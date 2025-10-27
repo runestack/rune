@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // FakeScalingController is a lightweight test double for ScalingController

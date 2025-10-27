@@ -3,8 +3,8 @@ package client
 import (
 	"context"
 
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/log"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/log"
 )
 
 // LogClient provides methods for interacting with logs on the Rune API server.

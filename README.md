@@ -31,29 +31,29 @@ Rune is a lightweight, powerful orchestration platform designed to simplify the 
 
 ```bash
 # Install CLI only (for developers)
-curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install-cli.sh | bash
+curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-cli.sh | bash
 
 # Install complete server environment (recommended for most users)
-curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install-server.sh | sudo bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-server.sh | sudo bash -s -- --version v0.1.0
 
 # Install binary-only (assumes Docker already configured)
-curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install.sh | sudo bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install.sh | sudo bash -s -- --version v0.1.0
 
 # For automated deployment (cloud-init, CI/CD) - runs as root automatically
-curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install-server.sh | bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-server.sh | bash -s -- --version v0.1.0
 ```
 
 #### From Source
 
 ```bash
 # Clone and build
-git clone https://github.com/rzbill/rune.git
+git clone https://github.com/runestack/rune.git
 cd rune
 make setup
 make build
 
 # Install from source
-go install github.com/rzbill/rune/cmd/rune@latest
+go install github.com/runestack/rune/cmd/rune@latest
 
 # Verify installation
 rune version
@@ -64,7 +64,7 @@ rune version
 #### Scripted upgrade (recommended)
 ```bash
 # Upgrade runed on the server to v0.0.1-dev.10 (keeps config/data)
-curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install-server.sh \
+curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-server.sh \
 | sudo bash -s -- --version v0.0.1-dev.10 --skip-docker
 ```
 
@@ -74,7 +74,7 @@ VER=v0.0.1-dev.10
 ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "Unsupported arch"; exit 1 ;; esac
 
 sudo systemctl stop runed
-curl -L -o /tmp/rune.tgz "https://github.com/rzbill/rune/releases/download/$VER/rune_linux_${ARCH}.tar.gz"
+curl -L -o /tmp/rune.tgz "https://github.com/runestack/rune/releases/download/$VER/rune_linux_${ARCH}.tar.gz"
 sudo tar -C /usr/local/bin -xzf /tmp/rune.tgz rune runed
 sudo systemctl start runed
 ```
@@ -458,7 +458,7 @@ See [CI/CD Guide](docs/guides/ci-cd-github-actions.md) for complete setup instru
 
 ```bash
 # Clone the repository
-git clone https://github.com/rzbill/rune.git
+git clone https://github.com/runestack/rune.git
 cd rune
 
 # Install development dependencies

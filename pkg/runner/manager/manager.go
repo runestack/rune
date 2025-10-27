@@ -5,12 +5,12 @@ import (
 
 	"os"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/runner/docker"
-	"github.com/rzbill/rune/pkg/runner/process"
-	"github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/runner/docker"
+	"github.com/runestack/rune/pkg/runner/process"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

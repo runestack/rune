@@ -4,7 +4,7 @@ package rune.api;
 
 import "pkg/api/proto/common.proto";
 
-option go_package = "github.com/rzbill/rune/pkg/api/generated";
+option go_package = "github.com/runestack/rune/pkg/api/generated";
 
 // LogRequest represents a request to get logs from a service or instance.
 message LogRequest {

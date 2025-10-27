@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // Validate that BadgerStore implements the Store interface

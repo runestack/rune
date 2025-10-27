@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // FakeHealthController is a lightweight test double for HealthController

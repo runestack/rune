@@ -3,7 +3,7 @@ package watcher
 import (
 	"context"
 
-	"github.com/rzbill/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/api/client"
 )
 
 // ServiceWatcher defines the interface for watching services

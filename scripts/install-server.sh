@@ -147,7 +147,7 @@ install_from_release() {
   local arch url tmp
   arch=$(arch_normalize)
   tmp=$(mktemp -d)
-  url="https://github.com/rzbill/rune/releases/download/${RUNE_VERSION}/rune_linux_${arch}.tar.gz"
+  url="https://github.com/runestack/rune/releases/download/${RUNE_VERSION}/rune_linux_${arch}.tar.gz"
   log "Downloading $url"
   
   if ! curl -fsSL -o "$tmp/rune.tgz" "$url"; then
@@ -175,7 +175,7 @@ install_from_source() {
   
   log "Building Rune from source (branch: $BRANCH)"
   local src=/opt/rune
-  rm -rf "$src" && git clone --branch "$BRANCH" --single-branch https://github.com/rzbill/rune.git "$src"
+  rm -rf "$src" && git clone --branch "$BRANCH" --single-branch https://github.com/runestack/rune.git "$src"
   (cd "$src" && make build)
   install -m 0755 "$src/bin/rune" /usr/local/bin/rune
   install -m 0755 "$src/bin/runed" /usr/local/bin/runed

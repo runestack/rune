@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // Compile-time check that FakeOrchestrator implements Orchestrator interface

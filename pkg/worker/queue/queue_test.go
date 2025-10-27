@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rzbill/rune/pkg/worker"
+	"github.com/runestack/rune/pkg/worker"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rzbill/rune/pkg/api/client"
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/cli/format"
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/cli/format"
+	"github.com/runestack/rune/pkg/utils"
 	"github.com/spf13/cobra"
 )
 

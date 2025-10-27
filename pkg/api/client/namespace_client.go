@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // Validate that TestStore implements the Store interface

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/test/integration/helpers"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/test/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

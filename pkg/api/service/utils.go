@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/store/repos"
-	"github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
 )
 
 type ResourceTarget struct {

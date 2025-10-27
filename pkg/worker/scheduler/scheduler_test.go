@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rzbill/rune/pkg/worker"
-	"github.com/rzbill/rune/pkg/worker/pool"
-	"github.com/rzbill/rune/pkg/worker/queue"
+	"github.com/runestack/rune/pkg/worker"
+	"github.com/runestack/rune/pkg/worker/pool"
+	"github.com/runestack/rune/pkg/worker/queue"
 	"github.com/stretchr/testify/assert"
 )
 

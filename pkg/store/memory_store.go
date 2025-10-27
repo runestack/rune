@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // MemoryStore is a simple in-memory implementation of the Store interface for testing.

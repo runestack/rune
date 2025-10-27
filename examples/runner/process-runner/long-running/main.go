@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/runner/process"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/runner/process"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // This example demonstrates a longer-running process with interactive management

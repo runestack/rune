@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/pterm/pterm"
-	"github.com/rzbill/rune/pkg/cli/format"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/cli/format"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // ResourceWatcher is a generic interface for resource watching

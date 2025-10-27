@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // FinalizerFactory is a function that creates a new finalizer instance

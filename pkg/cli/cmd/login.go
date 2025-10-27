@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	internalConfig "github.com/rzbill/rune/internal/config"
-	"github.com/rzbill/rune/pkg/api/generated"
+	internalConfig "github.com/runestack/rune/internal/config"
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/spf13/cobra"
 )
 

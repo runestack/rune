@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/mock"
 )
 

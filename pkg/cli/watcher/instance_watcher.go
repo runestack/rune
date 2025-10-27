@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rzbill/rune/pkg/api/client"
-	"github.com/rzbill/rune/pkg/cli/utils"
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/cli/utils"
 )
 
 // InstanceWatcher defines the interface for watching instances

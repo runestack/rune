@@ -3,9 +3,9 @@ package server
 import (
 	"context"
 
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/store/repos"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // SeedBuiltinNamespaces ensures the built-in namespaces exist (idempotent).

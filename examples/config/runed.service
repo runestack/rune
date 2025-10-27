@@ -1,6 +1,6 @@
 [Unit]
 Description=Rune Server
-Documentation=https://github.com/rzbill/rune
+Documentation=https://github.com/runestack/rune
 After=network.target
 
 [Service]

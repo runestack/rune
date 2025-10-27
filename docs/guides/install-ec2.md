@@ -9,7 +9,7 @@ Prerequisites:
 
 Quick install (recommended):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install.sh | sudo bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install.sh | sudo bash -s -- --version v0.1.0
 ```
 
 Notes:
@@ -98,7 +98,7 @@ Step 3 — Install binaries
 Option A: Download release binaries (recommended once releases are available):
 ```bash
 RUNE_VERSION="v0.1.0" # replace with the desired tag
-curl -L -o /tmp/rune.tgz "https://github.com/rzbill/rune/releases/download/${RUNE_VERSION}/rune_linux_amd64.tar.gz"
+curl -L -o /tmp/rune.tgz "https://github.com/runestack/rune/releases/download/${RUNE_VERSION}/rune_linux_amd64.tar.gz"
 sudo tar -C /usr/local/bin -xzf /tmp/rune.tgz rune runed
 ```
 
@@ -108,7 +108,7 @@ GO_VERSION=1.22.5
 curl -LO https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
 export PATH=/usr/local/go/bin:$PATH
-git clone https://github.com/rzbill/rune.git
+git clone https://github.com/runestack/rune.git
 cd rune
 make build
 sudo install -m 0755 bin/rune /usr/local/bin/rune

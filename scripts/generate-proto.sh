@@ -23,11 +23,11 @@ protoc \
   --proto_path=$PROJECT_ROOT \
   --proto_path=$PROJECT_ROOT/pkg/api/proto \
   --go_out=$PROJECT_ROOT \
-  --go_opt=module=github.com/rzbill/rune \
+  --go_opt=module=github.com/runestack/rune \
   --go-grpc_out=$PROJECT_ROOT \
-  --go-grpc_opt=module=github.com/rzbill/rune \
+  --go-grpc_opt=module=github.com/runestack/rune \
   --grpc-gateway_out=$PROJECT_ROOT \
-  --grpc-gateway_opt module=github.com/rzbill/rune \
+  --grpc-gateway_opt module=github.com/runestack/rune \
   --grpc-gateway_opt generate_unbound_methods=true \
   $PROTO_FILES
 

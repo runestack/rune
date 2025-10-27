@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/utils"
 	"golang.org/x/term"
 	"google.golang.org/grpc/codes"
 )

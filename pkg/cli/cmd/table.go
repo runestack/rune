@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/pterm/pterm"
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/cli/format"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/cli/format"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // ResourceTable provides a generic interface for rendering tables of different resources

@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"github.com/rzbill/rune/pkg/worker"
-	"github.com/rzbill/rune/pkg/worker/pool"
-	"github.com/rzbill/rune/pkg/worker/store"
+	"github.com/runestack/rune/pkg/worker"
+	"github.com/runestack/rune/pkg/worker/pool"
+	"github.com/runestack/rune/pkg/worker/store"
 )
 
 // SchedulerConfig defines the configuration for a scheduler

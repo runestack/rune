@@ -1,8 +1,8 @@
 package manager
 
 import (
-	"github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // IRunnerManager defines the interface for managing runners

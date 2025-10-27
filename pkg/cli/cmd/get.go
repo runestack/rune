@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/rzbill/rune/pkg/api/client"
-	resourceWatcher "github.com/rzbill/rune/pkg/cli/watcher"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/api/client"
+	resourceWatcher "github.com/runestack/rune/pkg/cli/watcher"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
 )
 

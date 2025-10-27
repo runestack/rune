@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/rzbill/rune/pkg/version"
+	"github.com/runestack/rune/pkg/version"
 	"github.com/spf13/cobra"
 )
 

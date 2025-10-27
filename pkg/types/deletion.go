@@ -3,7 +3,7 @@ package types
 import (
 	"time"
 
-	"github.com/rzbill/rune/pkg/worker"
+	"github.com/runestack/rune/pkg/worker"
 )
 
 // DeletionOperationStatus represents the status of a deletion operation

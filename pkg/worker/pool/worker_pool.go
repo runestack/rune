@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rzbill/rune/pkg/worker"
-	"github.com/rzbill/rune/pkg/worker/metrics"
-	"github.com/rzbill/rune/pkg/worker/queue"
-	"github.com/rzbill/rune/pkg/worker/store"
+	"github.com/runestack/rune/pkg/worker"
+	"github.com/runestack/rune/pkg/worker/metrics"
+	"github.com/runestack/rune/pkg/worker/queue"
+	"github.com/runestack/rune/pkg/worker/store"
 )
 
 // QueueOptions defines the base options for all queue types

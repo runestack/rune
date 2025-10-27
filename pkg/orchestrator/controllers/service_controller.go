@@ -8,13 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/orchestrator/finalizers"
-	"github.com/rzbill/rune/pkg/orchestrator/tasks"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/pkg/utils"
-	"github.com/rzbill/rune/pkg/worker/pool"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator/finalizers"
+	"github.com/runestack/rune/pkg/orchestrator/tasks"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/worker/pool"
 )
 
 // ServiceController implements the Controller interface for service management

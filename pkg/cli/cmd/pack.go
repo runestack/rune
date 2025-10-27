@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rzbill/rune/pkg/cli/utils"
+	"github.com/runestack/rune/pkg/cli/utils"
 	"github.com/spf13/cobra"
 )
 

@@ -6,11 +6,11 @@ import (
 	"io"
 	"sync"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/orchestrator/controllers"
-	"github.com/rzbill/rune/pkg/runner/manager"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator/controllers"
+	"github.com/runestack/rune/pkg/runner/manager"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // Orchestrator interface - main entry point (simplified)

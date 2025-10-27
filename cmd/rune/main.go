@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/rzbill/rune/pkg/cli/cmd"
+	"github.com/runestack/rune/pkg/cli/cmd"
 )
 
 func main() {

@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // ScalingController manages scaling operations for services

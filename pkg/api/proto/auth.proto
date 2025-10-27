@@ -1,6 +1,6 @@
 syntax = "proto3";
 package rune.api;
-option go_package = "github.com/rzbill/rune/pkg/api/generated";
+option go_package = "github.com/runestack/rune/pkg/api/generated";
 
 // HTTP annotations are optional; omit to avoid dependency for now
 

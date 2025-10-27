@@ -10,11 +10,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/rzbill/rune/internal/config"
-	"github.com/rzbill/rune/pkg/api/server"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/version"
+	"github.com/runestack/rune/internal/config"
+	"github.com/runestack/rune/pkg/api/server"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/version"
 	"github.com/spf13/viper"
 )
 

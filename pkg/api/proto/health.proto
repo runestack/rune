@@ -4,7 +4,7 @@ package rune.api;
 
 import "pkg/api/proto/common.proto";
 
-option go_package = "github.com/rzbill/rune/pkg/api/generated";
+option go_package = "github.com/runestack/rune/pkg/api/generated";
 
 // HealthStatus represents the health status of a component.
 enum HealthStatus {

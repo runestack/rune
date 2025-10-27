@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/rzbill/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/api/generated"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

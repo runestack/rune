@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/rzbill/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/spf13/cobra"
 )
 

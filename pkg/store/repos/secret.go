@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rzbill/rune/pkg/crypto"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/crypto"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
 )
 
 type SecretRepo struct {
