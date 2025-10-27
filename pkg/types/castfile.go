@@ -92,7 +92,7 @@ func ParseCastFileFromBytes(data []byte, overrideNamespace string) (*CastFile, e
 }
 
 // IsCastFile performs a lightweight detection to determine if a YAML file
-// appears to define Rune resource specs (services, secrets, configMaps).
+// appears to define Rune resource specs (services, secrets, configmaps).
 // It does not validate structure; it only checks for presence of known keys.
 func IsCastFile(filename string) (bool, error) {
 	data, err := os.ReadFile(filename)
