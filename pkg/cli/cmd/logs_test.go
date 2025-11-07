@@ -18,7 +18,7 @@ func TestParseTraceOptions(t *testing.T) {
 			tail:           100,
 			showTimestamps: false,
 			pattern:        "",
-			outputFormat:   OutputFormatJSON,
+			outputFormat:   OutputFormatText,
 		}
 
 		// Parse options
