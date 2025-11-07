@@ -106,10 +106,10 @@ install_docker() {
     
     # Determine codename per distro
     if [ "$os" = "ubuntu" ]; then
-      CODENAME=$(. /etc/os-release && echo $${UBUNTU_CODENAME:-jammy})
+      CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-jammy}")
       DIST="ubuntu"
     else
-      CODENAME=$(. /etc/os-release && echo $VERSION_CODENAME)
+      CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
       DIST="debian"
     fi
     
