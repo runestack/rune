@@ -98,9 +98,9 @@ func setupMockStream(t *testing.T, testOrchestrator *orchestrator.FakeOrchestrat
 		return ok && exitResp.Exit.Code == int32(0)
 	})).Return(nil).Once()
 
-	// Second receive will terminate the stream
+	// Second receive will terminate the stream (may not happen if exec completes quickly)
 	var nilReq *generated.ExecRequest = nil
-	mockStream.On("Recv").Return(nilReq, io.EOF).Once()
+	mockStream.On("Recv").Return(nilReq, io.EOF).Maybe()
 
 	return mockStream
 }
