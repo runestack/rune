@@ -27,6 +27,11 @@ func TestEffectiveCmdNS(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Save original value
+			original := viper.GetString("contexts.default.defaultNamespace")
+			// Clean up after test
+			defer viper.Set("contexts.default.defaultNamespace", original)
+
 			viper.Set("contexts.default.defaultNamespace", tt.defaultNS)
 			result := effectiveCmdNS(tt.namespace)
 			assert.Equal(t, tt.expected, result, "effectiveCmdNS() = %v, want %v", result, tt.expected)
@@ -40,20 +45,12 @@ func TestParseTargetExpression(t *testing.T) {
 		input    string
 		expected types.ResourceType
 	}{
-
 		{"instance full name", "instance/my-instance", types.ResourceTypeInstance},
 		{"instance short name", "inst/my-instance", types.ResourceTypeInstance},
 		{"service full name", "service/my-service", types.ResourceTypeService},
 		{"service short name", "svc/my-service", types.ResourceTypeService},
 		{"no prefix", "my-resource", ""},
 		{"invalid prefix", "invalid/resource", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := parseTargetExpression(tt.input)
-			assert.Equal(t, tt.expected, result, "parseTargetExpression() = %v, want %v", result, tt.expected)
-		})
 	}
 
 	for _, tt := range tests {
