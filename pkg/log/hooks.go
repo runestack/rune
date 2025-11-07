@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/utils"
 )
 
 // RedactionHook redacts sensitive values from log entries.

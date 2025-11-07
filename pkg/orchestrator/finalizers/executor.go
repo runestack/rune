@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/pkg/worker"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/worker"
 )
 
 // FinalizerExecutor executes finalizers with dependency resolution, timeouts, and retries

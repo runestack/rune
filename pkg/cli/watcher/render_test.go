@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 func TestDefaultServiceResourceToRows_SameNamespaceHeader(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
-	"github.com/rzbill/rune/pkg/store/repos"
+	"github.com/runestack/rune/pkg/store/repos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"

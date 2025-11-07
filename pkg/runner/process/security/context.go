@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
 )
 
 // ApplySecurityContext applies security settings from a ProcessSecurityContext to a command

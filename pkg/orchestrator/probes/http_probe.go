@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rzbill/rune/pkg/log"
+	"github.com/runestack/rune/pkg/log"
 )
 
 // HTTPProber implements the HTTP health check probe

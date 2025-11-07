@@ -17,9 +17,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/rzbill/rune/pkg/version.Version={{.Version}}
-      - -X github.com/rzbill/rune/pkg/version.BuildTime={{.Date}}
-      - -X github.com/rzbill/rune/pkg/version.Commit={{.Commit}}
+      - -X github.com/runestack/rune/pkg/version.Version={{.Version}}
+      - -X github.com/runestack/rune/pkg/version.BuildTime={{.Date}}
+      - -X github.com/runestack/rune/pkg/version.Commit={{.Commit}}
 
   - id: runed
     main: ./cmd/runed
@@ -34,9 +34,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/rzbill/rune/pkg/version.Version={{.Version}}
-      - -X github.com/rzbill/rune/pkg/version.BuildTime={{.Date}}
-      - -X github.com/rzbill/rune/pkg/version.Commit={{.Commit}}
+      - -X github.com/runestack/rune/pkg/version.Version={{.Version}}
+      - -X github.com/runestack/rune/pkg/version.BuildTime={{.Date}}
+      - -X github.com/runestack/rune/pkg/version.Commit={{.Commit}}
 
 archives:
   - format: tar.gz

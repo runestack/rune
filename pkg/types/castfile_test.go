@@ -8,7 +8,7 @@ import (
 )
 
 // Test parsing a cast YAML that includes a singular service plus plural
-// secrets and configMaps. Ensures we get a populated CastFile back.
+// secrets and configmaps. Ensures we get a populated CastFile back.
 func TestParseCastFile_MixedForms(t *testing.T) {
 	t.Parallel()
 
@@ -54,7 +54,7 @@ func TestParseCastFile_MixedForms(t *testing.T) {
        password: s3cr3t-mongo
 
  # multiple configmaps
- configMaps:
+ configmaps:
    - name: app-config
      data:
        LOG_LEVEL: debug
@@ -109,7 +109,7 @@ func TestParseCastFile_MixedForms(t *testing.T) {
 		}
 	}
 
-	// Configmaps parsed from 'configMaps' list
+	// Configmaps parsed from 'configmaps' list
 	if len(cf.Configmaps) != 3 {
 		t.Fatalf("expected 3 configmap specs, got %d", len(cf.Configmaps))
 	}
@@ -420,7 +420,7 @@ secrets:
 func TestParseCastFile_FullConfigmap(t *testing.T) {
 	t.Parallel()
 	yamlContent := `
-configMaps:
+configmaps:
   - name: app-config
     data:
       LOG_LEVEL: info

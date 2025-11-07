@@ -9,8 +9,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
 )
 
 // ProcessExecStream implements the runner.ExecStream interface for processes.

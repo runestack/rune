@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/rzbill/rune/pkg/worker"
+	"github.com/runestack/rune/pkg/worker"
 )
 
 var (

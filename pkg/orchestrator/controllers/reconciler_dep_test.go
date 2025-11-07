@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner/manager"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner/manager"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // Minimal test to assert that services with dependencies are gated until deps are ready

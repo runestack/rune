@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // createTempDir creates a temporary directory for testing.

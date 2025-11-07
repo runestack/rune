@@ -11,8 +11,8 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
 )
 
 // DockerClient defines the Docker API methods we need

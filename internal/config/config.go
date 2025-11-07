@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/rzbill/rune/pkg/crypto"
-	"github.com/rzbill/rune/pkg/store"
+	"github.com/runestack/rune/pkg/crypto"
+	"github.com/runestack/rune/pkg/store"
 	"github.com/spf13/viper"
 )
 

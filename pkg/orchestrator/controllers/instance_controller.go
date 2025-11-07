@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/runner/manager"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/store/repos"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/runner/manager"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
+	"github.com/runestack/rune/pkg/types"
 )
 
 type InstanceRestartReason string

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rzbill/rune/internal/config"
-	"github.com/rzbill/rune/pkg/api/client"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/internal/config"
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )

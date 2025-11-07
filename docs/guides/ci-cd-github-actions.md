@@ -155,10 +155,10 @@ Use different configurations per environment:
 **CLI Installation Fails**
 ```bash
 # Check if the version exists
-curl -I https://github.com/rzbill/rune/releases/download/v0.1.0/rune-cli_linux_amd64.tar.gz
+curl -I https://github.com/runestack/rune/releases/download/v0.1.0/rune-cli_linux_amd64.tar.gz
 
 # Use latest available version
-curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install-cli.sh | bash
+curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-cli.sh | bash
 ```
 
 **Authentication Fails**

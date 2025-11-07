@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // Runner defines the interface for service runners, which are responsible for

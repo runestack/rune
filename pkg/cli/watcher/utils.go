@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // getTerminalSize returns the dimensions of the terminal

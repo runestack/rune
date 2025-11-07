@@ -29,10 +29,10 @@ fi
 # Install Rune using the official installer
 if [ -n "$RUNE_VERSION" ]; then
     echo "Installing Rune version: $RUNE_VERSION"
-    curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install-server.sh | bash -s -- --version "$RUNE_VERSION"
+    curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-server.sh | bash -s -- --version "$RUNE_VERSION"
 else
     echo "Installing Rune from source (branch: $GIT_BRANCH)"
-    curl -fsSL https://raw.githubusercontent.com/rzbill/rune/master/scripts/install-server.sh | bash -s -- --from-source --branch "$GIT_BRANCH"
+    curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-server.sh | bash -s -- --from-source --branch "$GIT_BRANCH"
 fi
 
 # Wait for installer to complete

@@ -3,8 +3,8 @@ package repos
 import (
 	"context"
 
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // BaseRepo provides common CRUD over the core store for a specific resource type.

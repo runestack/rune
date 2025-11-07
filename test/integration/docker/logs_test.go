@@ -14,11 +14,11 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
-	"github.com/rzbill/rune/pkg/log"
-	runeRunner "github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/runner/docker"
-	runetypes "github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/test/integration/helpers"
+	"github.com/runestack/rune/pkg/log"
+	runeRunner "github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/runner/docker"
+	runetypes "github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/test/integration/helpers"
 )
 
 // skipIfDockerUnavailable skips the test if Docker is not available.

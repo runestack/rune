@@ -1,7 +1,7 @@
 package store
 
 import (
-	"github.com/rzbill/rune/pkg/crypto"
+	"github.com/runestack/rune/pkg/crypto"
 )
 
 // StoreOptions configure the core store

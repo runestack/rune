@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // ProbeResult represents the result of a health check probe

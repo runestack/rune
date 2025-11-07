@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rzbill/rune/internal/config"
-	"github.com/rzbill/rune/pkg/log"
+	"github.com/runestack/rune/internal/config"
+	"github.com/runestack/rune/pkg/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"

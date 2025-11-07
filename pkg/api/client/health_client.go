@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/log"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/log"
 	"google.golang.org/grpc/codes"
 )
 

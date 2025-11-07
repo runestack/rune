@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/docker/docker/client"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/types"
-	runetypes "github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/types"
+	runetypes "github.com/runestack/rune/pkg/types"
 )
 
 // skipIfDockerUnavailable skips the test if Docker is not available.

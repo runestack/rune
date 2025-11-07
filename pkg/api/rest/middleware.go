@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rzbill/rune/pkg/log"
+	"github.com/runestack/rune/pkg/log"
 )
 
 // Middleware is a function that wraps an http.Handler.

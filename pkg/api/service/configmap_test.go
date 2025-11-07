@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/store"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/store"
 )
 
 func TestConfigServiceCRUD(t *testing.T) {

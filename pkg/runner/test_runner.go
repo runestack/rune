@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // TestRunner is a simplified, predictable implementation of Runner for testing.

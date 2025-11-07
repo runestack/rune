@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rzbill/rune/pkg/api/client"
-	"github.com/rzbill/rune/pkg/cli/format"
-	"github.com/rzbill/rune/pkg/cli/utils"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/cli/format"
+	"github.com/runestack/rune/pkg/cli/utils"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
 )
 
@@ -283,12 +283,12 @@ func parseCastFilesResources(filePaths []string, sourceArgs []string, opts *cast
 		}
 
 		// Extract config maps from the cast file with proper error handling
-		configMaps, err := castFile.GetConfigmaps()
+		configmaps, err := castFile.GetConfigmaps()
 		if err != nil {
 			fileErrors = append(fileErrors, fmt.Sprintf("failed to extract config maps: %v", err))
-		} else if len(configMaps) > 0 {
-			info.ConfigmapsByFile[filePath] = configMaps
-			info.TotalResources += len(configMaps)
+		} else if len(configmaps) > 0 {
+			info.ConfigmapsByFile[filePath] = configmaps
+			info.TotalResources += len(configmaps)
 
 			// Fix FilesByType logic
 			if _, exists := info.FilesByType["Configmap"]; !exists {
@@ -451,8 +451,8 @@ func deployConfigmaps(apiClient *client.Client, info *ResourceInfo, results *Dep
 	configClient := client.NewConfigmapClient(apiClient)
 	// Calculate actual resource count safely
 	resourceCount := 0
-	for _, configMaps := range info.ConfigmapsByFile {
-		resourceCount += len(configMaps)
+	for _, configmaps := range info.ConfigmapsByFile {
+		resourceCount += len(configmaps)
 	}
 
 	// Safety check: no config maps to deploy

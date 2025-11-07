@@ -66,7 +66,7 @@ install_from_release() {
   os=$(os_normalize)
   tmp=$(mktemp -d)
   
-  url="https://github.com/rzbill/rune/releases/download/${RUNE_VERSION}/rune-cli_${os}_${arch}.tar.gz"
+  url="https://github.com/runestack/rune/releases/download/${RUNE_VERSION}/rune-cli_${os}_${arch}.tar.gz"
   log "Downloading CLI-only release from $url"
   
   if ! curl -fsSL -o "$tmp/rune-cli.tgz" "$url"; then
@@ -113,7 +113,7 @@ install_from_source() {
   local src=/tmp/rune-cli-build
   rm -rf "$src"
   
-  git clone --branch "$BRANCH" --single-branch https://github.com/rzbill/rune.git "$src"
+  git clone --branch "$BRANCH" --single-branch https://github.com/runestack/rune.git "$src"
   (cd "$src" && make build)
   
   if [ -f "$INSTALL_DIR/rune" ] && [ "$FORCE" != "true" ]; then

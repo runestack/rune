@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	apiClient "github.com/rzbill/rune/pkg/api/client"
-	"github.com/rzbill/rune/pkg/cli/utils"
-	"github.com/rzbill/rune/pkg/types"
+	apiClient "github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/cli/utils"
+	"github.com/runestack/rune/pkg/types"
 )
 
 type fakeInstanceWatcher struct {

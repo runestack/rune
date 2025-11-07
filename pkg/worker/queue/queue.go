@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rzbill/rune/pkg/worker"
+	"github.com/runestack/rune/pkg/worker"
 )
 
 // QueueType represents the type of queue

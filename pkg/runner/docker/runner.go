@@ -18,11 +18,11 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/runner/docker/registryauth"
-	"github.com/rzbill/rune/pkg/types"
-	runetypes "github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/runner/docker/registryauth"
+	"github.com/runestack/rune/pkg/types"
+	runetypes "github.com/runestack/rune/pkg/types"
 )
 
 // DockerConfig holds Docker runner configuration options

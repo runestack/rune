@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/rzbill/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
 )

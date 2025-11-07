@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/version"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc/status"

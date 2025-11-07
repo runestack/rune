@@ -1,4 +1,4 @@
-module github.com/rzbill/rune
+module github.com/runestack/rune
 
 go 1.23.4
 

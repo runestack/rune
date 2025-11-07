@@ -11,7 +11,7 @@ This guide will help you get started with Rune, a lightweight orchestration plat
 
 ### From Binary
 
-Download the latest release for your platform from the [releases page](https://github.com/rzbill/rune/releases).
+Download the latest release for your platform from the [releases page](https://github.com/runestack/rune/releases).
 
 ```bash
 # Linux/macOS
@@ -23,7 +23,7 @@ sudo mv rune /usr/local/bin/
 
 ```bash
 # Install from source
-go install github.com/rzbill/rune/cmd/rune@latest
+go install github.com/runestack/rune/cmd/rune@latest
 
 # Verify installation
 rune version
@@ -99,4 +99,4 @@ rune login --server https://localhost:8443 --token-file /secure/token.txt --conf
 
 The CLI will also try `XDG_CONFIG_HOME/rune/config.yaml` automatically as a fallback if `~/.rune` is not writable.
 
-For more help, please [open an issue](https://github.com/rzbill/rune/issues) on GitHub. 
+For more help, please [open an issue](https://github.com/runestack/rune/issues) on GitHub. 

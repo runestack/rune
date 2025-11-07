@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 )
 
 type InstanceRepo struct {

@@ -11,12 +11,12 @@ import (
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/orchestrator"
-	"github.com/rzbill/rune/pkg/runner"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 )
 
 // setupTestEnvironment creates a clean test environment for each test

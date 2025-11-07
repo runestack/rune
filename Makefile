@@ -9,9 +9,9 @@ BINARY_NAME = rune
 VERSION = $(shell git describe --tags --always --dirty 2>/dev/null || echo "unknown")
 BUILD_TIME = $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 COMMIT = $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
-LDFLAGS = -X github.com/rzbill/rune/pkg/version.Version=$(VERSION) \
-          -X github.com/rzbill/rune/pkg/version.BuildTime=$(BUILD_TIME) \
-          -X github.com/rzbill/rune/pkg/version.Commit=$(COMMIT)
+LDFLAGS = -X github.com/runestack/rune/pkg/version.Version=$(VERSION) \
+          -X github.com/runestack/rune/pkg/version.BuildTime=$(BUILD_TIME) \
+          -X github.com/runestack/rune/pkg/version.Commit=$(COMMIT)
 
 # Coverage files
 UNIT_COVERAGE = coverage_unit.out

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rzbill/rune/pkg/types"
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
 	yaml "gopkg.in/yaml.v3"
 )
 

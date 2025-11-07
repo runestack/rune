@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"

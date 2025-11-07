@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/rzbill/rune/pkg/api/client"
-	"github.com/rzbill/rune/pkg/api/generated"
-	"github.com/rzbill/rune/pkg/utils"
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/utils"
 	"github.com/spf13/cobra"
 )
 

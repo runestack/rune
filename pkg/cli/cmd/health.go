@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rzbill/rune/pkg/api/client"
-	"github.com/rzbill/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/spf13/cobra"
 )
 

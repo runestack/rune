@@ -5,7 +5,7 @@ package rune.api;
 import "pkg/api/proto/common.proto";
 import "pkg/api/proto/instance.proto";
 
-option go_package = "github.com/rzbill/rune/pkg/api/generated";
+option go_package = "github.com/runestack/rune/pkg/api/generated";
 
 // ServiceStatus represents the current status of a service.
 enum ServiceStatus {

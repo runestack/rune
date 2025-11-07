@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rzbill/rune/pkg/api/server"
-	"github.com/rzbill/rune/pkg/log"
-	"github.com/rzbill/rune/pkg/store"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/api/server"
+	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,7 +111,7 @@ func NewTestHelperWithStore(t *testing.T, storeType StoreType) *TestHelper {
 		// Use real rune CLI
 		binPath := filepath.Join(getProjectRootOrCwd(t), "bin", "rune")
 		if _, statErr := os.Stat(binPath); statErr != nil {
-			cmd := exec.Command("go", "build", "-o", binPath, "github.com/rzbill/rune/cmd/rune")
+			cmd := exec.Command("go", "build", "-o", binPath, "github.com/runestack/rune/cmd/rune")
 			cmd.Dir = getProjectRootOrCwd(t)
 			if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
 				t.Fatalf("Failed to build rune CLI: %v\n%s", buildErr, string(out))
@@ -137,7 +137,7 @@ func NewTestHelperWithStore(t *testing.T, storeType StoreType) *TestHelper {
 				if p, lookErr := exec.LookPath("rune-test"); lookErr == nil {
 					runeBinary = p
 				} else {
-					cmd := exec.Command("go", "build", "-o", filepath.Join(tempDir, "rune-test"), "github.com/rzbill/rune/cmd/rune-test")
+					cmd := exec.Command("go", "build", "-o", filepath.Join(tempDir, "rune-test"), "github.com/runestack/rune/cmd/rune-test")
 					if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
 						t.Fatalf("Failed to build test binary: %v\n%s", buildErr, string(out))
 					}

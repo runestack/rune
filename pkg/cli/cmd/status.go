@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/rzbill/rune/pkg/api/client"
-	"github.com/rzbill/rune/pkg/types"
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
 )
 
