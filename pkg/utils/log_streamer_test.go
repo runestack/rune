@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -13,6 +14,7 @@ type mockReader struct {
 	data   string
 	offset int
 	closed bool
+	mu     sync.RWMutex
 }
 
 func newMockReader(data string) *mockReader {
@@ -24,22 +26,38 @@ func newMockReader(data string) *mockReader {
 }
 
 func (m *mockReader) Read(p []byte) (n int, err error) {
-	if m.closed {
+	m.mu.RLock()
+	closed := m.closed
+	offset := m.offset
+	m.mu.RUnlock()
+
+	if closed {
 		return 0, io.ErrClosedPipe
 	}
 
-	if m.offset >= len(m.data) {
+	if offset >= len(m.data) {
 		return 0, io.EOF
 	}
 
-	n = copy(p, m.data[m.offset:])
+	n = copy(p, m.data[offset:])
+	m.mu.Lock()
 	m.offset += n
+	m.mu.Unlock()
 	return n, nil
 }
 
 func (m *mockReader) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.closed = true
 	return nil
+}
+
+// isClosed returns whether the reader is closed (thread-safe)
+func (m *mockReader) isClosed() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.closed
 }
 
 // TestMultiLogStreamer_NoMetadata tests log streaming without metadata prefixes
@@ -232,12 +250,12 @@ func TestMultiLogStreamer_CloseReaders(t *testing.T) {
 		t.Fatalf("Failed to close streamer: %v", err)
 	}
 
-	// Verify the underlying readers were closed
-	if !reader1.closed {
+	// Verify the underlying readers were closed (use thread-safe method)
+	if !reader1.isClosed() {
 		t.Error("Reader 1 was not closed")
 	}
 
-	if !reader2.closed {
+	if !reader2.isClosed() {
 		t.Error("Reader 2 was not closed")
 	}
 

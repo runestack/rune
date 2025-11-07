@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -315,10 +316,10 @@ func TestSchedulerWithMixedScheduling(t *testing.T) {
 	scheduler.Start()
 	defer scheduler.Stop()
 
-	// Test case 1: Interval-based task
-	intervalCount := 0
+	// Test case 1: Interval-based task (use atomic for thread-safe counter)
+	var intervalCount int64
 	intervalTask := worker.NewTask(func(ctx context.Context) error {
-		intervalCount++
+		atomic.AddInt64(&intervalCount, 1)
 		return nil
 	})
 
@@ -326,10 +327,10 @@ func TestSchedulerWithMixedScheduling(t *testing.T) {
 	err = scheduler.Schedule(intervalTask, 100*time.Millisecond, 0)
 	assert.NoError(t, err)
 
-	// Test case 2: Cron-based task
-	cronCount := 0
+	// Test case 2: Cron-based task (use atomic for thread-safe counter)
+	var cronCount int64
 	cronTask := worker.NewTask(func(ctx context.Context) error {
-		cronCount++
+		atomic.AddInt64(&cronCount, 1)
 		return nil
 	})
 
@@ -341,8 +342,8 @@ func TestSchedulerWithMixedScheduling(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Verify both tasks were executed
-	assert.Greater(t, intervalCount, 0)
-	assert.Greater(t, cronCount, 0)
+	assert.Greater(t, atomic.LoadInt64(&intervalCount), int64(0))
+	assert.Greater(t, atomic.LoadInt64(&cronCount), int64(0))
 }
 
 func TestSchedulerWithMaxRuns(t *testing.T) {
@@ -364,10 +365,10 @@ func TestSchedulerWithMaxRuns(t *testing.T) {
 	scheduler.Start()
 	defer scheduler.Stop()
 
-	// Test case 1: Interval-based task with max runs
-	executionCount := 0
+	// Test case 1: Interval-based task with max runs (use atomic for thread-safe counter)
+	var executionCount1 int64
 	task1 := worker.NewTask(func(ctx context.Context) error {
-		executionCount++
+		atomic.AddInt64(&executionCount1, 1)
 		return nil
 	})
 
@@ -379,12 +380,12 @@ func TestSchedulerWithMaxRuns(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify task was executed exactly 3 times
-	assert.Equal(t, 3, executionCount)
+	assert.Equal(t, int64(3), atomic.LoadInt64(&executionCount1))
 
-	// Test case 2: Cron-based task with max runs
-	executionCount = 0
+	// Test case 2: Cron-based task with max runs (use atomic for thread-safe counter)
+	var executionCount2 int64
 	task2 := worker.NewTask(func(ctx context.Context) error {
-		executionCount++
+		atomic.AddInt64(&executionCount2, 1)
 		return nil
 	})
 
@@ -396,7 +397,7 @@ func TestSchedulerWithMaxRuns(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// Verify task was executed exactly 2 times
-	assert.Equal(t, 2, executionCount)
+	assert.Equal(t, int64(2), atomic.LoadInt64(&executionCount2))
 }
 
 func TestSchedulerWithZeroMaxRuns(t *testing.T) {
@@ -418,10 +419,10 @@ func TestSchedulerWithZeroMaxRuns(t *testing.T) {
 	scheduler.Start()
 	defer scheduler.Stop()
 
-	// Test case: Task with zero max runs (should run indefinitely)
-	executionCount := 0
+	// Test case: Task with zero max runs (should run indefinitely) (use atomic for thread-safe counter)
+	var executionCount int64
 	task := worker.NewTask(func(ctx context.Context) error {
-		executionCount++
+		atomic.AddInt64(&executionCount, 1)
 		return nil
 	})
 
@@ -433,5 +434,5 @@ func TestSchedulerWithZeroMaxRuns(t *testing.T) {
 	time.Sleep(800 * time.Millisecond)
 
 	// Verify task was executed multiple times
-	assert.GreaterOrEqual(t, executionCount, 5)
+	assert.GreaterOrEqual(t, atomic.LoadInt64(&executionCount), int64(5))
 }

@@ -342,9 +342,10 @@ func TestExecHealthCheck(t *testing.T) {
 	err = controller.AddInstance(service, instance)
 	require.NoError(t, err)
 
-	// Just verify that exec was called after a while
+	// Just verify that exec was called after a while (use thread-safe getter)
 	time.Sleep(3 * time.Second)
-	assert.Contains(t, testRunner.ExecCalls, instance.ID, "Exec should have been called on instance")
+	execCalls := testRunner.GetExecCalls()
+	assert.Contains(t, execCalls, instance.ID, "Exec should have been called on instance")
 }
 
 // TestRestartAfterHealthCheckFailure is a more direct test of the restart mechanism
@@ -403,9 +404,11 @@ func TestRestartAfterHealthCheckFailure(t *testing.T) {
 	// Wait for multiple health checks to run and trigger a restart
 	time.Sleep(5 * time.Second)
 
-	// Verify that instance was restarted
-	assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Instance should have been stopped")
-	assert.Contains(t, testRunner.StartedInstances, instance.ID, "Instance should have been started")
+	// Verify that instance was restarted (use thread-safe getters)
+	stoppedInstances := testRunner.GetStoppedInstances()
+	startedInstances := testRunner.GetStartedInstances()
+	assert.Contains(t, stoppedInstances, instance.ID, "Instance should have been stopped")
+	assert.Contains(t, startedInstances, instance.ID, "Instance should have been started")
 }
 
 // TestNoHealthCheckService tests adding an instance with no health check configured

@@ -32,7 +32,34 @@ type TestRunner struct {
 	ExecOptions      []ExecOptions
 	LogCalls         []string
 	StatusCalls      []string
-	mu               sync.Mutex // protects the tracking fields
+	mu               sync.RWMutex // protects the tracking fields
+}
+
+// GetStartedInstances returns a copy of StartedInstances (thread-safe)
+func (r *TestRunner) GetStartedInstances() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]string, len(r.StartedInstances))
+	copy(result, r.StartedInstances)
+	return result
+}
+
+// GetStoppedInstances returns a copy of StoppedInstances (thread-safe)
+func (r *TestRunner) GetStoppedInstances() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]string, len(r.StoppedInstances))
+	copy(result, r.StoppedInstances)
+	return result
+}
+
+// GetExecCalls returns a copy of ExecCalls (thread-safe)
+func (r *TestRunner) GetExecCalls() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]string, len(r.ExecCalls))
+	copy(result, r.ExecCalls)
+	return result
 }
 
 // NewTestRunner creates a new TestRunner with default behavior
