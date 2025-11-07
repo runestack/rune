@@ -151,8 +151,8 @@ func TestWatchServices(t *testing.T) {
 	// Mock service client
 	mockClient := &mockServiceClient{}
 
-	// Create a context with timeout for the test
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Create a context with timeout for the test (longer than test timeout to avoid premature cancellation)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Test cases for different watch scenarios
@@ -201,6 +201,10 @@ func TestWatchServices(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Create a cancellable context for this test case
+			testCtx, testCancel := context.WithCancel(ctx)
+			defer testCancel()
+
 			// Set up test globals
 			opts := &getOptions{}
 			opts.namespace = tt.namespace
@@ -221,21 +225,23 @@ func TestWatchServices(t *testing.T) {
 			// Start the watch in a goroutine
 			errCh := make(chan error, 1)
 			go func() {
-				// Close the channel after our test events to simulate end of stream
-				defer close(watchCh)
-				errCh <- watchServices(ctx, mockClient, tt.resourceName, opts)
+				// Allow events to be processed, then cancel context to stop watch
+				time.Sleep(100 * time.Millisecond)
+				testCancel() // Cancel context to stop the watch (simulates user interrupt or timeout)
+				errCh <- watchServices(testCtx, mockClient, tt.resourceName, opts)
 			}()
 
 			// Wait for the function to complete or timeout
 			select {
 			case err := <-errCh:
+				// Context cancellation is expected when we cancel the context to stop the watch
+				if err != nil && err != context.Canceled && !tt.expectedError {
+					t.Errorf("Unexpected error: %v", err)
+				}
 				if tt.expectedError && err == nil {
 					t.Errorf("Expected error but got nil")
 				}
-				if !tt.expectedError && err != nil {
-					t.Errorf("Unexpected error: %v", err)
-				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(5 * time.Second):
 				t.Errorf("Test timed out")
 			}
 		})

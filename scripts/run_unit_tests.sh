@@ -26,11 +26,18 @@ echo -e "${YELLOW}Running unit tests...${NC}"
 # Skip docker package integration-like tests unless explicitly enabled
 export SKIP_DOCKER_TESTS=${SKIP_DOCKER_TESTS:-1}
 
+# Check if race detection is enabled
+RACE_FLAG=""
+if [ "${RACE_DETECTION:-}" = "1" ]; then
+    RACE_FLAG="-race"
+    echo -e "${YELLOW}Race detection enabled${NC}"
+fi
+
 # Run tests on each package individually to handle packages without tests
 FAILED_PACKAGES=()
 for pkg in $UNIT_PACKAGES; do
     echo -e "${YELLOW}Testing $pkg...${NC}"
-    if go test -tags=unit $pkg -v 2>&1; then
+    if go test -tags=unit $RACE_FLAG $pkg -v 2>&1; then
         echo -e "${GREEN}✓ $pkg passed${NC}"
     else
         echo -e "${RED}✗ $pkg failed${NC}"

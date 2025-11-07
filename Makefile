@@ -1,4 +1,4 @@
-.PHONY: build test lint clean setup dev generate proto proto-tools docs docker install coverage-report coverage-summary test-unit test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
+.PHONY: build test lint clean setup dev generate proto proto-tools docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
 
 # Tools and paths
 GO ?= go
@@ -87,7 +87,17 @@ test: test-unit test-integration
 ## Run unit tests via script
 test-unit:
 	@bash scripts/run_unit_tests.sh
-	@$(GO) test -coverprofile=$(UNIT_COVERAGE) ./... 
+	@$(GO) test -tags=unit -coverprofile=$(UNIT_COVERAGE) ./...
+
+## Run unit tests with race detection (recommended for CI)
+test-unit-race:
+	@echo "Running unit tests with race detection..."
+	@$(GO) test -tags=unit -race -coverprofile=$(UNIT_COVERAGE) ./...
+
+## Run unit tests with race detection via script (for CI)
+test-unit-race-script:
+	@RACE_DETECTION=1 bash scripts/run_unit_tests.sh
+	@$(GO) test -tags=unit -race -coverprofile=$(UNIT_COVERAGE) ./... 
 
 ## Run integration tests via script (defaults to BadgerDB store)
 test-integration:
@@ -222,9 +232,11 @@ help:
 	@echo "  install           Build and install to GOPATH/bin"
 	@echo ""
 	@echo "Testing:"
-	@echo "  test              Run all tests"
-	@echo "  test-unit         Run unit tests"
-	@echo "  test-integration  Run integration tests (BadgerDB store by default)"
+	@echo "  test                  Run all tests"
+	@echo "  test-unit             Run unit tests"
+	@echo "  test-unit-race        Run unit tests with race detection (recommended for CI)"
+	@echo "  test-unit-race-script Run unit tests with race detection via script (for CI)"
+	@echo "  test-integration      Run integration tests (BadgerDB store by default)"
 	@echo "  test-integration-memory  Run integration tests with memory store (fast)"
 	@echo "  test-integration-badger  Run integration tests with BadgerDB store (real storage)"
 	@echo "  test-integration-store STORE=<type>  Run integration tests with specific store type"
