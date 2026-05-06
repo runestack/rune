@@ -171,7 +171,8 @@ func createClientWithVersionHandling(logger log.Logger, config *DockerConfig) (*
 	logger.Info("Using negotiated Docker API version", log.Str("api_version", clientVersion))
 
 	// Verify the version works by doing a ping test
-	if err := verifyClientCompatibility(dockerClient, clientVersion, config.FallbackAPIVersion, logger); err != nil {
+	dockerClient, err = verifyClientCompatibility(dockerClient, clientVersion, config.FallbackAPIVersion, logger)
+	if err != nil {
 		return nil, err
 	}
 
@@ -179,8 +180,9 @@ func createClientWithVersionHandling(logger log.Logger, config *DockerConfig) (*
 }
 
 // verifyClientCompatibility checks if the Docker client is compatible with the server
-// and falls back to a compatible version if needed
-func verifyClientCompatibility(dockerClient *client.Client, clientVersion, fallbackVersion string, logger log.Logger) error {
+// and falls back to a compatible version if needed.
+// If a fallback is required, the old client is closed and a new one is returned.
+func verifyClientCompatibility(dockerClient *client.Client, clientVersion, fallbackVersion string, logger log.Logger) (*client.Client, error) {
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer pingCancel()
 
@@ -195,24 +197,26 @@ func verifyClientCompatibility(dockerClient *client.Client, clientVersion, fallb
 			log.Str("fallback_version", fallbackVersion),
 			log.Err(err))
 
+		// Close the incompatible client
+		_ = dockerClient.Close()
+
 		// Create new client with fallback version
 		newClient, err := client.NewClientWithOpts(
 			client.FromEnv,
 			client.WithVersion(fallbackVersion),
 		)
 		if err != nil {
-			return fmt.Errorf("failed to create Docker client with fallback version %s: %w",
+			return nil, fmt.Errorf("failed to create Docker client with fallback version %s: %w",
 				fallbackVersion, err)
 		}
 
-		// Replace the original client with the fallback client
-		*dockerClient = *newClient
+		return newClient, nil
 	} else if err != nil {
 		// If there's a non-version error, log it but continue
 		logger.Warn("Docker ping error (continuing anyway)", log.Err(err))
 	}
 
-	return nil
+	return dockerClient, nil
 }
 
 // Create creates a new container but does not start it.
