@@ -72,6 +72,8 @@ func init() {
 	rootCmd.AddCommand(newAdminCmd())
 	// Network command group (RUNE-064: ServiceNetworkPolicy explain/validate)
 	rootCmd.AddCommand(newPolicyCmd())
+	// Ingress command group (RUNE-067: ingress + TLS cert inspection)
+	rootCmd.AddCommand(newIngressCmd())
 	// Register config management commands
 	rootCmd.AddCommand(newConfigCmd())
 	// Register convenient context switching alias
