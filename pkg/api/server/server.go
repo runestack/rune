@@ -157,6 +157,9 @@ func (s *APIServer) Start() error {
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
 	}
+	if s.options.VIPAllocator != nil {
+		s.serviceService.SetVIPAllocator(s.options.VIPAllocator)
+	}
 
 	// Start gRPC server
 	if err := s.startGRPCServer(); err != nil {

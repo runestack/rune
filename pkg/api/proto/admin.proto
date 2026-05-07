@@ -154,8 +154,6 @@ message RegistryRuntimeStatus {
 message RegistriesStatusRequest {}
 message RegistriesStatusResponse { repeated RegistryRuntimeStatus registries = 1; }
 
-// --- Network admin (RUNE-040) -----------------------------------------------
-
 message NetworkStatusRequest {}
 
 message NetworkAllocation {
@@ -203,7 +201,7 @@ service AdminService {
   rpc TestRegistry(TestRegistryRequest) returns (TestRegistryResponse);
   rpc RegistriesStatus(RegistriesStatusRequest) returns (RegistriesStatusResponse);
 
-  // Network status (RUNE-040): inspect ClusterNetwork CIDR + VIP allocations.
+  // Network status: inspect ClusterNetwork CIDR + VIP allocations.
   rpc NetworkStatus(NetworkStatusRequest) returns (NetworkStatusResponse);
 }
 

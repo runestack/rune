@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check_orderedlog_seam.sh
 #
-# Seam-leakage lint enforcing RUNE-039:
+# Seam-leakage lint enforcing:
 #
 # The orderedlog package owns mutations under the protected key prefixes
 # below. Anything else that writes those prefixes through Badger directly

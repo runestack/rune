@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -11,7 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/runestack/rune/internal/agent"
+	"github.com/runestack/rune/internal/agent/dataplane"
 	"github.com/runestack/rune/internal/config"
 	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
@@ -37,6 +41,7 @@ var (
 	prettyLogs    = flag.Bool("pretty", false, "Enable pretty text log format (shorthand for --log-format=text)")
 	devMode       = flag.Bool("dev-mode", false, "Run in dev mode: skip nftables, bind ingress on user ports, embedded DNS resolves .rune to 127.0.0.1 (laptop development)")
 	clusterCIDR   = flag.String("cluster-cidr", "10.96.0.0/16", "Cluster service CIDR for VIP allocation (RFC1918 or 100.64/10)")
+	metricsAddr   = flag.String("metrics-addr", "127.0.0.1:9100", "Address for the Prometheus /metrics endpoint (empty disables)")
 	showHelp      = flag.Bool("help", false, "Show help")
 	showVer       = flag.Bool("version", false, "Show version")
 )
@@ -339,7 +344,7 @@ func main() {
 	}
 
 	// Create and start API server (with WatchService registered).
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, logger, vipAllocator, watchRegistrar)...)
+	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, logger, vipAllocator, vipAllocator, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)
@@ -355,7 +360,25 @@ func main() {
 	// OrderedLog backend opened above. Subsystems (data plane, DNS,
 	// policy, ingress) register themselves in subsequent
 	// networking-layer tickets.
-	agentInst, agentStop, err := startAgent(ctx, logger, olog, *dataDir, *devMode)
+	agentInst, agentStop, err := startAgent(ctx, logger, olog, *dataDir, *devMode, func(a *agent.Agent) error {
+		dpMode := dataplane.ModeProduction
+		if *devMode {
+			dpMode = dataplane.ModeDev
+		}
+		dp, derr := dataplane.New(dataplane.Config{
+			OrderedLog: olog,
+			Node:       dataplane.StaticNodeID(a.Identity().NodeID),
+			Mode:       dpMode,
+			Logger:     logger,
+		})
+		if derr != nil {
+			return fmt.Errorf("dataplane: %w", derr)
+		}
+		if err := dp.Metrics().Register(prometheus.DefaultRegisterer); err != nil {
+			return fmt.Errorf("dataplane metrics: %w", err)
+		}
+		return a.Register(dp)
+	})
 	if err != nil {
 		logger.Error("Failed to start agent", log.Err(err))
 		_ = apiServer.Stop()
@@ -363,8 +386,33 @@ func main() {
 	}
 	_ = agentInst
 
+	// Optional: serve Prometheus metrics on a private address so
+	// scrapers can collect dataplane + future subsystem metrics.
+	var metricsServer *http.Server
+	if *metricsAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		metricsServer = &http.Server{
+			Addr:              *metricsAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			logger.Info("Metrics server listening", log.Str("addr", *metricsAddr))
+			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Warn("Metrics server stopped", log.Err(err))
+			}
+		}()
+	}
+
 	// Wait for cancellation
 	<-ctx.Done()
+
+	if metricsServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = metricsServer.Shutdown(shutdownCtx)
+		cancel()
+	}
 
 	// Stop agent before API server so subsystems can drain via the
 	// control plane if they need to.
@@ -440,7 +488,7 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 	return st, appCfg, storeDir, nil
 }
 
-func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger log.Logger, netSP service.NetworkStatusProvider, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
 	opts := []server.Option{
 		server.WithGRPCAddr(grpcAddress),
 		server.WithHTTPAddr(httpAddress),
@@ -452,6 +500,9 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger 
 	if netSP != nil {
 		opts = append(opts, server.WithNetworkStatusProvider(netSP))
 	}
+	if vipAlloc != nil {
+		opts = append(opts, server.WithVIPAllocator(vipAlloc))
+	}
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
 	}
@@ -462,7 +513,7 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger 
 // OrderedLog. The orderedlog is owned by the caller (main) so it can
 // also be shared with the API server's WatchService. Returns the
 // agent and a stop function the caller invokes during shutdown.
-func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, dataDirPath string, dev bool) (*agent.Agent, func(), error) {
+func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, dataDirPath string, dev bool, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
 	identity, err := agent.LoadOrCreateIdentity(dataDirPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("agent: load identity: %w", err)
@@ -481,6 +532,12 @@ func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedL
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("agent: construct: %w", err)
+	}
+
+	if registerSubsystems != nil {
+		if err := registerSubsystems(a); err != nil {
+			return nil, nil, fmt.Errorf("agent: register subsystems: %w", err)
+		}
 	}
 
 	if err := a.Start(ctx); err != nil {

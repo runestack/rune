@@ -177,6 +177,17 @@ type ExposeServiceTLS struct {
 type ServiceDiscovery struct {
 	// Discovery mode (load-balanced or headless)
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+
+	// VIP is the cluster virtual IP allocated for this service. Set by
+	// the control plane on Create via the cluster VIP allocator
+	// (RUNE-040). Stable for the lifetime of the service ID.
+	VIP string `json:"vip,omitempty" yaml:"vip,omitempty"`
+
+	// LocalityPreference controls how the userspace proxy picks
+	// endpoints (RUNE-041). One of "" (no preference), "prefer-local"
+	// (same-node first, fall back to remote), or "local-only" (fail
+	// closed if no local endpoint).
+	LocalityPreference string `json:"localityPreference,omitempty" yaml:"localityPreference,omitempty"`
 }
 
 // DependencyRef is the normalized internal representation of a dependency

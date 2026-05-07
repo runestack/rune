@@ -161,8 +161,8 @@ func TestRelease_CooldownThenReuse(t *testing.T) {
 func TestBootstrap_InvalidCIDR(t *testing.T) {
 	cases := []string{
 		"not-a-cidr",
-		"8.8.8.0/24",       // public
-		"2001:db8::/32",    // ipv6
+		"8.8.8.0/24",    // public
+		"2001:db8::/32", // ipv6
 	}
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {

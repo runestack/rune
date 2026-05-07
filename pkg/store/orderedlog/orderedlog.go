@@ -134,13 +134,21 @@ type Applier func(tx Txn, op Op) ([]Mutation, error)
 // taken at. A watcher that received ErrCompacted should call Snapshot,
 // rebuild its local view from it, and resume Watch from snapshot.Seq+1.
 //
-// The exact methods on Snapshot are deferred to consumers in subsequent
-// tickets (RUNE-028 watch-stream wiring will define a Reader interface
-// here). For now Snapshot is opaque to keep RUNE-039 self-contained.
+// Range iterates committed key/value pairs whose keys begin with the
+// given prefix in lexicographic order. The visitor's slices are valid
+// only for the duration of the call (Badger's Item.Value semantics);
+// callers must copy if they need to retain them. A non-nil error from
+// the visitor terminates iteration and is returned.
 type Snapshot interface {
 	// Close releases any resources held by the snapshot. Safe to call
 	// multiple times.
 	Close() error
+
+	// Range iterates committed key/value pairs sharing prefix and
+	// invokes visit for each. visit must not retain the byte slices
+	// past its return. A non-nil error from visit aborts iteration
+	// and is returned to the caller.
+	Range(prefix []byte, visit func(key, value []byte) error) error
 }
 
 // OrderedLog is the seam.

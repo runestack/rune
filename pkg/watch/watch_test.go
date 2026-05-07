@@ -1,4 +1,4 @@
-package watch_test
+package watch
 
 import (
 	"context"
@@ -15,7 +15,6 @@ import (
 	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store/orderedlog"
-	"github.com/runestack/rune/pkg/watch"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -81,10 +80,10 @@ func newOlog(t *testing.T) *orderedlog.BadgerBackend {
 	return be
 }
 
-func newServer(t *testing.T, be orderedlog.OrderedLog) (*grpc.ClientConn, *watch.Server) {
+func newServer(t *testing.T, be orderedlog.OrderedLog) (*grpc.ClientConn, *Server) {
 	t.Helper()
 	lis := bufconn.Listen(1 << 16)
-	ws := watch.NewServer(be, log.GetDefaultLogger())
+	ws := NewServer(be, log.GetDefaultLogger())
 	gs := grpc.NewServer()
 	pb.RegisterWatchServiceServer(gs, ws)
 	go func() { _ = gs.Serve(lis) }()
@@ -314,7 +313,7 @@ func TestClient_DeliversAndRecordsLastSeq(t *testing.T) {
 		}
 		return nil
 	}
-	cli := watch.NewClient(conn, 0, handler, nil, watch.ClientOptions{ClientID: "t"})
+	cli := NewClient(conn, 0, handler, nil, ClientOptions{ClientID: "t"})
 
 	runErr := make(chan error, 1)
 	go func() { runErr <- cli.Run(ctx) }()
@@ -359,7 +358,7 @@ func TestClient_FatalHandlerErrorTerminates(t *testing.T) {
 	handler := func(ctx context.Context, ev orderedlog.Event) error {
 		return errors.New("boom")
 	}
-	cli := watch.NewClient(conn, 0, handler, nil, watch.ClientOptions{})
+	cli := NewClient(conn, 0, handler, nil, ClientOptions{})
 
 	runErr := make(chan error, 1)
 	go func() { runErr <- cli.Run(ctx) }()

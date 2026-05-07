@@ -2,7 +2,6 @@
 //
 // `rune admin network status` calls AdminService.NetworkStatus and
 // renders the cluster ClusterNetwork CIDR plus VIP allocation summary
-// (RUNE-040).
 package cmd
 
 import (

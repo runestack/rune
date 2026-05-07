@@ -50,6 +50,11 @@ type Options struct {
 	// allocations. Supplied by runed alongside the VIP allocator
 	// (RUNE-040).
 	NetworkStatusProvider service.NetworkStatusProvider
+
+	// VIPAllocator, if set, is plugged into ServiceService so each
+	// CreateService call assigns a stable VIP from the pool
+	// (RUNE-041). Supplied by runed at startup.
+	VIPAllocator service.VIPAllocator
 }
 
 // Option is a function that configures options.
@@ -146,5 +151,13 @@ func WithExtraGRPCRegistrar(reg func(grpc.ServiceRegistrar)) Option {
 func WithNetworkStatusProvider(p service.NetworkStatusProvider) Option {
 	return func(opts *Options) {
 		opts.NetworkStatusProvider = p
+	}
+}
+
+// WithVIPAllocator plugs the VIP allocator into ServiceService so
+// CreateService assigns a stable VIP from the cluster pool.
+func WithVIPAllocator(a service.VIPAllocator) Option {
+	return func(opts *Options) {
+		opts.VIPAllocator = a
 	}
 }

@@ -6,8 +6,8 @@
 // drain stale clients.
 //
 // The allocator is the single writer of the ClusterNetwork resource.
-// All state changes flow through orderedlog.Propose, so a Phase 2
-// Raft-backed control plane will see the same state changes in the
+// All state changes flow through orderedlog.Propose, so a Raft-backed
+// control plane will see the same state changes in the
 // same order without code changes here. The allocator never touches
 // Badger directly; the orderedlog seam lint enforces this.
 package vip
@@ -88,9 +88,9 @@ type Allocator struct {
 	opts Options
 
 	// in-memory mirror of committed state, protected by mu
-	mu      sync.RWMutex
-	state   types.ClusterNetwork
-	loaded  bool
+	mu     sync.RWMutex
+	state  types.ClusterNetwork
+	loaded bool
 
 	// Pending releases waiting for the cooldown window to elapse.
 	// IP -> release-time. The release goroutine flushes them via Propose.
@@ -493,8 +493,8 @@ func pickIP(cidr string, freeList []string, allocated map[string]string) (net.IP
 		bcast[i] = netIP[i] | ^mask[i]
 	}
 	cur := dupIP(netIP)
-	incIP(cur)             // skip network address (.0)
-	incIP(cur)             // skip gateway (.1)
+	incIP(cur) // skip network address (.0)
+	incIP(cur) // skip gateway (.1)
 	for !cur.Equal(bcast) {
 		s := cur.String()
 		if _, inUse := used[s]; !inUse {

@@ -56,13 +56,13 @@ func (o *ClientOptions) defaults() {
 // reconnects so no event is delivered twice, and invokes the snapshot
 // handler when the server reports COMPACTED.
 type Client struct {
-	conn      grpc.ClientConnInterface
-	stub      pb.WatchServiceClient
-	handler   EventHandler
-	snapshot  SnapshotHandler
-	opts      ClientOptions
-	log       log.Logger
-	lastSeq   uint64
+	conn     grpc.ClientConnInterface
+	stub     pb.WatchServiceClient
+	handler  EventHandler
+	snapshot SnapshotHandler
+	opts     ClientOptions
+	log      log.Logger
+	lastSeq  uint64
 }
 
 // NewClient constructs a Client over an existing grpc.ClientConn.
