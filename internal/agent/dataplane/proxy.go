@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/networking/policy"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -21,6 +22,13 @@ import (
 // budget?" predicate. The proxy refuses new connections when fresh()
 // returns false (fail-closed behavior on prolonged watch disconnect).
 type freshFn func() bool
+
+// policyEvalFn evaluates ingress policy for a connection landing on
+// serviceID from srcIP on (port, proto). Nil means "no policy
+// enforcement wired in" (treated as allow). The Subsystem owns the
+// real implementation and resolves srcIP -> identity through the
+// LocalInstances table internally.
+type policyEvalFn func(serviceID string, srcIP net.IP, port int, proto string) policy.Result
 
 // listenerKey identifies a single VIP+port+protocol listener.
 type listenerKey struct {
@@ -36,6 +44,7 @@ type ProxyManager struct {
 	cache   *Cache
 	metrics *Metrics
 	fresh   freshFn
+	eval    policyEvalFn
 
 	mu        sync.Mutex
 	stopped   bool
@@ -43,12 +52,13 @@ type ProxyManager struct {
 	services  map[string]*types.Service // serviceID -> last-known spec
 }
 
-func newProxyManager(cfg Config, cache *Cache, m *Metrics, fresh freshFn) *ProxyManager {
+func newProxyManager(cfg Config, cache *Cache, m *Metrics, fresh freshFn, eval policyEvalFn) *ProxyManager {
 	return &ProxyManager{
 		cfg:       cfg,
 		cache:     cache,
 		metrics:   m,
 		fresh:     fresh,
+		eval:      eval,
 		listeners: make(map[listenerKey]*listener),
 		services:  make(map[string]*types.Service),
 	}
@@ -198,19 +208,22 @@ func (pm *ProxyManager) openListener(svc *types.Service, p types.ServicePort, pr
 	}
 
 	l := &listener{
-		key:        listenerKey{serviceID: svc.ID, port: p.Port, protocol: proto},
-		serviceID:  svc.ID,
-		targetPort: p.TargetPort,
-		addr:       addr,
-		log:        pm.cfg.Logger.WithComponent("proxy"),
-		cache:      pm.cache,
-		metrics:    pm.metrics,
-		fresh:      pm.fresh,
-		pref:       pref,
-		localNode:  localNode,
-		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
-		drain:      pm.cfg.DrainTimeout,
-		stop:       make(chan struct{}),
+		key:         listenerKey{serviceID: svc.ID, port: p.Port, protocol: proto},
+		serviceID:   svc.ID,
+		namespace:   svc.Namespace,
+		servicePort: p.Port,
+		targetPort:  p.TargetPort,
+		addr:        addr,
+		log:         pm.cfg.Logger.WithComponent("proxy"),
+		cache:       pm.cache,
+		metrics:     pm.metrics,
+		fresh:       pm.fresh,
+		eval:        pm.eval,
+		pref:        pref,
+		localNode:   localNode,
+		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		drain:       pm.cfg.DrainTimeout,
+		stop:        make(chan struct{}),
 	}
 	if proto == "udp" {
 		pc, err := net.ListenPacket("udp", addr)
@@ -244,22 +257,41 @@ func normalizeProtocol(p string) string {
 	}
 }
 
+// remoteIP extracts the source IP from a net.Addr (TCP or UDP).
+// Returns nil for unsupported address types.
+func remoteIP(a net.Addr) net.IP {
+	switch v := a.(type) {
+	case *net.TCPAddr:
+		return v.IP
+	case *net.UDPAddr:
+		return v.IP
+	}
+	host, _, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(host)
+}
+
 // listener is a single VIP+port+protocol bind. The accept loop runs
 // in its own goroutine; closing stop and the underlying socket causes
 // the loop to exit.
 type listener struct {
-	key        listenerKey
-	serviceID  string
-	targetPort int
-	addr       string
-	log        log.Logger
-	cache      *Cache
-	metrics    *Metrics
-	fresh      freshFn
-	pref       string
-	localNode  string
-	rng        *rand.Rand
-	drain      time.Duration
+	key         listenerKey
+	serviceID   string
+	namespace   string
+	servicePort int
+	targetPort  int
+	addr        string
+	log         log.Logger
+	cache       *Cache
+	metrics     *Metrics
+	fresh       freshFn
+	eval        policyEvalFn
+	pref        string
+	localNode   string
+	rng         *rand.Rand
+	drain       time.Duration
 
 	tcp net.Listener
 	udp net.PacketConn
@@ -338,6 +370,26 @@ func (l *listener) handleTCP(client net.Conn) {
 			log.Str("service_id", l.serviceID),
 		)
 		return
+	}
+	if l.eval != nil {
+		src := remoteIP(client.RemoteAddr())
+		res := l.eval(l.serviceID, src, l.servicePort, "tcp")
+		if res.Decision == policy.DecisionDeny {
+			l.metrics.incTotal(l.serviceID, "tcp", "policy_denied")
+			l.metrics.incPolicyDrop(l.serviceID, l.namespace, l.serviceID, string(res.Reason))
+			l.log.Warn("connection dropped by network policy",
+				log.Str("service_id", l.serviceID),
+				log.Str("namespace", l.namespace),
+				log.Str("src", src.String()),
+				log.Int("port", l.servicePort),
+				log.Str("protocol", "tcp"),
+				log.Str("reason", string(res.Reason)),
+			)
+			return
+		}
+		if res.Decision == policy.DecisionAllow {
+			l.metrics.incPolicyAllow(l.serviceID, l.namespace, l.serviceID)
+		}
 	}
 	healthy, ok := l.cache.Healthy(l.serviceID)
 	if !ok || len(healthy) == 0 {
@@ -445,6 +497,26 @@ func (l *listener) handleUDP(payload []byte, from net.Addr) {
 	if !l.fresh() {
 		l.metrics.incTotal(l.serviceID, "udp", "stale_watch")
 		return
+	}
+	if l.eval != nil {
+		src := remoteIP(from)
+		res := l.eval(l.serviceID, src, l.servicePort, "udp")
+		if res.Decision == policy.DecisionDeny {
+			l.metrics.incTotal(l.serviceID, "udp", "policy_denied")
+			l.metrics.incPolicyDrop(l.serviceID, l.namespace, l.serviceID, string(res.Reason))
+			l.log.Warn("datagram dropped by network policy",
+				log.Str("service_id", l.serviceID),
+				log.Str("namespace", l.namespace),
+				log.Str("src", src.String()),
+				log.Int("port", l.servicePort),
+				log.Str("protocol", "udp"),
+				log.Str("reason", string(res.Reason)),
+			)
+			return
+		}
+		if res.Decision == policy.DecisionAllow {
+			l.metrics.incPolicyAllow(l.serviceID, l.namespace, l.serviceID)
+		}
 	}
 	healthy, ok := l.cache.Healthy(l.serviceID)
 	if !ok || len(healthy) == 0 {

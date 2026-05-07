@@ -23,11 +23,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/networking/endpoints"
+	"github.com/runestack/rune/pkg/networking/localinstances"
+	"github.com/runestack/rune/pkg/networking/policy"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -126,6 +129,11 @@ type Subsystem struct {
 	nfm     nftablesManager
 	metrics *Metrics
 
+	// Network policy state (RUNE-064).
+	policyMu       sync.RWMutex
+	policies       map[string]*policy.Compiled
+	localInstances *policy.LocalInstancesTable
+
 	mu      sync.Mutex
 	started bool
 	stopped bool
@@ -160,17 +168,26 @@ func New(cfg Config) (*Subsystem, error) {
 	if err := endpoints.Register(cfg.OrderedLog); err != nil {
 		return nil, fmt.Errorf("dataplane: register endpoints op: %w", err)
 	}
+	if err := localinstances.Register(cfg.OrderedLog); err != nil {
+		return nil, fmt.Errorf("dataplane: register local_instances op: %w", err)
+	}
+	nodeID := ""
+	if cfg.Node != nil {
+		nodeID = cfg.Node.NodeID()
+	}
 	m := newMetrics()
 	cache := newCache()
 	s := &Subsystem{
-		cfg:     cfg,
-		log:     cfg.Logger,
-		cache:   cache,
-		metrics: m,
-		nfm:     newNFTables(cfg.Mode, cfg.Logger),
-		readyCh: make(chan struct{}),
+		cfg:            cfg,
+		log:            cfg.Logger,
+		cache:          cache,
+		metrics:        m,
+		nfm:            newNFTables(cfg.Mode, cfg.Logger),
+		readyCh:        make(chan struct{}),
+		policies:       make(map[string]*policy.Compiled),
+		localInstances: policy.NewLocalInstancesTable(nodeID),
 	}
-	s.proxy = newProxyManager(cfg, cache, m, s.fresh)
+	s.proxy = newProxyManager(cfg, cache, m, s.fresh, s.evaluatePolicy)
 	return s, nil
 }
 
@@ -196,13 +213,54 @@ func (s *Subsystem) RegisterService(svc *types.Service) error {
 	if svc == nil {
 		return errors.New("dataplane: nil service")
 	}
+	// Compile and store policy before opening listeners so the very
+	// first connection sees the active rule set.
+	compiled := policy.Compile(svc)
+	s.policyMu.Lock()
+	if compiled == nil {
+		delete(s.policies, svc.ID)
+	} else {
+		s.policies[svc.ID] = compiled
+	}
+	s.policyMu.Unlock()
+	if compiled != nil {
+		s.metrics.setPolicyRules(svc.ID, svc.Namespace, compiled.IngressRuleCount()+compiled.EgressRuleCount())
+	} else {
+		s.metrics.setPolicyRules(svc.ID, svc.Namespace, 0)
+	}
+	s.metrics.setPolicyLastSeq(svc.ID, svc.Namespace, time.Now().Unix())
 	return s.proxy.Register(svc)
 }
 
 // UnregisterService closes listeners for serviceID. Connections drain
 // for up to DrainTimeout. Idempotent.
 func (s *Subsystem) UnregisterService(serviceID string) {
+	s.policyMu.Lock()
+	delete(s.policies, serviceID)
+	s.policyMu.Unlock()
 	s.proxy.Unregister(serviceID)
+}
+
+// LocalInstances returns the agent's IP -> identity table for
+// diagnostics and tests.
+func (s *Subsystem) LocalInstances() *policy.LocalInstancesTable { return s.localInstances }
+
+// evaluatePolicy is the closure handed to the proxy manager. It
+// resolves the source IP to identity via the LocalInstances table
+// then evaluates against the destination service's compiled policy.
+func (s *Subsystem) evaluatePolicy(serviceID string, srcIP net.IP, port int, proto string) policy.Result {
+	s.policyMu.RLock()
+	c := s.policies[serviceID]
+	s.policyMu.RUnlock()
+	peer := s.localInstances.PeerInfoFor(srcIP)
+	return c.EvaluateIngress(peer, port, proto)
+}
+
+// PolicyFor returns the compiled policy for serviceID for diagnostics.
+func (s *Subsystem) PolicyFor(serviceID string) *policy.Compiled {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.policies[serviceID]
 }
 
 // Start begins the watch loop and reconciler. Returns once Ready
@@ -287,6 +345,18 @@ func (s *Subsystem) hydrate(ctx context.Context) (uint64, error) {
 	}); err != nil {
 		return 0, err
 	}
+	if err := snap.Range([]byte("local_instances/"), func(_, value []byte) error {
+		var li types.LocalInstances
+		if err := decodeJSON(value, &li); err != nil {
+			s.log.Warn("hydrate: skip malformed local_instances record", log.Err(err))
+			return nil
+		}
+		n := s.localInstances.Apply(li)
+		s.metrics.setLocalInstances(n)
+		return nil
+	}); err != nil {
+		return 0, err
+	}
 	return seq, nil
 }
 
@@ -351,27 +421,54 @@ func (s *Subsystem) consume(ctx context.Context, ch <-chan orderedlog.Event, cur
 
 func (s *Subsystem) applyEvent(ev orderedlog.Event) {
 	for _, m := range ev.Mutations {
-		if !endpoints.IsEndpointsMutation(m) {
-			continue
+		switch {
+		case endpoints.IsEndpointsMutation(m):
+			s.applyEndpointsMutation(m)
+		case localinstances.IsLocalInstancesMutation(m):
+			s.applyLocalInstancesMutation(m)
 		}
-		switch m.Kind {
-		case orderedlog.MutationDelete:
-			s.cache.Delete(m.Name)
-			s.metrics.observeEndpointSet(m.Name, 0)
-			s.log.Debug("endpoints deleted", log.Str("service_id", m.Name))
-		case orderedlog.MutationPut:
-			se, err := endpoints.DecodePayload(m)
-			if err != nil {
-				s.log.Warn("apply: decode endpoints payload failed", log.Err(err))
-				continue
-			}
-			s.cache.Set(se.ServiceID, se.Endpoints)
-			s.metrics.observeEndpointSet(se.ServiceID, len(se.Endpoints))
-			s.log.Debug("endpoints updated",
-				log.Str("service_id", se.ServiceID),
-				log.Int("count", len(se.Endpoints)),
-			)
+	}
+}
+
+func (s *Subsystem) applyEndpointsMutation(m orderedlog.Mutation) {
+	switch m.Kind {
+	case orderedlog.MutationDelete:
+		s.cache.Delete(m.Name)
+		s.metrics.observeEndpointSet(m.Name, 0)
+		s.log.Debug("endpoints deleted", log.Str("service_id", m.Name))
+	case orderedlog.MutationPut:
+		se, err := endpoints.DecodePayload(m)
+		if err != nil {
+			s.log.Warn("apply: decode endpoints payload failed", log.Err(err))
+			return
 		}
+		s.cache.Set(se.ServiceID, se.Endpoints)
+		s.metrics.observeEndpointSet(se.ServiceID, len(se.Endpoints))
+		s.log.Debug("endpoints updated",
+			log.Str("service_id", se.ServiceID),
+			log.Int("count", len(se.Endpoints)),
+		)
+	}
+}
+
+func (s *Subsystem) applyLocalInstancesMutation(m orderedlog.Mutation) {
+	switch m.Kind {
+	case orderedlog.MutationDelete:
+		n := s.localInstances.Remove(m.Name)
+		s.metrics.setLocalInstances(n)
+		s.log.Debug("local_instances deleted", log.Str("node_id", m.Name))
+	case orderedlog.MutationPut:
+		li, err := localinstances.DecodePayload(m)
+		if err != nil {
+			s.log.Warn("apply: decode local_instances payload failed", log.Err(err))
+			return
+		}
+		n := s.localInstances.Apply(li)
+		s.metrics.setLocalInstances(n)
+		s.log.Debug("local_instances updated",
+			log.Str("node_id", li.NodeID),
+			log.Int("count", len(li.Instances)),
+		)
 	}
 }
 

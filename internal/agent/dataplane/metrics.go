@@ -15,6 +15,11 @@ type Metrics struct {
 	WatchLag          prometheus.Gauge       // seconds since last watch event
 	NftablesRules     prometheus.Gauge       // current rule count (linux only)
 	ListenersOpen     *prometheus.GaugeVec   // {service,protocol}
+	PolicyDrops       *prometheus.CounterVec // {service,namespace,policy,reason}
+	PolicyAllows      *prometheus.CounterVec // {service,namespace,policy}
+	PolicyRules       *prometheus.GaugeVec   // {service,namespace} -> ingress+egress rule count
+	PolicyLastSeq     *prometheus.GaugeVec   // {service,namespace} -> last refresh timestamp (unix seconds)
+	LocalInstances    prometheus.Gauge       // size of LocalInstances table
 }
 
 func newMetrics() *Metrics {
@@ -43,6 +48,26 @@ func newMetrics() *Metrics {
 			Name: "rune_proxy_listeners_open",
 			Help: "Open per-VIP proxy listeners by service and protocol.",
 		}, []string{"service", "protocol"}),
+		PolicyDrops: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "rune_policy_drops_total",
+			Help: "Connections rejected by network policy, labelled by destination service and reason.",
+		}, []string{"service", "namespace", "policy", "reason"}),
+		PolicyAllows: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "rune_policy_allows_total",
+			Help: "Connections explicitly allowed by network policy.",
+		}, []string{"service", "namespace", "policy"}),
+		PolicyRules: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "rune_policy_rules",
+			Help: "Number of compiled ingress+egress rules currently active for a service.",
+		}, []string{"service", "namespace"}),
+		PolicyLastSeq: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "rune_policy_last_seq",
+			Help: "Unix timestamp (seconds) of the last successful policy refresh per service. Operators use this to detect stale agents; in v1 the value is the registration time on the agent (no separate policy/ keyspace yet).",
+		}, []string{"service", "namespace"}),
+		LocalInstances: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "rune_policy_local_instances",
+			Help: "Size of the agent's LocalInstances IP -> identity table.",
+		}),
 	}
 }
 
@@ -53,6 +78,7 @@ func (m *Metrics) Register(reg prometheus.Registerer) error {
 	for _, c := range []prometheus.Collector{
 		m.ConnectionsActive, m.ConnectionsTotal, m.EndpointHealth,
 		m.WatchLag, m.NftablesRules, m.ListenersOpen,
+		m.PolicyDrops, m.PolicyAllows, m.PolicyRules, m.PolicyLastSeq, m.LocalInstances,
 	} {
 		if err := reg.Register(c); err != nil {
 			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
@@ -79,3 +105,17 @@ func (m *Metrics) observeListenerClosed(svc, proto string) {
 }
 func (m *Metrics) setWatchLag(s float64)  { m.WatchLag.Set(s) }
 func (m *Metrics) setNftablesRules(n int) { m.NftablesRules.Set(float64(n)) }
+
+func (m *Metrics) incPolicyDrop(svc, ns, pol, reason string) {
+	m.PolicyDrops.WithLabelValues(svc, ns, pol, reason).Inc()
+}
+func (m *Metrics) incPolicyAllow(svc, ns, pol string) {
+	m.PolicyAllows.WithLabelValues(svc, ns, pol).Inc()
+}
+func (m *Metrics) setPolicyRules(svc, ns string, n int) {
+	m.PolicyRules.WithLabelValues(svc, ns).Set(float64(n))
+}
+func (m *Metrics) setPolicyLastSeq(svc, ns string, ts int64) {
+	m.PolicyLastSeq.WithLabelValues(svc, ns).Set(float64(ts))
+}
+func (m *Metrics) setLocalInstances(n int) { m.LocalInstances.Set(float64(n)) }

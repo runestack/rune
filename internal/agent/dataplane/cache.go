@@ -113,3 +113,9 @@ type ServiceSummary struct {
 func decodePayload(raw []byte, out *types.ServiceEndpoints) error {
 	return json.Unmarshal(raw, out)
 }
+
+// decodeJSON is a generic decode helper for snapshot hydration of
+// other op-kind records (local_instances, etc.).
+func decodeJSON(raw []byte, out any) error {
+	return json.Unmarshal(raw, out)
+}

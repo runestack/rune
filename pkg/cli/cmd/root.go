@@ -70,6 +70,8 @@ func init() {
 	rootCmd.AddCommand(newWhoAmICmd())
 	// Admin command group (bootstrap, token, user, policy)
 	rootCmd.AddCommand(newAdminCmd())
+	// Network command group (RUNE-064: ServiceNetworkPolicy explain/validate)
+	rootCmd.AddCommand(newPolicyCmd())
 	// Register config management commands
 	rootCmd.AddCommand(newConfigCmd())
 	// Register convenient context switching alias
