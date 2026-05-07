@@ -9,6 +9,7 @@ import (
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/store"
+	"google.golang.org/grpc"
 )
 
 // Options defines the options for the API server.
@@ -36,6 +37,12 @@ type Options struct {
 
 	// Orchestrator
 	Orchestrator orchestrator.Orchestrator
+
+	// ExtraGRPCRegistrars are invoked during gRPC server startup to
+	// register additional services beyond the built-in set. Used by
+	// runed to plug in WatchService (RUNE-028) without forcing the
+	// API server to depend on every networking-layer package.
+	ExtraGRPCRegistrars []func(grpc.ServiceRegistrar)
 }
 
 // Option is a function that configures options.
@@ -112,5 +119,17 @@ func WithLogger(logger log.Logger) Option {
 func WithOrchestrator(orchestrator orchestrator.Orchestrator) Option {
 	return func(opts *Options) {
 		opts.Orchestrator = orchestrator
+	}
+}
+
+// WithExtraGRPCRegistrar appends a function that registers an
+// additional gRPC service when the server starts. Callers (e.g.
+// runed wiring up WatchService) use this to inject services without
+// the API server package having to import them.
+func WithExtraGRPCRegistrar(reg func(grpc.ServiceRegistrar)) Option {
+	return func(opts *Options) {
+		if reg != nil {
+			opts.ExtraGRPCRegistrars = append(opts.ExtraGRPCRegistrars, reg)
+		}
 	}
 }

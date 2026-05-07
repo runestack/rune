@@ -218,6 +218,11 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterAdminServiceServer(s.grpcServer, s.adminService)
 	generated.RegisterNamespaceServiceServer(s.grpcServer, s.namespaceService)
 
+	// Extra registrars (e.g. WatchService wired by runed for RUNE-028).
+	for _, reg := range s.options.ExtraGRPCRegistrars {
+		reg(s.grpcServer)
+	}
+
 	// Register reflection service for grpcurl/development
 	reflection.Register(s.grpcServer)
 

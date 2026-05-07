@@ -13,12 +13,15 @@ import (
 
 	"github.com/runestack/rune/internal/agent"
 	"github.com/runestack/rune/internal/config"
+	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/version"
+	watchsvc "github.com/runestack/rune/pkg/watch"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -291,8 +294,31 @@ func main() {
 	// Token-based auth is always enabled in MVP
 	logger.Info("Authentication enabled (token-based)")
 
-	// Create and start API server
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, logger)...)
+	// Open the in-process OrderedLog before the API server so we can
+	// register the WatchService alongside the other gRPC services.
+	bs, ok := stateStore.(*store.BadgerStore)
+	if !ok {
+		logger.Error("State store is not a *BadgerStore", log.Str("type", fmt.Sprintf("%T", stateStore)))
+		os.Exit(1)
+	}
+	olog := orderedlog.NewBadgerBackend(bs.DB(), orderedlog.BackendOptions{
+		Logger: logger.WithComponent("orderedlog"),
+	})
+	if err := olog.Open(); err != nil {
+		logger.Error("Failed to open orderedlog", log.Err(err))
+		os.Exit(1)
+	}
+	defer olog.Close()
+
+	watchServer := watchsvc.NewServer(olog, logger)
+	defer watchServer.Close()
+
+	watchRegistrar := func(reg grpc.ServiceRegistrar) {
+		pb.RegisterWatchServiceServer(reg, watchServer)
+	}
+
+	// Create and start API server (with WatchService registered).
+	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, logger, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)
@@ -304,10 +330,11 @@ func main() {
 	}
 
 	// Start the per-node agent. On single-node, the agent runs in-process
-	// and shares the control plane's Badger DB via an in-process
-	// OrderedLog backend. Subsystems (data plane, DNS, policy, ingress)
-	// register themselves in subsequent networking-layer tickets.
-	agentInst, agentStop, err := startAgent(ctx, logger, stateStore, *dataDir, *devMode)
+	// and shares the control plane's Badger DB via the in-process
+	// OrderedLog backend opened above. Subsystems (data plane, DNS,
+	// policy, ingress) register themselves in subsequent
+	// networking-layer tickets.
+	agentInst, agentStop, err := startAgent(ctx, logger, olog, *dataDir, *devMode)
 	if err != nil {
 		logger.Error("Failed to start agent", log.Err(err))
 		_ = apiServer.Stop()
@@ -392,7 +419,7 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 	return st, appCfg, storeDir, nil
 }
 
-func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger log.Logger) []server.Option {
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger log.Logger, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
 	opts := []server.Option{
 		server.WithGRPCAddr(grpcAddress),
 		server.WithHTTPAddr(httpAddress),
@@ -401,33 +428,19 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger 
 	}
 	// Token-based auth (MVP)
 	opts = append(opts, server.WithAuth(nil))
+	for _, r := range extraRegistrars {
+		opts = append(opts, server.WithExtraGRPCRegistrar(r))
+	}
 	return opts
 }
 
-// startAgent boots the per-node agent. It creates the in-process
-// OrderedLog backend over the control plane's Badger DB, loads or
-// creates the node identity, and starts the agent. Returns the agent
-// and a stop function the caller invokes during shutdown.
-func startAgent(ctx context.Context, logger log.Logger, st store.Store, dataDirPath string, dev bool) (*agent.Agent, func(), error) {
-	bs, ok := st.(*store.BadgerStore)
-	if !ok {
-		return nil, nil, fmt.Errorf("agent: state store is not a *BadgerStore (got %T)", st)
-	}
-	db := bs.DB()
-	if db == nil {
-		return nil, nil, fmt.Errorf("agent: state store has no underlying *badger.DB")
-	}
-
-	olog := orderedlog.NewBadgerBackend(db, orderedlog.BackendOptions{
-		Logger: logger.WithComponent("orderedlog"),
-	})
-	if err := olog.Open(); err != nil {
-		return nil, nil, fmt.Errorf("agent: open orderedlog: %w", err)
-	}
-
+// startAgent boots the per-node agent against an already-open
+// OrderedLog. The orderedlog is owned by the caller (main) so it can
+// also be shared with the API server's WatchService. Returns the
+// agent and a stop function the caller invokes during shutdown.
+func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, dataDirPath string, dev bool) (*agent.Agent, func(), error) {
 	identity, err := agent.LoadOrCreateIdentity(dataDirPath)
 	if err != nil {
-		_ = olog.Close()
 		return nil, nil, fmt.Errorf("agent: load identity: %w", err)
 	}
 
@@ -443,12 +456,10 @@ func startAgent(ctx context.Context, logger log.Logger, st store.Store, dataDirP
 		Logger:     logger,
 	})
 	if err != nil {
-		_ = olog.Close()
 		return nil, nil, fmt.Errorf("agent: construct: %w", err)
 	}
 
 	if err := a.Start(ctx); err != nil {
-		_ = olog.Close()
 		return nil, nil, fmt.Errorf("agent: start: %w", err)
 	}
 
@@ -463,9 +474,6 @@ func startAgent(ctx context.Context, logger log.Logger, st store.Store, dataDirP
 		defer cancel()
 		if err := a.Stop(stopCtx); err != nil {
 			logger.Warn("Agent stop returned error", log.Err(err))
-		}
-		if err := olog.Close(); err != nil {
-			logger.Warn("OrderedLog close returned error", log.Err(err))
 		}
 	}
 	return a, stop, nil
