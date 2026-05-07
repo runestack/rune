@@ -75,6 +75,13 @@ func (s *BadgerStore) Open(path string) error {
 // GetOpts returns the configured store options
 func (s *BadgerStore) GetOpts() StoreOptions { return s.opts }
 
+// DB returns the underlying *badger.DB. Intended for in-process
+// subsystems (notably pkg/store/orderedlog) that need to share the
+// same Badger instance for atomic writes against reserved key
+// prefixes. Callers MUST NOT write to keys outside their reserved
+// prefix; the orderedlog seam lint enforces this.
+func (s *BadgerStore) DB() *badger.DB { return s.db }
+
 // GetLimits returns configured limits for secrets and configs
 func (s *BadgerStore) GetLimits() (Limits, Limits) { return s.opts.SecretLimits, s.opts.ConfigLimits }
 

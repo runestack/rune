@@ -9,11 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/runestack/rune/internal/agent"
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/api/server"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/version"
 	"github.com/spf13/viper"
 )
@@ -27,6 +30,7 @@ var (
 	debugLogLevel = flag.Bool("debug", false, "Enable debug mode (shorthand for --log-level=debug)")
 	logFormat     = flag.String("log-format", "text", "Log format (text, json)")
 	prettyLogs    = flag.Bool("pretty", false, "Enable pretty text log format (shorthand for --log-format=text)")
+	devMode       = flag.Bool("dev-mode", false, "Run in dev mode: skip nftables, bind ingress on user ports, embedded DNS resolves .rune to 127.0.0.1 (laptop development)")
 	showHelp      = flag.Bool("help", false, "Show help")
 	showVer       = flag.Bool("version", false, "Show version")
 )
@@ -299,8 +303,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start the per-node agent. On single-node, the agent runs in-process
+	// and shares the control plane's Badger DB via an in-process
+	// OrderedLog backend. Subsystems (data plane, DNS, policy, ingress)
+	// register themselves in subsequent networking-layer tickets.
+	agentInst, agentStop, err := startAgent(ctx, logger, stateStore, *dataDir, *devMode)
+	if err != nil {
+		logger.Error("Failed to start agent", log.Err(err))
+		_ = apiServer.Stop()
+		os.Exit(1)
+	}
+	_ = agentInst
+
 	// Wait for cancellation
 	<-ctx.Done()
+
+	// Stop agent before API server so subsystems can drain via the
+	// control plane if they need to.
+	if agentStop != nil {
+		agentStop()
+	}
 
 	// Gracefully stop the API server
 	if err := apiServer.Stop(); err != nil {
@@ -380,4 +402,71 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger 
 	// Token-based auth (MVP)
 	opts = append(opts, server.WithAuth(nil))
 	return opts
+}
+
+// startAgent boots the per-node agent. It creates the in-process
+// OrderedLog backend over the control plane's Badger DB, loads or
+// creates the node identity, and starts the agent. Returns the agent
+// and a stop function the caller invokes during shutdown.
+func startAgent(ctx context.Context, logger log.Logger, st store.Store, dataDirPath string, dev bool) (*agent.Agent, func(), error) {
+	bs, ok := st.(*store.BadgerStore)
+	if !ok {
+		return nil, nil, fmt.Errorf("agent: state store is not a *BadgerStore (got %T)", st)
+	}
+	db := bs.DB()
+	if db == nil {
+		return nil, nil, fmt.Errorf("agent: state store has no underlying *badger.DB")
+	}
+
+	olog := orderedlog.NewBadgerBackend(db, orderedlog.BackendOptions{
+		Logger: logger.WithComponent("orderedlog"),
+	})
+	if err := olog.Open(); err != nil {
+		return nil, nil, fmt.Errorf("agent: open orderedlog: %w", err)
+	}
+
+	identity, err := agent.LoadOrCreateIdentity(dataDirPath)
+	if err != nil {
+		_ = olog.Close()
+		return nil, nil, fmt.Errorf("agent: load identity: %w", err)
+	}
+
+	mode := agent.ModeProduction
+	if dev {
+		mode = agent.ModeDev
+	}
+
+	a, err := agent.New(agent.Config{
+		Identity:   identity,
+		OrderedLog: olog,
+		Mode:       mode,
+		Logger:     logger,
+	})
+	if err != nil {
+		_ = olog.Close()
+		return nil, nil, fmt.Errorf("agent: construct: %w", err)
+	}
+
+	if err := a.Start(ctx); err != nil {
+		_ = olog.Close()
+		return nil, nil, fmt.Errorf("agent: start: %w", err)
+	}
+
+	logger.Info("Agent started",
+		log.Str("node_id", identity.NodeID),
+		log.Str("hostname", identity.Hostname),
+		log.Str("mode", string(mode)),
+	)
+
+	stop := func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := a.Stop(stopCtx); err != nil {
+			logger.Warn("Agent stop returned error", log.Err(err))
+		}
+		if err := olog.Close(); err != nil {
+			logger.Warn("OrderedLog close returned error", log.Err(err))
+		}
+	}
+	return a, stop, nil
 }
