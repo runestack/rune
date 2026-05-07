@@ -86,6 +86,12 @@ type Service struct {
 	// Status of the service
 	Status ServiceStatus `json:"status" yaml:"status"`
 
+	// IngressCert tracks asynchronous TLS certificate state for the
+	// ingress controller (RUNE-066). Populated only when Expose is
+	// configured for ACME-managed TLS. The orchestrator updates this
+	// field independently of cast; cast does not block on issuance.
+	IngressCert *IngressCertStatus `json:"ingressCert,omitempty" yaml:"ingressCert,omitempty"`
+
 	// Instances of this service currently running
 	Instances []Instance `json:"instances,omitempty" yaml:"instances,omitempty"`
 
@@ -171,6 +177,31 @@ type ExposeServiceTLS struct {
 
 	// Whether to automatically generate a TLS certificate
 	Auto bool `json:"auto,omitempty" yaml:"auto,omitempty"`
+
+	// Mode selects the certificate provisioning strategy.
+	// Empty / "manual": operator supplies SecretName.
+	// "acme": ingress controller obtains a cert from Let's Encrypt
+	// (HTTP-01) for Expose.Host. Auto implies Mode=acme.
+	// See RUNE-066.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+}
+
+// Well-known TLS modes for ExposeServiceTLS.Mode.
+const (
+	ExposeTLSModeManual = "manual"
+	ExposeTLSModeACME   = "acme"
+)
+
+// IsACME reports whether the expose configuration requests
+// ACME-managed TLS. Auto: true is treated as Mode=acme.
+func (t *ExposeServiceTLS) IsACME() bool {
+	if t == nil {
+		return false
+	}
+	if t.Mode == ExposeTLSModeACME {
+		return true
+	}
+	return t.Auto && t.Mode == ""
 }
 
 // ServiceDiscovery defines how a service is discovered by other services.

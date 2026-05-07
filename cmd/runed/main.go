@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -22,14 +23,60 @@ import (
 	"github.com/runestack/rune/pkg/api/server"
 	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/log"
+	acmesvc "github.com/runestack/rune/pkg/networking/acme"
+	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/networking/vip"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/version"
 	watchsvc "github.com/runestack/rune/pkg/watch"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 )
+
+// acmeCertStoreWithReload wraps a CertStore so that successful Set
+// calls trigger a refresh of the ingress CertLoader cache. Without
+// this, newly-issued certificates would not be served until a process
+// restart.
+type acmeCertStoreWithReload struct {
+	store  acmesvc.CertStore
+	loader *ingress.CertLoader
+}
+
+func (w acmeCertStoreWithReload) Set(ctx context.Context, host string, cert, key []byte) error {
+	if err := w.store.Set(ctx, host, cert, key); err != nil {
+		return err
+	}
+	return w.loader.Reload(ctx, host)
+}
+
+func (w acmeCertStoreWithReload) Get(ctx context.Context, host string) ([]byte, []byte, error) {
+	return w.store.Get(ctx, host)
+}
+
+func (w acmeCertStoreWithReload) Delete(ctx context.Context, host string) error {
+	w.loader.Forget(host)
+	return w.store.Delete(ctx, host)
+}
+
+// acmeNoopStatus discards status updates. Until the service-watch
+// wiring lands, there is no Service object to mutate; the orchestrator
+// still records state in its in-memory tracker which is enough for
+// observability via /metrics.
+type acmeNoopStatus struct {
+	logger log.Logger
+}
+
+func (s acmeNoopStatus) UpdateIngressCert(_ context.Context, ns, name string, st types.IngressCertStatus) error {
+	s.logger.Debug("ingress cert status",
+		log.Str("namespace", ns),
+		log.Str("service", name),
+		log.Str("host", st.Host),
+		log.Str("state", string(st.State)),
+		log.Str("error", st.LastError))
+	return nil
+}
 
 var (
 	configFile    = flag.String("config", "", "Path to runefile.yaml (server configuration)")
@@ -43,6 +90,11 @@ var (
 	devMode       = flag.Bool("dev-mode", false, "Run in dev mode: skip nftables, bind ingress on user ports, embedded DNS resolves .rune to 127.0.0.1 (laptop development)")
 	clusterCIDR   = flag.String("cluster-cidr", "10.96.0.0/16", "Cluster service CIDR for VIP allocation (RFC1918 or 100.64/10)")
 	metricsAddr   = flag.String("metrics-addr", "127.0.0.1:9100", "Address for the Prometheus /metrics endpoint (empty disables)")
+	nodeRole      = flag.String("node-role", "", "Comma-separated node roles. 'edge' enables the ingress controller (RUNE-066) and ACME orchestrator on this node.")
+	ingressHTTP   = flag.String("ingress-http-addr", "", "Bind address for the ingress HTTP listener. Defaults to :80 in production, :8080 in dev mode. Used only when node-role contains 'edge'.")
+	ingressHTTPS  = flag.String("ingress-https-addr", "", "Bind address for the ingress HTTPS listener. Defaults to :443 in production, :8443 in dev mode. Used only when node-role contains 'edge'. Empty disables TLS termination.")
+	acmeDirectory = flag.String("acme-directory", "", "ACME directory URL. Empty defaults to Let's Encrypt production. Use a Pebble URL for integration tests.")
+	acmeEmail     = flag.String("acme-email", "", "Contact email passed to the ACME provider on account registration.")
 	showHelp      = flag.Bool("help", false, "Show help")
 	showVer       = flag.Bool("version", false, "Show version")
 )
@@ -362,7 +414,11 @@ func main() {
 	// policy, ingress) register themselves in subsequent
 	// networking-layer tickets.
 	var dnsSub *dnssub.Subsystem
-	agentInst, agentStop, err := startAgent(ctx, logger, olog, *dataDir, *devMode, func(a *agent.Agent) error {
+	extraLabels := map[string]string{}
+	if *nodeRole != "" {
+		extraLabels[types.LabelNodeRole] = *nodeRole
+	}
+	agentInst, agentStop, err := startAgent(ctx, logger, olog, *dataDir, *devMode, extraLabels, func(a *agent.Agent) error {
 		dpMode := dataplane.ModeProduction
 		if *devMode {
 			dpMode = dataplane.ModeDev
@@ -397,7 +453,81 @@ func main() {
 		if derr != nil {
 			return fmt.Errorf("dns: %w", derr)
 		}
-		return a.Register(dnsSub)
+		if err := a.Register(dnsSub); err != nil {
+			return err
+		}
+
+		// Ingress controller + ACME orchestrator (RUNE-066).
+		// Edge-only: any node whose role label contains "edge"
+		// terminates :80/:443 and runs the ACME issuer. v1 ships
+		// the building blocks; service-watch wiring that submits
+		// (service, host) requests to the orchestrator and
+		// populates the router from Service.Expose lands in a
+		// follow-up commit.
+		if types.IsEdgeNode(a.Identity().Labels) {
+			challenges := ingress.NewMemChallengeStore()
+			certStore := acmesvc.NewMemCertStore()
+			loader := ingress.NewCertLoader(certStore)
+			router := ingress.NewRouter()
+
+			httpAddr := *ingressHTTP
+			httpsAddr := *ingressHTTPS
+			if httpAddr == "" {
+				if *devMode {
+					httpAddr = ":8080"
+				} else {
+					httpAddr = ":80"
+				}
+			}
+			if httpsAddr == "" {
+				if *devMode {
+					httpsAddr = ":8443"
+				} else {
+					httpsAddr = ":443"
+				}
+			}
+			isub, ierr := ingress.New(ingress.Config{
+				Router:     router,
+				Challenges: challenges,
+				Certs:      loader,
+				HTTPAddr:   httpAddr,
+				HTTPSAddr:  httpsAddr,
+				// Until the service-watch wiring lands, no
+				// upstream resolves successfully — every routed
+				// request gets a 503 by design. The challenge
+				// path still works because it never resolves.
+				UpstreamResolver: ingress.FuncResolver(func(string, string, int) (string, bool) { return "", false }),
+				Logger:           logger.WithComponent("ingress"),
+			})
+			if ierr != nil {
+				return fmt.Errorf("ingress: %w", ierr)
+			}
+			if err := a.Register(isub); err != nil {
+				return err
+			}
+
+			// ACME orchestrator. Single-node = always leader.
+			issuer := &acmesvc.HTTP01Issuer{
+				Directory:  *acmeDirectory,
+				Email:      *acmeEmail,
+				Challenges: challenges,
+			}
+			orch := acmesvc.New(acmesvc.Config{
+				Issuer: issuer,
+				Certs:  acmeCertStoreWithReload{store: certStore, loader: loader},
+				Status: acmeNoopStatus{logger: logger.WithComponent("acme")},
+				Logger: logger.WithComponent("acme"),
+			})
+			go func() {
+				if err := orch.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					logger.Warn("acme orchestrator stopped", log.Err(err))
+				}
+			}()
+			logger.Info("Ingress + ACME enabled (edge node)",
+				log.Str("http", httpAddr),
+				log.Str("https", httpsAddr))
+		}
+		return nil
 	})
 	if err != nil {
 		logger.Error("Failed to start agent", log.Err(err))
@@ -565,10 +695,18 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger 
 // OrderedLog. The orderedlog is owned by the caller (main) so it can
 // also be shared with the API server's WatchService. Returns the
 // agent and a stop function the caller invokes during shutdown.
-func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, dataDirPath string, dev bool, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
+func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, dataDirPath string, dev bool, extraLabels map[string]string, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
 	identity, err := agent.LoadOrCreateIdentity(dataDirPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("agent: load identity: %w", err)
+	}
+	if len(extraLabels) > 0 {
+		if identity.Labels == nil {
+			identity.Labels = make(map[string]string, len(extraLabels))
+		}
+		for k, v := range extraLabels {
+			identity.Labels[k] = v
+		}
 	}
 
 	mode := agent.ModeProduction
