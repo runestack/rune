@@ -14,9 +14,10 @@
 #
 # Protected prefixes (must match keyPrefix conventions of the networking
 # layer):
-#   network/        - ClusterNetwork + VIP allocator state (RUNE-040)
-#   endpoints/      - ServiceEndpoints / LocalInstances (RUNE-063)
-#   policy/         - Compiled network-policy state (RUNE-064)
+#   network/         - ClusterNetwork + VIP allocator state (RUNE-040)
+#   endpoints/       - ServiceEndpoints (RUNE-041)
+#   local_instances/ - Per-node container-IP identity table (RUNE-063)
+#   policy/          - Compiled network-policy state (RUNE-064)
 
 set -euo pipefail
 
@@ -25,6 +26,7 @@ cd "$(dirname "$0")/.."
 PROTECTED_PREFIXES=(
   '"network/'
   '"endpoints/'
+  '"local_instances/'
   '"policy/'
 )
 

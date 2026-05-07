@@ -59,6 +59,10 @@ type Orchestrator interface {
 	// Scaling operations
 	CreateScalingOperation(ctx context.Context, service *types.Service, params types.ScalingOperationParams) error
 	GetActiveScalingOperation(ctx context.Context, namespace, serviceName string) (*types.ScalingOperation, error)
+
+	// SetEndpointPublisher wires the networking data plane (RUNE-063).
+	// Optional; nil-safe. Call once at startup before Start().
+	SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string)
 }
 
 // orchestrator implements the Orchestrator interface
@@ -436,4 +440,10 @@ func (o *orchestrator) CreateScalingOperation(ctx context.Context, service *type
 
 func (o *orchestrator) GetActiveScalingOperation(ctx context.Context, namespace, serviceName string) (*types.ScalingOperation, error) {
 	return o.scalingController.GetActiveOperation(ctx, namespace, serviceName)
+}
+
+// SetEndpointPublisher wires the networking data plane (RUNE-063)
+// to the underlying instance controller.
+func (o *orchestrator) SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string) {
+	o.instanceController.SetEndpointPublisher(publisher, nodeID)
 }

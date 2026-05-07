@@ -104,6 +104,12 @@ type InstanceMetadata struct {
 	// Resolved exposed endpoint on host (best-effort)
 	ExposedHost     string `json:"exposedHost,omitempty" yaml:"exposedHost,omitempty"`
 	ExposedHostPort int    `json:"exposedHostPort,omitempty" yaml:"exposedHostPort,omitempty"`
+
+	// ContainerIP is the IP assigned to the container on its primary
+	// Docker network. Recorded by the runner on Start; consumed by the
+	// agent to map source IPs to service identity for policy
+	// enforcement.
+	ContainerIP string `json:"containerIp,omitempty" yaml:"containerIp,omitempty"`
 }
 
 // ResolvedSecretMount contains the resolved secret data for mounting

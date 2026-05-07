@@ -482,6 +482,13 @@ func (s *APIServer) GetStore() store.Store {
 	return s.store
 }
 
+// GetOrchestrator returns the orchestrator instance. Used by runed
+// to wire post-construction collaborators (e.g. RUNE-063 networking
+// data plane endpoint publisher).
+func (s *APIServer) GetOrchestrator() orchestrator.Orchestrator {
+	return s.orchestrator
+}
+
 // logStreamInterceptor returns a stream interceptor for logging.
 func (s *APIServer) logStreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {

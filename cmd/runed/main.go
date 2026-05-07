@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/runestack/rune/internal/agent"
 	"github.com/runestack/rune/internal/agent/dataplane"
+	dnssub "github.com/runestack/rune/internal/agent/dns"
 	"github.com/runestack/rune/internal/config"
 	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
@@ -360,6 +361,7 @@ func main() {
 	// OrderedLog backend opened above. Subsystems (data plane, DNS,
 	// policy, ingress) register themselves in subsequent
 	// networking-layer tickets.
+	var dnsSub *dnssub.Subsystem
 	agentInst, agentStop, err := startAgent(ctx, logger, olog, *dataDir, *devMode, func(a *agent.Agent) error {
 		dpMode := dataplane.ModeProduction
 		if *devMode {
@@ -377,7 +379,25 @@ func main() {
 		if err := dp.Metrics().Register(prometheus.DefaultRegisterer); err != nil {
 			return fmt.Errorf("dataplane metrics: %w", err)
 		}
-		return a.Register(dp)
+		if err := a.Register(dp); err != nil {
+			return err
+		}
+
+		// Embedded DNS subsystem (RUNE-063). Registers itself with
+		// the agent so it inherits supervised lifecycle. Bind list
+		// stays at the loopback default in MVP; bridge enumeration
+		// is done by the caller in a follow-up commit. The store-
+		// backed ZoneProvider answers <svc>.<ns>.rune; freshness is
+		// "always" until the data plane exposes a real accessor.
+		dnsSub, derr = dnssub.New(dnssub.Config{
+			Zone:             dnssub.NewStoreZone(stateStore, logger.WithComponent("dns-zone")),
+			UpstreamProvider: dnssub.ResolvConfUpstreams(),
+			Logger:           logger.WithComponent("dns"),
+		})
+		if derr != nil {
+			return fmt.Errorf("dns: %w", derr)
+		}
+		return a.Register(dnsSub)
 	})
 	if err != nil {
 		logger.Error("Failed to start agent", log.Err(err))
@@ -385,6 +405,16 @@ func main() {
 		os.Exit(1)
 	}
 	_ = agentInst
+
+	// Wire the orchestrator's instance controller to the OrderedLog-
+	// backed networking publishers (RUNE-063). Best-effort: if either
+	// op-kind has already been registered (dnsSub.New just did so via
+	// the agent.Register path), Register is idempotent.
+	if pub, perr := dnssub.NewEndpointPublisher(olog, logger.WithComponent("endpoint-publisher")); perr != nil {
+		logger.Warn("Endpoint publisher disabled", log.Err(perr))
+	} else {
+		apiServer.GetOrchestrator().SetEndpointPublisher(pub, agentInst.Identity().NodeID)
+	}
 
 	// Optional: serve Prometheus metrics on a private address so
 	// scrapers can collect dataplane + future subsystem metrics.
@@ -401,6 +431,28 @@ func main() {
 			logger.Info("Metrics server listening", log.Str("addr", *metricsAddr))
 			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Warn("Metrics server stopped", log.Err(err))
+			}
+		}()
+	}
+
+	// SIGHUP triggers a re-read of upstream DNS resolvers (RUNE-063).
+	// Useful when /etc/resolv.conf changes (DHCP renewal, NetworkManager
+	// reload, etc.) without restarting runed.
+	if dnsSub != nil {
+		hupCh := make(chan os.Signal, 1)
+		signal.Notify(hupCh, syscall.SIGHUP)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-hupCh:
+					if err := dnsSub.Refresh(); err != nil {
+						logger.Warn("DNS refresh failed", log.Err(err))
+					} else {
+						logger.Info("DNS upstreams refreshed (SIGHUP)")
+					}
+				}
 			}
 		}()
 	}
