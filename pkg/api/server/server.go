@@ -154,6 +154,10 @@ func (s *APIServer) Start() error {
 	s.authService = service.NewAuthService(s.store, s.logger)
 	s.adminService = service.NewAdminService(s.store, s.logger)
 
+	if s.options.NetworkStatusProvider != nil {
+		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
+	}
+
 	// Start gRPC server
 	if err := s.startGRPCServer(); err != nil {
 		return fmt.Errorf("failed to start gRPC server: %w", err)

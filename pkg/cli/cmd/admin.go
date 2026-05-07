@@ -17,6 +17,7 @@ func newAdminCmd() *cobra.Command {
 	admin.AddCommand(newAdminUserCmd())
 	admin.AddCommand(newAdminPolicyCmd())
 	admin.AddCommand(newAdminRegistriesCmd())
+	admin.AddCommand(newAdminNetworkCmd())
 	return admin
 }
 

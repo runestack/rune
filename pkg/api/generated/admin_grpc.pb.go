@@ -38,6 +38,7 @@ const (
 	AdminService_BootstrapAuth_FullMethodName           = "/rune.api.AdminService/BootstrapAuth"
 	AdminService_TestRegistry_FullMethodName            = "/rune.api.AdminService/TestRegistry"
 	AdminService_RegistriesStatus_FullMethodName        = "/rune.api.AdminService/RegistriesStatus"
+	AdminService_NetworkStatus_FullMethodName           = "/rune.api.AdminService/NetworkStatus"
 )
 
 // AdminServiceClient is the client API for AdminService service.
@@ -65,6 +66,8 @@ type AdminServiceClient interface {
 	BootstrapAuth(ctx context.Context, in *BootstrapAuthRequest, opts ...grpc.CallOption) (*BootstrapAuthResponse, error)
 	TestRegistry(ctx context.Context, in *TestRegistryRequest, opts ...grpc.CallOption) (*TestRegistryResponse, error)
 	RegistriesStatus(ctx context.Context, in *RegistriesStatusRequest, opts ...grpc.CallOption) (*RegistriesStatusResponse, error)
+	// Network status (RUNE-040): inspect ClusterNetwork CIDR + VIP allocations.
+	NetworkStatus(ctx context.Context, in *NetworkStatusRequest, opts ...grpc.CallOption) (*NetworkStatusResponse, error)
 }
 
 type adminServiceClient struct {
@@ -265,6 +268,16 @@ func (c *adminServiceClient) RegistriesStatus(ctx context.Context, in *Registrie
 	return out, nil
 }
 
+func (c *adminServiceClient) NetworkStatus(ctx context.Context, in *NetworkStatusRequest, opts ...grpc.CallOption) (*NetworkStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NetworkStatusResponse)
+	err := c.cc.Invoke(ctx, AdminService_NetworkStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AdminServiceServer is the server API for AdminService service.
 // All implementations must embed UnimplementedAdminServiceServer
 // for forward compatibility.
@@ -290,6 +303,8 @@ type AdminServiceServer interface {
 	BootstrapAuth(context.Context, *BootstrapAuthRequest) (*BootstrapAuthResponse, error)
 	TestRegistry(context.Context, *TestRegistryRequest) (*TestRegistryResponse, error)
 	RegistriesStatus(context.Context, *RegistriesStatusRequest) (*RegistriesStatusResponse, error)
+	// Network status (RUNE-040): inspect ClusterNetwork CIDR + VIP allocations.
+	NetworkStatus(context.Context, *NetworkStatusRequest) (*NetworkStatusResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
 }
 
@@ -356,6 +371,9 @@ func (UnimplementedAdminServiceServer) TestRegistry(context.Context, *TestRegist
 }
 func (UnimplementedAdminServiceServer) RegistriesStatus(context.Context, *RegistriesStatusRequest) (*RegistriesStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RegistriesStatus not implemented")
+}
+func (UnimplementedAdminServiceServer) NetworkStatus(context.Context, *NetworkStatusRequest) (*NetworkStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NetworkStatus not implemented")
 }
 func (UnimplementedAdminServiceServer) mustEmbedUnimplementedAdminServiceServer() {}
 func (UnimplementedAdminServiceServer) testEmbeddedByValue()                      {}
@@ -720,6 +738,24 @@ func _AdminService_RegistriesStatus_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AdminService_NetworkStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NetworkStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).NetworkStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_NetworkStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).NetworkStatus(ctx, req.(*NetworkStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AdminService_ServiceDesc is the grpc.ServiceDesc for AdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -802,6 +838,10 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegistriesStatus",
 			Handler:    _AdminService_RegistriesStatus_Handler,
+		},
+		{
+			MethodName: "NetworkStatus",
+			Handler:    _AdminService_NetworkStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -2365,6 +2365,175 @@ func (x *RegistriesStatusResponse) GetRegistries() []*RegistryRuntimeStatus {
 	return nil
 }
 
+type NetworkStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkStatusRequest) Reset() {
+	*x = NetworkStatusRequest{}
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkStatusRequest) ProtoMessage() {}
+
+func (x *NetworkStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkStatusRequest.ProtoReflect.Descriptor instead.
+func (*NetworkStatusRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_admin_proto_rawDescGZIP(), []int{45}
+}
+
+type NetworkAllocation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ServiceId     string                 `protobuf:"bytes,1,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
+	Vip           string                 `protobuf:"bytes,2,opt,name=vip,proto3" json:"vip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkAllocation) Reset() {
+	*x = NetworkAllocation{}
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkAllocation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkAllocation) ProtoMessage() {}
+
+func (x *NetworkAllocation) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkAllocation.ProtoReflect.Descriptor instead.
+func (*NetworkAllocation) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_admin_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *NetworkAllocation) GetServiceId() string {
+	if x != nil {
+		return x.ServiceId
+	}
+	return ""
+}
+
+func (x *NetworkAllocation) GetVip() string {
+	if x != nil {
+		return x.Vip
+	}
+	return ""
+}
+
+type NetworkStatusResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Cluster service CIDR (e.g. "10.96.0.0/16"). Empty if not bootstrapped.
+	Cidr string `protobuf:"bytes,1,opt,name=cidr,proto3" json:"cidr,omitempty"`
+	// Currently allocated VIPs (serviceID -> IP).
+	Allocations []*NetworkAllocation `protobuf:"bytes,2,rep,name=allocations,proto3" json:"allocations,omitempty"`
+	// Free-list size: IPs ready for the next allocation.
+	FreeListSize uint32 `protobuf:"varint,3,opt,name=free_list_size,json=freeListSize,proto3" json:"free_list_size,omitempty"`
+	// Pending releases waiting on the cooldown window.
+	PendingReleases uint32 `protobuf:"varint,4,opt,name=pending_releases,json=pendingReleases,proto3" json:"pending_releases,omitempty"`
+	// Total usable IP count carved from the CIDR.
+	Capacity      uint32 `protobuf:"varint,5,opt,name=capacity,proto3" json:"capacity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkStatusResponse) Reset() {
+	*x = NetworkStatusResponse{}
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkStatusResponse) ProtoMessage() {}
+
+func (x *NetworkStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkStatusResponse.ProtoReflect.Descriptor instead.
+func (*NetworkStatusResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_admin_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *NetworkStatusResponse) GetCidr() string {
+	if x != nil {
+		return x.Cidr
+	}
+	return ""
+}
+
+func (x *NetworkStatusResponse) GetAllocations() []*NetworkAllocation {
+	if x != nil {
+		return x.Allocations
+	}
+	return nil
+}
+
+func (x *NetworkStatusResponse) GetFreeListSize() uint32 {
+	if x != nil {
+		return x.FreeListSize
+	}
+	return 0
+}
+
+func (x *NetworkStatusResponse) GetPendingReleases() uint32 {
+	if x != nil {
+		return x.PendingReleases
+	}
+	return 0
+}
+
+func (x *NetworkStatusResponse) GetCapacity() uint32 {
+	if x != nil {
+		return x.Capacity
+	}
+	return 0
+}
+
 var File_pkg_api_proto_admin_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_admin_proto_rawDesc = "" +
@@ -2522,7 +2691,18 @@ const file_pkg_api_proto_admin_proto_rawDesc = "" +
 	"\x18RegistriesStatusResponse\x12?\n" +
 	"\n" +
 	"registries\x18\x01 \x03(\v2\x1f.rune.api.RegistryRuntimeStatusR\n" +
-	"registries2\x9e\f\n" +
+	"registries\"\x16\n" +
+	"\x14NetworkStatusRequest\"D\n" +
+	"\x11NetworkAllocation\x12\x1d\n" +
+	"\n" +
+	"service_id\x18\x01 \x01(\tR\tserviceId\x12\x10\n" +
+	"\x03vip\x18\x02 \x01(\tR\x03vip\"\xd7\x01\n" +
+	"\x15NetworkStatusResponse\x12\x12\n" +
+	"\x04cidr\x18\x01 \x01(\tR\x04cidr\x12=\n" +
+	"\vallocations\x18\x02 \x03(\v2\x1b.rune.api.NetworkAllocationR\vallocations\x12$\n" +
+	"\x0efree_list_size\x18\x03 \x01(\rR\ffreeListSize\x12)\n" +
+	"\x10pending_releases\x18\x04 \x01(\rR\x0fpendingReleases\x12\x1a\n" +
+	"\bcapacity\x18\x05 \x01(\rR\bcapacity2\xf0\f\n" +
 	"\fAdminService\x12S\n" +
 	"\x0eAdminBootstrap\x12\x1f.rune.api.AdminBootstrapRequest\x1a .rune.api.AdminBootstrapResponse\x12M\n" +
 	"\fPolicyCreate\x12\x1d.rune.api.PolicyCreateRequest\x1a\x1e.rune.api.PolicyCreateResponse\x12M\n" +
@@ -2544,7 +2724,8 @@ const file_pkg_api_proto_admin_proto_rawDesc = "" +
 	"\x0eRemoveRegistry\x12\x1f.rune.api.RemoveRegistryRequest\x1a .rune.api.RemoveRegistryResponse\x12P\n" +
 	"\rBootstrapAuth\x12\x1e.rune.api.BootstrapAuthRequest\x1a\x1f.rune.api.BootstrapAuthResponse\x12M\n" +
 	"\fTestRegistry\x12\x1d.rune.api.TestRegistryRequest\x1a\x1e.rune.api.TestRegistryResponse\x12Y\n" +
-	"\x10RegistriesStatus\x12!.rune.api.RegistriesStatusRequest\x1a\".rune.api.RegistriesStatusResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\x10RegistriesStatus\x12!.rune.api.RegistriesStatusRequest\x1a\".rune.api.RegistriesStatusResponse\x12P\n" +
+	"\rNetworkStatus\x12\x1e.rune.api.NetworkStatusRequest\x1a\x1f.rune.api.NetworkStatusResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_admin_proto_rawDescOnce sync.Once
@@ -2558,7 +2739,7 @@ func file_pkg_api_proto_admin_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_admin_proto_rawDescData
 }
 
-var file_pkg_api_proto_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
+var file_pkg_api_proto_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
 var file_pkg_api_proto_admin_proto_goTypes = []any{
 	(*Subject)(nil),                         // 0: rune.api.Subject
 	(*AdminBootstrapRequest)(nil),           // 1: rune.api.AdminBootstrapRequest
@@ -2605,7 +2786,10 @@ var file_pkg_api_proto_admin_proto_goTypes = []any{
 	(*RegistryRuntimeStatus)(nil),           // 42: rune.api.RegistryRuntimeStatus
 	(*RegistriesStatusRequest)(nil),         // 43: rune.api.RegistriesStatusRequest
 	(*RegistriesStatusResponse)(nil),        // 44: rune.api.RegistriesStatusResponse
-	nil,                                     // 45: rune.api.RegistryAuthConfig.DataEntry
+	(*NetworkStatusRequest)(nil),            // 45: rune.api.NetworkStatusRequest
+	(*NetworkAllocation)(nil),               // 46: rune.api.NetworkAllocation
+	(*NetworkStatusResponse)(nil),           // 47: rune.api.NetworkStatusResponse
+	nil,                                     // 48: rune.api.RegistryAuthConfig.DataEntry
 }
 var file_pkg_api_proto_admin_proto_depIdxs = []int32{
 	3,  // 0: rune.api.Policy.rules:type_name -> rune.api.PolicyRule
@@ -2618,7 +2802,7 @@ var file_pkg_api_proto_admin_proto_depIdxs = []int32{
 	0,  // 7: rune.api.UserCreateResponse.user:type_name -> rune.api.Subject
 	0,  // 8: rune.api.UserListResponse.users:type_name -> rune.api.Subject
 	23, // 9: rune.api.TokenListResponse.tokens:type_name -> rune.api.TokenInfo
-	45, // 10: rune.api.RegistryAuthConfig.data:type_name -> rune.api.RegistryAuthConfig.DataEntry
+	48, // 10: rune.api.RegistryAuthConfig.data:type_name -> rune.api.RegistryAuthConfig.DataEntry
 	26, // 11: rune.api.RegistryConfig.auth:type_name -> rune.api.RegistryAuthConfig
 	27, // 12: rune.api.ListRegistriesResponse.registries:type_name -> rune.api.RegistryConfig
 	27, // 13: rune.api.GetRegistryResponse.registry:type_name -> rune.api.RegistryConfig
@@ -2627,49 +2811,52 @@ var file_pkg_api_proto_admin_proto_depIdxs = []int32{
 	27, // 16: rune.api.UpdateRegistryRequest.registry:type_name -> rune.api.RegistryConfig
 	27, // 17: rune.api.UpdateRegistryResponse.registry:type_name -> rune.api.RegistryConfig
 	42, // 18: rune.api.RegistriesStatusResponse.registries:type_name -> rune.api.RegistryRuntimeStatus
-	1,  // 19: rune.api.AdminService.AdminBootstrap:input_type -> rune.api.AdminBootstrapRequest
-	5,  // 20: rune.api.AdminService.PolicyCreate:input_type -> rune.api.PolicyCreateRequest
-	7,  // 21: rune.api.AdminService.PolicyUpdate:input_type -> rune.api.PolicyUpdateRequest
-	9,  // 22: rune.api.AdminService.PolicyDelete:input_type -> rune.api.PolicyDeleteRequest
-	11, // 23: rune.api.AdminService.PolicyGet:input_type -> rune.api.PolicyGetRequest
-	13, // 24: rune.api.AdminService.PolicyList:input_type -> rune.api.PolicyListRequest
-	15, // 25: rune.api.AdminService.PolicyAttachToSubject:input_type -> rune.api.PolicyAttachToSubjectRequest
-	17, // 26: rune.api.AdminService.PolicyDetachFromSubject:input_type -> rune.api.PolicyDetachFromSubjectRequest
-	19, // 27: rune.api.AdminService.UserCreate:input_type -> rune.api.UserCreateRequest
-	21, // 28: rune.api.AdminService.UserList:input_type -> rune.api.UserListRequest
-	24, // 29: rune.api.AdminService.TokenList:input_type -> rune.api.TokenListRequest
-	28, // 30: rune.api.AdminService.ListRegistries:input_type -> rune.api.ListRegistriesRequest
-	30, // 31: rune.api.AdminService.GetRegistry:input_type -> rune.api.GetRegistryRequest
-	32, // 32: rune.api.AdminService.AddRegistry:input_type -> rune.api.AddRegistryRequest
-	34, // 33: rune.api.AdminService.UpdateRegistry:input_type -> rune.api.UpdateRegistryRequest
-	36, // 34: rune.api.AdminService.RemoveRegistry:input_type -> rune.api.RemoveRegistryRequest
-	38, // 35: rune.api.AdminService.BootstrapAuth:input_type -> rune.api.BootstrapAuthRequest
-	40, // 36: rune.api.AdminService.TestRegistry:input_type -> rune.api.TestRegistryRequest
-	43, // 37: rune.api.AdminService.RegistriesStatus:input_type -> rune.api.RegistriesStatusRequest
-	2,  // 38: rune.api.AdminService.AdminBootstrap:output_type -> rune.api.AdminBootstrapResponse
-	6,  // 39: rune.api.AdminService.PolicyCreate:output_type -> rune.api.PolicyCreateResponse
-	8,  // 40: rune.api.AdminService.PolicyUpdate:output_type -> rune.api.PolicyUpdateResponse
-	10, // 41: rune.api.AdminService.PolicyDelete:output_type -> rune.api.PolicyDeleteResponse
-	12, // 42: rune.api.AdminService.PolicyGet:output_type -> rune.api.PolicyGetResponse
-	14, // 43: rune.api.AdminService.PolicyList:output_type -> rune.api.PolicyListResponse
-	16, // 44: rune.api.AdminService.PolicyAttachToSubject:output_type -> rune.api.PolicyAttachToSubjectResponse
-	18, // 45: rune.api.AdminService.PolicyDetachFromSubject:output_type -> rune.api.PolicyDetachFromSubjectResponse
-	20, // 46: rune.api.AdminService.UserCreate:output_type -> rune.api.UserCreateResponse
-	22, // 47: rune.api.AdminService.UserList:output_type -> rune.api.UserListResponse
-	25, // 48: rune.api.AdminService.TokenList:output_type -> rune.api.TokenListResponse
-	29, // 49: rune.api.AdminService.ListRegistries:output_type -> rune.api.ListRegistriesResponse
-	31, // 50: rune.api.AdminService.GetRegistry:output_type -> rune.api.GetRegistryResponse
-	33, // 51: rune.api.AdminService.AddRegistry:output_type -> rune.api.AddRegistryResponse
-	35, // 52: rune.api.AdminService.UpdateRegistry:output_type -> rune.api.UpdateRegistryResponse
-	37, // 53: rune.api.AdminService.RemoveRegistry:output_type -> rune.api.RemoveRegistryResponse
-	39, // 54: rune.api.AdminService.BootstrapAuth:output_type -> rune.api.BootstrapAuthResponse
-	41, // 55: rune.api.AdminService.TestRegistry:output_type -> rune.api.TestRegistryResponse
-	44, // 56: rune.api.AdminService.RegistriesStatus:output_type -> rune.api.RegistriesStatusResponse
-	38, // [38:57] is the sub-list for method output_type
-	19, // [19:38] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	46, // 19: rune.api.NetworkStatusResponse.allocations:type_name -> rune.api.NetworkAllocation
+	1,  // 20: rune.api.AdminService.AdminBootstrap:input_type -> rune.api.AdminBootstrapRequest
+	5,  // 21: rune.api.AdminService.PolicyCreate:input_type -> rune.api.PolicyCreateRequest
+	7,  // 22: rune.api.AdminService.PolicyUpdate:input_type -> rune.api.PolicyUpdateRequest
+	9,  // 23: rune.api.AdminService.PolicyDelete:input_type -> rune.api.PolicyDeleteRequest
+	11, // 24: rune.api.AdminService.PolicyGet:input_type -> rune.api.PolicyGetRequest
+	13, // 25: rune.api.AdminService.PolicyList:input_type -> rune.api.PolicyListRequest
+	15, // 26: rune.api.AdminService.PolicyAttachToSubject:input_type -> rune.api.PolicyAttachToSubjectRequest
+	17, // 27: rune.api.AdminService.PolicyDetachFromSubject:input_type -> rune.api.PolicyDetachFromSubjectRequest
+	19, // 28: rune.api.AdminService.UserCreate:input_type -> rune.api.UserCreateRequest
+	21, // 29: rune.api.AdminService.UserList:input_type -> rune.api.UserListRequest
+	24, // 30: rune.api.AdminService.TokenList:input_type -> rune.api.TokenListRequest
+	28, // 31: rune.api.AdminService.ListRegistries:input_type -> rune.api.ListRegistriesRequest
+	30, // 32: rune.api.AdminService.GetRegistry:input_type -> rune.api.GetRegistryRequest
+	32, // 33: rune.api.AdminService.AddRegistry:input_type -> rune.api.AddRegistryRequest
+	34, // 34: rune.api.AdminService.UpdateRegistry:input_type -> rune.api.UpdateRegistryRequest
+	36, // 35: rune.api.AdminService.RemoveRegistry:input_type -> rune.api.RemoveRegistryRequest
+	38, // 36: rune.api.AdminService.BootstrapAuth:input_type -> rune.api.BootstrapAuthRequest
+	40, // 37: rune.api.AdminService.TestRegistry:input_type -> rune.api.TestRegistryRequest
+	43, // 38: rune.api.AdminService.RegistriesStatus:input_type -> rune.api.RegistriesStatusRequest
+	45, // 39: rune.api.AdminService.NetworkStatus:input_type -> rune.api.NetworkStatusRequest
+	2,  // 40: rune.api.AdminService.AdminBootstrap:output_type -> rune.api.AdminBootstrapResponse
+	6,  // 41: rune.api.AdminService.PolicyCreate:output_type -> rune.api.PolicyCreateResponse
+	8,  // 42: rune.api.AdminService.PolicyUpdate:output_type -> rune.api.PolicyUpdateResponse
+	10, // 43: rune.api.AdminService.PolicyDelete:output_type -> rune.api.PolicyDeleteResponse
+	12, // 44: rune.api.AdminService.PolicyGet:output_type -> rune.api.PolicyGetResponse
+	14, // 45: rune.api.AdminService.PolicyList:output_type -> rune.api.PolicyListResponse
+	16, // 46: rune.api.AdminService.PolicyAttachToSubject:output_type -> rune.api.PolicyAttachToSubjectResponse
+	18, // 47: rune.api.AdminService.PolicyDetachFromSubject:output_type -> rune.api.PolicyDetachFromSubjectResponse
+	20, // 48: rune.api.AdminService.UserCreate:output_type -> rune.api.UserCreateResponse
+	22, // 49: rune.api.AdminService.UserList:output_type -> rune.api.UserListResponse
+	25, // 50: rune.api.AdminService.TokenList:output_type -> rune.api.TokenListResponse
+	29, // 51: rune.api.AdminService.ListRegistries:output_type -> rune.api.ListRegistriesResponse
+	31, // 52: rune.api.AdminService.GetRegistry:output_type -> rune.api.GetRegistryResponse
+	33, // 53: rune.api.AdminService.AddRegistry:output_type -> rune.api.AddRegistryResponse
+	35, // 54: rune.api.AdminService.UpdateRegistry:output_type -> rune.api.UpdateRegistryResponse
+	37, // 55: rune.api.AdminService.RemoveRegistry:output_type -> rune.api.RemoveRegistryResponse
+	39, // 56: rune.api.AdminService.BootstrapAuth:output_type -> rune.api.BootstrapAuthResponse
+	41, // 57: rune.api.AdminService.TestRegistry:output_type -> rune.api.TestRegistryResponse
+	44, // 58: rune.api.AdminService.RegistriesStatus:output_type -> rune.api.RegistriesStatusResponse
+	47, // 59: rune.api.AdminService.NetworkStatus:output_type -> rune.api.NetworkStatusResponse
+	40, // [40:60] is the sub-list for method output_type
+	20, // [20:40] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_admin_proto_init() }
@@ -2683,7 +2870,7 @@ func file_pkg_api_proto_admin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_admin_proto_rawDesc), len(file_pkg_api_proto_admin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   46,
+			NumMessages:   49,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

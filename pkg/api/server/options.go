@@ -7,6 +7,7 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/store"
 	"google.golang.org/grpc"
@@ -43,6 +44,12 @@ type Options struct {
 	// runed to plug in WatchService (RUNE-028) without forcing the
 	// API server to depend on every networking-layer package.
 	ExtraGRPCRegistrars []func(grpc.ServiceRegistrar)
+
+	// NetworkStatusProvider, if set, is wired into AdminService so
+	// the NetworkStatus RPC can report ClusterNetwork CIDR + VIP
+	// allocations. Supplied by runed alongside the VIP allocator
+	// (RUNE-040).
+	NetworkStatusProvider service.NetworkStatusProvider
 }
 
 // Option is a function that configures options.
@@ -131,5 +138,13 @@ func WithExtraGRPCRegistrar(reg func(grpc.ServiceRegistrar)) Option {
 		if reg != nil {
 			opts.ExtraGRPCRegistrars = append(opts.ExtraGRPCRegistrars, reg)
 		}
+	}
+}
+
+// WithNetworkStatusProvider plugs the live VIP allocator into the
+// AdminService.NetworkStatus RPC.
+func WithNetworkStatusProvider(p service.NetworkStatusProvider) Option {
+	return func(opts *Options) {
+		opts.NetworkStatusProvider = p
 	}
 }

@@ -15,7 +15,9 @@ import (
 	"github.com/runestack/rune/internal/config"
 	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
+	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/networking/vip"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/version"
@@ -34,6 +36,7 @@ var (
 	logFormat     = flag.String("log-format", "text", "Log format (text, json)")
 	prettyLogs    = flag.Bool("pretty", false, "Enable pretty text log format (shorthand for --log-format=text)")
 	devMode       = flag.Bool("dev-mode", false, "Run in dev mode: skip nftables, bind ingress on user ports, embedded DNS resolves .rune to 127.0.0.1 (laptop development)")
+	clusterCIDR   = flag.String("cluster-cidr", "10.96.0.0/16", "Cluster service CIDR for VIP allocation (RFC1918 or 100.64/10)")
 	showHelp      = flag.Bool("help", false, "Show help")
 	showVer       = flag.Bool("version", false, "Show version")
 )
@@ -310,6 +313,24 @@ func main() {
 	}
 	defer olog.Close()
 
+	// Construct the cluster VIP allocator (RUNE-040). Bootstrapping the
+	// CIDR through the OrderedLog is idempotent — re-running with the
+	// same CIDR succeeds; a different CIDR after first bootstrap is
+	// rejected to protect the persisted ClusterNetwork state.
+	vipAllocator, err := vip.New(olog, vip.Options{
+		CIDR:   *clusterCIDR,
+		Logger: logger.WithComponent("vip-allocator"),
+	})
+	if err != nil {
+		logger.Error("Failed to create VIP allocator", log.Err(err))
+		os.Exit(1)
+	}
+	if err := vipAllocator.Bootstrap(ctx); err != nil {
+		logger.Error("Failed to bootstrap cluster network", log.Err(err), log.Str("cidr", *clusterCIDR))
+		os.Exit(1)
+	}
+	defer vipAllocator.Close()
+
 	watchServer := watchsvc.NewServer(olog, logger)
 	defer watchServer.Close()
 
@@ -318,7 +339,7 @@ func main() {
 	}
 
 	// Create and start API server (with WatchService registered).
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, logger, watchRegistrar)...)
+	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, logger, vipAllocator, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)
@@ -419,7 +440,7 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 	return st, appCfg, storeDir, nil
 }
 
-func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger log.Logger, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger log.Logger, netSP service.NetworkStatusProvider, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
 	opts := []server.Option{
 		server.WithGRPCAddr(grpcAddress),
 		server.WithHTTPAddr(httpAddress),
@@ -428,6 +449,9 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger 
 	}
 	// Token-based auth (MVP)
 	opts = append(opts, server.WithAuth(nil))
+	if netSP != nil {
+		opts = append(opts, server.WithNetworkStatusProvider(netSP))
+	}
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
 	}
