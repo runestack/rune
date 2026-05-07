@@ -132,10 +132,16 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// createDefaultRunefile creates a default runefile.yaml in the data dir if none exists
+// createDefaultRunefile creates a default runefile.yaml in the data dir if none exists.
+// If a runefile.toml or runefile.yml already exists alongside, it is left untouched —
+// runefile auto-discovery searches for any of {toml,yaml,yml}.
 func createDefaultRunefile(dataDir string) error {
 	defaultConfig := fmt.Sprintf(`# Default Rune server configuration
-# This file was auto-generated on first run
+# This file was auto-generated on first run.
+#
+# Rune supports YAML and TOML runefiles. Auto-discovery looks for
+# runefile.{toml,yaml,yml} in the working directory, /etc/rune/, and
+# the data directory. Use --config <path> to point at a specific file.
 
 docker:
   registries: []
@@ -157,6 +163,26 @@ secret:
       source: "file"
       file: "kek.b64"
 
+# Networking layer (RUNE-040..067). All keys are optional; the values
+# below are the built-in defaults shown for documentation.
+#
+# networking:
+#   cluster_cidr: "10.96.0.0/16"   # service VIP allocation range
+#   dev_mode: false                # skip nftables, bind ingress on user ports,
+#                                  # resolve .rune to 127.0.0.1
+#   metrics_addr: "127.0.0.1:9100" # Prometheus /metrics endpoint, "" disables
+#
+# node:
+#   role: ""                       # comma-separated; "edge" enables ingress + ACME
+#
+# ingress:
+#   http_addr: ""                  # default :80 (or :8080 in dev mode)
+#   https_addr: ""                 # default :443 (or :8443 in dev mode), "" disables TLS
+#
+# acme:
+#   directory: ""                  # default Let's Encrypt production
+#   email: ""                      # contact email for ACME registration
+
 data_dir: "%s"
 `, dataDir)
 
@@ -165,11 +191,30 @@ data_dir: "%s"
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	configPath := filepath.Join(dataDir, "runefile.yaml")
-	if _, err := os.Stat(configPath); err == nil {
-		return nil
+	// If any runefile already exists in the data dir (any supported
+	// extension), leave it alone.
+	for _, ext := range []string{"yaml", "yml", "toml"} {
+		if _, err := os.Stat(filepath.Join(dataDir, "runefile."+ext)); err == nil {
+			return nil
+		}
 	}
-	return os.WriteFile(configPath, []byte(defaultConfig), 0600)
+	return os.WriteFile(filepath.Join(dataDir, "runefile.yaml"), []byte(defaultConfig), 0600)
+}
+
+// findRunefile returns the first runefile.{toml,yaml,yml} found in
+// the supplied search paths. The returned path is suitable for
+// viper.SetConfigFile (extension drives parser selection). Returns
+// an empty string if no runefile is found.
+func findRunefile(searchPaths []string) string {
+	for _, dir := range searchPaths {
+		for _, ext := range []string{"toml", "yaml", "yml"} {
+			candidate := filepath.Join(dir, "runefile."+ext)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return ""
 }
 
 // initRuntimeConfig initializes runtime settings (viper defaults + config file + env + flags)
@@ -190,15 +235,44 @@ func initRuntimeConfig() {
 	v.SetDefault("docker.fallback_api_version", "1.43")
 	v.SetDefault("docker.negotiation_timeout_seconds", 3)
 
-	// 2. Try to load config file if specified or look in standard locations
+	// Networking layer defaults (RUNE-040..067). These mirror the
+	// flag defaults so that a runefile can override them without
+	// having to also pass the corresponding flag.
+	v.SetDefault("networking.cluster_cidr", "10.96.0.0/16")
+	v.SetDefault("networking.dev_mode", false)
+	v.SetDefault("networking.metrics_addr", "127.0.0.1:9100")
+	v.SetDefault("node.role", "")
+	v.SetDefault("ingress.http_addr", "")
+	v.SetDefault("ingress.https_addr", "")
+	v.SetDefault("acme.directory", "")
+	v.SetDefault("acme.email", "")
+
+	// 2. Try to load config file if specified or look in standard locations.
+	// Both YAML and TOML are supported; viper picks the parser from the
+	// file extension when SetConfigFile is used.
 	configFileSpecified := *configFile != ""
 	if configFileSpecified {
 		v.SetConfigFile(*configFile)
 	} else {
-		v.SetConfigName("runefile")
-		v.SetConfigType("yaml")
-		v.AddConfigPath(".")          // Local development override
-		v.AddConfigPath("/etc/rune/") // System-wide production config
+		// Search for runefile.{toml,yaml,yml} in priority order:
+		//   1. Current working directory   (developer override)
+		//   2. /etc/rune/                   (system-wide production config)
+		//   3. <data_dir>                   (auto-generated default)
+		dataDirSearch := defaultDataDir
+		if envDD := os.Getenv("RUNE_DATA_DIR"); envDD != "" {
+			dataDirSearch = envDD
+		}
+		if found := findRunefile([]string{".", "/etc/rune", dataDirSearch}); found != "" {
+			v.SetConfigFile(found)
+		} else {
+			// No file present yet (will be auto-created later);
+			// keep the legacy yaml lookup to avoid breaking the
+			// "first run" code path.
+			v.SetConfigName("runefile")
+			v.SetConfigType("yaml")
+			v.AddConfigPath(".")
+			v.AddConfigPath("/etc/rune/")
+		}
 	}
 
 	// Read config file if available
@@ -239,6 +313,16 @@ func initRuntimeConfig() {
 		// Auth config
 		"RUNE_AUTH_API_KEYS":           "auth.api_keys",
 		"RUNE_AUTH_ALLOW_REMOTE_ADMIN": "auth.allow_remote_admin",
+
+		// Networking layer (RUNE-040..067)
+		"RUNE_NETWORKING_CLUSTER_CIDR": "networking.cluster_cidr",
+		"RUNE_NETWORKING_DEV_MODE":     "networking.dev_mode",
+		"RUNE_NETWORKING_METRICS_ADDR": "networking.metrics_addr",
+		"RUNE_NODE_ROLE":               "node.role",
+		"RUNE_INGRESS_HTTP_ADDR":       "ingress.http_addr",
+		"RUNE_INGRESS_HTTPS_ADDR":      "ingress.https_addr",
+		"RUNE_ACME_DIRECTORY":          "acme.directory",
+		"RUNE_ACME_EMAIL":              "acme.email",
 	}
 
 	// Explicitly bind environment variables to configuration keys
@@ -288,6 +372,38 @@ func initRuntimeConfig() {
 
 	if !cmdFlags["pretty"] {
 		*prettyLogs = v.GetBool("pretty")
+	}
+
+	// Networking layer flag precedence (RUNE-040..067).
+	if !cmdFlags["cluster-cidr"] {
+		if s := v.GetString("networking.cluster_cidr"); s != "" {
+			*clusterCIDR = s
+		}
+	}
+	if !cmdFlags["dev-mode"] {
+		*devMode = v.GetBool("networking.dev_mode")
+	}
+	if !cmdFlags["metrics-addr"] {
+		// Empty string is a valid value (disables metrics) so use IsSet
+		// to distinguish "explicitly set to empty" from "unset".
+		if v.IsSet("networking.metrics_addr") {
+			*metricsAddr = v.GetString("networking.metrics_addr")
+		}
+	}
+	if !cmdFlags["node-role"] {
+		*nodeRole = v.GetString("node.role")
+	}
+	if !cmdFlags["ingress-http-addr"] {
+		*ingressHTTP = v.GetString("ingress.http_addr")
+	}
+	if !cmdFlags["ingress-https-addr"] {
+		*ingressHTTPS = v.GetString("ingress.https_addr")
+	}
+	if !cmdFlags["acme-directory"] {
+		*acmeDirectory = v.GetString("acme.directory")
+	}
+	if !cmdFlags["acme-email"] {
+		*acmeEmail = v.GetString("acme.email")
 	}
 
 	// Final validation and defaults for required parameters
