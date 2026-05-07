@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	"github.com/runestack/rune/internal/config"
+	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/runner"
-	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/store"
 	"google.golang.org/grpc"
@@ -52,8 +52,8 @@ type Options struct {
 	NetworkStatusProvider service.NetworkStatusProvider
 
 	// VIPAllocator, if set, is plugged into ServiceService so each
-	// CreateService call assigns a stable VIP from the pool
-	// (RUNE-041). Supplied by runed at startup.
+	// CreateService call assigns a stable VIP from the pool.
+	// Supplied by runed at startup.
 	VIPAllocator service.VIPAllocator
 }
 

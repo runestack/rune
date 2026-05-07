@@ -119,19 +119,19 @@ type Config struct {
 // interface used by internal/agent (Name / Start / Ready / Stop) but
 // does not import the agent package directly to avoid cycles.
 type Subsystem struct {
-	cfg    Config
-	log    log.Logger
-	cache  *Cache
-	proxy  *ProxyManager
-	nfm    nftablesManager
+	cfg     Config
+	log     log.Logger
+	cache   *Cache
+	proxy   *ProxyManager
+	nfm     nftablesManager
 	metrics *Metrics
 
-	mu       sync.Mutex
-	started  bool
-	stopped  bool
-	readyCh  chan struct{}
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	mu      sync.Mutex
+	started bool
+	stopped bool
+	readyCh chan struct{}
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 
 	// last successful watch event timestamp; the staleness check uses
 	// this to decide when to start failing closed.

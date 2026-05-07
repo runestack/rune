@@ -63,8 +63,8 @@ func (m *Metrics) Register(reg prometheus.Registerer) error {
 	return nil
 }
 
-func (m *Metrics) incActive(svc, proto string)   { m.ConnectionsActive.WithLabelValues(svc, proto).Inc() }
-func (m *Metrics) decActive(svc, proto string)   { m.ConnectionsActive.WithLabelValues(svc, proto).Dec() }
+func (m *Metrics) incActive(svc, proto string) { m.ConnectionsActive.WithLabelValues(svc, proto).Inc() }
+func (m *Metrics) decActive(svc, proto string) { m.ConnectionsActive.WithLabelValues(svc, proto).Dec() }
 func (m *Metrics) incTotal(svc, proto, res string) {
 	m.ConnectionsTotal.WithLabelValues(svc, proto, res).Inc()
 }
@@ -77,5 +77,5 @@ func (m *Metrics) observeListenerOpened(svc, proto string) {
 func (m *Metrics) observeListenerClosed(svc, proto string) {
 	m.ListenersOpen.WithLabelValues(svc, proto).Dec()
 }
-func (m *Metrics) setWatchLag(s float64) { m.WatchLag.Set(s) }
+func (m *Metrics) setWatchLag(s float64)  { m.WatchLag.Set(s) }
 func (m *Metrics) setNftablesRules(n int) { m.NftablesRules.Set(float64(n)) }

@@ -123,7 +123,7 @@ type updateOp struct {
 	Endpoints []types.Endpoint `json:"endpoints"`
 }
 
-func (o *updateOp) OpType() string         { return OpUpdateEndpoints }
+func (o *updateOp) OpType() string           { return OpUpdateEndpoints }
 func (o *updateOp) Marshal() ([]byte, error) { return json.Marshal(o) }
 
 func unmarshalUpdate(raw []byte) (orderedlog.Op, error) {
@@ -138,7 +138,7 @@ type deleteOp struct {
 	ServiceID string `json:"serviceId"`
 }
 
-func (o *deleteOp) OpType() string         { return OpDeleteEndpoints }
+func (o *deleteOp) OpType() string           { return OpDeleteEndpoints }
 func (o *deleteOp) Marshal() ([]byte, error) { return json.Marshal(o) }
 
 func unmarshalDelete(raw []byte) (orderedlog.Op, error) {
