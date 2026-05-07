@@ -1,7 +1,7 @@
 // Package types: ingress / expose validation.
 //
 // ValidateExpose enforces the pre-cast invariants required by the
-// ingress controller (RUNE-066):
+// ingress controller:
 //
 //   - acme TLS requires a non-empty Host (the ACME provider needs
 //     a hostname to issue against).

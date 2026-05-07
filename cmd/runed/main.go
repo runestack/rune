@@ -90,7 +90,7 @@ var (
 	devMode       = flag.Bool("dev-mode", false, "Run in dev mode: skip nftables, bind ingress on user ports, embedded DNS resolves .rune to 127.0.0.1 (laptop development)")
 	clusterCIDR   = flag.String("cluster-cidr", "10.96.0.0/16", "Cluster service CIDR for VIP allocation (RFC1918 or 100.64/10)")
 	metricsAddr   = flag.String("metrics-addr", "127.0.0.1:9100", "Address for the Prometheus /metrics endpoint (empty disables)")
-	nodeRole      = flag.String("node-role", "", "Comma-separated node roles. 'edge' enables the ingress controller (RUNE-066) and ACME orchestrator on this node.")
+	nodeRole      = flag.String("node-role", "", "Comma-separated node roles. 'edge' enables the ingress controller and ACME orchestrator on this node.")
 	ingressHTTP   = flag.String("ingress-http-addr", "", "Bind address for the ingress HTTP listener. Defaults to :80 in production, :8080 in dev mode. Used only when node-role contains 'edge'.")
 	ingressHTTPS  = flag.String("ingress-https-addr", "", "Bind address for the ingress HTTPS listener. Defaults to :443 in production, :8443 in dev mode. Used only when node-role contains 'edge'. Empty disables TLS termination.")
 	acmeDirectory = flag.String("acme-directory", "", "ACME directory URL. Empty defaults to Let's Encrypt production. Use a Pebble URL for integration tests.")

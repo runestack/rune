@@ -77,7 +77,7 @@ func (i *HTTP01Issuer) Issue(ctx context.Context, host string) ([]byte, []byte, 
 		return nil, nil, fmt.Errorf("generate key: %w", err)
 	}
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: host},
+		Subject:  pkix.Name{CommonName: host},
 		DNSNames: []string{host},
 	}, keyPriv)
 	if err != nil {
