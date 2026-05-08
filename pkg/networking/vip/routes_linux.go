@@ -26,6 +26,13 @@ func checkRouteCollision(ipnet *net.IPNet) error {
 		if r.Dst == nil {
 			continue
 		}
+		// Skip default routes (0.0.0.0/0, ::/0). These are the gateway
+		// entries present on every cloud VM and don't represent a real
+		// address claim — they "overlap" every CIDR but never indicate
+		// a routing conflict.
+		if ones, _ := r.Dst.Mask.Size(); ones == 0 {
+			continue
+		}
 		if cidrsOverlap(r.Dst, ipnet) {
 			return fmt.Errorf("existing route %s overlaps cluster CIDR %s", r.Dst.String(), ipnet.String())
 		}
