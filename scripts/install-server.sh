@@ -17,6 +17,9 @@ RUNE_VERSION=""
 FROM_SOURCE=false
 BRANCH="master"
 SKIP_DOCKER=false
+EDGE=false
+ACME_EMAIL=""
+CLUSTER_CIDR="10.96.0.0/16"
 
 log() { echo "[install-server] $*"; }
 die() { echo "[install-server] ERROR: $*" >&2; exit 1; }
@@ -24,17 +27,26 @@ die() { echo "[install-server] ERROR: $*" >&2; exit 1; }
 usage() {
   cat <<USAGE
 Usage: $0 [--version vX.Y.Z | --from-source] [--branch NAME] [--grpc-port N] [--http-port N] [--skip-docker]
+           [--edge] [--acme-email EMAIL] [--cluster-cidr CIDR]
 Options:
-  --version vX.Y.Z   Install from GitHub release tag (preferred)
-  --from-source      Build from source if no release is specified
-  --branch NAME      Git branch to clone when building from source (default: master)
-  --grpc-port N      gRPC port (default: 7863)
-  --http-port N      HTTP port (default: 7861)
-  --skip-docker      Skip Docker installation (assume already installed)
-  -h, --help         Show help
+  --version vX.Y.Z      Install from GitHub release tag (preferred)
+  --from-source         Build from source if no release is specified
+  --branch NAME         Git branch to clone when building from source (default: master)
+  --grpc-port N         gRPC port (default: 7863)
+  --http-port N         HTTP port (default: 7861)
+  --skip-docker         Skip Docker installation (assume already installed)
+  --edge                Configure as edge node: sets node.role=edge in runefile.toml
+                        and grants cap_net_bind_service so runed can bind :80/:443
+  --acme-email EMAIL    ACME / Let's Encrypt contact email (writes [acme].email)
+  --cluster-cidr CIDR   Cluster CIDR for the networking layer (default: 10.96.0.0/16)
+  -h, --help            Show help
 
 This installer sets up the complete Rune server environment including Docker.
 For CLI-only installation, use: curl -fsSL https://rune.sh/install-cli.sh | bash
+
+Example (edge node with ACME):
+  curl -fsSL https://rune.sh/install-server.sh | bash -s -- \
+    --version v0.0.1-dev.18 --edge --acme-email you@example.com
 USAGE
 }
 
@@ -260,6 +272,51 @@ setup_cli_access() {
   fi
 }
 
+generate_runefile() {
+  # Skip when no runefile-affecting flag was supplied; let runed create
+  # its own default runefile.yaml on first start.
+  if [ "$EDGE" = false ] && [ -z "$ACME_EMAIL" ] && [ "$CLUSTER_CIDR" = "10.96.0.0/16" ]; then
+    return
+  fi
+
+  local runefile="$DATA_DIR/runefile.toml"
+  if [ -f "$runefile" ] || [ -f "$DATA_DIR/runefile.yaml" ] || [ -f "$DATA_DIR/runefile.yml" ]; then
+    log "Existing runefile found in $DATA_DIR; leaving untouched"
+    return
+  fi
+
+  local role="worker"
+  [ "$EDGE" = true ] && role="edge"
+
+  mkdir -p "$DATA_DIR"
+  cat > "$runefile" <<EOF
+data_dir = "$DATA_DIR"
+
+[server]
+grpc_address = ":$GRPC_PORT"
+http_address = ":$HTTP_PORT"
+
+[log]
+level = "info"
+format = "text"
+
+[networking]
+cluster_cidr = "$CLUSTER_CIDR"
+
+[telemetry]
+metrics_addr = "127.0.0.1:9100"
+
+[node]
+role = "$role"
+
+[acme]
+email = "${ACME_EMAIL}"
+EOF
+  chown "$RUNE_USER":"$RUNE_GROUP" "$runefile" 2>/dev/null || true
+  chmod 0640 "$runefile"
+  log "Wrote runefile.toml (role=$role, cluster_cidr=$CLUSTER_CIDR${ACME_EMAIL:+, acme_email=$ACME_EMAIL})"
+}
+
 install_systemd() {
   local unit=/etc/systemd/system/runed.service
   if [ -f "$unit" ]; then
@@ -282,12 +339,18 @@ ExecStart=/usr/local/bin/runed
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
+# Allow binding to low ports (:80, :443) when running as the rune
+# user. The capability is also granted on the binary via setcap when
+# the installer is invoked with --edge; this directive is a belt-and-
+# braces measure for systemd-managed restarts.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
 UNIT
   fi
-  
+
   # Ensure Docker group access
   if getent group docker >/dev/null 2>&1; then
     mkdir -p /etc/systemd/system/runed.service.d
@@ -353,6 +416,9 @@ main() {
       --grpc-port) GRPC_PORT="$2"; shift 2 ;;
       --http-port) HTTP_PORT="$2"; shift 2 ;;
       --skip-docker) SKIP_DOCKER=true; shift ;;
+      --edge) EDGE=true; shift ;;
+      --acme-email) ACME_EMAIL="$2"; shift 2 ;;
+      --cluster-cidr) CLUSTER_CIDR="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown argument: $1" ;;
     esac
@@ -371,6 +437,20 @@ main() {
     log "No version specified; installing from source"
     install_from_source
   fi
+
+  # Edge mode: grant low-port binding capability so runed can listen on :80/:443
+  # without running as root.
+  if [ "$EDGE" = true ] && [ -x /usr/local/bin/runed ]; then
+    if command -v setcap >/dev/null 2>&1; then
+      setcap 'cap_net_bind_service=+ep' /usr/local/bin/runed
+      log "Granted cap_net_bind_service to /usr/local/bin/runed (edge mode)"
+    else
+      log "⚠️  setcap not found; ingress binds on :80/:443 may fail. Install libcap2-bin (Debian/Ubuntu) or libcap (RHEL)."
+    fi
+  fi
+
+  # Generate runefile.toml when edge / acme / non-default cidr is requested.
+  generate_runefile
 
   # Server will create runefile.yaml and KEK in the data dir on first start
   install_systemd
