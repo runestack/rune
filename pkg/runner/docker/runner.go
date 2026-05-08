@@ -881,20 +881,44 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 				}
 				containerConfig.ExposedPorts[containerPort] = struct{}{}
 
-				// Determine host port
-				hostPort := instance.Metadata.Expose.HostPort
-				if hostPort == 0 {
-					hostPort = svcPort.Port
-				}
-				if hostConfig.PortBindings == nil {
-					hostConfig.PortBindings = nat.PortMap{}
-				}
-				hostBinding := nat.PortBinding{HostIP: "127.0.0.1", HostPort: fmt.Sprintf("%d", hostPort)}
-				hostConfig.PortBindings[containerPort] = []nat.PortBinding{hostBinding}
+				// Decide whether to publish a host port for this
+				// container.
+				//
+				// When Expose.Host is set, the edge ingress
+				// controller terminates :80/:443 on the host and
+				// proxies to the container over Docker networking
+				// using the container IP + container port. Binding
+				// 127.0.0.1:<port> here is both unnecessary and
+				// actively harmful: on edge nodes that own :80, it
+				// races the ingress listener and one of them fails
+				// to bind ("address already in use").
+				//
+				// Skip the host bind in the ingress-mediated case
+				// unless the operator has explicitly asked for one
+				// via Expose.HostPort (escape hatch for users who
+				// want both ingress and a direct host port).
+				skipHostBind := instance.Metadata.Expose.Host != "" && instance.Metadata.Expose.HostPort == 0
+				if skipHostBind {
+					// Container port is exposed for the ingress
+					// proxy to dial; no host-port publication.
+					instance.Metadata.ExposedHost = ""
+					instance.Metadata.ExposedHostPort = 0
+				} else {
+					// Determine host port
+					hostPort := instance.Metadata.Expose.HostPort
+					if hostPort == 0 {
+						hostPort = svcPort.Port
+					}
+					if hostConfig.PortBindings == nil {
+						hostConfig.PortBindings = nat.PortMap{}
+					}
+					hostBinding := nat.PortBinding{HostIP: "127.0.0.1", HostPort: fmt.Sprintf("%d", hostPort)}
+					hostConfig.PortBindings[containerPort] = []nat.PortBinding{hostBinding}
 
-				// Store resolved endpoint back on instance metadata (best-effort)
-				instance.Metadata.ExposedHost = "localhost"
-				instance.Metadata.ExposedHostPort = hostPort
+					// Store resolved endpoint back on instance metadata (best-effort)
+					instance.Metadata.ExposedHost = "localhost"
+					instance.Metadata.ExposedHostPort = hostPort
+				}
 			}
 		}
 	}
