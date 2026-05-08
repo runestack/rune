@@ -89,7 +89,7 @@ var (
 	prettyLogs    = flag.Bool("pretty", false, "Enable pretty text log format (shorthand for --log-format=text)")
 	devMode       = flag.Bool("dev-mode", false, "Run in dev mode: skip nftables, bind ingress on user ports, embedded DNS resolves .rune to 127.0.0.1 (laptop development)")
 	clusterCIDR   = flag.String("cluster-cidr", "10.96.0.0/16", "Cluster service CIDR for VIP allocation (RFC1918 or 100.64/10)")
-	metricsAddr   = flag.String("metrics-addr", "127.0.0.1:9100", "Address for the Prometheus /metrics endpoint (empty disables)")
+	metricsAddr   = flag.String("metrics-addr", "127.0.0.1:9100", "Address for the Prometheus /metrics endpoint (empty disables). Exposes metrics from all subsystems (orchestrator, runners, networking, agent, DNS).")
 	nodeRole      = flag.String("node-role", "", "Comma-separated node roles. 'edge' enables the ingress controller and ACME orchestrator on this node.")
 	ingressHTTP   = flag.String("ingress-http-addr", "", "Bind address for the ingress HTTP listener. Defaults to :80 in production, :8080 in dev mode. Used only when node-role contains 'edge'.")
 	ingressHTTPS  = flag.String("ingress-https-addr", "", "Bind address for the ingress HTTPS listener. Defaults to :443 in production, :8443 in dev mode. Used only when node-role contains 'edge'. Empty disables TLS termination.")
@@ -163,14 +163,17 @@ secret:
       source: "file"
       file: "kek.b64"
 
-# Networking layer (RUNE-040..067). All keys are optional; the values
+# Networking layer. All keys are optional; the values
 # below are the built-in defaults shown for documentation.
 #
 # networking:
 #   cluster_cidr: "10.96.0.0/16"   # service VIP allocation range
 #   dev_mode: false                # skip nftables, bind ingress on user ports,
 #                                  # resolve .rune to 127.0.0.1
+#
+# telemetry:
 #   metrics_addr: "127.0.0.1:9100" # Prometheus /metrics endpoint, "" disables
+#                                  # (covers all subsystems, not just networking)
 #
 # node:
 #   role: ""                       # comma-separated; "edge" enables ingress + ACME
@@ -240,7 +243,7 @@ func initRuntimeConfig() {
 	// having to also pass the corresponding flag.
 	v.SetDefault("networking.cluster_cidr", "10.96.0.0/16")
 	v.SetDefault("networking.dev_mode", false)
-	v.SetDefault("networking.metrics_addr", "127.0.0.1:9100")
+	v.SetDefault("telemetry.metrics_addr", "127.0.0.1:9100")
 	v.SetDefault("node.role", "")
 	v.SetDefault("ingress.http_addr", "")
 	v.SetDefault("ingress.https_addr", "")
@@ -317,7 +320,7 @@ func initRuntimeConfig() {
 		// Networking layer (RUNE-040..067)
 		"RUNE_NETWORKING_CLUSTER_CIDR": "networking.cluster_cidr",
 		"RUNE_NETWORKING_DEV_MODE":     "networking.dev_mode",
-		"RUNE_NETWORKING_METRICS_ADDR": "networking.metrics_addr",
+		"RUNE_TELEMETRY_METRICS_ADDR":  "telemetry.metrics_addr",
 		"RUNE_NODE_ROLE":               "node.role",
 		"RUNE_INGRESS_HTTP_ADDR":       "ingress.http_addr",
 		"RUNE_INGRESS_HTTPS_ADDR":      "ingress.https_addr",
@@ -386,12 +389,19 @@ func initRuntimeConfig() {
 	if !cmdFlags["metrics-addr"] {
 		// Empty string is a valid value (disables metrics) so use IsSet
 		// to distinguish "explicitly set to empty" from "unset".
-		if v.IsSet("networking.metrics_addr") {
-			*metricsAddr = v.GetString("networking.metrics_addr")
+		if v.IsSet("telemetry.metrics_addr") {
+			*metricsAddr = v.GetString("telemetry.metrics_addr")
 		}
 	}
 	if !cmdFlags["node-role"] {
 		*nodeRole = v.GetString("node.role")
+	}
+	// Dev mode is single-node by definition. Auto-promote the node to
+	// 'edge' so the ingress controller and ACME orchestrator come up
+	// without forcing developers to remember a second flag. An explicit
+	// --node-role (including --node-role="" to opt out) is respected.
+	if *devMode && !cmdFlags["node-role"] && *nodeRole == "" {
+		*nodeRole = "edge"
 	}
 	if !cmdFlags["ingress-http-addr"] {
 		*ingressHTTP = v.GetString("ingress.http_addr")
@@ -642,6 +652,13 @@ func main() {
 			logger.Info("Ingress + ACME enabled (edge node)",
 				log.Str("http", httpAddr),
 				log.Str("https", httpsAddr))
+		} else {
+			// Visibility for the most common operator footgun: starting
+			// runed without --node-role=edge means services with an
+			// `expose:` block will run but won't be reachable from
+			// outside the cluster. Surface it in logs so the cause is
+			// obvious instead of silently dropping ingress traffic.
+			logger.Info("Ingress + ACME disabled (non-edge node). Services with `expose:` will not be reachable on this node. Set --node-role=edge (or node.role=edge in the runefile) to enable.")
 		}
 		return nil
 	})
