@@ -18,6 +18,7 @@ import (
 	"github.com/runestack/rune/internal/agent"
 	"github.com/runestack/rune/internal/agent/dataplane"
 	dnssub "github.com/runestack/rune/internal/agent/dns"
+	"github.com/runestack/rune/internal/agent/ingressctl"
 	"github.com/runestack/rune/internal/config"
 	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
@@ -540,6 +541,7 @@ func main() {
 	// policy, ingress) register themselves in subsequent
 	// networking-layer tickets.
 	var dnsSub *dnssub.Subsystem
+	var dpRef *dataplane.Subsystem
 	extraLabels := map[string]string{}
 	if *nodeRole != "" {
 		extraLabels[types.LabelNodeRole] = *nodeRole
@@ -564,6 +566,7 @@ func main() {
 		if err := a.Register(dp); err != nil {
 			return err
 		}
+		dpRef = dp
 
 		// Embedded DNS subsystem (RUNE-063). Registers itself with
 		// the agent so it inherits supervised lifecycle. Bind list
@@ -585,11 +588,7 @@ func main() {
 
 		// Ingress controller + ACME orchestrator (RUNE-066).
 		// Edge-only: any node whose role label contains "edge"
-		// terminates :80/:443 and runs the ACME issuer. v1 ships
-		// the building blocks; service-watch wiring that submits
-		// (service, host) requests to the orchestrator and
-		// populates the router from Service.Expose lands in a
-		// follow-up commit.
+		// terminates :80/:443 and runs the ACME issuer.
 		if types.IsEdgeNode(a.Identity().Labels) {
 			challenges := ingress.NewMemChallengeStore()
 			certStore := acmesvc.NewMemCertStore()
@@ -612,25 +611,6 @@ func main() {
 					httpsAddr = ":443"
 				}
 			}
-			isub, ierr := ingress.New(ingress.Config{
-				Router:     router,
-				Challenges: challenges,
-				Certs:      loader,
-				HTTPAddr:   httpAddr,
-				HTTPSAddr:  httpsAddr,
-				// Until the service-watch wiring lands, no
-				// upstream resolves successfully — every routed
-				// request gets a 503 by design. The challenge
-				// path still works because it never resolves.
-				UpstreamResolver: ingress.FuncResolver(func(string, string, int) (string, bool) { return "", false }),
-				Logger:           logger.WithComponent("ingress"),
-			})
-			if ierr != nil {
-				return fmt.Errorf("ingress: %w", ierr)
-			}
-			if err := a.Register(isub); err != nil {
-				return err
-			}
 
 			// ACME orchestrator. Single-node = always leader.
 			issuer := &acmesvc.HTTP01Issuer{
@@ -644,11 +624,43 @@ func main() {
 				Status: acmeNoopStatus{logger: logger.WithComponent("acme")},
 				Logger: logger.WithComponent("acme"),
 			})
+
+			// Ingress route reconciler + upstream resolver. Watches
+			// the service store, builds a Route per service with
+			// `expose.host`, applies them to the Router, and answers
+			// the listener's UpstreamResolver lookups out of the
+			// dataplane endpoint cache. Without this, the route
+			// table stays empty and inbound requests 404.
+			ictl := ingressctl.New(ingressctl.Config{
+				Router: router,
+				Store:  stateStore,
+				Cache:  dpRef.Cache(),
+				ACME:   orch,
+				Logger: logger.WithComponent("ingressctl"),
+			})
+
+			isub, ierr := ingress.New(ingress.Config{
+				Router:           router,
+				Challenges:       challenges,
+				Certs:            loader,
+				HTTPAddr:         httpAddr,
+				HTTPSAddr:        httpsAddr,
+				UpstreamResolver: ictl,
+				Logger:           logger.WithComponent("ingress"),
+			})
+			if ierr != nil {
+				return fmt.Errorf("ingress: %w", ierr)
+			}
+			if err := a.Register(isub); err != nil {
+				return err
+			}
+
 			go func() {
 				if err := orch.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 					logger.Warn("acme orchestrator stopped", log.Err(err))
 				}
 			}()
+			go ictl.Run(ctx)
 			logger.Info("Ingress + ACME enabled (edge node)",
 				log.Str("http", httpAddr),
 				log.Str("https", httpsAddr))
