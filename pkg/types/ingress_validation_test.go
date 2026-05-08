@@ -58,17 +58,6 @@ func TestValidateExpose_ACMEHostRequired(t *testing.T) {
 	}
 }
 
-func TestValidateExpose_ReservedPortOnEdge(t *testing.T) {
-	for _, p := range EdgeReservedPorts {
-		if err := ValidateExpose(&ServiceExpose{Port: "80", HostPort: p}, true); err == nil {
-			t.Fatalf("expected error for reserved port %d on edge", p)
-		}
-		if err := ValidateExpose(&ServiceExpose{Port: "80", HostPort: p}, false); err != nil {
-			t.Fatalf("port %d should be allowed off-edge: %v", p, err)
-		}
-	}
-}
-
 func TestExposeServiceTLS_IsACME(t *testing.T) {
 	if (&ExposeServiceTLS{}).IsACME() {
 		t.Fatal("empty should not be acme")

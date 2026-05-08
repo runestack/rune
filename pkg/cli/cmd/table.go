@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -91,32 +90,18 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 		}
 		instances := fmt.Sprintf("%d/%d", running, service.Scale)
 
-		// External endpoint (best-effort)
+		// External endpoint (best-effort).
+		// With the ingress controller, the canonical external URL is
+		// https://{Expose.Host}{Expose.Path}. We don't know the scheme
+		// for sure (could be http if no TLS), so default to https when
+		// TLS is configured and http otherwise.
 		external := "-"
-		if service.Expose != nil {
-			var portNum int
-			for i := range service.Ports {
-				p := service.Ports[i]
-				if p.Name == service.Expose.Port {
-					portNum = p.Port
-					break
-				}
-				if n, err := strconv.Atoi(service.Expose.Port); err == nil && n == p.Port {
-					portNum = p.Port
-					break
-				}
+		if service.Expose != nil && service.Expose.Host != "" {
+			scheme := "http"
+			if service.Expose.TLS != nil {
+				scheme = "https"
 			}
-			if portNum > 0 {
-				host := service.Expose.Host
-				if host == "" {
-					host = "localhost"
-				}
-				hostPort := portNum
-				if service.Expose.HostPort > 0 {
-					hostPort = service.Expose.HostPort
-				}
-				external = fmt.Sprintf("http://%s:%d", host, hostPort)
-			}
+			external = fmt.Sprintf("%s://%s%s", scheme, service.Expose.Host, service.Expose.Path)
 		}
 
 		// Calculate age

@@ -160,9 +160,6 @@ type ServiceExpose struct {
 	// Host for the exposed service
 	Host string `json:"host,omitempty" yaml:"host,omitempty"`
 
-	// HostPort is the host port to bind to (MVP: defaults to container port if omitted)
-	HostPort int `json:"hostPort,omitempty" yaml:"hostPort,omitempty"`
-
 	// Path prefix for the exposed service
 	Path string `json:"path,omitempty" yaml:"path,omitempty"`
 
@@ -683,7 +680,7 @@ func (s *Service) CalculateHash() string {
 	if s.Expose == nil {
 		fmt.Fprintf(h, "expose:nil\n")
 	} else {
-		fmt.Fprintf(h, "expose:%s:%s:%d:%s\n", s.Expose.Port, s.Expose.Host, s.Expose.HostPort, s.Expose.Path)
+		fmt.Fprintf(h, "expose:%s:%s:%s\n", s.Expose.Port, s.Expose.Host, s.Expose.Path)
 		if s.Expose.TLS == nil {
 			fmt.Fprintf(h, "expose.tls:nil\n")
 		} else {

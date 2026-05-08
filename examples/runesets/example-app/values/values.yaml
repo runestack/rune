@@ -9,5 +9,4 @@ svc:
   expose:
     portName: http
     host: api.example.local
-    hostPort: 8080
 

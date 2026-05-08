@@ -441,13 +441,12 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		}
 	}
 
-	// Convert expose (MVP)
+	// Convert expose
 	if service.Expose != nil {
 		protoService.Expose = &generated.ServiceExpose{
-			Port:     service.Expose.Port,
-			Host:     service.Expose.Host,
-			HostPort: utils.ToUint32NonNegative(service.Expose.HostPort),
-			Path:     service.Expose.Path,
+			Port: service.Expose.Port,
+			Host: service.Expose.Host,
+			Path: service.Expose.Path,
 		}
 	}
 
@@ -653,13 +652,12 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		}
 	}
 
-	// Convert expose (MVP)
+	// Convert expose
 	if proto.Expose != nil {
 		service.Expose = &types.ServiceExpose{
-			Port:     proto.Expose.Port,
-			Host:     proto.Expose.Host,
-			HostPort: int(proto.Expose.HostPort),
-			Path:     proto.Expose.Path,
+			Port: proto.Expose.Port,
+			Host: proto.Expose.Host,
+			Path: proto.Expose.Path,
 		}
 	}
 

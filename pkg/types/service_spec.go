@@ -451,12 +451,6 @@ func (s *ServiceSpec) Validate() error {
 		if proto != "tcp" {
 			return NewValidationError("expose only supports tcp protocol in MVP")
 		}
-		// Validate hostPort range if provided
-		if s.Expose.HostPort != 0 {
-			if s.Expose.HostPort < 1 || s.Expose.HostPort > 65535 {
-				return NewValidationError("expose.hostPort must be between 1 and 65535")
-			}
-		}
 	}
 
 	return nil
