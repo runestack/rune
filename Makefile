@@ -77,8 +77,9 @@ build-platform:
 ## Install binaries to GOPATH/bin
 install: build
 	@echo "Installing $(BINARY_NAME)..."
-	@install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(GOPATH)/bin/
-	@install -m 755 $(BIN_DIR)/$(BINARY_NAME)d $(GOPATH)/bin/
+	@GOPATH_BIN="$$(go env GOPATH)/bin"; \
+	  cp $(BIN_DIR)/$(BINARY_NAME) "$$GOPATH_BIN/" && chmod 755 "$$GOPATH_BIN/$(BINARY_NAME)"; \
+	  cp $(BIN_DIR)/$(BINARY_NAME)d "$$GOPATH_BIN/" && chmod 755 "$$GOPATH_BIN/$(BINARY_NAME)d"
 	@echo "Installation completed!"
 
 ## Run all tests

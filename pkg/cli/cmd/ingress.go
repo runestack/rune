@@ -29,7 +29,7 @@ func newIngressCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ingress",
 		Short: "Inspect ingress + TLS certificate state",
-		Long: `Operator commands for the ingress controller (RUNE-066).
+		Long: `Operator commands for the ingress controller.
 List exposed services, view certificate state and expiry, and
 inspect per-host TLS provisioning lifecycle.`,
 	}

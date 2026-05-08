@@ -25,14 +25,19 @@ negotiation_timeout_seconds   = 3
 registries                    = []
 
 # ---------------------------------------------------------------
-# Networking layer (RUNE-040..067)
+# Networking layer
 # ---------------------------------------------------------------
 
 [networking]
 cluster_cidr = "10.96.0.0/16"   # Service VIP allocation range
 dev_mode     = false            # Skip nftables, bind ingress on user
                                 # ports, resolve .rune to 127.0.0.1
-metrics_addr = "127.0.0.1:9100" # Prometheus /metrics, "" disables
+
+[telemetry]
+# Prometheus /metrics endpoint. Covers ALL subsystems (orchestrator,
+# runners, networking, agent, DNS) — not just the networking layer.
+# Set to "" to disable.
+metrics_addr = "127.0.0.1:9100"
 
 [node]
 # Comma-separated roles. Adding "edge" enables the ingress

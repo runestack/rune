@@ -104,7 +104,7 @@ plugins:
     - "registry"
 
 # ---------------------------------------------------------------
-# Networking layer (RUNE-040..067)
+# Networking layer
 # ---------------------------------------------------------------
 
 networking:
@@ -118,7 +118,11 @@ networking:
   # laptop development only.
   dev_mode: false
 
-  # Prometheus /metrics endpoint. Empty disables.
+# Telemetry / observability
+telemetry:
+  # Prometheus /metrics endpoint. Covers ALL subsystems (orchestrator,
+  # runners, networking, agent, DNS) — not just the networking layer.
+  # Set to "" to disable.
   metrics_addr: "127.0.0.1:9100"
 
 node:
@@ -138,5 +142,3 @@ acme:
   directory: ""
   # Contact email passed to the ACME provider on account registration.
   email: ""
-
-    - "functions"

@@ -30,6 +30,8 @@ level = "warn"
 [networking]
 cluster_cidr = "10.42.0.0/16"
 dev_mode     = true
+
+[telemetry]
 metrics_addr = "127.0.0.1:29100"
 
 [node]
