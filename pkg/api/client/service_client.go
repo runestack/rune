@@ -383,13 +383,14 @@ func ServiceToProto(service *types.Service) *generated.Service {
 	}
 
 	protoService := &generated.Service{
-		Id:        service.ID,
-		Name:      service.Name,
-		Namespace: service.Namespace,
-		Image:     service.Image,
-		Command:   service.Command,
-		Scale:     utils.ToInt32NonNegative(service.Scale),
-		Runtime:   string(service.Runtime),
+		Id:              service.ID,
+		Name:            service.Name,
+		Namespace:       service.Namespace,
+		Image:           service.Image,
+		Command:         service.Command,
+		Scale:           utils.ToInt32NonNegative(service.Scale),
+		Runtime:         string(service.Runtime),
+		ImagePullPolicy: service.ImagePullPolicy,
 	}
 
 	if service.Metadata != nil {
@@ -582,13 +583,14 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 
 	// Create an initial service with basic fields
 	service := &types.Service{
-		ID:        proto.Id,
-		Name:      proto.Name,
-		Namespace: proto.Namespace,
-		Image:     proto.Image,
-		Command:   proto.Command,
-		Scale:     int(proto.Scale),
-		Runtime:   types.RuntimeType(proto.Runtime),
+		ID:              proto.Id,
+		Name:            proto.Name,
+		Namespace:       proto.Namespace,
+		Image:           proto.Image,
+		Command:         proto.Command,
+		Scale:           int(proto.Scale),
+		Runtime:         types.RuntimeType(proto.Runtime),
+		ImagePullPolicy: proto.ImagePullPolicy,
 	}
 
 	// Convert metadata

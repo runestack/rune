@@ -254,7 +254,11 @@ func (r *DockerRunner) Create(ctx context.Context, instance *runetypes.Instance)
 	}
 
 	// Pull the image first
-	if err := r.pullImage(ctx, containerConfig.Image); err != nil {
+	pullPolicy := runetypes.ImagePullPolicyAlways
+	if instance.Metadata != nil && instance.Metadata.ImagePullPolicy != "" {
+		pullPolicy = instance.Metadata.ImagePullPolicy
+	}
+	if err := r.pullImage(ctx, containerConfig.Image, pullPolicy); err != nil {
 		return fmt.Errorf("failed to pull image %s: %w", containerConfig.Image, err)
 	}
 
@@ -633,16 +637,30 @@ func (r *DockerRunner) getContainerID(ctx context.Context, instance *runetypes.I
 	return containers[0].ID, nil
 }
 
-// pullImage pulls an image from the registry if it doesn't exist locally
-func (r *DockerRunner) pullImage(ctx context.Context, image string) error {
-	// Check if we already have the image
-	_, _, err := r.client.ImageInspectWithRaw(ctx, image)
-	if err == nil {
-		// Image exists locally
+// pullImage pulls an image from the registry, honoring the supplied
+// imagePullPolicy ("Always", "IfNotPresent", "Never"). Empty defaults to
+// "Always". For "Never", no pull is attempted; container creation will
+// fail later if the image is missing locally.
+func (r *DockerRunner) pullImage(ctx context.Context, image string, policy string) error {
+	switch policy {
+	case runetypes.ImagePullPolicyNever:
+		r.logger.Debug("Skipping image pull (policy=Never)", log.Str("image", image))
 		return nil
+	case runetypes.ImagePullPolicyIfNotPresent:
+		if _, _, err := r.client.ImageInspectWithRaw(ctx, image); err == nil {
+			r.logger.Debug("Image present locally; skipping pull (policy=IfNotPresent)", log.Str("image", image))
+			return nil
+		}
+	case runetypes.ImagePullPolicyAlways, "":
+		// fall through and re-pull every time
+	default:
+		// Unknown policy values are treated as Always but logged.
+		r.logger.Warn("Unknown imagePullPolicy; defaulting to Always",
+			log.Str("policy", policy), log.Str("image", image))
 	}
 
-	r.logger.Info("Pulling Docker image", log.Str("image", image))
+	r.logger.Info("Pulling Docker image",
+		log.Str("image", image), log.Str("policy", policy))
 
 	// Resolve registry auth for this image if configured
 	host := parseImageHost(image)

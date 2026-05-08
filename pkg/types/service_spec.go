@@ -77,6 +77,10 @@ type ServiceSpec struct {
 	// Registry override allowing inline auth or named selection (optional)
 	Registry *ServiceRegistryOverride `json:"registry,omitempty" yaml:"registry,omitempty"`
 
+	// ImagePullPolicy controls when the runner pulls the container image.
+	// Allowed values: "Always" (default), "IfNotPresent", "Never".
+	ImagePullPolicy string `json:"imagePullPolicy,omitempty" yaml:"imagePullPolicy,omitempty"`
+
 	// Skip indicates this spec should be ignored by castfile parsing
 	Skip bool `json:"skip,omitempty" yaml:"skip,omitempty"`
 
@@ -298,6 +302,14 @@ func (s *ServiceSpec) Validate() error {
 		}
 	}
 
+	if s.ImagePullPolicy != "" {
+		switch s.ImagePullPolicy {
+		case ImagePullPolicyAlways, ImagePullPolicyIfNotPresent, ImagePullPolicyNever:
+		default:
+			return NewValidationError(fmt.Sprintf("invalid imagePullPolicy %q (allowed: Always, IfNotPresent, Never)", s.ImagePullPolicy))
+		}
+	}
+
 	if s.Scale < 0 {
 		return NewValidationError("service scale cannot be negative")
 	}
@@ -486,6 +498,7 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 		"discovery":     true,
 		"imageRegistry": true,
 		"registry":      true,
+		"imagePullPolicy": true,
 		"skip":          true,
 		"dependencies":  true,
 	}
@@ -597,6 +610,7 @@ func (s *ServiceSpec) ToService() (*Service, error) {
 		Image:           s.Image,
 		ImageRegistry:   s.ImageRegistry,
 		Registry:        s.Registry,
+		ImagePullPolicy: s.ImagePullPolicy,
 		Command:         s.Command,
 		Args:            s.Args,
 		Env:             s.Env,

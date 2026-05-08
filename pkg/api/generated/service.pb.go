@@ -176,9 +176,12 @@ type Service struct {
 	// Dependencies declared by this service (normalized form)
 	Dependencies []*DependencyRef `protobuf:"bytes,21,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
 	// Simple external exposure configuration (MVP)
-	Expose        *ServiceExpose `protobuf:"bytes,22,opt,name=expose,proto3" json:"expose,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Expose *ServiceExpose `protobuf:"bytes,22,opt,name=expose,proto3" json:"expose,omitempty"`
+	// ImagePullPolicy controls when the runner pulls the container image.
+	// Allowed values: "Always" (default), "IfNotPresent", "Never".
+	ImagePullPolicy string `protobuf:"bytes,23,opt,name=image_pull_policy,json=imagePullPolicy,proto3" json:"image_pull_policy,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Service) Reset() {
@@ -363,6 +366,13 @@ func (x *Service) GetExpose() *ServiceExpose {
 		return x.Expose
 	}
 	return nil
+}
+
+func (x *Service) GetImagePullPolicy() string {
+	if x != nil {
+		return x.ImagePullPolicy
+	}
+	return ""
 }
 
 // EnvFromSource represents an environment import source
@@ -2220,7 +2230,7 @@ var File_pkg_api_proto_service_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\xa2\b\n" +
+	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\xce\b\n" +
 	"\aService\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -2244,7 +2254,8 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\x10configmap_mounts\x18\x13 \x03(\v2\x18.rune.api.ConfigmapMountR\x0fconfigmapMounts\x125\n" +
 	"\bmetadata\x18\x14 \x01(\v2\x19.rune.api.ServiceMetadataR\bmetadata\x12;\n" +
 	"\fdependencies\x18\x15 \x03(\v2\x17.rune.api.DependencyRefR\fdependencies\x12/\n" +
-	"\x06expose\x18\x16 \x01(\v2\x17.rune.api.ServiceExposeR\x06expose\x1a9\n" +
+	"\x06expose\x18\x16 \x01(\v2\x17.rune.api.ServiceExposeR\x06expose\x12*\n" +
+	"\x11image_pull_policy\x18\x17 \x01(\tR\x0fimagePullPolicy\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a6\n" +

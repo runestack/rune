@@ -751,14 +751,19 @@ func (x *ServicePort) GetProtocol() string {
 	return ""
 }
 
-// ServiceExpose defines simple external exposure configuration for a service (MVP)
+// ServiceExpose defines simple external exposure configuration for a service
 type ServiceExpose struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Port or port name to expose (must match a declared service port)
 	Port string `protobuf:"bytes,1,opt,name=port,proto3" json:"port,omitempty"`
-	// Host for the exposed service (MVP: defaults to localhost)
+	// Host for the exposed service
 	Host string `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`
-	// Fixed host port to bind (0 means auto/default to same as container port)
+	// Deprecated: host_port is no longer honored. The ingress
+	// controller reaches the container by container IP; raw host
+	// binds are no longer derived from expose. Field kept for wire
+	// compatibility only.
+	//
+	// Deprecated: Marked as deprecated in pkg/api/proto/common.proto.
 	HostPort uint32 `protobuf:"varint,3,opt,name=host_port,json=hostPort,proto3" json:"host_port,omitempty"`
 	// Optional path prefix (reserved for future use)
 	Path          string `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
@@ -810,6 +815,7 @@ func (x *ServiceExpose) GetHost() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in pkg/api/proto/common.proto.
 func (x *ServiceExpose) GetHostPort() uint32 {
 	if x != nil {
 		return x.HostPort
@@ -1036,11 +1042,11 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\x12\x1f\n" +
 	"\vtarget_port\x18\x03 \x01(\x05R\n" +
 	"targetPort\x12\x1a\n" +
-	"\bprotocol\x18\x04 \x01(\tR\bprotocol\"h\n" +
+	"\bprotocol\x18\x04 \x01(\tR\bprotocol\"l\n" +
 	"\rServiceExpose\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\tR\x04port\x12\x12\n" +
-	"\x04host\x18\x02 \x01(\tR\x04host\x12\x1b\n" +
-	"\thost_port\x18\x03 \x01(\rR\bhostPort\x12\x12\n" +
+	"\x04host\x18\x02 \x01(\tR\x04host\x12\x1f\n" +
+	"\thost_port\x18\x03 \x01(\rB\x02\x18\x01R\bhostPort\x12\x12\n" +
 	"\x04path\x18\x04 \x01(\tR\x04path\"\xd0\x02\n" +
 	"\x05Probe\x12'\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x13.rune.api.ProbeTypeR\x04type\x12\x12\n" +

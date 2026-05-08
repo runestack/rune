@@ -10,6 +10,13 @@ import (
 
 var _ Resource = (*Service)(nil)
 
+// ImagePullPolicy values for Service.ImagePullPolicy.
+const (
+	ImagePullPolicyAlways       = "Always"
+	ImagePullPolicyIfNotPresent = "IfNotPresent"
+	ImagePullPolicyNever        = "Never"
+)
+
 // Service represents a deployable application or workload.
 type Service struct {
 	NamespacedResource `json:"-" yaml:"-"`
@@ -34,6 +41,11 @@ type Service struct {
 
 	// Registry override allowing inline auth or named selection (optional)
 	Registry *ServiceRegistryOverride `json:"registry,omitempty" yaml:"registry,omitempty"`
+
+	// ImagePullPolicy controls when the runner pulls the container image.
+	// Allowed values: "Always", "IfNotPresent", "Never". Empty defaults to
+	// "Always" (re-pull on every deploy/restart).
+	ImagePullPolicy string `json:"imagePullPolicy,omitempty" yaml:"imagePullPolicy,omitempty"`
 
 	// Command to run in the container (overrides image CMD)
 	Command string `json:"command,omitempty" yaml:"command,omitempty"`

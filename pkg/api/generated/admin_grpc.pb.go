@@ -66,7 +66,7 @@ type AdminServiceClient interface {
 	BootstrapAuth(ctx context.Context, in *BootstrapAuthRequest, opts ...grpc.CallOption) (*BootstrapAuthResponse, error)
 	TestRegistry(ctx context.Context, in *TestRegistryRequest, opts ...grpc.CallOption) (*TestRegistryResponse, error)
 	RegistriesStatus(ctx context.Context, in *RegistriesStatusRequest, opts ...grpc.CallOption) (*RegistriesStatusResponse, error)
-	// Network status (RUNE-040): inspect ClusterNetwork CIDR + VIP allocations.
+	// Network status: inspect ClusterNetwork CIDR + VIP allocations.
 	NetworkStatus(ctx context.Context, in *NetworkStatusRequest, opts ...grpc.CallOption) (*NetworkStatusResponse, error)
 }
 
@@ -303,7 +303,7 @@ type AdminServiceServer interface {
 	BootstrapAuth(context.Context, *BootstrapAuthRequest) (*BootstrapAuthResponse, error)
 	TestRegistry(context.Context, *TestRegistryRequest) (*TestRegistryResponse, error)
 	RegistriesStatus(context.Context, *RegistriesStatusRequest) (*RegistriesStatusResponse, error)
-	// Network status (RUNE-040): inspect ClusterNetwork CIDR + VIP allocations.
+	// Network status: inspect ClusterNetwork CIDR + VIP allocations.
 	NetworkStatus(context.Context, *NetworkStatusRequest) (*NetworkStatusResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
 }
