@@ -12,31 +12,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
-	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/types"
-	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
-
-// newIngressCmd assembles the `rune ingress` command group.
-func newIngressCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "ingress",
-		Short: "Inspect ingress + TLS certificate state",
-		Long: `Operator commands for the ingress controller.
-List exposed services, view certificate state and expiry, and
-inspect per-host TLS provisioning lifecycle.`,
-	}
-	cmd.AddCommand(newIngressListCmd())
-	cmd.AddCommand(newIngressGetCmd())
-	return cmd
-}
 
 // ingressRow is the projected view of a single exposed service used
 // by both the table and structured outputs.
@@ -48,68 +31,6 @@ type ingressRow struct {
 	Port      string                   `json:"port,omitempty" yaml:"port,omitempty"`
 	TLSMode   string                   `json:"tlsMode,omitempty" yaml:"tlsMode,omitempty"`
 	Cert      *types.IngressCertStatus `json:"cert,omitempty" yaml:"cert,omitempty"`
-}
-
-func newIngressListCmd() *cobra.Command {
-	opts := &cmdOptions{}
-	var output string
-	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List services exposed via the ingress controller",
-		Long: `Lists every service whose spec.expose.host is set in the given
-namespace. Shows certificate state and expiry for ACME-managed
-hosts. Use --output json|yaml for machine-readable output.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			apiClient, err := createAPIClient(opts)
-			if err != nil {
-				return fmt.Errorf("failed to create API client: %w", err)
-			}
-			defer apiClient.Close()
-			ns := effectiveCmdNS(opts.namespace)
-			svcs, err := client.NewServiceClient(apiClient).ListServices(ns, "", "")
-			if err != nil {
-				return fmt.Errorf("list services: %w", err)
-			}
-			rows := collectIngressRows(svcs)
-			return writeIngressRows(os.Stdout, rows, output)
-		},
-	}
-	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "", "Namespace (defaults to current context)")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "Output format: table | json | yaml")
-	return cmd
-}
-
-func newIngressGetCmd() *cobra.Command {
-	opts := &cmdOptions{}
-	var output string
-	cmd := &cobra.Command{
-		Use:   "get <service>",
-		Short: "Show ingress + TLS detail for a single service",
-		Long: `Fetches a single service and prints its ingress configuration
-along with the full IngressCertStatus (state, last error, next
-retry time, expiry).`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			apiClient, err := createAPIClient(opts)
-			if err != nil {
-				return fmt.Errorf("failed to create API client: %w", err)
-			}
-			defer apiClient.Close()
-			ns := effectiveCmdNS(opts.namespace)
-			svc, err := client.NewServiceClient(apiClient).GetService(ns, args[0])
-			if err != nil {
-				return fmt.Errorf("get service %s: %w", args[0], err)
-			}
-			row, ok := projectIngressRow(svc)
-			if !ok {
-				return fmt.Errorf("service %s/%s is not exposed (no spec.expose.host)", svc.Namespace, svc.ID)
-			}
-			return writeIngressDetail(os.Stdout, row, output)
-		},
-	}
-	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "", "Namespace (defaults to current context)")
-	cmd.Flags().StringVarP(&output, "output", "o", "table", "Output format: table | json | yaml")
-	return cmd
 }
 
 // projectIngressRow returns the projected view of a service, plus

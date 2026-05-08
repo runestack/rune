@@ -22,10 +22,10 @@ func newLoginCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "login [context-name]",
-		Short: "Login and create/update a context (shortcut to 'rune config set-context')",
+		Short: "Login and create/update a context (shortcut to 'rune context set')",
 		Long: `Login and create/update a context.
 
-This is a shortcut for 'rune config set-context' that creates or updates a context
+This is a shortcut for 'rune context set' that creates or updates a context
 and optionally sets it as the current context.
 
 If context-name is not provided, it will use "default".

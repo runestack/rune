@@ -68,15 +68,11 @@ func init() {
 	// Register auth-related commands
 	rootCmd.AddCommand(newLoginCmd())
 	rootCmd.AddCommand(newWhoAmICmd())
-	// Admin command group (bootstrap, token, user, policy)
+	// Admin command group (bootstrap, token, user, policy, registry)
 	rootCmd.AddCommand(newAdminCmd())
-	// Network command group (RUNE-064: ServiceNetworkPolicy explain/validate)
-	rootCmd.AddCommand(newPolicyCmd())
-	// Ingress command group (RUNE-067: ingress + TLS cert inspection)
-	rootCmd.AddCommand(newIngressCmd())
-	// Register config management commands
-	rootCmd.AddCommand(newConfigCmd())
-	// Register convenient context switching alias
+	// Context management commands (server, token, default namespace)
+	rootCmd.AddCommand(newContextCmd())
+	// Convenient top-level alias for `rune context use`
 	rootCmd.AddCommand(newUseContextCmd())
 
 	// Cleaner error UX: avoid usage dump and duplicate error printing
@@ -176,17 +172,17 @@ func loadCurrentContextIntoViper() error {
 	return nil
 }
 
-// newUseContextCmd creates a convenient alias for 'rune config use-context'
+// newUseContextCmd creates a convenient top-level alias for 'rune context use'
 func newUseContextCmd() *cobra.Command {
-	// Reuse the existing config use-context command
-	useContextCmd := newConfigUseContextCmd()
+	// Reuse the existing context use command
+	useContextCmd := newContextUseCmd()
 
 	// Update the command to be a top-level alias
 	useContextCmd.Use = "use-context [context-name]"
-	useContextCmd.Short = "Switch to a different context (alias for 'rune config use-context')"
+	useContextCmd.Short = "Switch to a different context (alias for 'rune context use')"
 	useContextCmd.Long = `Switch to a different context.
 
-This is a convenient alias for 'rune config use-context'.
+This is a convenient alias for 'rune context use'.
 The context must already exist in your configuration.`
 
 	return useContextCmd

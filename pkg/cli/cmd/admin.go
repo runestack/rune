@@ -11,13 +11,12 @@ import (
 )
 
 func newAdminCmd() *cobra.Command {
-	admin := &cobra.Command{Use: "admin", Short: "Administrative operations (bootstrap, token, user, policy)"}
+	admin := &cobra.Command{Use: "admin", Short: "Administrative operations (bootstrap, token, user, policy, registry)"}
 	admin.AddCommand(newAdminBootstrapCmd())
 	admin.AddCommand(newAdminTokenCmd())
 	admin.AddCommand(newAdminUserCmd())
 	admin.AddCommand(newAdminPolicyCmd())
-	admin.AddCommand(newAdminRegistriesCmd())
-	admin.AddCommand(newAdminNetworkCmd())
+	admin.AddCommand(newAdminRegistryCmd())
 	return admin
 }
 
@@ -81,8 +80,8 @@ func newAdminPolicyCmd() *cobra.Command {
 	return c
 }
 
-func newAdminRegistriesCmd() *cobra.Command {
-	c := &cobra.Command{Use: "registries", Short: "Manage registry authentication"}
+func newAdminRegistryCmd() *cobra.Command {
+	c := &cobra.Command{Use: "registry", Short: "Manage registry authentication"}
 	c.AddCommand(newAdminRegistriesListCmd())
 	c.AddCommand(newAdminRegistriesShowCmd())
 	c.AddCommand(newAdminRegistriesAddCmd())

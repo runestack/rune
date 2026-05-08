@@ -2,11 +2,15 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/api/generated"
 	resourceWatcher "github.com/runestack/rune/pkg/cli/watcher"
+	"github.com/runestack/rune/pkg/networking/policy"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
 )
@@ -41,6 +45,12 @@ var resourceAliases = map[string]string{
 	"configs":    "config",
 	"secret":     "secret",
 	"secrets":    "secret",
+	// Networking resources
+	"ingress":     "ingress",
+	"ingresses":   "ingress",
+	"network":     "network",
+	"netpolicy":   "netpolicy",
+	"netpolicies": "netpolicy",
 	// Abbreviations
 	"svc":        "service",
 	"inst":       "instance",
@@ -48,6 +58,8 @@ var resourceAliases = map[string]string{
 	"cfg":        "config",
 	"configmap":  "configmap",
 	"configmaps": "configmap",
+	"ing":        "ingress",
+	"netpol":     "netpolicy",
 }
 
 // getCmd represents the get command
@@ -61,9 +73,11 @@ func newGetCmd() *cobra.Command {
 	* services (svc)
 	* instances (inst)
 	* namespaces (ns)
-	* jobs
-	* configs
-	* secrets`,
+	* configmaps (cfg)
+	* secrets
+	* ingresses (ing)        - services with spec.expose.host
+	* netpolicies (netpol)   - services with a networkPolicy block
+	* network                - cluster network state (CIDR, VIP allocations)`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.namespace = effectiveCmdNS(opts.namespace)
@@ -142,9 +156,173 @@ func runGet(cmd *cobra.Command, args []string, opts *getOptions) error {
 		return handleSecretGet(cmd, opts, resourceName)
 	case "configmap":
 		return handleConfigmapGet(cmd, opts, resourceName)
+	case "ingress":
+		return handleIngressGet(cmd, opts, resourceName)
+	case "network":
+		return handleNetworkGet(cmd, opts, resourceName)
+	case "netpolicy":
+		return handleNetpolicyGet(cmd, opts, resourceName)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", args[0])
 	}
+}
+
+// handleIngressGet handles get operations for ingresses (services with spec.expose.host set).
+// `rune get ingresses` lists exposed services in the current namespace.
+// `rune get ingress <service>` shows TLS + cert detail for a single exposed service.
+func handleIngressGet(cmd *cobra.Command, opts *getOptions, resourceName string) error {
+	apiClient, cErr := createAPIClient(&opts.cmdOptions)
+	if cErr != nil {
+		return fmt.Errorf("failed to create API client: %w", cErr)
+	}
+	defer apiClient.Close()
+
+	svcClient := client.NewServiceClient(apiClient)
+	output := opts.outputFormat
+	if output == "" || output == "table" {
+		output = "table"
+	}
+
+	if resourceName != "" {
+		svc, err := svcClient.GetService(opts.namespace, resourceName)
+		if err != nil {
+			return fmt.Errorf("failed to get service %s: %w", resourceName, err)
+		}
+		row, ok := projectIngressRow(svc)
+		if !ok {
+			return fmt.Errorf("service %s/%s is not exposed (no spec.expose.host)", svc.Namespace, svc.ID)
+		}
+		return writeIngressDetail(os.Stdout, row, output)
+	}
+
+	ns := opts.namespace
+	if opts.allNamespaces {
+		ns = "*"
+	}
+	svcs, err := svcClient.ListServices(ns, opts.labelSelector, opts.fieldSelector)
+	if err != nil {
+		return fmt.Errorf("failed to list services: %w", err)
+	}
+	rows := collectIngressRows(svcs)
+	return writeIngressRows(os.Stdout, rows, output)
+}
+
+// handleNetworkGet renders the cluster network state (CIDR, VIP allocations).
+// `rune get network` is the verb-first replacement for `rune admin network status`.
+func handleNetworkGet(_ *cobra.Command, opts *getOptions, resourceName string) error {
+	if resourceName != "" {
+		return fmt.Errorf("network resource does not accept a name argument")
+	}
+	api, err := createAPIClient(&opts.cmdOptions)
+	if err != nil {
+		return err
+	}
+	defer api.Close()
+	ac := generated.NewAdminServiceClient(api.Conn())
+	resp, err := ac.NetworkStatus(context.Background(), &generated.NetworkStatusRequest{})
+	if err != nil {
+		return err
+	}
+	switch opts.outputFormat {
+	case "json":
+		b, _ := json.MarshalIndent(resp, "", "  ")
+		fmt.Println(string(b))
+		return nil
+	default:
+		return printNetworkStatus(resp)
+	}
+}
+
+func printNetworkStatus(resp *generated.NetworkStatusResponse) error {
+	if resp.Cidr == "" {
+		fmt.Println("Cluster network not bootstrapped.")
+		return nil
+	}
+	fmt.Printf("CIDR:             %s\n", resp.Cidr)
+	fmt.Printf("Capacity:         %d usable IPs\n", resp.Capacity)
+	fmt.Printf("Allocated:        %d\n", len(resp.Allocations))
+	fmt.Printf("Free list size:   %d\n", resp.FreeListSize)
+	fmt.Printf("Pending releases: %d (cooldown)\n", resp.PendingReleases)
+	if len(resp.Allocations) > 0 {
+		sort.Slice(resp.Allocations, func(i, j int) bool {
+			return resp.Allocations[i].ServiceId < resp.Allocations[j].ServiceId
+		})
+		fmt.Println()
+		fmt.Println("Allocations:")
+		fmt.Printf("  %-40s %s\n", "SERVICE", "VIP")
+		for _, a := range resp.Allocations {
+			fmt.Printf("  %-40s %s\n", a.ServiceId, a.Vip)
+		}
+	}
+	return nil
+}
+
+// handleNetpolicyGet handles get operations for ServiceNetworkPolicy.
+// `rune get netpolicies` lists all services that have a networkPolicy block.
+// `rune get netpolicy <service>` shows the compiled policy for that service.
+func handleNetpolicyGet(_ *cobra.Command, opts *getOptions, resourceName string) error {
+	api, err := createAPIClient(&opts.cmdOptions)
+	if err != nil {
+		return err
+	}
+	defer api.Close()
+	svcClient := client.NewServiceClient(api)
+
+	if resourceName != "" {
+		svc, err := svcClient.GetService(opts.namespace, resourceName)
+		if err != nil {
+			return fmt.Errorf("get service %s: %w", resourceName, err)
+		}
+		compiled := policy.Compile(svc)
+		out := compiled.Explain()
+		switch opts.outputFormat {
+		case "json":
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(out)
+		default:
+			return printExplain(svc, out)
+		}
+	}
+
+	ns := opts.namespace
+	if opts.allNamespaces {
+		ns = "*"
+	}
+	svcs, err := svcClient.ListServices(ns, opts.labelSelector, opts.fieldSelector)
+	if err != nil {
+		return fmt.Errorf("failed to list services: %w", err)
+	}
+	// Filter services that have a networkPolicy block.
+	var filtered []*types.Service
+	for _, s := range svcs {
+		if s != nil && s.NetworkPolicy != nil {
+			filtered = append(filtered, s)
+		}
+	}
+	switch opts.outputFormat {
+	case "json":
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(filtered)
+	default:
+		return printNetpolicyTable(filtered)
+	}
+}
+
+func printNetpolicyTable(svcs []*types.Service) error {
+	if len(svcs) == 0 {
+		fmt.Println("No services with a network policy found.")
+		return nil
+	}
+	fmt.Printf("%-15s %-30s %-15s %-15s\n", "NAMESPACE", "SERVICE", "INGRESS", "EGRESS")
+	for _, s := range svcs {
+		np := s.NetworkPolicy
+		in := fmt.Sprintf("%d rule(s)", len(np.Ingress))
+		eg := fmt.Sprintf("%d rule(s)", len(np.Egress))
+		fmt.Printf("%-15s %-30s %-15s %-15s\n", emptyDash(s.Namespace), s.ID, in, eg)
+	}
+	return nil
 }
 
 // handleServiceGet handles get operations for services
