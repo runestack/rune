@@ -199,15 +199,19 @@ type ExposeServiceTLS struct {
 const (
 	ExposeTLSModeManual = "manual"
 	ExposeTLSModeACME   = "acme"
+	// ExposeTLSModeAuto is a user-friendly synonym for ExposeTLSModeACME.
+	// Both "auto" and "acme" request a Let's Encrypt-issued certificate.
+	ExposeTLSModeAuto = "auto"
 )
 
 // IsACME reports whether the expose configuration requests
-// ACME-managed TLS. Auto: true is treated as Mode=acme.
+// ACME-managed TLS. The boolean Auto: true is treated as Mode=acme.
+// Mode values "acme" and "auto" are accepted as synonyms.
 func (t *ExposeServiceTLS) IsACME() bool {
 	if t == nil {
 		return false
 	}
-	if t.Mode == ExposeTLSModeACME {
+	if t.Mode == ExposeTLSModeACME || t.Mode == ExposeTLSModeAuto {
 		return true
 	}
 	return t.Auto && t.Mode == ""

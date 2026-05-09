@@ -45,6 +45,24 @@ type Prober interface {
 	Execute(ctx *ProbeContext) ProbeResult
 }
 
+// probeHost returns the address to dial for network probes against
+// the given instance. Container instances expose a per-container IP
+// on the Docker bridge (recorded by the runner on Start as
+// Metadata.ContainerIP); we must dial that directly so the probe
+// hits the container instead of the host's loopback. Process
+// instances run on the host, so localhost is correct.
+//
+// Probing through localhost on edge nodes would otherwise hit the
+// runed ingress listener on :80 / :443 and 404 (no Host header
+// match), causing healthy containers to look unhealthy and
+// restart-loop forever.
+func probeHost(instance *types.Instance) string {
+	if instance != nil && instance.Metadata != nil && instance.Metadata.ContainerIP != "" {
+		return instance.Metadata.ContainerIP
+	}
+	return "localhost"
+}
+
 // ExecProber implements the Exec health check probe
 type ExecProber struct{}
 

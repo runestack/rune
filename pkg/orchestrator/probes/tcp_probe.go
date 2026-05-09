@@ -13,8 +13,12 @@ type TCPProber struct{}
 func (p *TCPProber) Execute(ctx *ProbeContext) ProbeResult {
 	start := time.Now()
 
+	// Container instances are dialled by their container IP so the
+	// probe bypasses the host's ingress listener; see probeHost.
+	host := probeHost(ctx.Instance)
+
 	// Attempt to establish TCP connection
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", ctx.ProbeConfig.Port), 5*time.Second)
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, ctx.ProbeConfig.Port), 5*time.Second)
 	if err != nil {
 		return ProbeResult{
 			Success:  false,
