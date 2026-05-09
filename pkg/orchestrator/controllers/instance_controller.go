@@ -367,7 +367,7 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 			instance.Metadata = &types.InstanceMetadata{}
 		}
 		instance.Metadata.Image = service.Image
-		instance.Metadata.ImagePullPolicy = service.ImagePullPolicy
+		instance.Metadata.ImagePull = service.ImagePull
 	}
 
 	// Update instance with pending status

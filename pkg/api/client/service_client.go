@@ -390,7 +390,7 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		Command:         service.Command,
 		Scale:           utils.ToInt32NonNegative(service.Scale),
 		Runtime:         string(service.Runtime),
-		ImagePullPolicy: service.ImagePullPolicy,
+		ImagePull:       service.ImagePull,
 	}
 
 	if service.Metadata != nil {
@@ -590,7 +590,7 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		Command:         proto.Command,
 		Scale:           int(proto.Scale),
 		Runtime:         types.RuntimeType(proto.Runtime),
-		ImagePullPolicy: proto.ImagePullPolicy,
+		ImagePull:       proto.ImagePull,
 	}
 
 	// Convert metadata

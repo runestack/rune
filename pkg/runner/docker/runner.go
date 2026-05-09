@@ -254,9 +254,9 @@ func (r *DockerRunner) Create(ctx context.Context, instance *runetypes.Instance)
 	}
 
 	// Pull the image first
-	pullPolicy := runetypes.ImagePullPolicyAlways
-	if instance.Metadata != nil && instance.Metadata.ImagePullPolicy != "" {
-		pullPolicy = instance.Metadata.ImagePullPolicy
+	pullPolicy := runetypes.ImagePullAlways
+	if instance.Metadata != nil && instance.Metadata.ImagePull != "" {
+		pullPolicy = instance.Metadata.ImagePull
 	}
 	if err := r.pullImage(ctx, containerConfig.Image, pullPolicy); err != nil {
 		return fmt.Errorf("failed to pull image %s: %w", containerConfig.Image, err)
@@ -638,25 +638,25 @@ func (r *DockerRunner) getContainerID(ctx context.Context, instance *runetypes.I
 }
 
 // pullImage pulls an image from the registry, honoring the supplied
-// imagePullPolicy ("Always", "IfNotPresent", "Never"). Empty defaults to
-// "Always". For "Never", no pull is attempted; container creation will
+// imagePull mode ("always", "missing", "never"). Empty defaults to
+// "always". For "never", no pull is attempted; container creation will
 // fail later if the image is missing locally.
 func (r *DockerRunner) pullImage(ctx context.Context, image string, policy string) error {
 	switch policy {
-	case runetypes.ImagePullPolicyNever:
-		r.logger.Debug("Skipping image pull (policy=Never)", log.Str("image", image))
+	case runetypes.ImagePullNever:
+		r.logger.Debug("Skipping image pull (imagePull=never)", log.Str("image", image))
 		return nil
-	case runetypes.ImagePullPolicyIfNotPresent:
+	case runetypes.ImagePullMissing:
 		if _, _, err := r.client.ImageInspectWithRaw(ctx, image); err == nil {
-			r.logger.Debug("Image present locally; skipping pull (policy=IfNotPresent)", log.Str("image", image))
+			r.logger.Debug("Image present locally; skipping pull (imagePull=missing)", log.Str("image", image))
 			return nil
 		}
-	case runetypes.ImagePullPolicyAlways, "":
+	case runetypes.ImagePullAlways, "":
 		// fall through and re-pull every time
 	default:
-		// Unknown policy values are treated as Always but logged.
-		r.logger.Warn("Unknown imagePullPolicy; defaulting to Always",
-			log.Str("policy", policy), log.Str("image", image))
+		// Unknown values are treated as always but logged.
+		r.logger.Warn("Unknown imagePull value; defaulting to always",
+			log.Str("imagePull", policy), log.Str("image", image))
 	}
 
 	r.logger.Info("Pulling Docker image",

@@ -80,10 +80,10 @@ type InstanceMetadata struct {
 	// Image is the image that the instance is running
 	Image string `json:"image,omitempty" yaml:"image,omitempty"`
 
-	// ImagePullPolicy controls when the runner pulls the container image
-	// ("Always", "IfNotPresent", "Never"). Propagated from the parent
-	// Service spec; empty defaults to "Always".
-	ImagePullPolicy string `json:"imagePullPolicy,omitempty" yaml:"imagePullPolicy,omitempty"`
+	// ImagePull controls when the runner pulls the container image
+	// ("always", "missing", "never"). Propagated from the parent
+	// Service spec; empty defaults to "always".
+	ImagePull string `json:"imagePull,omitempty" yaml:"imagePull,omitempty"`
 
 	// ServiceGeneration is the generation of the service that the instance belongs to
 	ServiceGeneration int64 `json:"serviceGeneration,omitempty" yaml:"serviceGeneration,omitempty"`

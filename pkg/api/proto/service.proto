@@ -84,9 +84,9 @@ message Service {
   // Simple external exposure configuration (MVP)
   ServiceExpose expose = 22;
 
-  // ImagePullPolicy controls when the runner pulls the container image.
-  // Allowed values: "Always" (default), "IfNotPresent", "Never".
-  string image_pull_policy = 23;
+  // ImagePull controls when the runner pulls the container image.
+  // Allowed values: "always" (default), "missing", "never".
+  string image_pull = 23;
 }
 
 // EnvFromSource represents an environment import source
