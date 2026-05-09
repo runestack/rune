@@ -22,9 +22,18 @@ func hashSecret(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// TokenSecretPrefix is the human-visible prefix on every newly issued
+// Rune token secret. It exists so the secrets are easy to spot in the
+// wild (logs, screenshots, terraform output, leaked configs) and so
+// that secret scanners (gitleaks, GitHub secret scanning, etc.) can
+// match on a stable, distinctive marker. Validation hashes the entire
+// string verbatim, so older tokens issued without the prefix continue
+// to work — only the prefix on freshly issued tokens is new.
+const TokenSecretPrefix = "rune_"
+
 // Issue creates a new token with a freshly generated secret. Returns the plaintext secret once.
 func (r *TokenRepo) Issue(ctx context.Context, name, subjectID, subjectType string, desc string, ttl time.Duration) (*types.Token, string, error) {
-	secret := uuid.NewString() + "." + uuid.NewString()
+	secret := TokenSecretPrefix + uuid.NewString() + "." + uuid.NewString()
 	now := time.Now()
 	var exp *time.Time
 	if ttl > 0 {
