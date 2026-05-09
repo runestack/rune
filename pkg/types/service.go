@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -97,6 +98,20 @@ type Service struct {
 
 	// Status of the service
 	Status ServiceStatus `json:"status" yaml:"status"`
+
+	// StatusReason is a short, machine-friendly slug describing why
+	// the service is in its current Status. Set by the reconciler when
+	// rolling up the worst instance state. Examples: "ImagePullBackOff",
+	// "ProbeFailed", "OOMKilled", "ScheduleFailed", "ConfigUnresolvable".
+	// Empty when Status is Running.
+	StatusReason string `json:"statusReason,omitempty" yaml:"statusReason,omitempty"`
+
+	// StatusMessage is a single human-readable sentence explaining
+	// StatusReason, copied verbatim from the worst instance's
+	// StatusMessage. The CLI shows this directly on `rune get
+	// service <name>` and on cast failure so developers never have to
+	// run a second command to learn why a service is unhealthy.
+	StatusMessage string `json:"statusMessage,omitempty" yaml:"statusMessage,omitempty"`
 
 	// IngressCert tracks asynchronous TLS certificate state for the
 	// ingress controller (RUNE-066). Populated only when Expose is
@@ -325,6 +340,63 @@ const (
 	// ServiceStatusDeleted indicates the service has been deleted.
 	ServiceStatusDeleted ServiceStatus = "Deleted"
 )
+
+// Well-known StatusReason values for Service.StatusReason. The reconciler
+// derives one of these from the worst-instance state. Keep this set small
+// and stable — operators may script against it.
+const (
+	ServiceReasonImagePullBackOff = "ImagePullBackOff"
+	ServiceReasonProbeFailed      = "ProbeFailed"
+	ServiceReasonCrashLooping     = "CrashLooping"
+	ServiceReasonOOMKilled        = "OOMKilled"
+	ServiceReasonScheduleFailed   = "ScheduleFailed"
+	ServiceReasonConfigError      = "ConfigError"
+	ServiceReasonRunnerError      = "RunnerError"
+	ServiceReasonExited           = "Exited"
+	ServiceReasonUnknown          = "Unknown"
+)
+
+// DeriveServiceReason inspects an instance's status and message and
+// returns a short, stable Service.StatusReason slug. Used by the
+// reconciler to roll up an unhealthy instance into a service-level
+// reason that's friendly to display in tables and to script against.
+func DeriveServiceReason(status InstanceStatus, message string) string {
+	m := strings.ToLower(message)
+	switch {
+	case strings.Contains(m, "pull access denied"),
+		strings.Contains(m, "manifest unknown"),
+		strings.Contains(m, "image not found"),
+		strings.Contains(m, "no such image"),
+		strings.Contains(m, "imagepullbackoff"),
+		strings.Contains(m, "errimagepull"),
+		strings.Contains(m, "pull failed"),
+		strings.Contains(m, "unauthorized") && strings.Contains(m, "image"):
+		return ServiceReasonImagePullBackOff
+	case strings.Contains(m, "oom"), strings.Contains(m, "out of memory"):
+		return ServiceReasonOOMKilled
+	case strings.Contains(m, "probe"), strings.Contains(m, "health check"):
+		return ServiceReasonProbeFailed
+	case strings.Contains(m, "no node"), strings.Contains(m, "no capacity"),
+		strings.Contains(m, "schedule"):
+		return ServiceReasonScheduleFailed
+	case strings.Contains(m, "secret"), strings.Contains(m, "configmap"),
+		strings.Contains(m, "config map"), strings.Contains(m, "env"):
+		if strings.Contains(m, "not found") || strings.Contains(m, "unresolvable") {
+			return ServiceReasonConfigError
+		}
+	case strings.Contains(m, "crashloop"):
+		return ServiceReasonCrashLooping
+	}
+	switch status {
+	case InstanceStatusExited:
+		return ServiceReasonExited
+	case InstanceStatusFailed:
+		return ServiceReasonRunnerError
+	case InstanceStatusUnknown:
+		return ServiceReasonUnknown
+	}
+	return ServiceReasonRunnerError
+}
 
 // Resources represents resource requirements for a service instance.
 type Resources struct {

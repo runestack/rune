@@ -347,6 +347,15 @@ func handleServiceGet(cmd *cobra.Command, opts *getOptions, resourceName string)
 			return fmt.Errorf("failed to get service %s: %w", resourceName, err)
 		}
 
+		// Default human view: render the detail paragraph (with
+		// instance breakdown + failure "why") instead of a one-row
+		// table. Keeps `rune get service <name>` self-contained: no
+		// describe, no second command. JSON/YAML still take the
+		// structured path.
+		if opts.outputFormat == "" || opts.outputFormat == "table" {
+			instClient := client.NewInstanceClient(apiClient)
+			return renderServiceDetail(os.Stdout, service, instClient)
+		}
 		return outputResource([]*types.Service{service}, opts)
 	}
 

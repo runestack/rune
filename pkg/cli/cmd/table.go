@@ -80,9 +80,9 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 	// Set default headers if not provided
 	if len(t.Headers) == 0 {
 		if t.AllNamespaces {
-			t.Headers = []string{"NAMESPACE", "NAME", "TYPE", "STATUS", "INSTANCES", "EXTERNAL", "GENERATION", "AGE"}
+			t.Headers = []string{"NAMESPACE", "NAME", "TYPE", "STATUS", "READY", "REASON", "EXTERNAL", "GEN", "AGE"}
 		} else {
-			t.Headers = []string{"NAME", "TYPE", "STATUS", "INSTANCES", "EXTERNAL", "GENERATION", "AGE"}
+			t.Headers = []string{"NAME", "TYPE", "STATUS", "READY", "REASON", "EXTERNAL", "GEN", "AGE"}
 		}
 	}
 
@@ -100,12 +100,18 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 		// Format status - use our colorizeStatus function
 		status := format.PTermStatusLabel(string(service.Status))
 
-		// Format instances
+		// Format ready count
 		running := 0
 		if service.Status == types.ServiceStatusRunning {
 			running = service.Scale
 		}
 		instances := fmt.Sprintf("%d/%d", running, service.Scale)
+
+		// Reason: short slug. Empty when service is healthy.
+		reason := service.StatusReason
+		if reason == "" {
+			reason = "-"
+		}
 
 		// External endpoint (best-effort).
 		// With the ingress controller, the canonical external URL is
@@ -143,6 +149,7 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 				serviceType,
 				status,
 				instances,
+				reason,
 				external,
 				generation,
 				age,
@@ -153,6 +160,7 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 				serviceType,
 				status,
 				instances,
+				reason,
 				external,
 				generation,
 				age,

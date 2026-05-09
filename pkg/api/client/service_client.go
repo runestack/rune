@@ -391,6 +391,8 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		Scale:           utils.ToInt32NonNegative(service.Scale),
 		Runtime:         string(service.Runtime),
 		ImagePull:       service.ImagePull,
+		StatusReason:    service.StatusReason,
+		StatusMessage:   service.StatusMessage,
 	}
 
 	if service.Metadata != nil {
@@ -598,6 +600,8 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		Scale:           int(proto.Scale),
 		Runtime:         types.RuntimeType(proto.Runtime),
 		ImagePull:       proto.ImagePull,
+		StatusReason:    proto.StatusReason,
+		StatusMessage:   proto.StatusMessage,
 	}
 
 	// Convert metadata

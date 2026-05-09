@@ -179,7 +179,17 @@ type Service struct {
 	Expose *ServiceExpose `protobuf:"bytes,22,opt,name=expose,proto3" json:"expose,omitempty"`
 	// ImagePull controls when the runner pulls the container image.
 	// Allowed values: "always" (default), "missing", "never".
-	ImagePull     string `protobuf:"bytes,23,opt,name=image_pull,json=imagePull,proto3" json:"image_pull,omitempty"`
+	ImagePull string `protobuf:"bytes,23,opt,name=image_pull,json=imagePull,proto3" json:"image_pull,omitempty"`
+	// StatusReason is a short, machine-friendly slug describing why
+	// the service is in its current Status. Examples:
+	// "ImagePullBackOff", "ProbeFailed", "OOMKilled", "ScheduleFailed".
+	// Empty when status is RUNNING.
+	StatusReason string `protobuf:"bytes,24,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"`
+	// StatusMessage is a single human-readable sentence explaining
+	// status_reason, copied verbatim from the worst instance's
+	// StatusMessage. Used by the CLI to show "why" without a second
+	// command.
+	StatusMessage string `protobuf:"bytes,25,opt,name=status_message,json=statusMessage,proto3" json:"status_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -371,6 +381,20 @@ func (x *Service) GetExpose() *ServiceExpose {
 func (x *Service) GetImagePull() string {
 	if x != nil {
 		return x.ImagePull
+	}
+	return ""
+}
+
+func (x *Service) GetStatusReason() string {
+	if x != nil {
+		return x.StatusReason
+	}
+	return ""
+}
+
+func (x *Service) GetStatusMessage() string {
+	if x != nil {
+		return x.StatusMessage
 	}
 	return ""
 }
@@ -2230,7 +2254,7 @@ var File_pkg_api_proto_service_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\xc1\b\n" +
+	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\x8d\t\n" +
 	"\aService\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -2256,7 +2280,9 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\fdependencies\x18\x15 \x03(\v2\x17.rune.api.DependencyRefR\fdependencies\x12/\n" +
 	"\x06expose\x18\x16 \x01(\v2\x17.rune.api.ServiceExposeR\x06expose\x12\x1d\n" +
 	"\n" +
-	"image_pull\x18\x17 \x01(\tR\timagePull\x1a9\n" +
+	"image_pull\x18\x17 \x01(\tR\timagePull\x12#\n" +
+	"\rstatus_reason\x18\x18 \x01(\tR\fstatusReason\x12%\n" +
+	"\x0estatus_message\x18\x19 \x01(\tR\rstatusMessage\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a6\n" +

@@ -651,6 +651,7 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 	}
 
 	var newStatus types.ServiceStatus
+	var newReason, newMessage string
 
 	if len(instanceData.Instances) == 0 {
 		// No instances yet
@@ -661,14 +662,27 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		running := 0
 		failed := 0
 
-		for _, instance := range instanceData.Instances {
+		// Track the worst instance so we can roll its StatusMessage up
+		// to the service. Failed wins over Pending wins over Running.
+		// First failed instance encountered is enough — operators get
+		// one concrete sentence to act on.
+		var worstFailed, worstPending *types.Instance
+
+		for i := range instanceData.Instances {
+			instance := &instanceData.Instances[i]
 			switch instance.Status {
 			case types.InstanceStatusPending, types.InstanceStatusCreated, types.InstanceStatusStarting:
 				pending++
+				if worstPending == nil {
+					worstPending = instance
+				}
 			case types.InstanceStatusRunning:
 				running++
 			case types.InstanceStatusFailed, types.InstanceStatusExited, types.InstanceStatusUnknown:
 				failed++
+				if worstFailed == nil {
+					worstFailed = instance
+				}
 			}
 		}
 
@@ -682,8 +696,15 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		// Determine overall service status
 		if failed > 0 {
 			newStatus = types.ServiceStatusFailed
+			if worstFailed != nil {
+				newReason = types.DeriveServiceReason(worstFailed.Status, worstFailed.StatusMessage)
+				newMessage = worstFailed.StatusMessage
+			}
 		} else if pending > 0 {
 			newStatus = types.ServiceStatusDeploying
+			if worstPending != nil && worstPending.StatusMessage != "" {
+				newMessage = worstPending.StatusMessage
+			}
 		} else if running == len(instanceData.Instances) {
 			newStatus = types.ServiceStatusRunning
 		} else {
@@ -691,14 +712,19 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		}
 	}
 
-	// Update service status if changed
-	if service.Status != newStatus {
+	// Update service status if anything changed (status, reason, or message)
+	if service.Status != newStatus ||
+		service.StatusReason != newReason ||
+		service.StatusMessage != newMessage {
 		r.logger.Info("Updating service status",
 			log.Str("service", service.Name),
 			log.Str("from", string(service.Status)),
-			log.Str("to", string(newStatus)))
+			log.Str("to", string(newStatus)),
+			log.Str("reason", newReason))
 
 		service.Status = newStatus
+		service.StatusReason = newReason
+		service.StatusMessage = newMessage
 		if err := r.store.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, service); err != nil {
 			return fmt.Errorf("failed to update service status: %w", err)
 		}

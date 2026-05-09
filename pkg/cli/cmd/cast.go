@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -401,6 +402,14 @@ func deployServices(apiClient *client.Client, info *ResourceInfo, results *Deplo
 				fmt.Printf("    Waiting for service to be ready...")
 				if err := waitForServiceReady(serviceClient, service.Namespace, service.Name, timeout); err != nil {
 					fmt.Println(" ❌")
+					// If the wait surfaced a structured failure (the
+					// reconciler reported Failed with a reason), print
+					// the developer-facing block inline so the
+					// operator never has to type a second command.
+					var fe *castFailureError
+					if errors.As(err, &fe) {
+						printCastFailure(fe.Service)
+					}
 					results.FailedResources[service.Name] = err.Error()
 					return fmt.Errorf("service %s failed to become ready: %w", service.Name, err)
 				}
@@ -685,6 +694,16 @@ func stringSliceContains(slice []string, value string) bool {
 }
 
 // waitForServiceReady waits for a service to be fully deployed.
+//
+// Returns:
+//   - nil when the service reaches ServiceStatusRunning with all instances ready.
+//   - A *castFailureError when the reconciler reports ServiceStatusFailed
+//     (the caller renders a developer-friendly failure block from this).
+//   - A plain error on timeout.
+//
+// The early exit on Failed is the whole point: we want the developer
+// to see "✗ ImagePullBackOff: pull access denied …" in the same scroll
+// as their `rune cast`, not a generic "timeout waiting for service".
 func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name string, timeout time.Duration) error {
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -711,6 +730,13 @@ func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name st
 				continue
 			}
 
+			// Fail fast: the reconciler has rolled the worst instance's
+			// reason/message up to the service. Surface it now instead
+			// of timing out with no context.
+			if service.Status == types.ServiceStatusFailed {
+				return &castFailureError{Service: service}
+			}
+
 			// Check if the service is running
 			if service.Status == types.ServiceStatusRunning {
 				// Check that all instances are ready
@@ -732,4 +758,46 @@ func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name st
 			}
 		}
 	}
+}
+
+// castFailureError carries the failed Service so the caller can render
+// a rich, in-line failure block (image, reason, message, hint) instead
+// of a flat one-line error.
+type castFailureError struct {
+	Service *types.Service
+}
+
+func (e *castFailureError) Error() string {
+	if e == nil || e.Service == nil {
+		return "service failed"
+	}
+	if e.Service.StatusReason != "" {
+		return fmt.Sprintf("service %s/%s failed: %s", e.Service.Namespace, e.Service.Name, e.Service.StatusReason)
+	}
+	return fmt.Sprintf("service %s/%s failed", e.Service.Namespace, e.Service.Name)
+}
+
+// printCastFailure prints the developer-facing failure block when
+// `rune cast` discovers a service entered Failed during its wait.
+// One paragraph, one hint command — same shape as `rune get service`.
+func printCastFailure(svc *types.Service) {
+	if svc == nil {
+		return
+	}
+	fmt.Println()
+	reason := svc.StatusReason
+	if reason == "" {
+		reason = "Failed"
+	}
+	fmt.Printf("    ✗ %s\n", reason)
+	if svc.StatusMessage != "" {
+		fmt.Printf("      %s\n", svc.StatusMessage)
+	}
+	fmt.Println()
+	if svc.Image != "" {
+		fmt.Printf("      image:  %s\n", svc.Image)
+	}
+	fmt.Printf("      service: %s/%s\n", svc.Namespace, svc.Name)
+	fmt.Println()
+	fmt.Printf("      rune get service %s -n %s\n", svc.Name, svc.Namespace)
 }

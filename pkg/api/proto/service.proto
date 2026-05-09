@@ -87,6 +87,18 @@ message Service {
   // ImagePull controls when the runner pulls the container image.
   // Allowed values: "always" (default), "missing", "never".
   string image_pull = 23;
+
+  // StatusReason is a short, machine-friendly slug describing why
+  // the service is in its current Status. Examples:
+  // "ImagePullBackOff", "ProbeFailed", "OOMKilled", "ScheduleFailed".
+  // Empty when status is RUNNING.
+  string status_reason = 24;
+
+  // StatusMessage is a single human-readable sentence explaining
+  // status_reason, copied verbatim from the worst instance's
+  // StatusMessage. Used by the CLI to show "why" without a second
+  // command.
+  string status_message = 25;
 }
 
 // EnvFromSource represents an environment import source
