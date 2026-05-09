@@ -145,6 +145,31 @@ message ServiceExpose {
 
   // Optional path prefix (reserved for future use)
   string path = 4;
+
+  // Optional TLS configuration. When omitted, the ingress serves
+  // the host on plain HTTP only.
+  ExposeServiceTLS tls = 5;
+}
+
+// ExposeServiceTLS controls how the ingress terminates TLS for an
+// exposed service. The fields are mutually informative: setting
+// `mode = "acme"` (or `mode = "auto"`) requests an ACME-issued
+// certificate from the configured provider; `secret_name` points
+// at an operator-supplied cert; the legacy `auto` boolean is
+// equivalent to `mode = "acme"` when no mode is set.
+message ExposeServiceTLS {
+  // Name of a Secret resource holding tls.crt + tls.key for
+  // operator-supplied certificates.
+  string secret_name = 1;
+
+  // Legacy boolean equivalent to mode = "acme". Kept for wire
+  // compatibility with older clients.
+  bool auto = 2;
+
+  // Provisioning mode. Recognised values: "manual" (default,
+  // operator-supplied), "acme" (ACME issuance), "auto" (synonym
+  // for "acme").
+  string mode = 3;
 }
 
 // ProbeType defines the type of health check

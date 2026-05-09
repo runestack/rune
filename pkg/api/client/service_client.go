@@ -449,6 +449,13 @@ func ServiceToProto(service *types.Service) *generated.Service {
 			Host: service.Expose.Host,
 			Path: service.Expose.Path,
 		}
+		if service.Expose.TLS != nil {
+			protoService.Expose.Tls = &generated.ExposeServiceTLS{
+				SecretName: service.Expose.TLS.SecretName,
+				Auto:       service.Expose.TLS.Auto,
+				Mode:       service.Expose.TLS.Mode,
+			}
+		}
 	}
 
 	// Convert resources
@@ -660,6 +667,13 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 			Port: proto.Expose.Port,
 			Host: proto.Expose.Host,
 			Path: proto.Expose.Path,
+		}
+		if proto.Expose.Tls != nil {
+			service.Expose.TLS = &types.ExposeServiceTLS{
+				SecretName: proto.Expose.Tls.SecretName,
+				Auto:       proto.Expose.Tls.Auto,
+				Mode:       proto.Expose.Tls.Mode,
+			}
 		}
 	}
 
