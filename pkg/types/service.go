@@ -101,8 +101,8 @@ type Service struct {
 
 	// StatusReason is a short, machine-friendly slug describing why
 	// the service is in its current Status. Set by the reconciler when
-	// rolling up the worst instance state. Examples: "ImagePullBackOff",
-	// "ProbeFailed", "OOMKilled", "ScheduleFailed", "ConfigUnresolvable".
+	// rolling up the worst instance state. Examples: "ImageUnreachable",
+	// "Unhealthy", "OutOfMemory", "Unplaceable", "ConfigMissing".
 	// Empty when Status is Running.
 	StatusReason string `json:"statusReason,omitempty" yaml:"statusReason,omitempty"`
 
@@ -344,16 +344,19 @@ const (
 // Well-known StatusReason values for Service.StatusReason. The reconciler
 // derives one of these from the worst-instance state. Keep this set small
 // and stable — operators may script against it.
+//
+// These names are intentionally Rune-shaped (verbs and plain English),
+// not borrowed from Kubernetes' Pod conditions.
 const (
-	ServiceReasonImagePullBackOff = "ImagePullBackOff"
-	ServiceReasonProbeFailed      = "ProbeFailed"
-	ServiceReasonCrashLooping     = "CrashLooping"
-	ServiceReasonOOMKilled        = "OOMKilled"
-	ServiceReasonScheduleFailed   = "ScheduleFailed"
-	ServiceReasonConfigError      = "ConfigError"
-	ServiceReasonRunnerError      = "RunnerError"
-	ServiceReasonExited           = "Exited"
-	ServiceReasonUnknown          = "Unknown"
+	ServiceReasonImageUnreachable = "ImageUnreachable" // image can't be pulled (auth, missing tag, network)
+	ServiceReasonUnhealthy        = "Unhealthy"        // liveness/readiness probe failing
+	ServiceReasonRestarting       = "Restarting"       // instance keeps exiting and being restarted
+	ServiceReasonOutOfMemory      = "OutOfMemory"      // killed for exceeding the memory limit
+	ServiceReasonUnplaceable      = "Unplaceable"      // no node has the capacity / matches placement
+	ServiceReasonConfigMissing    = "ConfigMissing"    // referenced secret/configmap/env not found
+	ServiceReasonLaunchFailed     = "LaunchFailed"     // runner refused to start the instance
+	ServiceReasonExited           = "Exited"           // instance ran to completion (non-zero or otherwise)
+	ServiceReasonUnknown          = "Unknown"          // no recognisable signal
 )
 
 // DeriveServiceReason inspects an instance's status and message and
@@ -371,31 +374,31 @@ func DeriveServiceReason(status InstanceStatus, message string) string {
 		strings.Contains(m, "errimagepull"),
 		strings.Contains(m, "pull failed"),
 		strings.Contains(m, "unauthorized") && strings.Contains(m, "image"):
-		return ServiceReasonImagePullBackOff
+		return ServiceReasonImageUnreachable
 	case strings.Contains(m, "oom"), strings.Contains(m, "out of memory"):
-		return ServiceReasonOOMKilled
+		return ServiceReasonOutOfMemory
 	case strings.Contains(m, "probe"), strings.Contains(m, "health check"):
-		return ServiceReasonProbeFailed
+		return ServiceReasonUnhealthy
 	case strings.Contains(m, "no node"), strings.Contains(m, "no capacity"),
 		strings.Contains(m, "schedule"):
-		return ServiceReasonScheduleFailed
+		return ServiceReasonUnplaceable
 	case strings.Contains(m, "secret"), strings.Contains(m, "configmap"),
 		strings.Contains(m, "config map"), strings.Contains(m, "env"):
 		if strings.Contains(m, "not found") || strings.Contains(m, "unresolvable") {
-			return ServiceReasonConfigError
+			return ServiceReasonConfigMissing
 		}
-	case strings.Contains(m, "crashloop"):
-		return ServiceReasonCrashLooping
+	case strings.Contains(m, "crashloop"), strings.Contains(m, "restart"):
+		return ServiceReasonRestarting
 	}
 	switch status {
 	case InstanceStatusExited:
 		return ServiceReasonExited
 	case InstanceStatusFailed:
-		return ServiceReasonRunnerError
+		return ServiceReasonLaunchFailed
 	case InstanceStatusUnknown:
 		return ServiceReasonUnknown
 	}
-	return ServiceReasonRunnerError
+	return ServiceReasonLaunchFailed
 }
 
 // Resources represents resource requirements for a service instance.
