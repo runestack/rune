@@ -22,13 +22,12 @@ func hashSecret(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// TokenSecretPrefix is the human-visible prefix on every newly issued
-// Rune token secret. It exists so the secrets are easy to spot in the
-// wild (logs, screenshots, terraform output, leaked configs) and so
-// that secret scanners (gitleaks, GitHub secret scanning, etc.) can
-// match on a stable, distinctive marker. Validation hashes the entire
-// string verbatim, so older tokens issued without the prefix continue
-// to work — only the prefix on freshly issued tokens is new.
+// TokenSecretPrefix is the human-visible prefix on every Rune token
+// secret. It exists so the secrets are easy to spot in the wild
+// (logs, screenshots, terraform output, leaked configs) and so that
+// secret scanners (gitleaks, GitHub secret scanning, etc.) can match
+// on a stable, distinctive marker. The prefix is mandatory: tokens
+// presented without it are rejected at validation time.
 const TokenSecretPrefix = "rune_"
 
 // Issue creates a new token with a freshly generated secret. Returns the plaintext secret once.
@@ -84,13 +83,19 @@ func (r *TokenRepo) List(ctx context.Context) ([]types.Token, error) {
 
 // FindBySecret tries to locate and validate a token by comparing the hash.
 func (r *TokenRepo) FindBySecret(ctx context.Context, secret string) (*types.Token, error) {
+	secret = strings.TrimSpace(secret)
+	// Reject any token that doesn't carry the canonical Rune prefix.
+	// This keeps the validation surface narrow and ensures every
+	// accepted token is also one a secret scanner could match.
+	if !strings.HasPrefix(secret, TokenSecretPrefix) {
+		return nil, fmt.Errorf("token not found or invalid")
+	}
 	// Token namespace is system; list all tokens in system namespace (MVP) and match hash
 	// TODO: index for scalability
 	var tokens []types.Token
 	if err := r.st.List(ctx, types.ResourceTypeToken, "system", &tokens); err != nil {
 		return nil, err
 	}
-	secret = strings.TrimSpace(secret)
 	h := hashSecret(secret)
 	now := time.Now()
 	for _, t := range tokens {
