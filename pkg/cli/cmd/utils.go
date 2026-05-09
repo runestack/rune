@@ -9,6 +9,7 @@ import (
 
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
@@ -212,6 +213,8 @@ func outputTable(resources interface{}, opts *getOptions) error {
 		return outputSecretsTable(r, opts)
 	case []*types.Configmap:
 		return outputConfigmapsTable(r, opts)
+	case []*generated.DeletionOperation:
+		return outputDeletionOperationsTable(r, opts)
 	// TODO: Add more resource types here
 	default:
 		return fmt.Errorf("unsupported resource type for table output")

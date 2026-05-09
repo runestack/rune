@@ -20,10 +20,27 @@ type ResourceTable struct {
 	AllNamespaces bool
 	ShowLabels    bool
 	MaxWidth      int
+	// Namespace is the resolved namespace scope used when rendering an
+	// empty-results message (e.g. "No services found in namespace 'stg'").
+	// Ignored when AllNamespaces is true.
+	Namespace string
 
 	// Rendering details
 	tableRenderer *pterm.TablePrinter
 	stripAnsiFunc func(string) string
+}
+
+// emptyMessage returns a human-readable "no results" message for the given
+// pluralised resource label, scoped by the table's Namespace / AllNamespaces.
+func (t *ResourceTable) emptyMessage(resourcePlural string) string {
+	switch {
+	case t.AllNamespaces:
+		return fmt.Sprintf("No %s found in any namespace", resourcePlural)
+	case t.Namespace != "":
+		return fmt.Sprintf("No %s found in namespace '%s'", resourcePlural, t.Namespace)
+	default:
+		return fmt.Sprintf("No %s found", resourcePlural)
+	}
 }
 
 // NewResourceTable creates a new resource table with default configuration
@@ -56,7 +73,7 @@ func (t *ResourceTable) SetStripAnsiFunc(fn func(string) string) {
 // RenderServices renders a table of services
 func (t *ResourceTable) RenderServices(services []*types.Service) error {
 	if len(services) == 0 {
-		fmt.Println("No services found")
+		fmt.Println(t.emptyMessage("services"))
 		return nil
 	}
 
@@ -161,7 +178,7 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 // RenderInstances renders a table of instances
 func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 	if len(instances) == 0 {
-		fmt.Println("No instances found")
+		fmt.Println(t.emptyMessage("instances"))
 		return nil
 	}
 
@@ -226,6 +243,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 // RenderNamespaces renders a table of namespaces
 func (t *ResourceTable) RenderNamespaces(namespaces []*types.Namespace) error {
 	if len(namespaces) == 0 {
+		// Namespaces are cluster-scoped; ignore Namespace/AllNamespaces here.
 		fmt.Println("No namespaces found")
 		return nil
 	}
@@ -268,7 +286,7 @@ func (t *ResourceTable) RenderNamespaces(namespaces []*types.Namespace) error {
 // RenderDeletionOperations renders a table of deletion operations
 func (t *ResourceTable) RenderDeletionOperations(operations []*generated.DeletionOperation) error {
 	if len(operations) == 0 {
-		fmt.Println("No deletion operations found")
+		fmt.Println(t.emptyMessage("deletion operations"))
 		return nil
 	}
 
@@ -304,7 +322,7 @@ func (t *ResourceTable) RenderDeletionOperations(operations []*generated.Deletio
 // RenderSecrets renders a table of secrets
 func (t *ResourceTable) RenderSecrets(secrets []*types.Secret) error {
 	if len(secrets) == 0 {
-		fmt.Println("No secrets found")
+		fmt.Println(t.emptyMessage("secrets"))
 		return nil
 	}
 
@@ -336,7 +354,7 @@ func (t *ResourceTable) RenderSecrets(secrets []*types.Secret) error {
 // RenderConfigmaps renders a table of configmaps
 func (t *ResourceTable) RenderConfigmaps(configmaps []*types.Configmap) error {
 	if len(configmaps) == 0 {
-		fmt.Println("No configmaps found")
+		fmt.Println(t.emptyMessage("configmaps"))
 		return nil
 	}
 

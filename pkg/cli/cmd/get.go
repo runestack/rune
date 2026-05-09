@@ -677,6 +677,7 @@ func outputServicesTable(services []*types.Service, opts *getOptions) error {
 	// Create and configure the table renderer
 	table := NewResourceTable()
 	table.AllNamespaces = opts.allNamespaces
+	table.Namespace = opts.namespace
 	table.ShowHeaders = !opts.noHeaders
 	table.ShowLabels = opts.showLabels
 
@@ -689,6 +690,7 @@ func outputInstancesTable(instances []*types.Instance, opts *getOptions) error {
 	// Create and configure the table renderer
 	table := NewResourceTable()
 	table.AllNamespaces = opts.allNamespaces
+	table.Namespace = opts.namespace
 	table.ShowHeaders = !opts.noHeaders
 	table.ShowLabels = opts.showLabels
 
@@ -711,6 +713,8 @@ func outputNamespacesTable(namespaces []*types.Namespace, opts *getOptions) erro
 func outputSecretsTable(secrets []*types.Secret, opts *getOptions) error {
 	// Create and configure the table renderer
 	table := NewResourceTable()
+	table.AllNamespaces = opts.allNamespaces
+	table.Namespace = opts.namespace
 	table.ShowHeaders = !opts.noHeaders
 	table.ShowLabels = opts.showLabels
 
@@ -722,11 +726,23 @@ func outputSecretsTable(secrets []*types.Secret, opts *getOptions) error {
 func outputConfigmapsTable(configmaps []*types.Configmap, opts *getOptions) error {
 	// Create and configure the table renderer
 	table := NewResourceTable()
+	table.AllNamespaces = opts.allNamespaces
+	table.Namespace = opts.namespace
 	table.ShowHeaders = !opts.noHeaders
 	table.ShowLabels = opts.showLabels
 
 	// Render the table
 	return table.RenderConfigmaps(configmaps)
+}
+
+// outputDeletionOperationsTable outputs deletion operations in a formatted table
+func outputDeletionOperationsTable(operations []*generated.DeletionOperation, opts *getOptions) error {
+	table := NewResourceTable()
+	table.AllNamespaces = opts.allNamespaces
+	table.Namespace = opts.namespace
+	table.ShowHeaders = !opts.noHeaders
+
+	return table.RenderDeletionOperations(operations)
 }
 
 // sortServices sorts services based on the specified sort field

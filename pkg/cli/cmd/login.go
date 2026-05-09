@@ -14,7 +14,8 @@ import (
 
 func newLoginCmd() *cobra.Command {
 	var server string
-	var namespace string
+	var defaultNamespace string
+	var legacyNamespace string
 	var token string
 	var tokenFile string
 	var contextName string
@@ -34,6 +35,12 @@ If --set-current is provided, the new context will become the current context.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if token == "" && tokenFile == "" {
 				return fmt.Errorf("must provide --token or --token-file")
+			}
+
+			// Resolve --default-namespace, accepting deprecated --namespace as a fallback.
+			// Cobra's MarkDeprecated already prints a deprecation notice when --namespace is set.
+			if cmd.Flags().Changed("namespace") && !cmd.Flags().Changed("default-namespace") {
+				defaultNamespace = legacyNamespace
 			}
 
 			// Set default context name
@@ -81,7 +88,7 @@ If --set-current is provided, the new context will become the current context.`,
 			ctx := Context{
 				Server:           server,
 				Token:            token,
-				DefaultNamespace: namespace,
+				DefaultNamespace: defaultNamespace,
 			}
 
 			// If server not specified, try to get from current context, else default to gRPC host:port
@@ -109,7 +116,9 @@ If --set-current is provided, the new context will become the current context.`,
 		},
 	}
 	cmd.Flags().StringVar(&server, "server", fmt.Sprintf("localhost:%d", internalConfig.DefaultGRPCPort), "Rune gRPC server address (host:port)")
-	cmd.Flags().StringVar(&namespace, "namespace", "", "Optional default namespace")
+	cmd.Flags().StringVar(&defaultNamespace, "default-namespace", "", "Default namespace stored in this context (used by future commands)")
+	cmd.Flags().StringVar(&legacyNamespace, "namespace", "", "Deprecated: alias for --default-namespace")
+	_ = cmd.Flags().MarkDeprecated("namespace", "use --default-namespace instead")
 	cmd.Flags().StringVar(&token, "token", "", "Bearer token value")
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Path to file containing the bearer token")
 	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "Skip server verification and just set the context")
