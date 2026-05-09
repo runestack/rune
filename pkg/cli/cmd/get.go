@@ -219,7 +219,9 @@ func handleNetworkGet(_ *cobra.Command, opts *getOptions, resourceName string) e
 	}
 	defer api.Close()
 	ac := generated.NewAdminServiceClient(api.Conn())
-	resp, err := ac.NetworkStatus(context.Background(), &generated.NetworkStatusRequest{})
+	ctx, cancel := api.Context()
+	defer cancel()
+	resp, err := ac.NetworkStatus(ctx, &generated.NetworkStatusRequest{})
 	if err != nil {
 		return err
 	}

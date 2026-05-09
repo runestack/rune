@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -39,7 +38,9 @@ func newAdminTokenCreateCmd() *cobra.Command {
 				TtlSeconds:  int64(ttl / time.Second),
 				Description: desc,
 			}
-			resp, err := ac.CreateToken(context.Background(), req)
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.CreateToken(ctx, req)
 			if err != nil {
 				return err
 			}
@@ -76,7 +77,9 @@ func newAdminTokenRevokeCmd() *cobra.Command {
 			defer api.Close()
 
 			ac := generated.NewAuthServiceClient(api.Conn())
-			resp, err := ac.RevokeToken(context.Background(), &generated.RevokeTokenRequest{Id: tokenIdArg})
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.RevokeToken(ctx, &generated.RevokeTokenRequest{Id: tokenIdArg})
 			if err != nil {
 				return err
 			}
@@ -103,7 +106,9 @@ func newAdminTokenListCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			resp, err := ac.TokenList(context.Background(), &generated.TokenListRequest{})
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.TokenList(ctx, &generated.TokenListRequest{})
 			if err != nil {
 				return err
 			}
