@@ -74,15 +74,15 @@ func (s *AuthService) WhoAmI(ctx context.Context, _ *generated.WhoAmIRequest) (*
 }
 
 func (s *AuthService) CreateToken(ctx context.Context, req *generated.CreateTokenRequest) (*generated.CreateTokenResponse, error) {
-	// Determine subject type (users only for MVP, services planned for future)
+	// Determine subject type. We support "user" (humans) and
+	// "service" (CI / automation). Both authenticate identically;
+	// the type is a label for auditing and listing.
 	subjectType := req.SubjectType
 	if subjectType == "" {
 		subjectType = "user"
 	}
-
-	// TODO: Implement service token creation when service types are added
-	if subjectType != "user" {
-		return nil, fmt.Errorf("invalid subject-type: %s (only 'user' supported for now, service support planned)", subjectType)
+	if subjectType != "user" && subjectType != "service" {
+		return nil, fmt.Errorf("invalid subject-type: %s (expected 'user' or 'service')", subjectType)
 	}
 
 	// Resolve identifier for subject: prefer SubjectId, else use subject name or token name

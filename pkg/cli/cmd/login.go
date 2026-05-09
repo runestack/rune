@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ func newLoginCmd() *cobra.Command {
 	var legacyNamespace string
 	var token string
 	var tokenFile string
+	var tokenStdin bool
 	var contextName string
 	var noVerify bool
 
@@ -33,8 +35,8 @@ If context-name is not provided, it will use "default".
 If --set-current is provided, the new context will become the current context.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if token == "" && tokenFile == "" {
-				return fmt.Errorf("must provide --token or --token-file")
+			if token == "" && tokenFile == "" && !tokenStdin {
+				return fmt.Errorf("must provide --token, --token-file, or --token-stdin")
 			}
 
 			// Resolve --default-namespace, accepting deprecated --namespace as a fallback.
@@ -57,6 +59,22 @@ If --set-current is provided, the new context will become the current context.`,
 					return fmt.Errorf("failed to read token file: %w", err)
 				}
 				token = strings.TrimSpace(string(b))
+			}
+
+			// Read token from stdin if requested. Designed for CI: callers
+			// pipe the secret in (`echo "$TOKEN" | rune login --token-stdin`)
+			// so it never appears on the process argv where it could be
+			// captured by /proc, ps, shell history, or CI log scrubbers.
+			if token == "" && tokenStdin {
+				r := bufio.NewReader(cmd.InOrStdin())
+				line, err := r.ReadString('\n')
+				if err != nil && line == "" {
+					return fmt.Errorf("failed to read token from stdin: %w", err)
+				}
+				token = strings.TrimSpace(line)
+				if token == "" {
+					return fmt.Errorf("empty token read from stdin")
+				}
 			}
 
 			// Load existing config or create new one
@@ -121,6 +139,7 @@ If --set-current is provided, the new context will become the current context.`,
 	_ = cmd.Flags().MarkDeprecated("namespace", "use --default-namespace instead")
 	cmd.Flags().StringVar(&token, "token", "", "Bearer token value")
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Path to file containing the bearer token")
+	cmd.Flags().BoolVar(&tokenStdin, "token-stdin", false, "Read the bearer token from stdin (recommended for CI)")
 	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "Skip server verification and just set the context")
 	return cmd
 }
