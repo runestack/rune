@@ -107,7 +107,7 @@ func (s *InstanceService) ListInstances(ctx context.Context, req *generated.List
 	for _, instance := range storeInstances {
 
 		// Apply service name filter if provided.
-		// NOTE: req.ServiceName carries the service *name* (e.g. "landing"),
+		// NOTE: req.ServiceName carries the service *name*,
 		// not the service UUID. Compare against instance.ServiceName, not
 		// instance.ServiceID, otherwise every name-filtered list returns
 		// empty and downstream renderers (e.g. `rune get service <name>`)

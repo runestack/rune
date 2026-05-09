@@ -279,16 +279,26 @@ generate_runefile() {
     return
   fi
 
-  local runefile="$DATA_DIR/runefile.toml"
-  if [ -f "$runefile" ] || [ -f "$DATA_DIR/runefile.yaml" ] || [ -f "$DATA_DIR/runefile.yml" ]; then
-    log "Existing runefile found in $DATA_DIR; leaving untouched"
-    return
-  fi
+  # Operator config lives in /etc/rune/ (system-wide). The data
+  # directory is for state (KEK, store, secrets) and should not also
+  # contain config. runed's auto-discovery checks both locations,
+  # but writing to /etc/rune/ is the canonical placement and matches
+  # what the systemd unit's --config flag points at.
+  local etc_dir="/etc/rune"
+  local runefile="$etc_dir/runefile.toml"
+  for dir in "$etc_dir" "$DATA_DIR"; do
+    for ext in toml yaml yml; do
+      if [ -f "$dir/runefile.$ext" ]; then
+        log "Existing runefile found at $dir/runefile.$ext; leaving untouched"
+        return
+      fi
+    done
+  done
 
   local role="worker"
   [ "$EDGE" = true ] && role="edge"
 
-  mkdir -p "$DATA_DIR"
+  mkdir -p "$etc_dir" "$DATA_DIR"
   cat > "$runefile" <<EOF
 data_dir = "$DATA_DIR"
 
@@ -314,7 +324,7 @@ email = "${ACME_EMAIL}"
 EOF
   chown "$RUNE_USER":"$RUNE_GROUP" "$runefile" 2>/dev/null || true
   chmod 0640 "$runefile"
-  log "Wrote runefile.toml (role=$role, cluster_cidr=$CLUSTER_CIDR${ACME_EMAIL:+, acme_email=$ACME_EMAIL})"
+  log "Wrote $runefile (role=$role, cluster_cidr=$CLUSTER_CIDR${ACME_EMAIL:+, acme_email=$ACME_EMAIL})"
 }
 
 install_systemd() {
@@ -335,7 +345,12 @@ User=${RUNE_USER}
 Group=${RUNE_GROUP}
 # Ensure non-interactive stdin under systemd
 StandardInput=null
-ExecStart=/usr/local/bin/runed
+# --config makes the resolved runefile path explicit and survives
+# anyone running 'systemctl status runed' / 'cat /etc/systemd/system/runed.service'
+# trying to figure out where config came from. If the file is absent
+# runed falls through to its built-in defaults; the auto-discovery
+# search order is unchanged.
+ExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

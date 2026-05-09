@@ -85,6 +85,24 @@ func (s *AuthService) CreateToken(ctx context.Context, req *generated.CreateToke
 		return nil, fmt.Errorf("invalid subject-type: %s (expected 'user' or 'service')", subjectType)
 	}
 
+	// Validate every requested policy exists *before* mutating any
+	// state. Without this guard a typo (e.g. --policy deployer when
+	// no such policy was defined) silently issues a token whose
+	// subject ends up with an unresolvable policy reference; every
+	// subsequent RPC then fails with PermissionDenied and the user
+	// has no way to tell that the root cause was at create-time.
+	for _, p := range req.Policies {
+		if p == "" {
+			continue
+		}
+		if _, err := s.policyRepo.Get(ctx, p); err != nil {
+			if store.IsNotFoundError(err) {
+				return nil, fmt.Errorf("policy %q not found (use 'rune admin policy list' to see available policies)", p)
+			}
+			return nil, fmt.Errorf("look up policy %q: %w", p, err)
+		}
+	}
+
 	// Resolve identifier for subject: prefer SubjectId, else use subject name or token name
 	nameOrID := utils.PickFirstNonEmpty(req.SubjectId, req.SubjectName, req.Name)
 	if nameOrID == "" {
