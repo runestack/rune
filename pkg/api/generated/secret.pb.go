@@ -22,14 +22,20 @@ const (
 )
 
 type Secret struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`                                                                           // "static" for MVP
-	Data          map[string]string      `protobuf:"bytes,4,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // returned for now (MVP), secure transports assumed
-	Version       int32                  `protobuf:"varint,5,opt,name=version,proto3" json:"version,omitempty"`
-	CreatedAt     string                 `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     string                 `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Name      string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Type      string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"` // "static" for MVP
+	// data is the plaintext secret payload. Only populated by RevealSecret responses
+	// and by client-supplied Create/Update requests. Get/List return it empty;
+	// metadata callers should use data_keys instead.
+	Data      map[string]string `protobuf:"bytes,4,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Version   int32             `protobuf:"varint,5,opt,name=version,proto3" json:"version,omitempty"`
+	CreatedAt string            `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt string            `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// data_keys lists the keys present in data without revealing values.
+	// Populated by Get/List/Reveal responses; ignored on Create/Update requests.
+	DataKeys      []string `protobuf:"bytes,8,rep,name=data_keys,json=dataKeys,proto3" json:"data_keys,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -111,6 +117,13 @@ func (x *Secret) GetUpdatedAt() string {
 		return x.UpdatedAt
 	}
 	return ""
+}
+
+func (x *Secret) GetDataKeys() []string {
+	if x != nil {
+		return x.DataKeys
+	}
+	return nil
 }
 
 type CreateSecretRequest struct {
@@ -488,11 +501,63 @@ func (x *SecretResponse) GetStatus() *Status {
 	return nil
 }
 
+type RevealSecretRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevealSecretRequest) Reset() {
+	*x = RevealSecretRequest{}
+	mi := &file_pkg_api_proto_secret_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevealSecretRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevealSecretRequest) ProtoMessage() {}
+
+func (x *RevealSecretRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_secret_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevealSecretRequest.ProtoReflect.Descriptor instead.
+func (*RevealSecretRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_secret_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RevealSecretRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RevealSecretRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
 var File_pkg_api_proto_secret_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_secret_proto_rawDesc = "" +
 	"\n" +
-	"\x1apkg/api/proto/secret.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\x8f\x02\n" +
+	"\x1apkg/api/proto/secret.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\xac\x02\n" +
 	"\x06Secret\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x12\n" +
@@ -502,7 +567,8 @@ const file_pkg_api_proto_secret_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x06 \x01(\tR\tcreatedAt\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\a \x01(\tR\tupdatedAt\x1a7\n" +
+	"updated_at\x18\a \x01(\tR\tupdatedAt\x12\x1b\n" +
+	"\tdata_keys\x18\b \x03(\tR\bdataKeys\x1a7\n" +
 	"\tDataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"j\n" +
@@ -533,13 +599,17 @@ const file_pkg_api_proto_secret_proto_rawDesc = "" +
 	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"d\n" +
 	"\x0eSecretResponse\x12(\n" +
 	"\x06secret\x18\x01 \x01(\v2\x10.rune.api.SecretR\x06secret\x12(\n" +
-	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status2\xf1\x02\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"G\n" +
+	"\x13RevealSecretRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace2\xba\x03\n" +
 	"\rSecretService\x12G\n" +
 	"\fCreateSecret\x12\x1d.rune.api.CreateSecretRequest\x1a\x18.rune.api.SecretResponse\x12A\n" +
 	"\tGetSecret\x12\x1a.rune.api.GetSecretRequest\x1a\x18.rune.api.SecretResponse\x12G\n" +
 	"\fUpdateSecret\x12\x1d.rune.api.UpdateSecretRequest\x1a\x18.rune.api.SecretResponse\x12?\n" +
 	"\fDeleteSecret\x12\x1d.rune.api.DeleteSecretRequest\x1a\x10.rune.api.Status\x12J\n" +
-	"\vListSecrets\x12\x1c.rune.api.ListSecretsRequest\x1a\x1d.rune.api.ListSecretsResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\vListSecrets\x12\x1c.rune.api.ListSecretsRequest\x1a\x1d.rune.api.ListSecretsResponse\x12G\n" +
+	"\fRevealSecret\x12\x1d.rune.api.RevealSecretRequest\x1a\x18.rune.api.SecretResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_secret_proto_rawDescOnce sync.Once
@@ -553,7 +623,7 @@ func file_pkg_api_proto_secret_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_secret_proto_rawDescData
 }
 
-var file_pkg_api_proto_secret_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_pkg_api_proto_secret_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_pkg_api_proto_secret_proto_goTypes = []any{
 	(*Secret)(nil),              // 0: rune.api.Secret
 	(*CreateSecretRequest)(nil), // 1: rune.api.CreateSecretRequest
@@ -563,35 +633,38 @@ var file_pkg_api_proto_secret_proto_goTypes = []any{
 	(*ListSecretsRequest)(nil),  // 5: rune.api.ListSecretsRequest
 	(*ListSecretsResponse)(nil), // 6: rune.api.ListSecretsResponse
 	(*SecretResponse)(nil),      // 7: rune.api.SecretResponse
-	nil,                         // 8: rune.api.Secret.DataEntry
-	nil,                         // 9: rune.api.ListSecretsRequest.LabelSelectorEntry
-	nil,                         // 10: rune.api.ListSecretsRequest.FieldSelectorEntry
-	(*PagingParams)(nil),        // 11: rune.api.PagingParams
-	(*Status)(nil),              // 12: rune.api.Status
+	(*RevealSecretRequest)(nil), // 8: rune.api.RevealSecretRequest
+	nil,                         // 9: rune.api.Secret.DataEntry
+	nil,                         // 10: rune.api.ListSecretsRequest.LabelSelectorEntry
+	nil,                         // 11: rune.api.ListSecretsRequest.FieldSelectorEntry
+	(*PagingParams)(nil),        // 12: rune.api.PagingParams
+	(*Status)(nil),              // 13: rune.api.Status
 }
 var file_pkg_api_proto_secret_proto_depIdxs = []int32{
-	8,  // 0: rune.api.Secret.data:type_name -> rune.api.Secret.DataEntry
+	9,  // 0: rune.api.Secret.data:type_name -> rune.api.Secret.DataEntry
 	0,  // 1: rune.api.CreateSecretRequest.secret:type_name -> rune.api.Secret
 	0,  // 2: rune.api.UpdateSecretRequest.secret:type_name -> rune.api.Secret
-	9,  // 3: rune.api.ListSecretsRequest.label_selector:type_name -> rune.api.ListSecretsRequest.LabelSelectorEntry
-	10, // 4: rune.api.ListSecretsRequest.field_selector:type_name -> rune.api.ListSecretsRequest.FieldSelectorEntry
-	11, // 5: rune.api.ListSecretsRequest.paging:type_name -> rune.api.PagingParams
+	10, // 3: rune.api.ListSecretsRequest.label_selector:type_name -> rune.api.ListSecretsRequest.LabelSelectorEntry
+	11, // 4: rune.api.ListSecretsRequest.field_selector:type_name -> rune.api.ListSecretsRequest.FieldSelectorEntry
+	12, // 5: rune.api.ListSecretsRequest.paging:type_name -> rune.api.PagingParams
 	0,  // 6: rune.api.ListSecretsResponse.secrets:type_name -> rune.api.Secret
-	12, // 7: rune.api.ListSecretsResponse.status:type_name -> rune.api.Status
+	13, // 7: rune.api.ListSecretsResponse.status:type_name -> rune.api.Status
 	0,  // 8: rune.api.SecretResponse.secret:type_name -> rune.api.Secret
-	12, // 9: rune.api.SecretResponse.status:type_name -> rune.api.Status
+	13, // 9: rune.api.SecretResponse.status:type_name -> rune.api.Status
 	1,  // 10: rune.api.SecretService.CreateSecret:input_type -> rune.api.CreateSecretRequest
 	2,  // 11: rune.api.SecretService.GetSecret:input_type -> rune.api.GetSecretRequest
 	3,  // 12: rune.api.SecretService.UpdateSecret:input_type -> rune.api.UpdateSecretRequest
 	4,  // 13: rune.api.SecretService.DeleteSecret:input_type -> rune.api.DeleteSecretRequest
 	5,  // 14: rune.api.SecretService.ListSecrets:input_type -> rune.api.ListSecretsRequest
-	7,  // 15: rune.api.SecretService.CreateSecret:output_type -> rune.api.SecretResponse
-	7,  // 16: rune.api.SecretService.GetSecret:output_type -> rune.api.SecretResponse
-	7,  // 17: rune.api.SecretService.UpdateSecret:output_type -> rune.api.SecretResponse
-	12, // 18: rune.api.SecretService.DeleteSecret:output_type -> rune.api.Status
-	6,  // 19: rune.api.SecretService.ListSecrets:output_type -> rune.api.ListSecretsResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
+	8,  // 15: rune.api.SecretService.RevealSecret:input_type -> rune.api.RevealSecretRequest
+	7,  // 16: rune.api.SecretService.CreateSecret:output_type -> rune.api.SecretResponse
+	7,  // 17: rune.api.SecretService.GetSecret:output_type -> rune.api.SecretResponse
+	7,  // 18: rune.api.SecretService.UpdateSecret:output_type -> rune.api.SecretResponse
+	13, // 19: rune.api.SecretService.DeleteSecret:output_type -> rune.api.Status
+	6,  // 20: rune.api.SecretService.ListSecrets:output_type -> rune.api.ListSecretsResponse
+	7,  // 21: rune.api.SecretService.RevealSecret:output_type -> rune.api.SecretResponse
+	16, // [16:22] is the sub-list for method output_type
+	10, // [10:16] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
 	10, // [10:10] is the sub-list for extension extendee
 	0,  // [0:10] is the sub-list for field type_name
@@ -609,7 +682,7 @@ func file_pkg_api_proto_secret_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_secret_proto_rawDesc), len(file_pkg_api_proto_secret_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

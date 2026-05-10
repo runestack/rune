@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package rune.api;
+
+import "pkg/api/proto/common.proto";
+
+option go_package = "github.com/runestack/rune/pkg/api/generated";
+
+// AuditEvent records a single security-relevant operation. See
+// pkg/types/audit.go for field semantics.
+message AuditEvent {
+  string id = 1;
+  string timestamp = 2; // RFC3339Nano UTC
+  string actor = 3;
+  string action = 4;
+  string resource = 5;
+  string resource_ref = 6;
+  string namespace = 7;
+  string outcome = 8; // success | denied | error
+  string message = 9;
+  map<string, string> metadata = 10;
+}
+
+// ListAuditEventsRequest narrows the audit log by exact-match filters and a
+// time window. All fields are optional. A limit of 0 applies a server-side
+// default cap (200).
+message ListAuditEventsRequest {
+  string resource = 1;
+  string resource_ref = 2;
+  string namespace = 3;
+  string actor = 4;
+  string action = 5;
+  string since = 6; // RFC3339; events at or after this timestamp
+  string until = 7; // RFC3339; events strictly before this timestamp
+  int32 limit = 8;
+}
+
+message ListAuditEventsResponse {
+  repeated AuditEvent events = 1;
+  Status status = 2;
+}
+
+service AuditService {
+  // ListAuditEvents returns audit events matching the filter, newest first.
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
+}

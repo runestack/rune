@@ -63,6 +63,10 @@ func (s *SecretClient) CreateSecret(secret *types.Secret, ensureNamespace bool) 
 }
 
 // GetSecret retrieves a secret by name.
+//
+// As of dev.33, GetSecret returns metadata only — the returned Secret has an
+// empty Data map and a populated DataKeys list. Use RevealSecret to obtain
+// the plaintext payload (requires the secrets:reveal RBAC verb).
 func (s *SecretClient) GetSecret(namespace, name string) (*types.Secret, error) {
 	s.logger.Debug("Getting secret", log.Str("name", name), log.Str("namespace", namespace))
 
@@ -204,6 +208,40 @@ func (s *SecretClient) ListSecrets(namespace string, labelSelector string, field
 	return filtered, nil
 }
 
+// RevealSecret retrieves the plaintext data payload of a secret.
+//
+// Requires the secrets:reveal RBAC verb. Each successful call emits a
+// `reveal` audit event server-side; failures are also recorded with
+// outcome=error.
+func (s *SecretClient) RevealSecret(namespace, name string) (*types.Secret, error) {
+	s.logger.Debug("Revealing secret", log.Str("name", name), log.Str("namespace", namespace))
+
+	req := &generated.RevealSecretRequest{Name: name, Namespace: namespace}
+
+	ctx, cancel := s.client.Context()
+	defer cancel()
+
+	resp, err := s.svc.RevealSecret(ctx, req)
+	if err != nil {
+		statusErr, ok := status.FromError(err)
+		if ok && statusErr.Code() == codes.NotFound {
+			return nil, fmt.Errorf("secret not found: %s/%s", namespace, name)
+		}
+		s.logger.Error("Failed to reveal secret", log.Err(err), log.Str("name", name))
+		return nil, convertGRPCError("reveal secret", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		err := fmt.Errorf("API error: %s", resp.Status.Message)
+		s.logger.Error("Failed to reveal secret", log.Err(err), log.Str("name", name))
+		return nil, err
+	}
+	secret, err := s.protoToSecret(resp.Secret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert secret: %w", err)
+	}
+	return secret, nil
+}
+
 // secretToProto converts a types.Secret to a generated.Secret
 func (s *SecretClient) secretToProto(secret *types.Secret) *generated.Secret {
 	if secret == nil {
@@ -239,6 +277,7 @@ func (s *SecretClient) protoToSecret(proto *generated.Secret) (*types.Secret, er
 		Namespace: proto.Namespace,
 		Type:      proto.Type,
 		Data:      proto.Data,
+		DataKeys:  proto.DataKeys,
 		Version:   int(proto.Version),
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,

@@ -70,6 +70,8 @@ func init() {
 	rootCmd.AddCommand(newWhoAmICmd())
 	// Admin command group (bootstrap, token, user, policy, registry)
 	rootCmd.AddCommand(newAdminCmd())
+	// Audit log query
+	rootCmd.AddCommand(newAuditCmd())
 	// Context management commands (server, token, default namespace)
 	rootCmd.AddCommand(newContextCmd())
 	// Convenient top-level alias for `rune context use`

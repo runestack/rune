@@ -24,6 +24,7 @@ const (
 	SecretService_UpdateSecret_FullMethodName = "/rune.api.SecretService/UpdateSecret"
 	SecretService_DeleteSecret_FullMethodName = "/rune.api.SecretService/DeleteSecret"
 	SecretService_ListSecrets_FullMethodName  = "/rune.api.SecretService/ListSecrets"
+	SecretService_RevealSecret_FullMethodName = "/rune.api.SecretService/RevealSecret"
 )
 
 // SecretServiceClient is the client API for SecretService service.
@@ -31,10 +32,16 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SecretServiceClient interface {
 	CreateSecret(ctx context.Context, in *CreateSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
+	// GetSecret returns secret metadata only (no plaintext data). Use RevealSecret
+	// to retrieve the plaintext payload; callers must hold the secrets:reveal verb.
 	GetSecret(ctx context.Context, in *GetSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
 	UpdateSecret(ctx context.Context, in *UpdateSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
 	DeleteSecret(ctx context.Context, in *DeleteSecretRequest, opts ...grpc.CallOption) (*Status, error)
+	// ListSecrets returns secret metadata only (no plaintext data).
 	ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error)
+	// RevealSecret returns the plaintext data map for a single secret. Requires
+	// the secrets:reveal verb. Each successful call emits an audit event.
+	RevealSecret(ctx context.Context, in *RevealSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
 }
 
 type secretServiceClient struct {
@@ -95,15 +102,31 @@ func (c *secretServiceClient) ListSecrets(ctx context.Context, in *ListSecretsRe
 	return out, nil
 }
 
+func (c *secretServiceClient) RevealSecret(ctx context.Context, in *RevealSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretResponse)
+	err := c.cc.Invoke(ctx, SecretService_RevealSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SecretServiceServer is the server API for SecretService service.
 // All implementations must embed UnimplementedSecretServiceServer
 // for forward compatibility.
 type SecretServiceServer interface {
 	CreateSecret(context.Context, *CreateSecretRequest) (*SecretResponse, error)
+	// GetSecret returns secret metadata only (no plaintext data). Use RevealSecret
+	// to retrieve the plaintext payload; callers must hold the secrets:reveal verb.
 	GetSecret(context.Context, *GetSecretRequest) (*SecretResponse, error)
 	UpdateSecret(context.Context, *UpdateSecretRequest) (*SecretResponse, error)
 	DeleteSecret(context.Context, *DeleteSecretRequest) (*Status, error)
+	// ListSecrets returns secret metadata only (no plaintext data).
 	ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error)
+	// RevealSecret returns the plaintext data map for a single secret. Requires
+	// the secrets:reveal verb. Each successful call emits an audit event.
+	RevealSecret(context.Context, *RevealSecretRequest) (*SecretResponse, error)
 	mustEmbedUnimplementedSecretServiceServer()
 }
 
@@ -128,6 +151,9 @@ func (UnimplementedSecretServiceServer) DeleteSecret(context.Context, *DeleteSec
 }
 func (UnimplementedSecretServiceServer) ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSecrets not implemented")
+}
+func (UnimplementedSecretServiceServer) RevealSecret(context.Context, *RevealSecretRequest) (*SecretResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevealSecret not implemented")
 }
 func (UnimplementedSecretServiceServer) mustEmbedUnimplementedSecretServiceServer() {}
 func (UnimplementedSecretServiceServer) testEmbeddedByValue()                       {}
@@ -240,6 +266,24 @@ func _SecretService_ListSecrets_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SecretService_RevealSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevealSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).RevealSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_RevealSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).RevealSecret(ctx, req.(*RevealSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SecretService_ServiceDesc is the grpc.ServiceDesc for SecretService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -266,6 +310,10 @@ var SecretService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSecrets",
 			Handler:    _SecretService_ListSecrets_Handler,
+		},
+		{
+			MethodName: "RevealSecret",
+			Handler:    _SecretService_RevealSecret_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

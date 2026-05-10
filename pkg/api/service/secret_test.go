@@ -46,7 +46,7 @@ func TestSecretServiceCRUD(t *testing.T) {
 		t.Fatalf("bad create resp")
 	}
 
-	// Get
+	// Get — as of dev.33 must NOT return plaintext data; must return data_keys
 	getResp, err := svc.GetSecret(ctx, &generated.GetSecretRequest{Name: "db-credentials", Namespace: "prod"})
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -54,14 +54,35 @@ func TestSecretServiceCRUD(t *testing.T) {
 	if getResp.Secret.Name != "db-credentials" {
 		t.Fatalf("bad get name")
 	}
+	if len(getResp.Secret.Data) != 0 {
+		t.Fatalf("GetSecret leaked plaintext: got %d data entries, want 0", len(getResp.Secret.Data))
+	}
+	if got := len(getResp.Secret.DataKeys); got != 2 {
+		t.Fatalf("GetSecret DataKeys: got %d, want 2", got)
+	}
 
-	// List
+	// List — must also be metadata-only
 	listResp, err := svc.ListSecrets(ctx, &generated.ListSecretsRequest{Namespace: "prod"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(listResp.Secrets) != 1 {
 		t.Fatalf("expected 1 secret, got %d", len(listResp.Secrets))
+	}
+	if len(listResp.Secrets[0].Data) != 0 {
+		t.Fatalf("ListSecrets leaked plaintext")
+	}
+	if len(listResp.Secrets[0].DataKeys) != 2 {
+		t.Fatalf("ListSecrets DataKeys: got %d, want 2", len(listResp.Secrets[0].DataKeys))
+	}
+
+	// Reveal — must return plaintext
+	revResp, err := svc.RevealSecret(ctx, &generated.RevealSecretRequest{Name: "db-credentials", Namespace: "prod"})
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+	if revResp.Secret == nil || revResp.Secret.Data["password"] != "s3cr3t" {
+		t.Fatalf("RevealSecret did not return plaintext password")
 	}
 
 	// Update

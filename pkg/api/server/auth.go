@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
+	"github.com/runestack/rune/pkg/api/authctx"
 	"github.com/runestack/rune/pkg/store/repos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -52,5 +53,9 @@ func (s *APIServer) authFunc(ctx context.Context) (context.Context, error) {
 	// Enrich context with subject only; permissions resolved via policy engine
 	info := &AuthInfo{SubjectID: tok.SubjectID}
 	ctx = context.WithValue(ctx, authCtxKey, info)
+	// Also publish the subject through the cross-package authctx helper so
+	// that gRPC service handlers (which can't import this package) can read
+	// it for audit-event emission, etc.
+	ctx = authctx.WithSubject(ctx, tok.SubjectID)
 	return ctx, nil
 }
