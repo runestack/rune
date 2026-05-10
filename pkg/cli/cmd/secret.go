@@ -46,63 +46,56 @@ func addSecretNamespaceFlag(cmd *cobra.Command, ns *string) {
 	cmd.Flags().StringVarP(ns, "namespace", "n", "default", "Namespace")
 }
 
-// --- get ---
+// --- get (alias for `rune get secret <name>`) ---
+//
+// Both shapes intentionally coexist: kubectl-shaped users reach for
+// `rune get secret`, while users browsing `rune secret --help` find the full
+// secret lifecycle (including reveal/versions/rollback) in one tree. To avoid
+// drift, this command delegates to handleSecretGet — the same handler the
+// generic `rune get` path uses — so they share rendering, label/field
+// selectors, and `-o` output formats verbatim.
 
 func newSecretGetCmd() *cobra.Command {
-	var ns, format string
+	opts := &getOptions{outputFormat: "table"}
 	cmd := &cobra.Command{
 		Use:   "get <name>",
 		Short: "Get a secret's metadata (no plaintext)",
 		Long: `Get returns metadata for a secret — namespace, name, version, timestamps,
 and the list of data keys. To retrieve the plaintext payload use 'rune secret
-reveal' (requires the secrets:reveal RBAC verb).`,
+reveal' (requires the secrets:reveal RBAC verb).
+
+Alias for 'rune get secret <name>' — both share the same handler and output
+formatting. Use whichever fits your muscle memory.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			api, err := newAPIClient("", "")
-			if err != nil {
-				return err
-			}
-			defer api.Close()
-			sec, err := client.NewSecretClient(api).GetSecret(ns, args[0])
-			if err != nil {
-				return err
-			}
-			return renderSecret(sec, format, false)
+			return handleSecretGet(cmd, opts, args[0])
 		},
 	}
-	addSecretNamespaceFlag(cmd, &ns)
-	addSecretOutputFlag(cmd, &format)
+	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace")
+	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", "table", "Output format: table|json|yaml")
 	return cmd
 }
 
-// --- list ---
+// --- list (alias for `rune get secrets`) ---
 
 func newSecretListCmd() *cobra.Command {
-	var ns, format string
-	var allNamespaces bool
+	opts := &getOptions{outputFormat: "table"}
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List secrets in a namespace",
+		Long: `Alias for 'rune get secrets' — both share the same handler, label/field
+selectors, and output formatting.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			api, err := newAPIClient("", "")
-			if err != nil {
-				return err
-			}
-			defer api.Close()
-			target := ns
-			if allNamespaces {
-				target = "*"
-			}
-			secs, err := client.NewSecretClient(api).ListSecrets(target, "", "")
-			if err != nil {
-				return err
-			}
-			return renderSecretList(secs, format)
+			// resourceName == "" tells handleSecretGet to list rather than get-one.
+			return handleSecretGet(cmd, opts, "")
 		},
 	}
-	addSecretNamespaceFlag(cmd, &ns)
-	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "List secrets across all namespaces")
-	addSecretOutputFlag(cmd, &format)
+	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace")
+	cmd.Flags().BoolVarP(&opts.allNamespaces, "all-namespaces", "A", false, "List secrets across all namespaces")
+	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", "table", "Output format: table|json|yaml|wide|name")
+	cmd.Flags().StringVarP(&opts.labelSelector, "selector", "l", "", "Label selector (key=value,key=value)")
+	cmd.Flags().StringVar(&opts.fieldSelector, "field-selector", "", "Field selector (key=value)")
+	cmd.Flags().IntVar(&opts.limit, "limit", 0, "Maximum number of secrets to return (0 = unlimited)")
 	return cmd
 }
 
@@ -201,32 +194,19 @@ or restored with 'rune secret rollback'.`,
 // --- delete ---
 
 func newSecretDeleteCmd() *cobra.Command {
-	var ns string
-	var yes bool
+	opts := &deleteOptions{}
 	cmd := &cobra.Command{
 		Use:   "delete <name>",
 		Short: "Delete a secret",
-		Args:  cobra.ExactArgs(1),
+		Long: `Alias for 'rune delete secret <name>' — both share the same handler. Secret
+deletion is unconditional (no interactive confirmation today); deletes are
+recorded in the audit log.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			if !yes {
-				fmt.Fprintf(os.Stderr, "Delete secret %s/%s? Pass --yes to confirm.\n", ns, name)
-				return fmt.Errorf("aborted: confirmation required")
-			}
-			api, err := newAPIClient("", "")
-			if err != nil {
-				return err
-			}
-			defer api.Close()
-			if err := client.NewSecretClient(api).DeleteSecret(ns, name); err != nil {
-				return err
-			}
-			fmt.Printf("Secret %s/%s deleted\n", ns, name)
-			return nil
+			return runDeleteSecret(cmd.Context(), args[0], opts)
 		},
 	}
-	addSecretNamespaceFlag(cmd, &ns)
-	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm destructive operation")
+	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace")
 	return cmd
 }
 
@@ -325,32 +305,6 @@ func renderSecret(sec *types.Secret, format string, reveal bool) error {
 		return nil
 	case "", "table":
 		return renderSecretTable(sec, reveal)
-	default:
-		return fmt.Errorf("unknown output format: %s", format)
-	}
-}
-
-func renderSecretList(secs []*types.Secret, format string) error {
-	switch strings.ToLower(format) {
-	case "json":
-		views := make([]map[string]interface{}, 0, len(secs))
-		for _, s := range secs {
-			views = append(views, secretView(s, false))
-		}
-		return writeJSON(views)
-	case "yaml":
-		views := make([]map[string]interface{}, 0, len(secs))
-		for _, s := range secs {
-			views = append(views, secretView(s, false))
-		}
-		return writeYAML(views)
-	case "", "table":
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAMESPACE\tNAME\tVERSION\tKEYS\tUPDATED")
-		for _, s := range secs {
-			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", s.Namespace, s.Name, s.Version, len(s.DataKeys), formatTime(s.UpdatedAt))
-		}
-		return w.Flush()
 	default:
 		return fmt.Errorf("unknown output format: %s", format)
 	}
