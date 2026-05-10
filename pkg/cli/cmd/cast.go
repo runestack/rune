@@ -344,6 +344,13 @@ func deployResources(apiClient *client.Client, info *ResourceInfo, timeout time.
 	if err := deployConfigmaps(apiClient, info, results, opts); err != nil {
 		return results, err
 	}
+	// Render cast-time `{{ secret:... }}` templates in secret data values
+	// before writing them. Components defined in the same castfile are
+	// rendered in topo order; out-of-castfile components are revealed via
+	// the API. (RUNE-105)
+	if err := renderSecretTemplates(apiClient, info); err != nil {
+		return results, err
+	}
 	if err := deploySecrets(apiClient, info, results, opts); err != nil {
 		return results, err
 	}

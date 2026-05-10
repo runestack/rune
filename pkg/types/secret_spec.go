@@ -280,6 +280,34 @@ func (s *SecretSpec) Validate() error {
 	return nil
 }
 
+// RestoreTemplateReferences restores template references in secret data values.
+// Called by the castfile parser so cast-time templating in `data:` values
+// (e.g. `{{ secret:db-host/value }}`) survives YAML parsing. The literal
+// `{{ ... }}` strings are substituted at cast time by the cast-secret renderer.
+func (s *SecretSpec) RestoreTemplateReferences(templateMap map[string]string) {
+	if len(templateMap) == 0 {
+		return
+	}
+	restore := func(in string) string {
+		out := in
+		for placeholder, templateRef := range templateMap {
+			if strings.Contains(out, placeholder) {
+				out = strings.ReplaceAll(out, placeholder, "{{"+templateRef+"}}")
+			}
+		}
+		return out
+	}
+	for k, v := range s.Data {
+		s.Data[k] = restore(v)
+	}
+	if s.Value != "" {
+		s.Value = restore(s.Value)
+	}
+	if s.ValueBase64 != "" {
+		s.ValueBase64 = restore(s.ValueBase64)
+	}
+}
+
 // validateStructureFromNode validates unknown fields using the captured raw YAML node.
 // If no raw node is available (e.g., constructed programmatically), it is a no-op.
 func (s *SecretSpec) validateStructureFromNode() error {
