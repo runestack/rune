@@ -26,20 +26,21 @@ func newAuditCmd() *cobra.Command {
 
 func newAuditListCmd() *cobra.Command {
 	var (
-		resource    string
-		ref         string
-		namespace   string
-		actor       string
-		action      string
-		sinceStr    string
-		untilStr    string
-		limit       int
-		outFormat   string
+		resource  string
+		ref       string
+		namespace string
+		actor     string
+		action    string
+		sinceStr  string
+		untilStr  string
+		limit     int
+		outFormat string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List audit events, newest first",
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List audit events, newest first",
 		Long: `List audit events from the server-side audit log.
 
 By default returns up to 200 events. Use --limit to override (capped server-side).
