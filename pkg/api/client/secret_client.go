@@ -242,6 +242,78 @@ func (s *SecretClient) RevealSecret(namespace, name string) (*types.Secret, erro
 	return secret, nil
 }
 
+// ListSecretVersions returns metadata for every historical version of a
+// secret, newest first. Plaintext data is omitted; DataKeys is populated
+// per version. Use RevealSecretVersion to obtain a specific version's
+// plaintext payload (requires the secrets:reveal verb).
+func (s *SecretClient) ListSecretVersions(namespace, name string) ([]*types.Secret, error) {
+	s.logger.Debug("Listing secret versions", log.Str("name", name), log.Str("namespace", namespace))
+	req := &generated.ListSecretVersionsRequest{Name: name, Namespace: namespace}
+	ctx, cancel := s.client.Context()
+	defer cancel()
+	resp, err := s.svc.ListSecretVersions(ctx, req)
+	if err != nil {
+		statusErr, ok := status.FromError(err)
+		if ok && statusErr.Code() == codes.NotFound {
+			return nil, fmt.Errorf("secret not found: %s/%s", namespace, name)
+		}
+		return nil, convertGRPCError("list secret versions", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	out := make([]*types.Secret, 0, len(resp.Versions))
+	for _, p := range resp.Versions {
+		sec, err := s.protoToSecret(p)
+		if err != nil {
+			s.logger.Warn("Failed to convert secret version", log.Err(err))
+			continue
+		}
+		out = append(out, sec)
+	}
+	return out, nil
+}
+
+// RevealSecretVersion returns the plaintext payload of a specific historical
+// version of a secret. Requires the secrets:reveal RBAC verb.
+func (s *SecretClient) RevealSecretVersion(namespace, name string, version int) (*types.Secret, error) {
+	s.logger.Debug("Revealing secret version", log.Str("name", name), log.Int("version", version))
+	req := &generated.RevealSecretVersionRequest{Name: name, Namespace: namespace, Version: int32(version)}
+	ctx, cancel := s.client.Context()
+	defer cancel()
+	resp, err := s.svc.RevealSecretVersion(ctx, req)
+	if err != nil {
+		statusErr, ok := status.FromError(err)
+		if ok && statusErr.Code() == codes.NotFound {
+			return nil, fmt.Errorf("secret version not found: %s/%s@%d", namespace, name, version)
+		}
+		return nil, convertGRPCError("reveal secret version", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	return s.protoToSecret(resp.Secret)
+}
+
+// RollbackSecret rewrites the secret's HEAD to the contents of a prior
+// version, producing a new HEAD version (head+1). Requires the secrets:update
+// RBAC verb. Emits a `rollback` audit event server-side recording fromVersion
+// (previous head), toVersion (target), and newVersion (the new head).
+func (s *SecretClient) RollbackSecret(namespace, name string, toVersion int) (*types.Secret, error) {
+	s.logger.Debug("Rolling back secret", log.Str("name", name), log.Int("toVersion", toVersion))
+	req := &generated.RollbackSecretRequest{Name: name, Namespace: namespace, ToVersion: int32(toVersion)}
+	ctx, cancel := s.client.Context()
+	defer cancel()
+	resp, err := s.svc.RollbackSecret(ctx, req)
+	if err != nil {
+		return nil, convertGRPCError("rollback secret", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	return s.protoToSecret(resp.Secret)
+}
+
 // secretToProto converts a types.Secret to a generated.Secret
 func (s *SecretClient) secretToProto(secret *types.Secret) *generated.Secret {
 	if secret == nil {

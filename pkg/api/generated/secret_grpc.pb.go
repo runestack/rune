@@ -19,12 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SecretService_CreateSecret_FullMethodName = "/rune.api.SecretService/CreateSecret"
-	SecretService_GetSecret_FullMethodName    = "/rune.api.SecretService/GetSecret"
-	SecretService_UpdateSecret_FullMethodName = "/rune.api.SecretService/UpdateSecret"
-	SecretService_DeleteSecret_FullMethodName = "/rune.api.SecretService/DeleteSecret"
-	SecretService_ListSecrets_FullMethodName  = "/rune.api.SecretService/ListSecrets"
-	SecretService_RevealSecret_FullMethodName = "/rune.api.SecretService/RevealSecret"
+	SecretService_CreateSecret_FullMethodName        = "/rune.api.SecretService/CreateSecret"
+	SecretService_GetSecret_FullMethodName           = "/rune.api.SecretService/GetSecret"
+	SecretService_UpdateSecret_FullMethodName        = "/rune.api.SecretService/UpdateSecret"
+	SecretService_DeleteSecret_FullMethodName        = "/rune.api.SecretService/DeleteSecret"
+	SecretService_ListSecrets_FullMethodName         = "/rune.api.SecretService/ListSecrets"
+	SecretService_RevealSecret_FullMethodName        = "/rune.api.SecretService/RevealSecret"
+	SecretService_ListSecretVersions_FullMethodName  = "/rune.api.SecretService/ListSecretVersions"
+	SecretService_RevealSecretVersion_FullMethodName = "/rune.api.SecretService/RevealSecretVersion"
+	SecretService_RollbackSecret_FullMethodName      = "/rune.api.SecretService/RollbackSecret"
 )
 
 // SecretServiceClient is the client API for SecretService service.
@@ -42,6 +45,15 @@ type SecretServiceClient interface {
 	// RevealSecret returns the plaintext data map for a single secret. Requires
 	// the secrets:reveal verb. Each successful call emits an audit event.
 	RevealSecret(ctx context.Context, in *RevealSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
+	// ListSecretVersions returns metadata for every historical version, newest
+	// first. Gated by secrets:get.
+	ListSecretVersions(ctx context.Context, in *ListSecretVersionsRequest, opts ...grpc.CallOption) (*ListSecretVersionsResponse, error)
+	// RevealSecretVersion returns the plaintext payload of a specific historical
+	// version. Gated by secrets:reveal.
+	RevealSecretVersion(ctx context.Context, in *RevealSecretVersionRequest, opts ...grpc.CallOption) (*SecretResponse, error)
+	// RollbackSecret rewrites HEAD to the contents of a prior version, producing
+	// a new version. Gated by secrets:update; emits a `rollback` audit event.
+	RollbackSecret(ctx context.Context, in *RollbackSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
 }
 
 type secretServiceClient struct {
@@ -112,6 +124,36 @@ func (c *secretServiceClient) RevealSecret(ctx context.Context, in *RevealSecret
 	return out, nil
 }
 
+func (c *secretServiceClient) ListSecretVersions(ctx context.Context, in *ListSecretVersionsRequest, opts ...grpc.CallOption) (*ListSecretVersionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSecretVersionsResponse)
+	err := c.cc.Invoke(ctx, SecretService_ListSecretVersions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) RevealSecretVersion(ctx context.Context, in *RevealSecretVersionRequest, opts ...grpc.CallOption) (*SecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretResponse)
+	err := c.cc.Invoke(ctx, SecretService_RevealSecretVersion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) RollbackSecret(ctx context.Context, in *RollbackSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretResponse)
+	err := c.cc.Invoke(ctx, SecretService_RollbackSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SecretServiceServer is the server API for SecretService service.
 // All implementations must embed UnimplementedSecretServiceServer
 // for forward compatibility.
@@ -127,6 +169,15 @@ type SecretServiceServer interface {
 	// RevealSecret returns the plaintext data map for a single secret. Requires
 	// the secrets:reveal verb. Each successful call emits an audit event.
 	RevealSecret(context.Context, *RevealSecretRequest) (*SecretResponse, error)
+	// ListSecretVersions returns metadata for every historical version, newest
+	// first. Gated by secrets:get.
+	ListSecretVersions(context.Context, *ListSecretVersionsRequest) (*ListSecretVersionsResponse, error)
+	// RevealSecretVersion returns the plaintext payload of a specific historical
+	// version. Gated by secrets:reveal.
+	RevealSecretVersion(context.Context, *RevealSecretVersionRequest) (*SecretResponse, error)
+	// RollbackSecret rewrites HEAD to the contents of a prior version, producing
+	// a new version. Gated by secrets:update; emits a `rollback` audit event.
+	RollbackSecret(context.Context, *RollbackSecretRequest) (*SecretResponse, error)
 	mustEmbedUnimplementedSecretServiceServer()
 }
 
@@ -154,6 +205,15 @@ func (UnimplementedSecretServiceServer) ListSecrets(context.Context, *ListSecret
 }
 func (UnimplementedSecretServiceServer) RevealSecret(context.Context, *RevealSecretRequest) (*SecretResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RevealSecret not implemented")
+}
+func (UnimplementedSecretServiceServer) ListSecretVersions(context.Context, *ListSecretVersionsRequest) (*ListSecretVersionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListSecretVersions not implemented")
+}
+func (UnimplementedSecretServiceServer) RevealSecretVersion(context.Context, *RevealSecretVersionRequest) (*SecretResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevealSecretVersion not implemented")
+}
+func (UnimplementedSecretServiceServer) RollbackSecret(context.Context, *RollbackSecretRequest) (*SecretResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RollbackSecret not implemented")
 }
 func (UnimplementedSecretServiceServer) mustEmbedUnimplementedSecretServiceServer() {}
 func (UnimplementedSecretServiceServer) testEmbeddedByValue()                       {}
@@ -284,6 +344,60 @@ func _SecretService_RevealSecret_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SecretService_ListSecretVersions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSecretVersionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).ListSecretVersions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_ListSecretVersions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).ListSecretVersions(ctx, req.(*ListSecretVersionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_RevealSecretVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevealSecretVersionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).RevealSecretVersion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_RevealSecretVersion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).RevealSecretVersion(ctx, req.(*RevealSecretVersionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_RollbackSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RollbackSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).RollbackSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_RollbackSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).RollbackSecret(ctx, req.(*RollbackSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SecretService_ServiceDesc is the grpc.ServiceDesc for SecretService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -314,6 +428,18 @@ var SecretService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevealSecret",
 			Handler:    _SecretService_RevealSecret_Handler,
+		},
+		{
+			MethodName: "ListSecretVersions",
+			Handler:    _SecretService_ListSecretVersions_Handler,
+		},
+		{
+			MethodName: "RevealSecretVersion",
+			Handler:    _SecretService_RevealSecretVersion_Handler,
+		},
+		{
+			MethodName: "RollbackSecret",
+			Handler:    _SecretService_RollbackSecret_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

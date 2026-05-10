@@ -1,0 +1,452 @@
+package cmd
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+)
+
+// newSecretCmd builds the `rune secret` command group, the canonical CLI
+// surface for managing secrets server-side (RUNE-103).
+//
+// The historical `rune get secrets` / `rune create secret` / `rune delete
+// secret` commands continue to work and share the same gRPC plumbing — this
+// group adds the operations that have no corresponding generic verb (reveal,
+// versions, rollback) and offers a one-stop subcommand tree for operators.
+func newSecretCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "secret",
+		Short: "Manage secrets (get, list, reveal, update, versions, rollback)",
+	}
+	cmd.AddCommand(newSecretGetCmd())
+	cmd.AddCommand(newSecretListCmd())
+	cmd.AddCommand(newSecretRevealCmd())
+	cmd.AddCommand(newSecretUpdateCmd())
+	cmd.AddCommand(newSecretDeleteCmd())
+	cmd.AddCommand(newSecretVersionsCmd())
+	cmd.AddCommand(newSecretRollbackCmd())
+	return cmd
+}
+
+// secretFormatFlags wires the standard --output flag onto a subcommand.
+func addSecretOutputFlag(cmd *cobra.Command, out *string) {
+	cmd.Flags().StringVarP(out, "output", "o", "table", "Output format: table|json|yaml")
+}
+
+func addSecretNamespaceFlag(cmd *cobra.Command, ns *string) {
+	cmd.Flags().StringVarP(ns, "namespace", "n", "default", "Namespace")
+}
+
+// --- get ---
+
+func newSecretGetCmd() *cobra.Command {
+	var ns, format string
+	cmd := &cobra.Command{
+		Use:   "get <name>",
+		Short: "Get a secret's metadata (no plaintext)",
+		Long: `Get returns metadata for a secret — namespace, name, version, timestamps,
+and the list of data keys. To retrieve the plaintext payload use 'rune secret
+reveal' (requires the secrets:reveal RBAC verb).`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			sec, err := client.NewSecretClient(api).GetSecret(ns, args[0])
+			if err != nil {
+				return err
+			}
+			return renderSecret(sec, format, false)
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	addSecretOutputFlag(cmd, &format)
+	return cmd
+}
+
+// --- list ---
+
+func newSecretListCmd() *cobra.Command {
+	var ns, format string
+	var allNamespaces bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List secrets in a namespace",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			target := ns
+			if allNamespaces {
+				target = "*"
+			}
+			secs, err := client.NewSecretClient(api).ListSecrets(target, "", "")
+			if err != nil {
+				return err
+			}
+			return renderSecretList(secs, format)
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "List secrets across all namespaces")
+	addSecretOutputFlag(cmd, &format)
+	return cmd
+}
+
+// --- reveal ---
+
+func newSecretRevealCmd() *cobra.Command {
+	var ns, format string
+	var version int
+	cmd := &cobra.Command{
+		Use:   "reveal <name>",
+		Short: "Reveal the plaintext payload of a secret (audited)",
+		Long: `Reveal returns the plaintext data map for a secret. Each call is recorded
+in the server-side audit log with action=reveal (or reveal-version) and the
+calling subject's identity.
+
+With --version N, fetches the plaintext payload of a specific historical
+version instead of the current head.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			sc := client.NewSecretClient(api)
+			var sec *types.Secret
+			if version > 0 {
+				sec, err = sc.RevealSecretVersion(ns, args[0], version)
+			} else {
+				sec, err = sc.RevealSecret(ns, args[0])
+			}
+			if err != nil {
+				return err
+			}
+			return renderSecret(sec, format, true)
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	cmd.Flags().IntVar(&version, "version", 0, "Reveal a specific historical version (default: current HEAD)")
+	cmd.Flags().StringVarP(&format, "output", "o", "table", "Output format: table|json|yaml|env")
+	return cmd
+}
+
+// --- update ---
+
+func newSecretUpdateCmd() *cobra.Command {
+	var ns string
+	var dataPairs []string
+	var fromFile string
+	cmd := &cobra.Command{
+		Use:   "update <name>",
+		Short: "Update an existing secret's data (creates a new version)",
+		Long: `Update rewrites the secret's data map and bumps its version. The previous
+version remains in history and can be inspected with 'rune secret versions'
+or restored with 'rune secret rollback'.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			data := map[string]string{}
+			if fromFile != "" {
+				fileData, err := readDataFromFile(fromFile)
+				if err != nil {
+					return fmt.Errorf("failed to read file %s: %w", fromFile, err)
+				}
+				data = fileData
+			}
+			for _, pair := range dataPairs {
+				k, v, err := splitPair(pair)
+				if err != nil {
+					return err
+				}
+				data[k] = v
+			}
+			if len(data) == 0 {
+				return fmt.Errorf("no data provided. Use --data flags or --from-file")
+			}
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			sec := &types.Secret{Name: name, Namespace: ns, Type: "static", Data: data}
+			if err := client.NewSecretClient(api).UpdateSecret(sec, false); err != nil {
+				return err
+			}
+			fmt.Printf("Secret %s/%s updated with %d data entries\n", ns, name, len(data))
+			return nil
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	cmd.Flags().StringSliceVar(&dataPairs, "data", nil, "Data entries key=value (can repeat)")
+	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read data from file (key=value format, one per line)")
+	return cmd
+}
+
+// --- delete ---
+
+func newSecretDeleteCmd() *cobra.Command {
+	var ns string
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Delete a secret",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if !yes {
+				fmt.Fprintf(os.Stderr, "Delete secret %s/%s? Pass --yes to confirm.\n", ns, name)
+				return fmt.Errorf("aborted: confirmation required")
+			}
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			if err := client.NewSecretClient(api).DeleteSecret(ns, name); err != nil {
+				return err
+			}
+			fmt.Printf("Secret %s/%s deleted\n", ns, name)
+			return nil
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm destructive operation")
+	return cmd
+}
+
+// --- versions ---
+
+func newSecretVersionsCmd() *cobra.Command {
+	var ns, format string
+	cmd := &cobra.Command{
+		Use:   "versions <name>",
+		Short: "List historical versions of a secret (metadata only)",
+		Long: `Versions returns metadata for every historical version of a secret, newest
+first. Plaintext is never included; use 'rune secret reveal --version N' to
+fetch the payload of a specific version.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			versions, err := client.NewSecretClient(api).ListSecretVersions(ns, args[0])
+			if err != nil {
+				return err
+			}
+			return renderSecretVersions(versions, format)
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	addSecretOutputFlag(cmd, &format)
+	return cmd
+}
+
+// --- rollback ---
+
+func newSecretRollbackCmd() *cobra.Command {
+	var ns string
+	var toVersion int
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "rollback <name>",
+		Short: "Rewrite a secret's HEAD to the contents of a prior version",
+		Long: `Rollback fetches the named historical version and writes its data as a new
+HEAD version (head+1). Old versions are retained — rollback never deletes
+history. Each rollback is recorded as an audit event with metadata
+fromVersion=<prev>, toVersion=<target>, newVersion=<new head>.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if toVersion <= 0 {
+				return fmt.Errorf("--to is required and must be > 0")
+			}
+			if !yes {
+				fmt.Fprintf(os.Stderr, "Rollback secret %s/%s to version %d? Pass --yes to confirm.\n", ns, name, toVersion)
+				return fmt.Errorf("aborted: confirmation required")
+			}
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			sec, err := client.NewSecretClient(api).RollbackSecret(ns, name, toVersion)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Secret %s/%s rolled back to version %d (new HEAD = v%d)\n", ns, name, toVersion, sec.Version)
+			return nil
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	cmd.Flags().IntVar(&toVersion, "to", 0, "Target historical version to roll back to")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm destructive operation")
+	return cmd
+}
+
+// --- rendering helpers ---
+
+// renderSecret prints a single secret. When reveal is true the Data map is
+// included verbatim; otherwise only DataKeys is shown.
+func renderSecret(sec *types.Secret, format string, reveal bool) error {
+	if sec == nil {
+		return fmt.Errorf("nil secret")
+	}
+	switch strings.ToLower(format) {
+	case "json":
+		return writeJSON(secretView(sec, reveal))
+	case "yaml":
+		return writeYAML(secretView(sec, reveal))
+	case "env":
+		if !reveal {
+			return fmt.Errorf("env output is only valid with reveal")
+		}
+		keys := sortedKeys(sec.Data)
+		for _, k := range keys {
+			fmt.Printf("%s=%s\n", k, sec.Data[k])
+		}
+		return nil
+	case "", "table":
+		return renderSecretTable(sec, reveal)
+	default:
+		return fmt.Errorf("unknown output format: %s", format)
+	}
+}
+
+func renderSecretList(secs []*types.Secret, format string) error {
+	switch strings.ToLower(format) {
+	case "json":
+		views := make([]map[string]interface{}, 0, len(secs))
+		for _, s := range secs {
+			views = append(views, secretView(s, false))
+		}
+		return writeJSON(views)
+	case "yaml":
+		views := make([]map[string]interface{}, 0, len(secs))
+		for _, s := range secs {
+			views = append(views, secretView(s, false))
+		}
+		return writeYAML(views)
+	case "", "table":
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NAMESPACE\tNAME\tVERSION\tKEYS\tUPDATED")
+		for _, s := range secs {
+			fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", s.Namespace, s.Name, s.Version, len(s.DataKeys), formatTime(s.UpdatedAt))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unknown output format: %s", format)
+	}
+}
+
+func renderSecretVersions(versions []*types.Secret, format string) error {
+	switch strings.ToLower(format) {
+	case "json":
+		views := make([]map[string]interface{}, 0, len(versions))
+		for _, s := range versions {
+			views = append(views, secretView(s, false))
+		}
+		return writeJSON(views)
+	case "yaml":
+		views := make([]map[string]interface{}, 0, len(versions))
+		for _, s := range versions {
+			views = append(views, secretView(s, false))
+		}
+		return writeYAML(views)
+	case "", "table":
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "VERSION\tKEYS\tCREATED\tUPDATED")
+		for _, s := range versions {
+			fmt.Fprintf(w, "%d\t%d\t%s\t%s\n", s.Version, len(s.DataKeys), formatTime(s.CreatedAt), formatTime(s.UpdatedAt))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unknown output format: %s", format)
+	}
+}
+
+func renderSecretTable(sec *types.Secret, reveal bool) error {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Namespace:\t%s\n", sec.Namespace)
+	fmt.Fprintf(w, "Name:\t%s\n", sec.Name)
+	fmt.Fprintf(w, "Type:\t%s\n", sec.Type)
+	fmt.Fprintf(w, "Version:\t%d\n", sec.Version)
+	fmt.Fprintf(w, "Created:\t%s\n", formatTime(sec.CreatedAt))
+	fmt.Fprintf(w, "Updated:\t%s\n", formatTime(sec.UpdatedAt))
+	if reveal {
+		fmt.Fprintln(w, "Data:")
+		for _, k := range sortedKeys(sec.Data) {
+			fmt.Fprintf(w, "  %s:\t%s\n", k, sec.Data[k])
+		}
+	} else {
+		keys := sec.DataKeys
+		sort.Strings(keys)
+		fmt.Fprintf(w, "Keys:\t%s\n", strings.Join(keys, ", "))
+	}
+	return w.Flush()
+}
+
+// secretView projects a Secret into a stable, render-friendly map. Plaintext
+// data is included only when reveal=true; otherwise only the key list is
+// shown so the structure mirrors the on-the-wire metadata-only response.
+func secretView(sec *types.Secret, reveal bool) map[string]interface{} {
+	view := map[string]interface{}{
+		"namespace": sec.Namespace,
+		"name":      sec.Name,
+		"type":      sec.Type,
+		"version":   sec.Version,
+		"createdAt": sec.CreatedAt,
+		"updatedAt": sec.UpdatedAt,
+		"dataKeys":  sec.DataKeys,
+	}
+	if reveal {
+		view["data"] = sec.Data
+	}
+	return view
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format(time.RFC3339)
+}
+
+func writeJSON(v interface{}) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+func writeYAML(v interface{}) error {
+	enc := yaml.NewEncoder(os.Stdout)
+	enc.SetIndent(2)
+	defer enc.Close()
+	return enc.Encode(v)
+}

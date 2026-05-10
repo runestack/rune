@@ -72,6 +72,8 @@ func init() {
 	rootCmd.AddCommand(newAdminCmd())
 	// Audit log query
 	rootCmd.AddCommand(newAuditCmd())
+	// Secret management (get, list, reveal, update, versions, rollback)
+	rootCmd.AddCommand(newSecretCmd())
 	// Context management commands (server, token, default namespace)
 	rootCmd.AddCommand(newContextCmd())
 	// Convenient top-level alias for `rune context use`

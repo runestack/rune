@@ -198,6 +198,95 @@ func (s *SecretService) RevealSecret(ctx context.Context, req *generated.RevealS
 	return &generated.SecretResponse{Secret: toProtoSecret(sec, true), Status: &generated.Status{Code: int32(codes.OK)}}, nil
 }
 
+// ListSecretVersions returns metadata for every historical version of a
+// secret, newest first. Plaintext data is stripped; data_keys is populated.
+// Use RevealSecretVersion to fetch the payload of a specific version.
+func (s *SecretService) ListSecretVersions(ctx context.Context, req *generated.ListSecretVersionsRequest) (*generated.ListSecretVersionsResponse, error) {
+	if !s.limiter.Allow() {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+	if req == nil || req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	versions, err := s.repo.ListVersions(ctx, req.Namespace, req.Name)
+	if err != nil {
+		s.emitAudit(ctx, "list-versions", types.NS(req.Namespace), req.Name, types.AuditOutcomeError, err.Error(), nil)
+		return nil, status.Errorf(codes.NotFound, "list versions: %v", err)
+	}
+	out := make([]*generated.Secret, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, toProtoSecret(v, false))
+	}
+	s.emitAudit(ctx, "list-versions", types.NS(req.Namespace), req.Name, types.AuditOutcomeSuccess, "", map[string]string{
+		"count": fmt.Sprintf("%d", len(versions)),
+	})
+	return &generated.ListSecretVersionsResponse{Versions: out, Status: &generated.Status{Code: int32(codes.OK)}}, nil
+}
+
+// RevealSecretVersion returns the plaintext payload of a specific historical
+// version of a secret. Gated by secrets:reveal.
+func (s *SecretService) RevealSecretVersion(ctx context.Context, req *generated.RevealSecretVersionRequest) (*generated.SecretResponse, error) {
+	if !s.limiter.Allow() {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+	if req == nil || req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	if req.Version <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "version must be > 0")
+	}
+	sec, err := s.repo.GetVersionN(ctx, req.Namespace, req.Name, int(req.Version))
+	if err != nil {
+		s.emitAudit(ctx, "reveal-version", types.NS(req.Namespace), req.Name, types.AuditOutcomeError, err.Error(), map[string]string{
+			"version": fmt.Sprintf("%d", req.Version),
+		})
+		return nil, status.Errorf(codes.NotFound, "reveal version: %v", err)
+	}
+	s.emitAudit(ctx, "reveal-version", sec.Namespace, sec.Name, types.AuditOutcomeSuccess, "", map[string]string{
+		"version":  fmt.Sprintf("%d", sec.Version),
+		"keyCount": fmt.Sprintf("%d", len(sec.Data)),
+	})
+	return &generated.SecretResponse{Secret: toProtoSecret(sec, true), Status: &generated.Status{Code: int32(codes.OK)}}, nil
+}
+
+// RollbackSecret rewrites HEAD to the contents of the given prior version,
+// producing a new HEAD version. Old versions are retained in history. Gated
+// by secrets:update; emits a `rollback` audit event whose metadata records
+// fromVersion (previous head), toVersion (rollback target), and newVersion
+// (the freshly written head).
+func (s *SecretService) RollbackSecret(ctx context.Context, req *generated.RollbackSecretRequest) (*generated.SecretResponse, error) {
+	if req == nil || req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	if req.ToVersion <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "to_version must be > 0")
+	}
+	cur, err := s.repo.Get(ctx, req.Namespace, req.Name)
+	if err != nil {
+		s.emitAudit(ctx, "rollback", types.NS(req.Namespace), req.Name, types.AuditOutcomeError, err.Error(), nil)
+		return nil, status.Errorf(codes.NotFound, "rollback: %v", err)
+	}
+	if int(req.ToVersion) == cur.Version {
+		s.emitAudit(ctx, "rollback", cur.Namespace, cur.Name, types.AuditOutcomeError, "rollback target equals current head", map[string]string{
+			"toVersion": fmt.Sprintf("%d", req.ToVersion),
+		})
+		return nil, status.Errorf(codes.FailedPrecondition, "version %d is already HEAD", req.ToVersion)
+	}
+	rolled, err := s.repo.Rollback(ctx, req.Namespace, req.Name, int(req.ToVersion), store.WithSource(store.EventSourceAPI))
+	if err != nil {
+		s.emitAudit(ctx, "rollback", types.NS(req.Namespace), req.Name, types.AuditOutcomeError, err.Error(), map[string]string{
+			"toVersion": fmt.Sprintf("%d", req.ToVersion),
+		})
+		return nil, status.Errorf(codes.Internal, "rollback: %v", err)
+	}
+	s.emitAudit(ctx, "rollback", rolled.Namespace, rolled.Name, types.AuditOutcomeSuccess, "", map[string]string{
+		"fromVersion": fmt.Sprintf("%d", cur.Version),
+		"toVersion":   fmt.Sprintf("%d", req.ToVersion),
+		"newVersion":  fmt.Sprintf("%d", rolled.Version),
+	})
+	return &generated.SecretResponse{Secret: toProtoSecret(rolled, false), Status: &generated.Status{Code: int32(codes.OK)}}, nil
+}
+
 // emitAudit writes a single audit event for a secret operation. Failures to
 // write are logged but never propagated to the caller — losing an audit row
 // must not break the underlying RPC.

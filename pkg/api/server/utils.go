@@ -52,6 +52,12 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.ConfigmapService/Delete"):
 		return "configmaps", "delete"
 
+	case strings.HasPrefix(method, "/rune.api.SecretService/RollbackSecret"):
+		return "secrets", "update"
+	case strings.HasPrefix(method, "/rune.api.SecretService/ListSecretVersions"):
+		return "secrets", "get"
+	case strings.HasPrefix(method, "/rune.api.SecretService/RevealSecretVersion"):
+		return "secrets", "reveal"
 	case strings.HasPrefix(method, "/rune.api.SecretService/Reveal"):
 		return "secrets", "reveal"
 	case strings.HasPrefix(method, "/rune.api.SecretService/Get"):
