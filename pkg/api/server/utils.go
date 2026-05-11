@@ -52,6 +52,14 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.ConfigmapService/Delete"):
 		return "configmaps", "delete"
 
+	case strings.HasPrefix(method, "/rune.api.SecretService/RollbackSecret"):
+		return "secrets", "update"
+	case strings.HasPrefix(method, "/rune.api.SecretService/ListSecretVersions"):
+		return "secrets", "get"
+	case strings.HasPrefix(method, "/rune.api.SecretService/RevealSecretVersion"):
+		return "secrets", "reveal"
+	case strings.HasPrefix(method, "/rune.api.SecretService/Reveal"):
+		return "secrets", "reveal"
 	case strings.HasPrefix(method, "/rune.api.SecretService/Get"):
 		return "secrets", "get"
 	case strings.HasPrefix(method, "/rune.api.SecretService/List"):
@@ -62,6 +70,11 @@ func methodToAction(method string) (string, string) {
 		return "secrets", "update"
 	case strings.HasPrefix(method, "/rune.api.SecretService/Delete"):
 		return "secrets", "delete"
+
+	case strings.HasPrefix(method, "/rune.api.AuditService/List"):
+		return "audit", "list"
+	case strings.HasPrefix(method, "/rune.api.AuditService/Get"):
+		return "audit", "get"
 
 	case strings.HasPrefix(method, "/rune.api.AuthService/WhoAmI"):
 		return "auth", "get"
@@ -117,4 +130,4 @@ func isLocalhost(addr string) bool {
 	return ip.IsLoopback()
 }
 
-func statusPermissionDenied(msg string) error { return status.Errorf(codes.PermissionDenied, msg) }
+func statusPermissionDenied(msg string) error { return status.Error(codes.PermissionDenied, msg) }

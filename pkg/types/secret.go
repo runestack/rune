@@ -21,6 +21,12 @@ type Secret struct {
 	// Static data (encrypted at rest, only for static secrets)
 	Data map[string]string `json:"-" yaml:"-"` // Not serialized, stored encrypted separately
 
+	// DataKeys is the sorted list of keys present in Data. It is populated
+	// by metadata-only API responses (Get, List) so callers can see the
+	// shape of a secret without learning its values. Reveal responses
+	// populate both Data and DataKeys.
+	DataKeys []string `json:"dataKeys,omitempty" yaml:"dataKeys,omitempty"`
+
 	// Engine configuration for dynamic secrets
 	Engine *SecretEngine `json:"engine,omitempty" yaml:"engine,omitempty"`
 

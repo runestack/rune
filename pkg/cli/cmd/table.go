@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,10 +20,27 @@ type ResourceTable struct {
 	AllNamespaces bool
 	ShowLabels    bool
 	MaxWidth      int
+	// Namespace is the resolved namespace scope used when rendering an
+	// empty-results message (e.g. "No services found in namespace 'stg'").
+	// Ignored when AllNamespaces is true.
+	Namespace string
 
 	// Rendering details
 	tableRenderer *pterm.TablePrinter
 	stripAnsiFunc func(string) string
+}
+
+// emptyMessage returns a human-readable "no results" message for the given
+// pluralised resource label, scoped by the table's Namespace / AllNamespaces.
+func (t *ResourceTable) emptyMessage(resourcePlural string) string {
+	switch {
+	case t.AllNamespaces:
+		return fmt.Sprintf("No %s found in any namespace", resourcePlural)
+	case t.Namespace != "":
+		return fmt.Sprintf("No %s found in namespace '%s'", resourcePlural, t.Namespace)
+	default:
+		return fmt.Sprintf("No %s found", resourcePlural)
+	}
 }
 
 // NewResourceTable creates a new resource table with default configuration
@@ -57,16 +73,16 @@ func (t *ResourceTable) SetStripAnsiFunc(fn func(string) string) {
 // RenderServices renders a table of services
 func (t *ResourceTable) RenderServices(services []*types.Service) error {
 	if len(services) == 0 {
-		fmt.Println("No services found")
+		fmt.Println(t.emptyMessage("services"))
 		return nil
 	}
 
 	// Set default headers if not provided
 	if len(t.Headers) == 0 {
 		if t.AllNamespaces {
-			t.Headers = []string{"NAMESPACE", "NAME", "TYPE", "STATUS", "INSTANCES", "EXTERNAL", "GENERATION", "AGE"}
+			t.Headers = []string{"NAMESPACE", "NAME", "TYPE", "STATUS", "READY", "REASON", "EXTERNAL", "GEN", "AGE"}
 		} else {
-			t.Headers = []string{"NAME", "TYPE", "STATUS", "INSTANCES", "EXTERNAL", "GENERATION", "AGE"}
+			t.Headers = []string{"NAME", "TYPE", "STATUS", "READY", "REASON", "EXTERNAL", "GEN", "AGE"}
 		}
 	}
 
@@ -84,39 +100,31 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 		// Format status - use our colorizeStatus function
 		status := format.PTermStatusLabel(string(service.Status))
 
-		// Format instances
+		// Format ready count
 		running := 0
 		if service.Status == types.ServiceStatusRunning {
 			running = service.Scale
 		}
 		instances := fmt.Sprintf("%d/%d", running, service.Scale)
 
-		// External endpoint (best-effort)
+		// Reason: short slug. Empty when service is healthy.
+		reason := service.StatusReason
+		if reason == "" {
+			reason = "-"
+		}
+
+		// External endpoint (best-effort).
+		// With the ingress controller, the canonical external URL is
+		// https://{Expose.Host}{Expose.Path}. We don't know the scheme
+		// for sure (could be http if no TLS), so default to https when
+		// TLS is configured and http otherwise.
 		external := "-"
-		if service.Expose != nil {
-			var portNum int
-			for i := range service.Ports {
-				p := service.Ports[i]
-				if p.Name == service.Expose.Port {
-					portNum = p.Port
-					break
-				}
-				if n, err := strconv.Atoi(service.Expose.Port); err == nil && n == p.Port {
-					portNum = p.Port
-					break
-				}
+		if service.Expose != nil && service.Expose.Host != "" {
+			scheme := "http"
+			if service.Expose.TLS != nil {
+				scheme = "https"
 			}
-			if portNum > 0 {
-				host := service.Expose.Host
-				if host == "" {
-					host = "localhost"
-				}
-				hostPort := portNum
-				if service.Expose.HostPort > 0 {
-					hostPort = service.Expose.HostPort
-				}
-				external = fmt.Sprintf("http://%s:%d", host, hostPort)
-			}
+			external = fmt.Sprintf("%s://%s%s", scheme, service.Expose.Host, service.Expose.Path)
 		}
 
 		// Calculate age
@@ -141,6 +149,7 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 				serviceType,
 				status,
 				instances,
+				reason,
 				external,
 				generation,
 				age,
@@ -151,6 +160,7 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 				serviceType,
 				status,
 				instances,
+				reason,
 				external,
 				generation,
 				age,
@@ -176,7 +186,7 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 // RenderInstances renders a table of instances
 func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 	if len(instances) == 0 {
-		fmt.Println("No instances found")
+		fmt.Println(t.emptyMessage("instances"))
 		return nil
 	}
 
@@ -241,6 +251,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 // RenderNamespaces renders a table of namespaces
 func (t *ResourceTable) RenderNamespaces(namespaces []*types.Namespace) error {
 	if len(namespaces) == 0 {
+		// Namespaces are cluster-scoped; ignore Namespace/AllNamespaces here.
 		fmt.Println("No namespaces found")
 		return nil
 	}
@@ -283,7 +294,7 @@ func (t *ResourceTable) RenderNamespaces(namespaces []*types.Namespace) error {
 // RenderDeletionOperations renders a table of deletion operations
 func (t *ResourceTable) RenderDeletionOperations(operations []*generated.DeletionOperation) error {
 	if len(operations) == 0 {
-		fmt.Println("No deletion operations found")
+		fmt.Println(t.emptyMessage("deletion operations"))
 		return nil
 	}
 
@@ -319,7 +330,7 @@ func (t *ResourceTable) RenderDeletionOperations(operations []*generated.Deletio
 // RenderSecrets renders a table of secrets
 func (t *ResourceTable) RenderSecrets(secrets []*types.Secret) error {
 	if len(secrets) == 0 {
-		fmt.Println("No secrets found")
+		fmt.Println(t.emptyMessage("secrets"))
 		return nil
 	}
 
@@ -351,7 +362,7 @@ func (t *ResourceTable) RenderSecrets(secrets []*types.Secret) error {
 // RenderConfigmaps renders a table of configmaps
 func (t *ResourceTable) RenderConfigmaps(configmaps []*types.Configmap) error {
 	if len(configmaps) == 0 {
-		fmt.Println("No configmaps found")
+		fmt.Println(t.emptyMessage("configmaps"))
 		return nil
 	}
 

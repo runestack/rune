@@ -80,6 +80,11 @@ type InstanceMetadata struct {
 	// Image is the image that the instance is running
 	Image string `json:"image,omitempty" yaml:"image,omitempty"`
 
+	// ImagePull controls when the runner pulls the container image
+	// ("always", "missing", "never"). Propagated from the parent
+	// Service spec; empty defaults to "always".
+	ImagePull string `json:"imagePull,omitempty" yaml:"imagePull,omitempty"`
+
 	// ServiceGeneration is the generation of the service that the instance belongs to
 	ServiceGeneration int64 `json:"serviceGeneration,omitempty" yaml:"serviceGeneration,omitempty"`
 
@@ -104,6 +109,12 @@ type InstanceMetadata struct {
 	// Resolved exposed endpoint on host (best-effort)
 	ExposedHost     string `json:"exposedHost,omitempty" yaml:"exposedHost,omitempty"`
 	ExposedHostPort int    `json:"exposedHostPort,omitempty" yaml:"exposedHostPort,omitempty"`
+
+	// ContainerIP is the IP assigned to the container on its primary
+	// Docker network. Recorded by the runner on Start; consumed by the
+	// agent to map source IPs to service identity for policy
+	// enforcement.
+	ContainerIP string `json:"containerIp,omitempty" yaml:"containerIp,omitempty"`
 }
 
 // ResolvedSecretMount contains the resolved secret data for mounting

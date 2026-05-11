@@ -3,13 +3,54 @@ package types
 import (
 	"fmt"
 	"os"
+	filepathpkg "path/filepath"
 	"strings"
 	"time"
 
+	tomlv2 "github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 )
 
-// RuneFile represents a Rune configuration file
+// isTOMLPath returns true when the file path's extension indicates a
+// TOML runefile. Anything else (including empty / unknown extensions)
+// is treated as YAML by the parser, which preserves backward
+// compatibility with the original Release-1 behaviour.
+func isTOMLPath(p string) bool {
+	return strings.EqualFold(filepathpkg.Ext(p), ".toml")
+}
+
+// readRunefileBytes loads `path` and, if it's a TOML file, transcodes
+// it to YAML so that the existing yaml.v3 AST pipeline (line tracking,
+// duplicate-key handling, top-level key validation, struct unmarshal)
+// can be reused unchanged. Returns the YAML bytes plus a flag noting
+// whether transcoding happened (so callers can decide whether to
+// surface line numbers).
+func readRunefileBytes(path string) ([]byte, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if !isTOMLPath(path) {
+		return data, false, nil
+	}
+	var raw map[string]any
+	if err := tomlv2.Unmarshal(data, &raw); err != nil {
+		return nil, true, fmt.Errorf("failed to parse TOML: %w", err)
+	}
+	ydata, err := yaml.Marshal(raw)
+	if err != nil {
+		return nil, true, fmt.Errorf("failed to transcode TOML to YAML: %w", err)
+	}
+	return ydata, true, nil
+}
+
+// RuneFile represents a Rune configuration file.
+//
+// MUST stay shape-compatible with internal/config.Config — runed loads
+// the runefile via viper into Config; lint loads it here. The two
+// structs are kept parallel by hand and policed by a reflection-based
+// parity test (see runefile_parity_test.go, RUNE-112). When you add
+// a field to one, add it to the other (and to isKnownField below).
 type RuneFile struct {
 	// Server configuration
 	Server *ServerConfig `yaml:"server,omitempty"`
@@ -20,7 +61,7 @@ type RuneFile struct {
 	// Client configuration
 	Client *ClientConfig `yaml:"client,omitempty"`
 
-	// Docker runner configuration
+	// Docker runner configuration (including private registries)
 	Docker *DockerConfig `yaml:"docker,omitempty"`
 
 	// Default namespace
@@ -35,11 +76,29 @@ type RuneFile struct {
 	// Logging configuration
 	Log *LogConfig `yaml:"log,omitempty"`
 
-	// Secret encryption configuration
+	// Secret encryption + limits configuration
 	Secret *SecretConfig `yaml:"secret,omitempty"`
+
+	// Top-level config-resource limits (RUNE-016)
+	Config *ConfigResourceConfig `yaml:"config,omitempty"`
 
 	// Plugin configuration
 	Plugins *PluginConfig `yaml:"plugins,omitempty"`
+
+	// Networking layer (RUNE-040..067)
+	Networking *NetworkingConfig `yaml:"networking,omitempty"`
+
+	// Telemetry / metrics
+	Telemetry *TelemetryConfig `yaml:"telemetry,omitempty"`
+
+	// Node placement (edge / worker / leader)
+	Node *NodeConfig `yaml:"node,omitempty"`
+
+	// Ingress (edge node terminating user traffic)
+	Ingress *IngressConfig `yaml:"ingress,omitempty"`
+
+	// ACME (Let's Encrypt) configuration
+	ACME *ACMEConfig `yaml:"acme,omitempty"`
 
 	// Internal tracking for line numbers (not serialized)
 	lineInfo map[string]int `json:"-" yaml:"-"`
@@ -72,9 +131,34 @@ type ClientConfig struct {
 
 // DockerConfig represents Docker runner configuration
 type DockerConfig struct {
-	APIVersion                string `yaml:"api_version,omitempty"`
-	FallbackAPIVersion        string `yaml:"fallback_api_version,omitempty"`
-	NegotiationTimeoutSeconds int    `yaml:"negotiation_timeout_seconds,omitempty"`
+	APIVersion                string                 `yaml:"api_version,omitempty"`
+	FallbackAPIVersion        string                 `yaml:"fallback_api_version,omitempty"`
+	NegotiationTimeoutSeconds int                    `yaml:"negotiation_timeout_seconds,omitempty"`
+	Registries                []DockerRegistryConfig `yaml:"registries,omitempty"`
+}
+
+// DockerRegistryConfig is a single private-registry entry. Mirrors
+// internal/config.DockerRegistryConfig.
+type DockerRegistryConfig struct {
+	Name     string             `yaml:"name"`
+	Registry string             `yaml:"registry"`
+	Auth     DockerRegistryAuth `yaml:"auth,omitempty"`
+}
+
+// DockerRegistryAuth holds registry credentials (or a fromSecret
+// reference). Mirrors internal/config.DockerRegistryAuth — see
+// RUNE-018 for the secret-bootstrap semantics.
+type DockerRegistryAuth struct {
+	Type       string            `yaml:"type,omitempty"` // basic | token | ecr
+	Username   string            `yaml:"username,omitempty"`
+	Password   string            `yaml:"password,omitempty"`
+	Token      string            `yaml:"token,omitempty"`
+	Region     string            `yaml:"region,omitempty"`
+	FromSecret any               `yaml:"fromSecret,omitempty"` // string or {name,namespace}
+	Bootstrap  bool              `yaml:"bootstrap,omitempty"`
+	Manage     string            `yaml:"manage,omitempty"`
+	Immutable  bool              `yaml:"immutable,omitempty"`
+	Data       map[string]string `yaml:"data,omitempty"`
 }
 
 // AuthConfig represents authentication configuration
@@ -109,9 +193,27 @@ type LogConfig struct {
 	Format string `yaml:"format,omitempty"`
 }
 
-// SecretConfig represents secret encryption configuration
+// SecretConfig represents secret encryption + storage limits configuration
 type SecretConfig struct {
 	Encryption *EncryptionConfig `yaml:"encryption,omitempty"`
+	Limits     *LimitsConfig     `yaml:"limits,omitempty"`
+}
+
+// ConfigResourceConfig holds limits for the top-level `config:`
+// resource type (RUNE-016 ConfigMaps). Distinct from `secret.limits`.
+type ConfigResourceConfig struct {
+	Limits *LimitsConfig `yaml:"limits,omitempty"`
+}
+
+// LimitsConfig mirrors store.Limits as it appears in the runefile.
+// Field tags use snake_case for consistency with the rest of the file
+// even though store.Limits itself is untagged (viper's default
+// behaviour is to lowercase field names with no separator, but in
+// practice runefiles in the wild use snake_case here — keep both
+// shapes valid).
+type LimitsConfig struct {
+	MaxObjectBytes   int `yaml:"max_object_bytes,omitempty"`
+	MaxKeyNameLength int `yaml:"max_key_name_length,omitempty"`
 }
 
 // EncryptionConfig represents encryption configuration
@@ -139,15 +241,53 @@ type PluginConfig struct {
 	Enabled []string `yaml:"enabled,omitempty"`
 }
 
-// ParseRuneFile parses a Rune configuration file from the given file path
+// NetworkingConfig holds the networking-layer settings (RUNE-040..067).
+type NetworkingConfig struct {
+	ClusterCIDR string `yaml:"cluster_cidr,omitempty"`
+	DevMode     bool   `yaml:"dev_mode,omitempty"`
+}
+
+// TelemetryConfig holds the metrics endpoint configuration.
+type TelemetryConfig struct {
+	MetricsAddr string `yaml:"metrics_addr,omitempty"`
+}
+
+// NodeConfig holds per-node placement metadata (edge / worker / leader).
+type NodeConfig struct {
+	Role string `yaml:"role,omitempty"`
+}
+
+// IngressConfig holds the bind addresses for the edge ingress (RUNE-067).
+type IngressConfig struct {
+	HTTPAddr  string `yaml:"http_addr,omitempty"`
+	HTTPSAddr string `yaml:"https_addr,omitempty"`
+}
+
+// ACMEConfig holds the Let's Encrypt directory + contact email used by
+// the edge ingress (RUNE-067).
+type ACMEConfig struct {
+	Directory string `yaml:"directory,omitempty"`
+	Email     string `yaml:"email,omitempty"`
+}
+
+// ParseRuneFile parses a Rune configuration file from the given file
+// path. Both YAML and TOML are accepted (TOML is detected via the
+// `.toml` extension and transcoded to YAML before parsing — see
+// readRunefileBytes for the rationale). Line numbers reported by the
+// linter for TOML files refer to positions in the post-transcode YAML,
+// not the original TOML source; callers that care about original-file
+// positions should fall back to printing the key name only.
 func ParseRuneFile(filePath string) (*RuneFile, error) {
-	data, err := os.ReadFile(filePath)
+	data, fromTOML, err := readRunefileBytes(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
 	var node yaml.Node
 	if err := yaml.Unmarshal(data, &node); err != nil {
+		if fromTOML {
+			return nil, fmt.Errorf("failed to parse TOML (post-transcode): %w", err)
+		}
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
@@ -183,16 +323,22 @@ func validateRuneFileTopLevelKeys(node *yaml.Node) error {
 	}
 
 	knownKeys := map[string]bool{
-		"server":    true,
-		"data_dir":  true,
-		"client":    true,
-		"docker":    true,
-		"namespace": true,
-		"auth":      true,
-		"resources": true,
-		"log":       true,
-		"secret":    true,
-		"plugins":   true,
+		"server":     true,
+		"data_dir":   true,
+		"client":     true,
+		"docker":     true,
+		"namespace":  true,
+		"auth":       true,
+		"resources":  true,
+		"log":        true,
+		"secret":     true,
+		"config":     true,
+		"plugins":    true,
+		"networking": true,
+		"telemetry":  true,
+		"node":       true,
+		"ingress":    true,
+		"acme":       true,
 	}
 
 	for i := 0; i < len(root.Content); i += 2 {
@@ -391,43 +537,98 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 	// This is a simplified check - in a real implementation, you'd want to track
 	// the current path and check against the appropriate struct definition
 	knownKeys := map[string]bool{
-		"server":                      true,
-		"data_dir":                    true,
-		"client":                      true,
-		"docker":                      true,
-		"namespace":                   true,
-		"auth":                        true,
-		"resources":                   true,
-		"log":                         true,
-		"secret":                      true,
-		"plugins":                     true,
-		"grpc_address":                true,
-		"http_address":                true,
-		"tls":                         true,
-		"enabled":                     true,
-		"cert_file":                   true,
-		"key_file":                    true,
-		"timeout":                     true,
-		"retries":                     true,
+		// Top-level sections
+		"server":     true,
+		"data_dir":   true,
+		"client":     true,
+		"docker":     true,
+		"namespace":  true,
+		"auth":       true,
+		"resources":  true,
+		"log":        true,
+		"secret":     true,
+		"config":     true,
+		"plugins":    true,
+		"networking": true,
+		"telemetry":  true,
+		"node":       true,
+		"ingress":    true,
+		"acme":       true,
+
+		// server / client
+		"grpc_address": true,
+		"http_address": true,
+		"tls":          true,
+		"enabled":      true,
+		"cert_file":    true,
+		"key_file":     true,
+		"timeout":      true,
+		"retries":      true,
+
+		// docker (+ registries)
 		"api_version":                 true,
 		"fallback_api_version":        true,
 		"negotiation_timeout_seconds": true,
-		"api_keys":                    true,
-		"provider":                    true,
-		"token":                       true,
-		"cpu":                         true,
-		"memory":                      true,
-		"default_request":             true,
-		"default_limit":               true,
-		"level":                       true,
-		"format":                      true,
-		"encryption":                  true,
-		"kek":                         true,
-		"source":                      true,
-		"file":                        true,
-		"passphrase":                  true,
-		"env":                         true,
-		"dir":                         true,
+		"registries":                  true,
+		"name":                        true,
+		"registry":                    true,
+		"username":                    true,
+		"password":                    true,
+		"region":                      true,
+		"fromSecret":                  true,
+		"bootstrap":                   true,
+		"manage":                      true,
+		"immutable":                   true,
+		"data":                        true,
+		"type":                        true,
+
+		// auth
+		"api_keys":           true,
+		"provider":           true,
+		"token":              true,
+		"allow_remote_admin": true,
+
+		// resources
+		"cpu":             true,
+		"memory":          true,
+		"default_request": true,
+		"default_limit":   true,
+
+		// log
+		"level":  true,
+		"format": true,
+
+		// secret / config / limits
+		"encryption":          true,
+		"kek":                 true,
+		"source":              true,
+		"file":                true,
+		"passphrase":          true,
+		"env":                 true,
+		"limits":              true,
+		"max_object_bytes":    true,
+		"max_key_name_length": true,
+
+		// plugins
+		"dir": true,
+
+		// networking
+		"cluster_cidr": true,
+		"dev_mode":     true,
+
+		// telemetry
+		"metrics_addr": true,
+
+		// node
+		"role": true,
+
+		// ingress
+		"http_addr":  true,
+		"https_addr": true,
+
+		// acme
+		"directory": true,
+		"email":     true,
 	}
 
 	return knownKeys[fieldName]
@@ -509,9 +710,12 @@ func (rf *RuneFile) GetLineInfo(key string) (int, bool) {
 	return line, exists
 }
 
-// IsRuneConfigFile checks if a file appears to be a Rune configuration file
+// IsRuneConfigFile checks if a file appears to be a Rune configuration
+// file. Accepts either YAML or TOML (TOML is detected by the `.toml`
+// extension and transcoded to YAML internally so we can reuse the same
+// AST-based key-counting heuristic).
 func IsRuneConfigFile(filePath string) (bool, error) {
-	data, err := os.ReadFile(filePath)
+	data, _, err := readRunefileBytes(filePath)
 	if err != nil {
 		return false, err
 	}

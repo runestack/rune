@@ -319,6 +319,9 @@ func (c *FakeInstanceController) isInstanceCompatibleWithService(ctx context.Con
 	return true, ""
 }
 
+// SetEndpointPublisher is a no-op on the fake.
+func (c *FakeInstanceController) SetEndpointPublisher(_ EndpointPublisher, _ string) {}
+
 func (c *FakeInstanceController) collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error) {
 	instances := make(map[string]*RunningInstance)
 	for id, instance := range c.instances {

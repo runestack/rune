@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -14,26 +15,34 @@ import (
 
 func newLoginCmd() *cobra.Command {
 	var server string
-	var namespace string
+	var defaultNamespace string
+	var legacyNamespace string
 	var token string
 	var tokenFile string
+	var tokenStdin bool
 	var contextName string
 	var noVerify bool
 
 	cmd := &cobra.Command{
 		Use:   "login [context-name]",
-		Short: "Login and create/update a context (shortcut to 'rune config set-context')",
+		Short: "Login and create/update a context (shortcut to 'rune context set')",
 		Long: `Login and create/update a context.
 
-This is a shortcut for 'rune config set-context' that creates or updates a context
+This is a shortcut for 'rune context set' that creates or updates a context
 and optionally sets it as the current context.
 
 If context-name is not provided, it will use "default".
 If --set-current is provided, the new context will become the current context.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if token == "" && tokenFile == "" {
-				return fmt.Errorf("must provide --token or --token-file")
+			if token == "" && tokenFile == "" && !tokenStdin {
+				return fmt.Errorf("must provide --token, --token-file, or --token-stdin")
+			}
+
+			// Resolve --default-namespace, accepting deprecated --namespace as a fallback.
+			// Cobra's MarkDeprecated already prints a deprecation notice when --namespace is set.
+			if cmd.Flags().Changed("namespace") && !cmd.Flags().Changed("default-namespace") {
+				defaultNamespace = legacyNamespace
 			}
 
 			// Set default context name
@@ -50,6 +59,22 @@ If --set-current is provided, the new context will become the current context.`,
 					return fmt.Errorf("failed to read token file: %w", err)
 				}
 				token = strings.TrimSpace(string(b))
+			}
+
+			// Read token from stdin if requested. Designed for CI: callers
+			// pipe the secret in (`echo "$TOKEN" | rune login --token-stdin`)
+			// so it never appears on the process argv where it could be
+			// captured by /proc, ps, shell history, or CI log scrubbers.
+			if token == "" && tokenStdin {
+				r := bufio.NewReader(cmd.InOrStdin())
+				line, err := r.ReadString('\n')
+				if err != nil && line == "" {
+					return fmt.Errorf("failed to read token from stdin: %w", err)
+				}
+				token = strings.TrimSpace(line)
+				if token == "" {
+					return fmt.Errorf("empty token read from stdin")
+				}
 			}
 
 			// Load existing config or create new one
@@ -81,7 +106,7 @@ If --set-current is provided, the new context will become the current context.`,
 			ctx := Context{
 				Server:           server,
 				Token:            token,
-				DefaultNamespace: namespace,
+				DefaultNamespace: defaultNamespace,
 			}
 
 			// If server not specified, try to get from current context, else default to gRPC host:port
@@ -109,9 +134,12 @@ If --set-current is provided, the new context will become the current context.`,
 		},
 	}
 	cmd.Flags().StringVar(&server, "server", fmt.Sprintf("localhost:%d", internalConfig.DefaultGRPCPort), "Rune gRPC server address (host:port)")
-	cmd.Flags().StringVar(&namespace, "namespace", "", "Optional default namespace")
+	cmd.Flags().StringVar(&defaultNamespace, "default-namespace", "", "Default namespace stored in this context (used by future commands)")
+	cmd.Flags().StringVar(&legacyNamespace, "namespace", "", "Deprecated: alias for --default-namespace")
+	_ = cmd.Flags().MarkDeprecated("namespace", "use --default-namespace instead")
 	cmd.Flags().StringVar(&token, "token", "", "Bearer token value")
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Path to file containing the bearer token")
+	cmd.Flags().BoolVar(&tokenStdin, "token-stdin", false, "Read the bearer token from stdin (recommended for CI)")
 	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "Skip server verification and just set the context")
 	return cmd
 }

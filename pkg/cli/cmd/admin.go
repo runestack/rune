@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,12 +10,13 @@ import (
 )
 
 func newAdminCmd() *cobra.Command {
-	admin := &cobra.Command{Use: "admin", Short: "Administrative operations (bootstrap, token, user, policy)"}
+	admin := &cobra.Command{Use: "admin", Short: "Administrative operations (bootstrap, token, user, policy, registry)"}
 	admin.AddCommand(newAdminBootstrapCmd())
 	admin.AddCommand(newAdminTokenCmd())
 	admin.AddCommand(newAdminUserCmd())
+	admin.AddCommand(newAdminServiceCmd())
 	admin.AddCommand(newAdminPolicyCmd())
-	admin.AddCommand(newAdminRegistriesCmd())
+	admin.AddCommand(newAdminRegistryCmd())
 	return admin
 }
 
@@ -32,7 +32,9 @@ func newAdminBootstrapCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			resp, err := ac.AdminBootstrap(context.Background(), &generated.AdminBootstrapRequest{})
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.AdminBootstrap(ctx, &generated.AdminBootstrapRequest{})
 			if err != nil {
 				return err
 			}
@@ -80,8 +82,8 @@ func newAdminPolicyCmd() *cobra.Command {
 	return c
 }
 
-func newAdminRegistriesCmd() *cobra.Command {
-	c := &cobra.Command{Use: "registries", Short: "Manage registry authentication"}
+func newAdminRegistryCmd() *cobra.Command {
+	c := &cobra.Command{Use: "registry", Short: "Manage registry authentication"}
 	c.AddCommand(newAdminRegistriesListCmd())
 	c.AddCommand(newAdminRegistriesShowCmd())
 	c.AddCommand(newAdminRegistriesAddCmd())
@@ -104,7 +106,9 @@ func newAdminRegistriesListCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			resp, err := ac.ListRegistries(context.Background(), &generated.ListRegistriesRequest{})
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.ListRegistries(ctx, &generated.ListRegistriesRequest{})
 			if err != nil {
 				return err
 			}
@@ -131,7 +135,9 @@ func newAdminRegistriesShowCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			resp, err := ac.GetRegistry(context.Background(), &generated.GetRegistryRequest{Name: args[0]})
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.GetRegistry(ctx, &generated.GetRegistryRequest{Name: args[0]})
 			if err != nil {
 				return err
 			}
@@ -160,7 +166,9 @@ func newAdminRegistriesAddCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			_, err = ac.AddRegistry(context.Background(), &generated.AddRegistryRequest{Registry: rc})
+			ctx, cancel := api.Context()
+			defer cancel()
+			_, err = ac.AddRegistry(ctx, &generated.AddRegistryRequest{Registry: rc})
 			return err
 		},
 	}
@@ -197,7 +205,9 @@ func newAdminRegistriesUpdateCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			_, err = ac.UpdateRegistry(context.Background(), &generated.UpdateRegistryRequest{Registry: rc})
+			ctx, cancel := api.Context()
+			defer cancel()
+			_, err = ac.UpdateRegistry(ctx, &generated.UpdateRegistryRequest{Registry: rc})
 			return err
 		},
 	}
@@ -228,7 +238,9 @@ func newAdminRegistriesRemoveCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			_, err = ac.RemoveRegistry(context.Background(), &generated.RemoveRegistryRequest{Name: args[0]})
+			ctx, cancel := api.Context()
+			defer cancel()
+			_, err = ac.RemoveRegistry(ctx, &generated.RemoveRegistryRequest{Name: args[0]})
 			return err
 		},
 	}
@@ -247,7 +259,9 @@ func newAdminRegistriesBootstrapAuthCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			_, err = ac.BootstrapAuth(context.Background(), &generated.BootstrapAuthRequest{Name: name, Type: rtype, All: all})
+			ctx, cancel := api.Context()
+			defer cancel()
+			_, err = ac.BootstrapAuth(ctx, &generated.BootstrapAuthRequest{Name: name, Type: rtype, All: all})
 			return err
 		},
 	}
@@ -269,7 +283,9 @@ func newAdminRegistriesTestCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			resp, err := ac.TestRegistry(context.Background(), &generated.TestRegistryRequest{Name: args[0]})
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.TestRegistry(ctx, &generated.TestRegistryRequest{Name: args[0]})
 			if err != nil {
 				return err
 			}
@@ -294,7 +310,9 @@ func newAdminRegistriesStatusCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			resp, err := ac.RegistriesStatus(context.Background(), &generated.RegistriesStatusRequest{})
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.RegistriesStatus(ctx, &generated.RegistriesStatusRequest{})
 			if err != nil {
 				return err
 			}

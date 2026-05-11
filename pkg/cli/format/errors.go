@@ -140,7 +140,7 @@ func (f *ErrorFormatter) PrintErrorHeader() {
 
 	fmt.Println()
 	divider := strings.Repeat("─", f.TerminalWidth)
-	ErrorColor.Println("× VALIDATION FAILED", FileColor.Sprintf(f.FileName))
+	ErrorColor.Println("× VALIDATION FAILED", FileColor.Sprintf("%s", f.FileName))
 	fmt.Println(divider)
 	fmt.Println()
 }

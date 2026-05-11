@@ -383,13 +383,16 @@ func ServiceToProto(service *types.Service) *generated.Service {
 	}
 
 	protoService := &generated.Service{
-		Id:        service.ID,
-		Name:      service.Name,
-		Namespace: service.Namespace,
-		Image:     service.Image,
-		Command:   service.Command,
-		Scale:     utils.ToInt32NonNegative(service.Scale),
-		Runtime:   string(service.Runtime),
+		Id:            service.ID,
+		Name:          service.Name,
+		Namespace:     service.Namespace,
+		Image:         service.Image,
+		Command:       service.Command,
+		Scale:         utils.ToInt32NonNegative(service.Scale),
+		Runtime:       string(service.Runtime),
+		ImagePull:     service.ImagePull,
+		StatusReason:  service.StatusReason,
+		StatusMessage: service.StatusMessage,
 	}
 
 	if service.Metadata != nil {
@@ -441,13 +444,19 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		}
 	}
 
-	// Convert expose (MVP)
+	// Convert expose
 	if service.Expose != nil {
 		protoService.Expose = &generated.ServiceExpose{
-			Port:     service.Expose.Port,
-			Host:     service.Expose.Host,
-			HostPort: utils.ToUint32NonNegative(service.Expose.HostPort),
-			Path:     service.Expose.Path,
+			Port: service.Expose.Port,
+			Host: service.Expose.Host,
+			Path: service.Expose.Path,
+		}
+		if service.Expose.TLS != nil {
+			protoService.Expose.Tls = &generated.ExposeServiceTLS{
+				SecretName: service.Expose.TLS.SecretName,
+				Auto:       service.Expose.TLS.Auto,
+				Mode:       service.Expose.TLS.Mode,
+			}
 		}
 	}
 
@@ -583,13 +592,16 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 
 	// Create an initial service with basic fields
 	service := &types.Service{
-		ID:        proto.Id,
-		Name:      proto.Name,
-		Namespace: proto.Namespace,
-		Image:     proto.Image,
-		Command:   proto.Command,
-		Scale:     int(proto.Scale),
-		Runtime:   types.RuntimeType(proto.Runtime),
+		ID:            proto.Id,
+		Name:          proto.Name,
+		Namespace:     proto.Namespace,
+		Image:         proto.Image,
+		Command:       proto.Command,
+		Scale:         int(proto.Scale),
+		Runtime:       types.RuntimeType(proto.Runtime),
+		ImagePull:     proto.ImagePull,
+		StatusReason:  proto.StatusReason,
+		StatusMessage: proto.StatusMessage,
 	}
 
 	// Convert metadata
@@ -653,13 +665,19 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		}
 	}
 
-	// Convert expose (MVP)
+	// Convert expose
 	if proto.Expose != nil {
 		service.Expose = &types.ServiceExpose{
-			Port:     proto.Expose.Port,
-			Host:     proto.Expose.Host,
-			HostPort: int(proto.Expose.HostPort),
-			Path:     proto.Expose.Path,
+			Port: proto.Expose.Port,
+			Host: proto.Expose.Host,
+			Path: proto.Expose.Path,
+		}
+		if proto.Expose.Tls != nil {
+			service.Expose.TLS = &types.ExposeServiceTLS{
+				SecretName: proto.Expose.Tls.SecretName,
+				Auto:       proto.Expose.Tls.Auto,
+				Mode:       proto.Expose.Tls.Mode,
+			}
 		}
 	}
 

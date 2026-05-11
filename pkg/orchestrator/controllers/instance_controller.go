@@ -70,6 +70,10 @@ type InstanceController interface {
 	// Returns an ExecStream for bidirectional communication
 	Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
 
+	// SetEndpointPublisher wires the networking data plane (RUNE-063).
+	// May be called once at startup; nil-publisher disables publishing.
+	SetEndpointPublisher(publisher EndpointPublisher, nodeID string)
+
 	// collectRunningInstances gathers all running instances from all runners
 	collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error)
 
@@ -84,6 +88,30 @@ type instanceController struct {
 	logger        log.Logger
 	secretRepo    *repos.SecretRepo
 	configRepo    *repos.ConfigmapRepo
+
+	// endpointPublisher and nodeID power the RUNE-063 networking
+	// data plane. When non-nil, every successful instance lifecycle
+	// transition (Create/Update/Stop/Delete) re-derives the full
+	// endpoint set for the affected service from the store and pushes
+	// it through OrderedLog so the agent's load-balancer + DNS see a
+	// single, ordered view of reality. Nil-safe: in dev/standalone
+	// mode the controller leaves networking to the runner.
+	endpointPublisher EndpointPublisher
+	nodeID            string
+}
+
+// EndpointPublisher is the orchestrator-side surface of the
+// networking data plane. The runed agent supplies an implementation
+// backed by pkg/networking/endpoints + pkg/networking/localinstances.
+type EndpointPublisher interface {
+	// PublishService re-publishes the full Endpoint set for a service.
+	// `endpoints` may be empty (the service has no running instances)
+	// in which case the publisher should clear/Delete.
+	PublishService(ctx context.Context, service *types.Service, endpoints []types.Endpoint) error
+	// PublishLocalInstances re-publishes the per-node identity table
+	// for `nodeID` so that policy enforcement can map source IPs back
+	// to a service identity.
+	PublishLocalInstances(ctx context.Context, nodeID string, table map[string]types.InstanceIdentity) error
 }
 
 // NewInstanceController creates a new instance controller
@@ -94,6 +122,131 @@ func NewInstanceController(store store.Store, runnerManager manager.IRunnerManag
 		logger:        logger.WithComponent("instance-controller"),
 		secretRepo:    repos.NewSecretRepo(store),
 		configRepo:    repos.NewConfigRepo(store),
+	}
+}
+
+// SetEndpointPublisher wires the networking data plane (RUNE-063)
+// into the controller. Call once at startup from runed before any
+// reconciles are processed. nodeID identifies the host running this
+// controller and is used as the LocalInstances table key. Passing a
+// nil publisher disables endpoint publication (dev/standalone mode).
+func (c *instanceController) SetEndpointPublisher(publisher EndpointPublisher, nodeID string) {
+	c.endpointPublisher = publisher
+	c.nodeID = nodeID
+}
+
+// republishService recomputes the endpoint set for a service from
+// the current store contents and publishes it. Best-effort: errors
+// are logged but never surfaced because a failure to publish must
+// not roll back the runner-side lifecycle transition that already
+// succeeded.
+func (c *instanceController) republishService(ctx context.Context, service *types.Service) {
+	if c.endpointPublisher == nil || service == nil {
+		return
+	}
+	var instances []*types.Instance
+	if err := c.store.List(ctx, types.ResourceTypeInstance, service.Namespace, &instances); err != nil {
+		c.logger.Warn("republishService: list instances failed",
+			log.Str("service", service.Name),
+			log.Err(err))
+		return
+	}
+	primaryPort := 0
+	primaryProto := "TCP"
+	if len(service.Ports) > 0 {
+		primaryPort = service.Ports[0].Port
+		if service.Ports[0].TargetPort != 0 {
+			primaryPort = service.Ports[0].TargetPort
+		}
+		if service.Ports[0].Protocol != "" {
+			primaryProto = service.Ports[0].Protocol
+		}
+	}
+	eps := make([]types.Endpoint, 0)
+	for _, inst := range instances {
+		if inst == nil || inst.ServiceName != service.Name {
+			continue
+		}
+		if inst.Status != types.InstanceStatusRunning {
+			continue
+		}
+		ip := ""
+		if inst.Metadata != nil {
+			ip = inst.Metadata.ContainerIP
+		}
+		if ip == "" {
+			continue
+		}
+		md := map[string]string{}
+		if c.nodeID != "" {
+			md["node_id"] = c.nodeID
+		}
+		eps = append(eps, types.Endpoint{
+			InstanceID: inst.ID,
+			IP:         ip,
+			Port:       primaryPort,
+			Protocol:   primaryProto,
+			Metadata:   md,
+			Healthy:    true,
+		})
+	}
+	if err := c.endpointPublisher.PublishService(ctx, service, eps); err != nil {
+		c.logger.Warn("republishService: publish failed",
+			log.Str("service", service.Name),
+			log.Err(err))
+	}
+}
+
+// republishServiceByInstance is a convenience wrapper that loads the
+// owning service from the store before delegating to republishService.
+// Used by lifecycle methods (Stop/Delete) that hold an Instance but
+// not its Service.
+func (c *instanceController) republishServiceByInstance(ctx context.Context, instance *types.Instance) {
+	if c.endpointPublisher == nil || instance == nil || instance.ServiceName == "" {
+		return
+	}
+	var svc types.Service
+	if err := c.store.Get(ctx, types.ResourceTypeService, instance.Namespace, instance.ServiceName, &svc); err != nil {
+		c.logger.Debug("republishServiceByInstance: service lookup failed",
+			log.Str("service", instance.ServiceName),
+			log.Err(err))
+		return
+	}
+	c.republishService(ctx, &svc)
+}
+
+// republishLocalInstances rebuilds the per-node InstanceIdentity
+// table from current store state across all namespaces and pushes
+// it. Best-effort.
+func (c *instanceController) republishLocalInstances(ctx context.Context) {
+	if c.endpointPublisher == nil || c.nodeID == "" {
+		return
+	}
+	running, err := c.collectRunningInstances(ctx)
+	if err != nil {
+		c.logger.Warn("republishLocalInstances: collectRunning failed", log.Err(err))
+		return
+	}
+	table := make(map[string]types.InstanceIdentity, len(running))
+	for id, ri := range running {
+		if ri == nil || ri.Instance == nil {
+			continue
+		}
+		ip := ""
+		if ri.Instance.Metadata != nil {
+			ip = ri.Instance.Metadata.ContainerIP
+		}
+		if ip == "" {
+			continue
+		}
+		table[ip] = types.InstanceIdentity{
+			InstanceID: id,
+			Service:    ri.Instance.ServiceName,
+			Namespace:  ri.Instance.Namespace,
+		}
+	}
+	if err := c.endpointPublisher.PublishLocalInstances(ctx, c.nodeID, table); err != nil {
+		c.logger.Warn("republishLocalInstances: publish failed", log.Err(err))
 	}
 }
 
@@ -214,6 +367,7 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 			instance.Metadata = &types.InstanceMetadata{}
 		}
 		instance.Metadata.Image = service.Image
+		instance.Metadata.ImagePull = service.ImagePull
 	}
 
 	// Update instance with pending status
@@ -254,6 +408,12 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 			log.Str("instance", instance.ID),
 			log.Err(err))
 	}
+
+	// Networking data plane (RUNE-063): republish service endpoints +
+	// per-node identity table now that this instance is Running and
+	// has a ContainerIP recorded by the runner.
+	c.republishService(ctx, service)
+	c.republishLocalInstances(ctx)
 
 	return instance, nil
 }
@@ -425,6 +585,8 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 
 	c.logger.Info("Instance stopped successfully",
 		log.Str("instance", instance.ID))
+	c.republishServiceByInstance(ctx, instance)
+	c.republishLocalInstances(ctx)
 	return nil
 }
 
@@ -484,6 +646,12 @@ func (c *instanceController) DeleteInstance(ctx context.Context, instance *types
 			log.Json("instance", instance.ID))
 
 	}
+
+	// Networking data plane (RUNE-063): drop this instance from the
+	// service's published endpoint set and from the local identity
+	// table.
+	c.republishServiceByInstance(ctx, instance)
+	c.republishLocalInstances(ctx)
 
 	// Report any runner errors
 	if failedToStop && failedToRemove {

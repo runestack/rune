@@ -1,0 +1,57 @@
+# Example Rune server configuration in TOML form.
+# Auto-discovered as runefile.toml in the working directory,
+# /etc/rune/, or the data directory. Pass --config /path/to/file to
+# override the search.
+
+data_dir = "/var/lib/rune"
+
+[server]
+grpc_address = ":7863"
+http_address = ":7861"
+
+[log]
+level  = "info"
+format = "text"
+
+[secret.encryption]
+enabled = true
+[secret.encryption.kek]
+source = "file"
+file   = "kek.b64"
+
+[docker]
+fallback_api_version          = "1.43"
+negotiation_timeout_seconds   = 3
+registries                    = []
+
+# ---------------------------------------------------------------
+# Networking layer
+# ---------------------------------------------------------------
+
+[networking]
+cluster_cidr = "10.96.0.0/16"   # Service VIP allocation range
+dev_mode     = false            # Skip nftables, bind ingress on user
+                                # ports, resolve .rune to 127.0.0.1
+
+[telemetry]
+# Prometheus /metrics endpoint. Covers ALL subsystems (orchestrator,
+# runners, networking, agent, DNS) — not just the networking layer.
+# Set to "" to disable.
+metrics_addr = "127.0.0.1:9100"
+
+[node]
+# Comma-separated roles. Adding "edge" enables the ingress
+# controller and the ACME orchestrator on this node.
+role = "edge"
+
+[ingress]
+# Empty defaults to :80/:443 in production, :8080/:8443 in dev mode.
+# Set https_addr to "" to disable TLS termination entirely.
+http_addr  = ""
+https_addr = ""
+
+[acme]
+# Empty defaults to Let's Encrypt production. Use a Pebble URL for
+# integration tests.
+directory = ""
+email     = "ops@example.com"

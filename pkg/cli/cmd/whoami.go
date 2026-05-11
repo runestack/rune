@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
@@ -77,7 +76,9 @@ func newWhoAmICmd() *cobra.Command {
 			defer api.Close()
 
 			ac := generated.NewAuthServiceClient(api.Conn())
-			resp, err := ac.WhoAmI(context.Background(), &generated.WhoAmIRequest{})
+			ctx, cancel := api.Context()
+			defer cancel()
+			resp, err := ac.WhoAmI(ctx, &generated.WhoAmIRequest{})
 			if err != nil || resp == nil || resp.SubjectId == "" {
 				// Fallback to local
 				output.Status = "Not authenticated"

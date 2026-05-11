@@ -5,10 +5,18 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
 var _ Resource = (*Service)(nil)
+
+// ImagePull values for Service.ImagePull.
+const (
+	ImagePullAlways  = "always"
+	ImagePullMissing = "missing"
+	ImagePullNever   = "never"
+)
 
 // Service represents a deployable application or workload.
 type Service struct {
@@ -34,6 +42,11 @@ type Service struct {
 
 	// Registry override allowing inline auth or named selection (optional)
 	Registry *ServiceRegistryOverride `json:"registry,omitempty" yaml:"registry,omitempty"`
+
+	// ImagePull controls when the runner pulls the container image.
+	// Allowed values: "always", "missing", "never". Empty defaults to
+	// "always" (re-pull on every deploy/restart).
+	ImagePull string `json:"imagePull,omitempty" yaml:"imagePull,omitempty"`
 
 	// Command to run in the container (overrides image CMD)
 	Command string `json:"command,omitempty" yaml:"command,omitempty"`
@@ -85,6 +98,26 @@ type Service struct {
 
 	// Status of the service
 	Status ServiceStatus `json:"status" yaml:"status"`
+
+	// StatusReason is a short, machine-friendly slug describing why
+	// the service is in its current Status. Set by the reconciler when
+	// rolling up the worst instance state. Examples: "ImageUnreachable",
+	// "Unhealthy", "OutOfMemory", "Unplaceable", "ConfigMissing".
+	// Empty when Status is Running.
+	StatusReason string `json:"statusReason,omitempty" yaml:"statusReason,omitempty"`
+
+	// StatusMessage is a single human-readable sentence explaining
+	// StatusReason, copied verbatim from the worst instance's
+	// StatusMessage. The CLI shows this directly on `rune get
+	// service <name>` and on cast failure so developers never have to
+	// run a second command to learn why a service is unhealthy.
+	StatusMessage string `json:"statusMessage,omitempty" yaml:"statusMessage,omitempty"`
+
+	// IngressCert tracks asynchronous TLS certificate state for the
+	// ingress controller (RUNE-066). Populated only when Expose is
+	// configured for ACME-managed TLS. The orchestrator updates this
+	// field independently of cast; cast does not block on issuance.
+	IngressCert *IngressCertStatus `json:"ingressCert,omitempty" yaml:"ingressCert,omitempty"`
 
 	// Instances of this service currently running
 	Instances []Instance `json:"instances,omitempty" yaml:"instances,omitempty"`
@@ -154,9 +187,6 @@ type ServiceExpose struct {
 	// Host for the exposed service
 	Host string `json:"host,omitempty" yaml:"host,omitempty"`
 
-	// HostPort is the host port to bind to (MVP: defaults to container port if omitted)
-	HostPort int `json:"hostPort,omitempty" yaml:"hostPort,omitempty"`
-
 	// Path prefix for the exposed service
 	Path string `json:"path,omitempty" yaml:"path,omitempty"`
 
@@ -171,12 +201,52 @@ type ExposeServiceTLS struct {
 
 	// Whether to automatically generate a TLS certificate
 	Auto bool `json:"auto,omitempty" yaml:"auto,omitempty"`
+
+	// Mode selects the certificate provisioning strategy.
+	// Empty / "manual": operator supplies SecretName.
+	// "acme": ingress controller obtains a cert from Let's Encrypt
+	// (HTTP-01) for Expose.Host. Auto implies Mode=acme.
+	// See RUNE-066.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+}
+
+// Well-known TLS modes for ExposeServiceTLS.Mode.
+const (
+	ExposeTLSModeManual = "manual"
+	ExposeTLSModeACME   = "acme"
+	// ExposeTLSModeAuto is a user-friendly synonym for ExposeTLSModeACME.
+	// Both "auto" and "acme" request a Let's Encrypt-issued certificate.
+	ExposeTLSModeAuto = "auto"
+)
+
+// IsACME reports whether the expose configuration requests
+// ACME-managed TLS. The boolean Auto: true is treated as Mode=acme.
+// Mode values "acme" and "auto" are accepted as synonyms.
+func (t *ExposeServiceTLS) IsACME() bool {
+	if t == nil {
+		return false
+	}
+	if t.Mode == ExposeTLSModeACME || t.Mode == ExposeTLSModeAuto {
+		return true
+	}
+	return t.Auto && t.Mode == ""
 }
 
 // ServiceDiscovery defines how a service is discovered by other services.
 type ServiceDiscovery struct {
 	// Discovery mode (load-balanced or headless)
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+
+	// VIP is the cluster virtual IP allocated for this service. Set by
+	// the control plane on Create via the cluster VIP allocator
+	// (RUNE-040). Stable for the lifetime of the service ID.
+	VIP string `json:"vip,omitempty" yaml:"vip,omitempty"`
+
+	// LocalityPreference controls how the userspace proxy picks
+	// endpoints (RUNE-041). One of "" (no preference), "prefer-local"
+	// (same-node first, fall back to remote), or "local-only" (fail
+	// closed if no local endpoint).
+	LocalityPreference string `json:"localityPreference,omitempty" yaml:"localityPreference,omitempty"`
 }
 
 // DependencyRef is the normalized internal representation of a dependency
@@ -270,6 +340,66 @@ const (
 	// ServiceStatusDeleted indicates the service has been deleted.
 	ServiceStatusDeleted ServiceStatus = "Deleted"
 )
+
+// Well-known StatusReason values for Service.StatusReason. The reconciler
+// derives one of these from the worst-instance state. Keep this set small
+// and stable — operators may script against it.
+//
+// These names are intentionally Rune-shaped (verbs and plain English),
+// not borrowed from Kubernetes' Pod conditions.
+const (
+	ServiceReasonImageUnreachable = "ImageUnreachable" // image can't be pulled (auth, missing tag, network)
+	ServiceReasonUnhealthy        = "Unhealthy"        // liveness/readiness probe failing
+	ServiceReasonRestarting       = "Restarting"       // instance keeps exiting and being restarted
+	ServiceReasonOutOfMemory      = "OutOfMemory"      // killed for exceeding the memory limit
+	ServiceReasonUnplaceable      = "Unplaceable"      // no node has the capacity / matches placement
+	ServiceReasonConfigMissing    = "ConfigMissing"    // referenced secret/configmap/env not found
+	ServiceReasonLaunchFailed     = "LaunchFailed"     // runner refused to start the instance
+	ServiceReasonExited           = "Exited"           // instance ran to completion (non-zero or otherwise)
+	ServiceReasonUnknown          = "Unknown"          // no recognisable signal
+)
+
+// DeriveServiceReason inspects an instance's status and message and
+// returns a short, stable Service.StatusReason slug. Used by the
+// reconciler to roll up an unhealthy instance into a service-level
+// reason that's friendly to display in tables and to script against.
+func DeriveServiceReason(status InstanceStatus, message string) string {
+	m := strings.ToLower(message)
+	switch {
+	case strings.Contains(m, "pull access denied"),
+		strings.Contains(m, "manifest unknown"),
+		strings.Contains(m, "image not found"),
+		strings.Contains(m, "no such image"),
+		strings.Contains(m, "imagepullbackoff"),
+		strings.Contains(m, "errimagepull"),
+		strings.Contains(m, "pull failed"),
+		strings.Contains(m, "unauthorized") && strings.Contains(m, "image"):
+		return ServiceReasonImageUnreachable
+	case strings.Contains(m, "oom"), strings.Contains(m, "out of memory"):
+		return ServiceReasonOutOfMemory
+	case strings.Contains(m, "probe"), strings.Contains(m, "health check"):
+		return ServiceReasonUnhealthy
+	case strings.Contains(m, "no node"), strings.Contains(m, "no capacity"),
+		strings.Contains(m, "schedule"):
+		return ServiceReasonUnplaceable
+	case strings.Contains(m, "secret"), strings.Contains(m, "configmap"),
+		strings.Contains(m, "config map"), strings.Contains(m, "env"):
+		if strings.Contains(m, "not found") || strings.Contains(m, "unresolvable") {
+			return ServiceReasonConfigMissing
+		}
+	case strings.Contains(m, "crashloop"), strings.Contains(m, "restart"):
+		return ServiceReasonRestarting
+	}
+	switch status {
+	case InstanceStatusExited:
+		return ServiceReasonExited
+	case InstanceStatusFailed:
+		return ServiceReasonLaunchFailed
+	case InstanceStatusUnknown:
+		return ServiceReasonUnknown
+	}
+	return ServiceReasonLaunchFailed
+}
 
 // Resources represents resource requirements for a service instance.
 type Resources struct {
@@ -641,7 +771,7 @@ func (s *Service) CalculateHash() string {
 	if s.Expose == nil {
 		fmt.Fprintf(h, "expose:nil\n")
 	} else {
-		fmt.Fprintf(h, "expose:%s:%s:%d:%s\n", s.Expose.Port, s.Expose.Host, s.Expose.HostPort, s.Expose.Path)
+		fmt.Fprintf(h, "expose:%s:%s:%s\n", s.Expose.Port, s.Expose.Host, s.Expose.Path)
 		if s.Expose.TLS == nil {
 			fmt.Fprintf(h, "expose.tls:nil\n")
 		} else {

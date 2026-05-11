@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -22,7 +21,9 @@ func newAdminUserCreateCmd() *cobra.Command {
 			}
 			defer api.Close()
 			ac := generated.NewAdminServiceClient(api.Conn())
-			_, err = ac.UserCreate(context.Background(), &generated.UserCreateRequest{Name: name, Email: email, Policies: policies})
+			ctx, cancel := api.Context()
+			defer cancel()
+			_, err = ac.UserCreate(ctx, &generated.UserCreateRequest{Name: name, Email: email, Policies: policies})
 			return err
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "User name")
@@ -39,7 +40,9 @@ func newAdminUserListCmd() *cobra.Command {
 		}
 		defer api.Close()
 		ac := generated.NewAdminServiceClient(api.Conn())
-		resp, err := ac.UserList(context.Background(), &generated.UserListRequest{})
+		ctx, cancel := api.Context()
+		defer cancel()
+		resp, err := ac.UserList(ctx, &generated.UserListRequest{})
 		if err != nil {
 			return err
 		}

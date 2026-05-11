@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -26,6 +27,14 @@ const (
 	DefaultNamespace = "default"
 )
 
+// VIPAllocator is the minimal surface ServiceService needs to allocate
+// a stable cluster VIP for each new service. Implemented by
+// pkg/networking/vip.Allocator. The interface keeps service.go free of
+// a dependency on the networking package and lets tests inject a fake.
+type VIPAllocator interface {
+	Allocate(ctx context.Context, serviceID string) (net.IP, error)
+}
+
 // ServiceService implements the gRPC ServiceService.
 type ServiceService struct {
 	generated.UnimplementedServiceServiceServer
@@ -34,6 +43,7 @@ type ServiceService struct {
 	orchestrator  orchestrator.Orchestrator
 	runnerManager *manager.RunnerManager
 	logger        log.Logger
+	vipAllocator  VIPAllocator // optional; nil disables VIP allocation
 }
 
 // NewServiceService creates a new ServiceService with the given orchestrator and logger.
@@ -44,6 +54,13 @@ func NewServiceService(store store.Store, orchestrator orchestrator.Orchestrator
 		runnerManager: runnerManager,
 		logger:        logger,
 	}
+}
+
+// SetVIPAllocator wires in the cluster VIP allocator. Calling this is
+// optional; when unset, services are created without a VIP (matching
+// pre-RUNE-040 behavior). runed wires the live allocator in main.go.
+func (s *ServiceService) SetVIPAllocator(a VIPAllocator) {
+	s.vipAllocator = a
 }
 
 // CreateService creates a new service.
@@ -86,6 +103,22 @@ func (s *ServiceService) CreateService(ctx context.Context, req *generated.Creat
 
 	// Set initial status
 	service.Status = types.ServiceStatusPending
+
+	// Allocate a stable cluster VIP (RUNE-040). The allocator is
+	// idempotent per serviceID, so retries during Create are safe. We
+	// allocate before validation/dependency checks because the VIP is
+	// part of the service's identity once persisted.
+	if s.vipAllocator != nil {
+		vip, err := s.vipAllocator.Allocate(ctx, service.ID)
+		if err != nil {
+			s.logger.Error("Failed to allocate VIP", log.Err(err), log.Str("service_id", service.ID))
+			return nil, status.Errorf(codes.ResourceExhausted, "failed to allocate cluster VIP: %v", err)
+		}
+		if service.Discovery == nil {
+			service.Discovery = &types.ServiceDiscovery{}
+		}
+		service.Discovery.VIP = vip.String()
+	}
 
 	// Validate global dependency cycles including this new service
 	if err := s.validateGlobalDependencyCycles(ctx, service); err != nil {

@@ -34,8 +34,27 @@ func SeedBuiltinPolicies(ctx context.Context, st store.Store) error {
 	builtins := []types.Policy{
 		{Name: "root", Description: "Full access", Builtin: true, Rules: []types.PolicyRule{{Resource: "*", Verbs: []string{"*"}, Namespace: "*"}}},
 		{Name: "admin", Description: "Full access", Builtin: true, Rules: []types.PolicyRule{{Resource: "*", Verbs: []string{"*"}, Namespace: "*"}}},
-		{Name: "readwrite", Description: "Read/write typical ops", Builtin: true, Rules: []types.PolicyRule{{Resource: "*", Verbs: []string{"get", "list", "watch", "create", "update", "delete", "scale", "exec"}, Namespace: "*"}}},
+		// readwrite intentionally does NOT include `reveal` on secrets — that
+		// requires admin or an explicit policy. It does include the metadata
+		// surface (`get`, `list`) which no longer returns plaintext as of dev.33.
+		{Name: "readwrite", Description: "Read/write typical ops", Builtin: true, Rules: []types.PolicyRule{
+			{Resource: "*", Verbs: []string{"get", "list", "watch", "create", "update", "delete", "scale", "exec"}, Namespace: "*"},
+		}},
 		{Name: "readonly", Description: "Read-only", Builtin: true, Rules: []types.PolicyRule{{Resource: "*", Verbs: []string{"get", "list", "watch"}, Namespace: "*"}}},
+		// `cast` is the minimum permission set needed by `rune cast`:
+		// it can create/update/scale services and the configmaps/secrets
+		// they reference, read instances/logs to confirm rollout, and
+		// get/create namespaces (so --create-namespace works). It cannot
+		// delete services or exec into them. Designed for CI tokens.
+		{Name: "cast", Description: "Cast services (CI deploy)", Builtin: true, Rules: []types.PolicyRule{
+			{Resource: "services", Verbs: []string{"get", "list", "create", "update", "scale"}, Namespace: "*"},
+			{Resource: "instances", Verbs: []string{"get", "list", "watch"}, Namespace: "*"},
+			{Resource: "configmaps", Verbs: []string{"get", "list", "create", "update"}, Namespace: "*"},
+			{Resource: "secrets", Verbs: []string{"get", "list", "create", "update"}, Namespace: "*"},
+			{Resource: "namespaces", Verbs: []string{"get", "list", "create"}, Namespace: "*"},
+			{Resource: "logs", Verbs: []string{"get"}, Namespace: "*"},
+			{Resource: "auth", Verbs: []string{"get"}, Namespace: "*"},
+		}},
 	}
 	for i := range builtins {
 		name := builtins[i].Name

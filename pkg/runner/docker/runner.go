@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -91,10 +92,31 @@ type DockerRunner struct {
 	config       *DockerConfig
 	ecrAuthCache map[string]ecrAuthEntry
 	providers    []registryauth.Provider
+
+	// dnsMu guards dnsServers + dnsSearch which are toggled at
+	// runtime by the agent once the data path (RUNE-041) is healthy
+	// and the embedded DNS server (RUNE-063) has bound.
+	dnsMu      sync.RWMutex
+	dnsServers []string
+	dnsSearch  []string
 }
 
 func (r *DockerRunner) Type() types.RunnerType {
 	return types.RunnerTypeDocker
+}
+
+// SetDNSInjection toggles --dns/--dns-search injection on subsequent
+// ContainerCreate calls. The agent calls this after the embedded DNS
+// server has bound (RUNE-063) and the data plane is healthy
+// (RUNE-041). Pass nil/empty servers to disable injection.
+//
+// Safe to call concurrently with container creates: only future
+// creates pick up the new value.
+func (r *DockerRunner) SetDNSInjection(servers []string, search []string) {
+	r.dnsMu.Lock()
+	defer r.dnsMu.Unlock()
+	r.dnsServers = append([]string(nil), servers...)
+	r.dnsSearch = append([]string(nil), search...)
 }
 
 // NewDockerRunner creates a new DockerRunner instance.
@@ -232,7 +254,11 @@ func (r *DockerRunner) Create(ctx context.Context, instance *runetypes.Instance)
 	}
 
 	// Pull the image first
-	if err := r.pullImage(ctx, containerConfig.Image); err != nil {
+	pullPolicy := runetypes.ImagePullAlways
+	if instance.Metadata != nil && instance.Metadata.ImagePull != "" {
+		pullPolicy = instance.Metadata.ImagePull
+	}
+	if err := r.pullImage(ctx, containerConfig.Image, pullPolicy); err != nil {
 		return fmt.Errorf("failed to pull image %s: %w", containerConfig.Image, err)
 	}
 
@@ -355,6 +381,18 @@ func (r *DockerRunner) Start(ctx context.Context, instance *runetypes.Instance) 
 	// Start the container - using empty StartOptions as we don't need any special configuration
 	if err := r.client.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("failed to start container: %w", err)
+	}
+
+	// Best-effort: record the container's IP on its primary network so
+	// the agent can attribute incoming connections back to a service
+	// identity (RUNE-063 LocalInstances).
+	if instance.Metadata == nil {
+		instance.Metadata = &runetypes.InstanceMetadata{}
+	}
+	if insp, err := r.client.ContainerInspect(ctx, containerID); err == nil && insp.NetworkSettings != nil {
+		if ip := pickContainerIP(insp.NetworkSettings); ip != "" {
+			instance.Metadata.ContainerIP = ip
+		}
 	}
 
 	r.logger.Info("Started container for instance",
@@ -599,16 +637,30 @@ func (r *DockerRunner) getContainerID(ctx context.Context, instance *runetypes.I
 	return containers[0].ID, nil
 }
 
-// pullImage pulls an image from the registry if it doesn't exist locally
-func (r *DockerRunner) pullImage(ctx context.Context, image string) error {
-	// Check if we already have the image
-	_, _, err := r.client.ImageInspectWithRaw(ctx, image)
-	if err == nil {
-		// Image exists locally
+// pullImage pulls an image from the registry, honoring the supplied
+// imagePull mode ("always", "missing", "never"). Empty defaults to
+// "always". For "never", no pull is attempted; container creation will
+// fail later if the image is missing locally.
+func (r *DockerRunner) pullImage(ctx context.Context, image string, policy string) error {
+	switch policy {
+	case runetypes.ImagePullNever:
+		r.logger.Debug("Skipping image pull (imagePull=never)", log.Str("image", image))
 		return nil
+	case runetypes.ImagePullMissing:
+		if _, _, err := r.client.ImageInspectWithRaw(ctx, image); err == nil {
+			r.logger.Debug("Image present locally; skipping pull (imagePull=missing)", log.Str("image", image))
+			return nil
+		}
+	case runetypes.ImagePullAlways, "":
+		// fall through and re-pull every time
+	default:
+		// Unknown values are treated as always but logged.
+		r.logger.Warn("Unknown imagePull value; defaulting to always",
+			log.Str("imagePull", policy), log.Str("image", image))
 	}
 
-	r.logger.Info("Pulling Docker image", log.Str("image", image))
+	r.logger.Info("Pulling Docker image",
+		log.Str("image", image), log.Str("policy", policy))
 
 	// Resolve registry auth for this image if configured
 	host := parseImageHost(image)
@@ -798,7 +850,33 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 		}
 	}
 
-	// Handle simple external exposure via port bindings (MVP)
+	// Inject the agent's embedded DNS (RUNE-063) when it has been
+	// activated. Activation is gated by the agent on data-plane
+	// readiness so containers never resolve names to unreachable
+	// VIPs. --dns-search ensures bare names like "db" resolve to
+	// "db.<namespace>.rune".
+	r.dnsMu.RLock()
+	dnsServers := append([]string(nil), r.dnsServers...)
+	dnsSearch := append([]string(nil), r.dnsSearch...)
+	r.dnsMu.RUnlock()
+	if len(dnsServers) > 0 {
+		hostConfig.DNS = append(hostConfig.DNS, dnsServers...)
+		// Per-instance namespace search domain
+		if instance.Namespace != "" {
+			hostConfig.DNSSearch = append(hostConfig.DNSSearch, instance.Namespace+".rune")
+		}
+		hostConfig.DNSSearch = append(hostConfig.DNSSearch, dnsSearch...)
+	}
+
+	// Expose the service port inside the container so the edge
+	// ingress controller can dial it over Docker networking. We
+	// never publish a host port from the runner: when expose.host
+	// is set, the ingress listener already owns :80/:443 on the
+	// host and proxies in by container IP. Operators who want a
+	// raw host bind for a non-ingress service can declare it via
+	// the runner-level mechanism (TBD); the MVP host-bind escape
+	// hatch (`expose.hostPort`) was removed in favor of a single
+	// well-defined ingress path.
 	if instance.Metadata != nil && instance.Metadata.Expose != nil && len(instance.Metadata.Ports) > 0 {
 		// Resolve the referenced port by name or number
 		var svcPort *runetypes.ServicePort
@@ -817,7 +895,6 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 			}
 		}
 		if svcPort != nil {
-			// Default protocol
 			proto := strings.ToLower(strings.TrimSpace(svcPort.Protocol))
 			if proto == "" {
 				proto = "tcp"
@@ -828,21 +905,10 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 					containerConfig.ExposedPorts = nat.PortSet{}
 				}
 				containerConfig.ExposedPorts[containerPort] = struct{}{}
-
-				// Determine host port
-				hostPort := instance.Metadata.Expose.HostPort
-				if hostPort == 0 {
-					hostPort = svcPort.Port
-				}
-				if hostConfig.PortBindings == nil {
-					hostConfig.PortBindings = nat.PortMap{}
-				}
-				hostBinding := nat.PortBinding{HostIP: "127.0.0.1", HostPort: fmt.Sprintf("%d", hostPort)}
-				hostConfig.PortBindings[containerPort] = []nat.PortBinding{hostBinding}
-
-				// Store resolved endpoint back on instance metadata (best-effort)
-				instance.Metadata.ExposedHost = "localhost"
-				instance.Metadata.ExposedHostPort = hostPort
+				// No host-port publication; the ingress controller
+				// reaches the container by container IP.
+				instance.Metadata.ExposedHost = ""
+				instance.Metadata.ExposedHostPort = 0
 			}
 		}
 	}
@@ -857,6 +923,22 @@ func formatEnvVars(env map[string]string) []string {
 		result = append(result, fmt.Sprintf("%s=%s", k, v))
 	}
 	return result
+}
+
+// pickContainerIP returns the container's primary IPv4 address from
+// an inspect result. Prefers the per-network EndpointSettings.IPAddress
+// (works for user-defined networks too), and falls back to the legacy
+// DefaultNetworkSettings.IPAddress for the default bridge.
+func pickContainerIP(ns *container.NetworkSettings) string {
+	if ns == nil {
+		return ""
+	}
+	for _, ep := range ns.Networks {
+		if ep != nil && ep.IPAddress != "" {
+			return ep.IPAddress
+		}
+	}
+	return ns.DefaultNetworkSettings.IPAddress
 }
 
 // prepareSecretMounts creates temporary files and Docker mounts for secret mounts

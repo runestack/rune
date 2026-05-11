@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/orchestrator/controllers"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -345,6 +346,9 @@ func (fo *FakeOrchestrator) GetActiveScalingOperation(ctx context.Context, names
 	// For fake implementation, return nil (no active operation)
 	return nil, nil
 }
+
+// SetEndpointPublisher implements Orchestrator interface; no-op for the fake.
+func (fo *FakeOrchestrator) SetEndpointPublisher(_ controllers.EndpointPublisher, _ string) {}
 
 // fakeExecStream implements types.ExecStream for testing
 type fakeExecStream struct {

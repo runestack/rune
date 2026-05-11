@@ -102,4 +102,43 @@ plugins:
     - "dashboard"
     - "metrics"
     - "registry"
-    - "functions"
+
+# ---------------------------------------------------------------
+# Networking layer
+# ---------------------------------------------------------------
+
+networking:
+  # Service VIP allocation range. RFC1918 or 100.64/10. Bootstrapped
+  # on first start; changing it later is rejected to protect the
+  # persisted ClusterNetwork state.
+  cluster_cidr: "10.96.0.0/16"
+
+  # Dev mode skips nftables, binds the ingress controller on user
+  # ports (8080/8443), and resolves *.rune to 127.0.0.1. Intended for
+  # laptop development only.
+  dev_mode: false
+
+# Telemetry / observability
+telemetry:
+  # Prometheus /metrics endpoint. Covers ALL subsystems (orchestrator,
+  # runners, networking, agent, DNS) — not just the networking layer.
+  # Set to "" to disable.
+  metrics_addr: "127.0.0.1:9100"
+
+node:
+  # Comma-separated roles. Adding "edge" enables the ingress
+  # controller and the ACME orchestrator on this node.
+  role: ""
+
+ingress:
+  # Empty defaults to :80/:443 in production, :8080/:8443 in dev mode.
+  # Set https_addr to "" to disable TLS termination entirely.
+  http_addr: ""
+  https_addr: ""
+
+acme:
+  # Empty defaults to Let's Encrypt production. Use a Pebble URL for
+  # integration tests.
+  directory: ""
+  # Contact email passed to the ACME provider on account registration.
+  email: ""

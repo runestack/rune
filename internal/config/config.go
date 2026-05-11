@@ -105,6 +105,46 @@ type Plugins struct {
 	Enabled []string `yaml:"enabled"`
 }
 
+// Networking holds the networking-layer settings (RUNE-040..067).
+//
+// runed currently reads these via viper.GetString("networking.*")
+// directly in cmd/runed/main.go rather than through the Config
+// unmarshal path, but the fields are declared here so that the
+// runefile schema-of-record stays complete (and so the lint-side
+// parity test stays bidirectional). If/when the runed boot path
+// migrates to reading these off Config, no further struct work is
+// needed.
+type Networking struct {
+	ClusterCIDR string `yaml:"cluster_cidr"`
+	DevMode     bool   `yaml:"dev_mode"`
+}
+
+// Telemetry holds the metrics endpoint configuration. See note on
+// Networking above for the viper-direct-vs-unmarshal status.
+type Telemetry struct {
+	MetricsAddr string `yaml:"metrics_addr"`
+}
+
+// Node holds per-node placement metadata (edge / worker / leader).
+// See note on Networking above.
+type Node struct {
+	Role string `yaml:"role"`
+}
+
+// Ingress holds the bind addresses for the edge ingress (RUNE-067).
+// See note on Networking above.
+type Ingress struct {
+	HTTPAddr  string `yaml:"http_addr"`
+	HTTPSAddr string `yaml:"https_addr"`
+}
+
+// ACME holds the Let's Encrypt directory + contact email used by the
+// edge ingress (RUNE-067). See note on Networking above.
+type ACME struct {
+	Directory string `yaml:"directory"`
+	Email     string `yaml:"email"`
+}
+
 type Config struct {
 	Server    Server    `yaml:"server"`
 	DataDir   string    `yaml:"data_dir"`
@@ -121,7 +161,12 @@ type Config struct {
 	ConfigResource struct {
 		Limits store.Limits `yaml:"limits"`
 	} `yaml:"config"`
-	Plugins Plugins `yaml:"plugins"`
+	Plugins    Plugins    `yaml:"plugins"`
+	Networking Networking `yaml:"networking"`
+	Telemetry  Telemetry  `yaml:"telemetry"`
+	Node       Node       `yaml:"node"`
+	Ingress    Ingress    `yaml:"ingress"`
+	ACME       ACME       `yaml:"acme"`
 }
 
 func Default() *Config {

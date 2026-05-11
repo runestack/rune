@@ -16,8 +16,11 @@ func (p *HTTPProber) Execute(ctx *ProbeContext) ProbeResult {
 	ctx.Logger.Info("Executing HTTP probe", log.Str("instance", ctx.Instance.Name), log.Str("probe_type", "http"))
 	start := time.Now()
 
-	// Determine endpoint for the check
-	endpoint := fmt.Sprintf("http://localhost:%d", ctx.ProbeConfig.Port)
+	// Determine endpoint for the check. Container instances are
+	// dialled by their container IP so the probe bypasses the host's
+	// ingress listener on :80/:443. See probeHost for the rationale.
+	host := probeHost(ctx.Instance)
+	endpoint := fmt.Sprintf("http://%s:%d", host, ctx.ProbeConfig.Port)
 	url := fmt.Sprintf("%s%s", endpoint, ctx.ProbeConfig.Path)
 
 	// Create HTTP request

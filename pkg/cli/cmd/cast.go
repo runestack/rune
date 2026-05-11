@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -343,6 +344,13 @@ func deployResources(apiClient *client.Client, info *ResourceInfo, timeout time.
 	if err := deployConfigmaps(apiClient, info, results, opts); err != nil {
 		return results, err
 	}
+	// Render cast-time `{{ secret:... }}` templates in secret data values
+	// before writing them. Components defined in the same castfile are
+	// rendered in topo order; out-of-castfile components are revealed via
+	// the API. (RUNE-105)
+	if err := renderSecretTemplates(apiClient, info); err != nil {
+		return results, err
+	}
 	if err := deploySecrets(apiClient, info, results, opts); err != nil {
 		return results, err
 	}
@@ -382,7 +390,7 @@ func deployServices(apiClient *client.Client, info *ResourceInfo, results *Deplo
 				action = "Deploying"
 			}
 
-			fmt.Printf("  [%d/%d] %s Service \"%s\" ", resourceIndex, resourceCount, action, format.Highlight(service.Name))
+			fmt.Printf("  [%d/%d] %s Service \"%s\" ", resourceIndex, resourceCount, action, format.Highlight("%s", service.Name))
 			fmt.Print(strings.Repeat(".", 25-len(service.Name)))
 
 			// Deploy the service; server handles update-on-exists
@@ -401,6 +409,14 @@ func deployServices(apiClient *client.Client, info *ResourceInfo, results *Deplo
 				fmt.Printf("    Waiting for service to be ready...")
 				if err := waitForServiceReady(serviceClient, service.Namespace, service.Name, timeout); err != nil {
 					fmt.Println(" ❌")
+					// If the wait surfaced a structured failure (the
+					// reconciler reported Failed with a reason), print
+					// the developer-facing block inline so the
+					// operator never has to type a second command.
+					var fe *castFailureError
+					if errors.As(err, &fe) {
+						printCastFailure(fe.Service)
+					}
 					results.FailedResources[service.Name] = err.Error()
 					return fmt.Errorf("service %s failed to become ready: %w", service.Name, err)
 				}
@@ -430,7 +446,7 @@ func deploySecrets(apiClient *client.Client, info *ResourceInfo, results *Deploy
 		for _, secret := range secrets {
 			resourceIndex++
 
-			fmt.Printf("  [%d/%d] Creating Secret \"%s\" ", resourceIndex, resourceCount, format.Highlight(secret.Name))
+			fmt.Printf("  [%d/%d] Creating Secret \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", secret.Name))
 			fmt.Print(strings.Repeat(".", 25-len(secret.Name)))
 
 			if err := secretClient.CreateSecret(secret, opts.createNamespace); err != nil {
@@ -466,7 +482,7 @@ func deployConfigmaps(apiClient *client.Client, info *ResourceInfo, results *Dep
 		for _, configmap := range configmaps {
 			resourceIndex++
 
-			fmt.Printf("  [%d/%d] Creating Config \"%s\" ", resourceIndex, resourceCount, format.Highlight(configmap.Name))
+			fmt.Printf("  [%d/%d] Creating Config \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", configmap.Name))
 			fmt.Print(strings.Repeat(".", 25-len(configmap.Name)))
 			if err := configClient.CreateConfigmap(configmap, opts.createNamespace); err != nil {
 				if uerr := configClient.UpdateConfigmap(configmap); uerr != nil {
@@ -491,7 +507,7 @@ func printCastBanner(args []string, isDetached bool) {
 	}
 
 	// Print source info
-	fmt.Println("\n- Source:", format.Highlight(strings.Join(args, ", ")))
+	fmt.Println("\n- Source:", format.Highlight("%s", strings.Join(args, ", ")))
 	fmt.Println()
 }
 
@@ -506,13 +522,13 @@ func printResourceInfo(info *ResourceInfo, opts *castOptions) {
 	}
 
 	if opts.namespace != "" {
-		fmt.Println("- Namespace:", format.Highlight(opts.namespace))
+		fmt.Println("- Namespace:", format.Highlight("%s", opts.namespace))
 	} else {
 		fmt.Println("- Namespace:", format.Highlight("from resource definition"))
 	}
 
 	targetDisplay := getTargetRuneServer()
-	fmt.Printf("- Target: %s (%s)\n", format.Highlight(targetDisplay), targetDisplay)
+	fmt.Printf("- Target: %s (%s)\n", format.Highlight("%s", targetDisplay), targetDisplay)
 	fmt.Println()
 
 	if opts.dryRun {
@@ -685,6 +701,16 @@ func stringSliceContains(slice []string, value string) bool {
 }
 
 // waitForServiceReady waits for a service to be fully deployed.
+//
+// Returns:
+//   - nil when the service reaches ServiceStatusRunning with all instances ready.
+//   - A *castFailureError when the reconciler reports ServiceStatusFailed
+//     (the caller renders a developer-friendly failure block from this).
+//   - A plain error on timeout.
+//
+// The early exit on Failed is the whole point: we want the developer
+// to see "✗ ImagePullBackOff: pull access denied …" in the same scroll
+// as their `rune cast`, not a generic "timeout waiting for service".
 func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name string, timeout time.Duration) error {
 	// Create a context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -711,6 +737,13 @@ func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name st
 				continue
 			}
 
+			// Fail fast: the reconciler has rolled the worst instance's
+			// reason/message up to the service. Surface it now instead
+			// of timing out with no context.
+			if service.Status == types.ServiceStatusFailed {
+				return &castFailureError{Service: service}
+			}
+
 			// Check if the service is running
 			if service.Status == types.ServiceStatusRunning {
 				// Check that all instances are ready
@@ -732,4 +765,46 @@ func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name st
 			}
 		}
 	}
+}
+
+// castFailureError carries the failed Service so the caller can render
+// a rich, in-line failure block (image, reason, message, hint) instead
+// of a flat one-line error.
+type castFailureError struct {
+	Service *types.Service
+}
+
+func (e *castFailureError) Error() string {
+	if e == nil || e.Service == nil {
+		return "service failed"
+	}
+	if e.Service.StatusReason != "" {
+		return fmt.Sprintf("service %s/%s failed: %s", e.Service.Namespace, e.Service.Name, e.Service.StatusReason)
+	}
+	return fmt.Sprintf("service %s/%s failed", e.Service.Namespace, e.Service.Name)
+}
+
+// printCastFailure prints the developer-facing failure block when
+// `rune cast` discovers a service entered Failed during its wait.
+// One paragraph, one hint command — same shape as `rune get service`.
+func printCastFailure(svc *types.Service) {
+	if svc == nil {
+		return
+	}
+	fmt.Println()
+	reason := svc.StatusReason
+	if reason == "" {
+		reason = "Failed"
+	}
+	fmt.Printf("    ✗ %s\n", reason)
+	if svc.StatusMessage != "" {
+		fmt.Printf("      %s\n", svc.StatusMessage)
+	}
+	fmt.Println()
+	if svc.Image != "" {
+		fmt.Printf("      image:  %s\n", svc.Image)
+	}
+	fmt.Printf("      service: %s/%s\n", svc.Namespace, svc.Name)
+	fmt.Println()
+	fmt.Printf("      rune get service %s -n %s\n", svc.Name, svc.Namespace)
 }

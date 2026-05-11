@@ -174,6 +174,10 @@ func collectRepeatedSpecs(node *yaml.Node, cf *CastFile) {
 				continue
 			}
 			spec.rawNode = val
+			// Restore template references in secret data values (RUNE-105 cast-time templating)
+			if cf.templateMap != nil {
+				spec.RestoreTemplateReferences(cf.templateMap)
+			}
 			// If overrideNamespace is set, use it for the namespace
 			if cf.overrideNamespace != "" {
 				spec.Namespace = cf.overrideNamespace
@@ -259,6 +263,10 @@ func collectRepeatedSpecs(node *yaml.Node, cf *CastFile) {
 						continue
 					}
 					spec.rawNode = item
+					// Restore template references in secret data values (RUNE-105 cast-time templating)
+					if cf.templateMap != nil {
+						spec.RestoreTemplateReferences(cf.templateMap)
+					}
 					// If overrideNamespace is set, use it for the namespace
 					if cf.overrideNamespace != "" {
 						spec.Namespace = cf.overrideNamespace

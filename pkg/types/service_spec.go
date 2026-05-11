@@ -77,6 +77,10 @@ type ServiceSpec struct {
 	// Registry override allowing inline auth or named selection (optional)
 	Registry *ServiceRegistryOverride `json:"registry,omitempty" yaml:"registry,omitempty"`
 
+	// ImagePull controls when the runner pulls the container image.
+	// Allowed values: "always" (default), "missing", "never".
+	ImagePull string `json:"imagePull,omitempty" yaml:"imagePull,omitempty"`
+
 	// Skip indicates this spec should be ignored by castfile parsing
 	Skip bool `json:"skip,omitempty" yaml:"skip,omitempty"`
 
@@ -298,6 +302,14 @@ func (s *ServiceSpec) Validate() error {
 		}
 	}
 
+	if s.ImagePull != "" {
+		switch s.ImagePull {
+		case ImagePullAlways, ImagePullMissing, ImagePullNever:
+		default:
+			return NewValidationError(fmt.Sprintf("invalid imagePull %q (allowed: always, missing, never)", s.ImagePull))
+		}
+	}
+
 	if s.Scale < 0 {
 		return NewValidationError("service scale cannot be negative")
 	}
@@ -451,12 +463,6 @@ func (s *ServiceSpec) Validate() error {
 		if proto != "tcp" {
 			return NewValidationError("expose only supports tcp protocol in MVP")
 		}
-		// Validate hostPort range if provided
-		if s.Expose.HostPort != 0 {
-			if s.Expose.HostPort < 1 || s.Expose.HostPort > 65535 {
-				return NewValidationError("expose.hostPort must be between 1 and 65535")
-			}
-		}
 	}
 
 	return nil
@@ -492,6 +498,7 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 		"discovery":     true,
 		"imageRegistry": true,
 		"registry":      true,
+		"imagePull":     true,
 		"skip":          true,
 		"dependencies":  true,
 	}
@@ -603,6 +610,7 @@ func (s *ServiceSpec) ToService() (*Service, error) {
 		Image:           s.Image,
 		ImageRegistry:   s.ImageRegistry,
 		Registry:        s.Registry,
+		ImagePull:       s.ImagePull,
 		Command:         s.Command,
 		Args:            s.Args,
 		Env:             s.Env,

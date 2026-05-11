@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package rune.api;
+
+option go_package = "github.com/runestack/rune/pkg/api/generated";
+
+// WatchService streams ordered events from the control plane's
+// OrderedLog to subscribers (typically the per-node agent).
+//
+// The protocol is sequence-number based:
+//   * Every persisted event has a monotonic uint64 seq.
+//   * The client subscribes from `from_seq` (0 = from the beginning,
+//     known seq = strictly after that seq).
+//   * The server first replays buffered events from from_seq+1 through
+//     the current head, then streams live events as they are
+//     proposed. There is no gap between replay and live.
+//   * If the requested seq has been compacted out of the retention
+//     window, the server emits a single COMPACTED status response and
+//     closes the stream. The client must take a fresh Snapshot and
+//     resubscribe from snapshot.Seq.
+//
+// Backpressure: the server enforces a per-stream send buffer. If the
+// client falls behind, the server cancels the stream with
+// SLOW_CONSUMER and the client must reconnect.
+service WatchService {
+  // Subscribe streams events from from_seq forward.
+  rpc Subscribe(SubscribeRequest) returns (stream WatchEvent);
+}
+
+message SubscribeRequest {
+  // Resume from this seq. The server will deliver events with
+  // seq > from_seq. Use 0 to receive everything from the beginning of
+  // retention.
+  uint64 from_seq = 1;
+
+  // Optional: client identifier for server-side logging / metrics.
+  // Not authenticated; use the gRPC auth metadata for that.
+  string client_id = 2;
+}
+
+// Mutation kind, mirrors orderedlog.MutationKind.
+enum MutationKind {
+  MUTATION_KIND_UNSPECIFIED = 0;
+  MUTATION_KIND_PUT = 1;
+  MUTATION_KIND_DELETE = 2;
+}
+
+// Mutation is the per-key effect of an applied operation. Mirrors
+// orderedlog.Mutation.
+message Mutation {
+  MutationKind kind = 1;
+  string resource_type = 2;
+  string namespace = 3;
+  string name = 4;
+  // Encoded resource bytes (PUT only). Empty for DELETE. The encoding
+  // is the same wire format the orderedlog stored.
+  bytes payload = 5;
+}
+
+// WatchEvent is a single delivery from the watch stream. Exactly one
+// of `event` or `status` is set.
+message WatchEvent {
+  oneof payload {
+    OrderedEvent event = 1;
+    WatchStatus status = 2;
+  }
+}
+
+// OrderedEvent is a successfully replicated control-plane operation.
+message OrderedEvent {
+  // Monotonic sequence number assigned by OrderedLog. Use as the
+  // resourceVersion equivalent for Watch resume.
+  uint64 seq = 1;
+
+  // Operation type identifier (e.g. "AllocateVIP",
+  // "PutNetworkPolicy"). The applier on the producer side is the
+  // authority on semantics.
+  string op_type = 2;
+
+  // The resulting state mutations.
+  repeated Mutation mutations = 3;
+}
+
+// WatchStatus is an out-of-band signal from the server.
+message WatchStatus {
+  enum Code {
+    CODE_UNSPECIFIED = 0;
+    // CODE_COMPACTED: from_seq is below the retained window. Client
+    // must take a fresh Snapshot and resume from snapshot.Seq + 1.
+    CODE_COMPACTED = 1;
+    // CODE_SLOW_CONSUMER: the client failed to drain the stream
+    // within the server's send-buffer window. The stream is being
+    // closed; the client should reconnect with the last seq it saw.
+    CODE_SLOW_CONSUMER = 2;
+    // CODE_SHUTTING_DOWN: server is gracefully closing watches;
+    // client should reconnect.
+    CODE_SHUTTING_DOWN = 3;
+  }
+  Code code = 1;
+  string message = 2;
+
+  // For CODE_COMPACTED: the lowest seq still in retention. The client
+  // must take a Snapshot at or after this point.
+  uint64 retained_min_seq = 3;
+}

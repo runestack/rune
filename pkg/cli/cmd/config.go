@@ -23,29 +23,31 @@ type Context struct {
 	DefaultNamespace string `yaml:"defaultNamespace,omitempty"`
 }
 
-func newConfigCmd() *cobra.Command {
+func newContextCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "config",
-		Short: "Manage Rune configuration and contexts",
-		Long: `Manage Rune configuration and contexts.
+		Use:   "context",
+		Short: "Manage Rune CLI contexts (server, token, default namespace)",
+		Long: `Manage Rune CLI contexts.
 
-This command allows you to:
-- View current configuration
-- Set context properties
+A context bundles the server address, bearer token, and default
+namespace used by every Rune CLI command. Use this group to:
+
+- View the current context
+- Set or update a context
 - Switch between contexts
-- List available contexts`,
+- List or delete contexts`,
 	}
 
-	cmd.AddCommand(newConfigViewCmd())
-	cmd.AddCommand(newConfigSetContextCmd())
-	cmd.AddCommand(newConfigUseContextCmd())
-	cmd.AddCommand(newConfigListContextsCmd())
-	cmd.AddCommand(newConfigDeleteContextCmd())
+	cmd.AddCommand(newContextViewCmd())
+	cmd.AddCommand(newContextSetCmd())
+	cmd.AddCommand(newContextUseCmd())
+	cmd.AddCommand(newContextListCmd())
+	cmd.AddCommand(newContextDeleteCmd())
 
 	return cmd
 }
 
-func newConfigViewCmd() *cobra.Command {
+func newContextViewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view",
 		Short: "View current configuration",
@@ -75,14 +77,14 @@ func newConfigViewCmd() *cobra.Command {
 	return cmd
 }
 
-func newConfigSetContextCmd() *cobra.Command {
+func newContextSetCmd() *cobra.Command {
 	var server string
 	var token string
 	var tokenFile string
 	var namespace string
 
 	cmd := &cobra.Command{
-		Use:   "set-context [context-name]",
+		Use:   "set [context-name]",
 		Short: "Set or update a context configuration",
 		Long: `Set or update a context configuration.
 
@@ -154,10 +156,10 @@ You must provide --server and --token (or --token-file) to configure the context
 	return cmd
 }
 
-func newConfigUseContextCmd() *cobra.Command {
+func newContextUseCmd() *cobra.Command {
 	var defaultNamespace string
 	cmd := &cobra.Command{
-		Use:   "use-context [context-name]",
+		Use:   "use [context-name]",
 		Short: "Switch to a different context",
 		Long: `Switch to a different context.
 
@@ -173,7 +175,7 @@ The context must already exist in your configuration.`,
 			}
 
 			if _, exists := config.Contexts[contextName]; !exists {
-				return fmt.Errorf("context '%s' does not exist. Use 'rune config set-context %s' to create it first", contextName, contextName)
+				return fmt.Errorf("context '%s' does not exist. Use 'rune context set %s' to create it first", contextName, contextName)
 			}
 
 			// Optionally update default namespace on the selected context
@@ -198,9 +200,9 @@ The context must already exist in your configuration.`,
 	return cmd
 }
 
-func newConfigListContextsCmd() *cobra.Command {
+func newContextListCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "list-contexts",
+		Use:   "list",
 		Short: "List all available contexts",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			config, err := loadContextConfig()
@@ -235,9 +237,9 @@ func newConfigListContextsCmd() *cobra.Command {
 	return cmd
 }
 
-func newConfigDeleteContextCmd() *cobra.Command {
+func newContextDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete-context [context-name]",
+		Use:   "delete [context-name]",
 		Short: "Delete a context",
 		Long: `Delete a context from your configuration.
 

@@ -41,6 +41,9 @@ const (
 
 	// ResourceTypePolicy represents authorization policies
 	ResourceTypePolicy ResourceType = "policy"
+
+	// ResourceTypeAuditEvent represents append-only audit events.
+	ResourceTypeAuditEvent ResourceType = "audit_event"
 )
 
 // RunnerType is the type of runner for an instance.

@@ -144,6 +144,102 @@ func (r *SecretRepo) Delete(ctx context.Context, namespace, name string) error {
 	return r.base.core.Delete(ctx, types.ResourceTypeSecret, namespace, name)
 }
 
+// ListVersions returns every historical version of a secret, decrypted, in
+// descending Version order. Useful for `rune secret versions`.
+//
+// The underlying store keeps every Update as a distinct version row so this
+// includes plaintext data for each one — callers must therefore gate access
+// behind the secrets:reveal verb if they expose Data downstream.
+func (r *SecretRepo) ListVersions(ctx context.Context, namespace, name string) ([]*types.Secret, error) {
+	hist, err := r.base.core.GetHistory(ctx, types.ResourceTypeSecret, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*types.Secret, 0, len(hist))
+	for _, h := range hist {
+		stored, err := historyToStored(h.Resource)
+		if err != nil {
+			return nil, err
+		}
+		s, err := r.decryptSecret(stored)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	// hist order from the store is newest-first by storage timestamp; ensure
+	// strict descending Version ordering for stable callers.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].Version > out[i].Version {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out, nil
+}
+
+// GetVersionN returns a specific historical version of a secret. The version
+// numbers are the monotonically-increasing user-facing integers carried on
+// types.Secret.Version, NOT the opaque store version IDs.
+func (r *SecretRepo) GetVersionN(ctx context.Context, namespace, name string, version int) (*types.Secret, error) {
+	versions, err := r.ListVersions(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range versions {
+		if s.Version == version {
+			return s, nil
+		}
+	}
+	return nil, fmt.Errorf("version %d of secret %s/%s not found", version, namespace, name)
+}
+
+// Rollback rewrites the secret to the contents of a prior version, producing
+// a NEW version (head+1). The old versions are retained in history. Returns
+// the freshly-written secret on success.
+func (r *SecretRepo) Rollback(ctx context.Context, namespace, name string, toVersion int, opts ...store.UpdateOption) (*types.Secret, error) {
+	prior, err := r.GetVersionN(ctx, namespace, name, toVersion)
+	if err != nil {
+		return nil, err
+	}
+	desired := &types.Secret{
+		Name:      name,
+		Namespace: namespace,
+		Type:      prior.Type,
+		Data:      prior.Data,
+	}
+	if err := r.Update(ctx, namespace, name, desired, opts...); err != nil {
+		return nil, err
+	}
+	return r.Get(ctx, namespace, name)
+}
+
+// historyToStored re-marshals an interface{} returned by Store.GetHistory
+// into a StoredSecret. The store layer goes through json.Unmarshal into
+// interface{}, leaving us with a map[string]interface{}; round-tripping back
+// through json is the simplest way to recover the typed shape.
+func historyToStored(raw interface{}) (types.StoredSecret, error) {
+	switch v := raw.(type) {
+	case types.StoredSecret:
+		return v, nil
+	case *types.StoredSecret:
+		if v == nil {
+			return types.StoredSecret{}, fmt.Errorf("nil stored secret in history")
+		}
+		return *v, nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return types.StoredSecret{}, fmt.Errorf("re-marshal history entry: %w", err)
+	}
+	var stored types.StoredSecret
+	if err := json.Unmarshal(b, &stored); err != nil {
+		return types.StoredSecret{}, fmt.Errorf("decode history entry: %w", err)
+	}
+	return stored, nil
+}
+
 func (r *SecretRepo) List(ctx context.Context, namespace string) ([]*types.Secret, error) {
 	var storedList []types.StoredSecret
 	if err := r.base.core.List(ctx, types.ResourceTypeSecret, namespace, &storedList); err != nil {

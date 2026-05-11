@@ -1,4 +1,4 @@
-.PHONY: build test lint clean setup dev generate proto proto-tools docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
+.PHONY: build test lint lint-orderedlog-seam clean setup dev generate proto proto-tools docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
 
 # Tools and paths
 GO ?= go
@@ -77,8 +77,9 @@ build-platform:
 ## Install binaries to GOPATH/bin
 install: build
 	@echo "Installing $(BINARY_NAME)..."
-	@install -m 755 $(BIN_DIR)/$(BINARY_NAME) $(GOPATH)/bin/
-	@install -m 755 $(BIN_DIR)/$(BINARY_NAME)d $(GOPATH)/bin/
+	@GOPATH_BIN="$$(go env GOPATH)/bin"; \
+	  cp $(BIN_DIR)/$(BINARY_NAME) "$$GOPATH_BIN/" && chmod 755 "$$GOPATH_BIN/$(BINARY_NAME)"; \
+	  cp $(BIN_DIR)/$(BINARY_NAME)d "$$GOPATH_BIN/" && chmod 755 "$$GOPATH_BIN/$(BINARY_NAME)d"
 	@echo "Installation completed!"
 
 ## Run all tests
@@ -176,9 +177,14 @@ check-coverage:
 	fi
 
 ## Lint the project
-lint:
+lint: lint-orderedlog-seam
 	@echo "Running linters..."
 	@golangci-lint run ./...
+
+## Enforce orderedlog seam (RUNE-039): no direct Badger writes to
+## protected key prefixes outside pkg/store/orderedlog/.
+lint-orderedlog-seam:
+	@scripts/check_orderedlog_seam.sh
 
 ## Clean build and coverage artifacts
 clean:

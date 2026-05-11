@@ -4,11 +4,13 @@ import (
 	"fmt"
 
 	"github.com/runestack/rune/internal/config"
+	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/store"
+	"google.golang.org/grpc"
 )
 
 // Options defines the options for the API server.
@@ -36,6 +38,23 @@ type Options struct {
 
 	// Orchestrator
 	Orchestrator orchestrator.Orchestrator
+
+	// ExtraGRPCRegistrars are invoked during gRPC server startup to
+	// register additional services beyond the built-in set. Used by
+	// runed to plug in WatchService (RUNE-028) without forcing the
+	// API server to depend on every networking-layer package.
+	ExtraGRPCRegistrars []func(grpc.ServiceRegistrar)
+
+	// NetworkStatusProvider, if set, is wired into AdminService so
+	// the NetworkStatus RPC can report ClusterNetwork CIDR + VIP
+	// allocations. Supplied by runed alongside the VIP allocator
+	// (RUNE-040).
+	NetworkStatusProvider service.NetworkStatusProvider
+
+	// VIPAllocator, if set, is plugged into ServiceService so each
+	// CreateService call assigns a stable VIP from the pool.
+	// Supplied by runed at startup.
+	VIPAllocator service.VIPAllocator
 }
 
 // Option is a function that configures options.
@@ -112,5 +131,33 @@ func WithLogger(logger log.Logger) Option {
 func WithOrchestrator(orchestrator orchestrator.Orchestrator) Option {
 	return func(opts *Options) {
 		opts.Orchestrator = orchestrator
+	}
+}
+
+// WithExtraGRPCRegistrar appends a function that registers an
+// additional gRPC service when the server starts. Callers (e.g.
+// runed wiring up WatchService) use this to inject services without
+// the API server package having to import them.
+func WithExtraGRPCRegistrar(reg func(grpc.ServiceRegistrar)) Option {
+	return func(opts *Options) {
+		if reg != nil {
+			opts.ExtraGRPCRegistrars = append(opts.ExtraGRPCRegistrars, reg)
+		}
+	}
+}
+
+// WithNetworkStatusProvider plugs the live VIP allocator into the
+// AdminService.NetworkStatus RPC.
+func WithNetworkStatusProvider(p service.NetworkStatusProvider) Option {
+	return func(opts *Options) {
+		opts.NetworkStatusProvider = p
+	}
+}
+
+// WithVIPAllocator plugs the VIP allocator into ServiceService so
+// CreateService assigns a stable VIP from the cluster pool.
+func WithVIPAllocator(a service.VIPAllocator) Option {
+	return func(opts *Options) {
+		opts.VIPAllocator = a
 	}
 }

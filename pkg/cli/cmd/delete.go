@@ -407,6 +407,9 @@ func confirmDeletion(ctx context.Context, serviceClient *client.ServiceClient, s
 	// Display service information
 	fmt.Printf("Service: %s/%s\n", service.Namespace, service.Name)
 	fmt.Printf("Image: %s\n", service.Image)
+	if service.ImagePull != "" {
+		fmt.Printf("ImagePull: %s\n", service.ImagePull)
+	}
 	fmt.Printf("Scale: %d\n", service.Scale)
 	fmt.Printf("Status: %s\n", service.Status)
 

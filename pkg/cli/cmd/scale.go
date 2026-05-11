@@ -116,13 +116,13 @@ func runScale(cmd *cobra.Command, args []string) error {
 		req.IntervalSeconds = utils.ToInt32NonNegative(int(scaleInterval.Seconds()))
 
 		fmt.Printf("Gradually scaling service %s from %d to %d instances (step size: %d, interval: %s)\n",
-			format.Highlight(serviceName), currentScale, replicas, scaleStep, scaleInterval)
+			format.Highlight("%s", serviceName), currentScale, replicas, scaleStep, scaleInterval)
 	} else {
 		// Immediate scaling
 		req.Mode = generated.ScalingMode_SCALING_MODE_IMMEDIATE
 
 		fmt.Printf("Scaling service %s from %d to %d instances\n",
-			format.Highlight(serviceName), currentScale, replicas)
+			format.Highlight("%s", serviceName), currentScale, replicas)
 	}
 
 	// Send the scale request to the server
@@ -146,7 +146,7 @@ func runScale(cmd *cobra.Command, args []string) error {
 		}
 
 		fmt.Printf("%s Service %s successfully scaled to %d instances\n",
-			format.Success("✓"), format.Highlight(serviceName), replicas)
+			format.Success("✓"), format.Highlight("%s", serviceName), replicas)
 	}
 
 	return nil

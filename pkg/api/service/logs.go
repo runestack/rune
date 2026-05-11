@@ -272,7 +272,7 @@ func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) er
 	// Build log options from request
 	logOptions, err := s.buildLogOptions(req)
 	if err != nil {
-		return status.Errorf(codes.InvalidArgument, err.Error())
+		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	// Get the appropriate log reader

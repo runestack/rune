@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -19,11 +20,20 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// NetworkStatusProvider is the minimal surface AdminService needs to
+// answer NetworkStatus RPCs. The vip allocator implements it. The
+// indirection keeps AdminService independent of the networking
+// package so existing admin tests don't grow a transitive dep.
+type NetworkStatusProvider interface {
+	Status() (cn types.ClusterNetwork, pendingReleases int)
+}
+
 // AdminService implements generated.AdminServiceServer
 type AdminService struct {
 	generated.UnimplementedAdminServiceServer
 	st     store.Store
 	logger log.Logger
+	netSP  NetworkStatusProvider
 }
 
 func NewAdminService(st store.Store, logger log.Logger) *AdminService {
@@ -33,6 +43,12 @@ func NewAdminService(st store.Store, logger log.Logger) *AdminService {
 		logger = logger.WithComponent("admin-service")
 	}
 	return &AdminService{st: st, logger: logger}
+}
+
+// SetNetworkStatusProvider plugs in the live VIP allocator. Calling
+// NetworkStatus before this is invoked returns codes.Unavailable.
+func (s *AdminService) SetNetworkStatusProvider(p NetworkStatusProvider) {
+	s.netSP = p
 }
 
 // AdminBootstrap creates the built-in root subject and returns a management token (opaque secret once)
@@ -790,4 +806,51 @@ func (s *AdminService) UserList(ctx context.Context, _ *generated.UserListReques
 		out = append(out, &generated.Subject{Id: uu.ID, Kind: "user", Name: uu.Name, Email: uu.Email, Policies: uu.Policies})
 	}
 	return &generated.UserListResponse{Users: out}, nil
+}
+
+// --- Network status (RUNE-040) -------------------------------------------
+
+// NetworkStatus returns the current ClusterNetwork CIDR plus VIP
+// allocation summary. Returns Unavailable if the allocator hasn't been
+// wired in (e.g. during startup or in tests that don't construct one).
+func (s *AdminService) NetworkStatus(_ context.Context, _ *generated.NetworkStatusRequest) (*generated.NetworkStatusResponse, error) {
+	if s.netSP == nil {
+		return nil, status.Error(codes.Unavailable, "network status: VIP allocator not initialized")
+	}
+	cn, pending := s.netSP.Status()
+	resp := &generated.NetworkStatusResponse{
+		Cidr:            cn.CIDR,
+		Allocations:     make([]*generated.NetworkAllocation, 0, len(cn.AllocatedVIPs)),
+		FreeListSize:    uint32(len(cn.FreeList)), //nolint:gosec // G115: VIP free-list bounded by /16 cluster CIDR (~64K entries) which fits in uint32
+		PendingReleases: uint32(pending),          //nolint:gosec // G115: same bound as FreeListSize
+	}
+	for sid, ip := range cn.AllocatedVIPs {
+		resp.Allocations = append(resp.Allocations, &generated.NetworkAllocation{ServiceId: sid, Vip: ip})
+	}
+	if cn.CIDR != "" {
+		resp.Capacity = capacityForCIDR(cn.CIDR)
+	}
+	return resp, nil
+}
+
+// capacityForCIDR returns the count of usable IPs in the CIDR
+// (total - network - broadcast - gateway). Returns 0 on parse error.
+func capacityForCIDR(cidr string) uint32 {
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil || ipnet.IP.To4() == nil {
+		return 0
+	}
+	ones, bits := ipnet.Mask.Size()
+	if bits != 32 {
+		return 0
+	}
+	hostBits := uint(bits - ones) //nolint:gosec // G115: bits=32 and ones<=32 enforced by checks above
+	if hostBits >= 32 {
+		return 0
+	}
+	total := uint32(1) << hostBits
+	if total <= 3 {
+		return 0
+	}
+	return total - 3 // .0 network, .last broadcast, .1 gateway
 }

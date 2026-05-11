@@ -154,6 +154,26 @@ message RegistryRuntimeStatus {
 message RegistriesStatusRequest {}
 message RegistriesStatusResponse { repeated RegistryRuntimeStatus registries = 1; }
 
+message NetworkStatusRequest {}
+
+message NetworkAllocation {
+  string service_id = 1;
+  string vip = 2;
+}
+
+message NetworkStatusResponse {
+  // Cluster service CIDR (e.g. "10.96.0.0/16"). Empty if not bootstrapped.
+  string cidr = 1;
+  // Currently allocated VIPs (serviceID -> IP).
+  repeated NetworkAllocation allocations = 2;
+  // Free-list size: IPs ready for the next allocation.
+  uint32 free_list_size = 3;
+  // Pending releases waiting on the cooldown window.
+  uint32 pending_releases = 4;
+  // Total usable IP count carved from the CIDR.
+  uint32 capacity = 5;
+}
+
 service AdminService {
   rpc AdminBootstrap(AdminBootstrapRequest) returns (AdminBootstrapResponse);
 
@@ -180,6 +200,9 @@ service AdminService {
   rpc BootstrapAuth(BootstrapAuthRequest) returns (BootstrapAuthResponse);
   rpc TestRegistry(TestRegistryRequest) returns (TestRegistryResponse);
   rpc RegistriesStatus(RegistriesStatusRequest) returns (RegistriesStatusResponse);
+
+  // Network status: inspect ClusterNetwork CIDR + VIP allocations.
+  rpc NetworkStatus(NetworkStatusRequest) returns (NetworkStatusResponse);
 }
 
 

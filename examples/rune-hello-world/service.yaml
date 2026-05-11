@@ -35,7 +35,6 @@ service:
   expose:
     port: http
     host: localhost
-    hostPort: 8080
   env:
     # Basic configuration
     PORT: "8080"

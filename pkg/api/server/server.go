@@ -47,6 +47,7 @@ type APIServer struct {
 	configService    *service.ConfigmapService
 	authService      *service.AuthService
 	adminService     *service.AdminService
+	auditService     *service.AuditService
 
 	// gRPC server
 	grpcServer *grpc.Server
@@ -153,6 +154,14 @@ func (s *APIServer) Start() error {
 	s.configService = service.NewConfigmapService(s.store, s.logger)
 	s.authService = service.NewAuthService(s.store, s.logger)
 	s.adminService = service.NewAdminService(s.store, s.logger)
+	s.auditService = service.NewAuditService(s.store, s.logger)
+
+	if s.options.NetworkStatusProvider != nil {
+		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
+	}
+	if s.options.VIPAllocator != nil {
+		s.serviceService.SetVIPAllocator(s.options.VIPAllocator)
+	}
 
 	// Start gRPC server
 	if err := s.startGRPCServer(); err != nil {
@@ -217,6 +226,12 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterAuthServiceServer(s.grpcServer, s.authService)
 	generated.RegisterAdminServiceServer(s.grpcServer, s.adminService)
 	generated.RegisterNamespaceServiceServer(s.grpcServer, s.namespaceService)
+	generated.RegisterAuditServiceServer(s.grpcServer, s.auditService)
+
+	// Extra registrars (e.g. WatchService wired by runed for RUNE-028).
+	for _, reg := range s.options.ExtraGRPCRegistrars {
+		reg(s.grpcServer)
+	}
 
 	// Register reflection service for grpcurl/development
 	reflection.Register(s.grpcServer)
@@ -468,6 +483,13 @@ func (s *APIServer) logUnaryInterceptor() grpc.UnaryServerInterceptor {
 // GetStore returns the store instance.
 func (s *APIServer) GetStore() store.Store {
 	return s.store
+}
+
+// GetOrchestrator returns the orchestrator instance. Used by runed
+// to wire post-construction collaborators (e.g. RUNE-063 networking
+// data plane endpoint publisher).
+func (s *APIServer) GetOrchestrator() orchestrator.Orchestrator {
+	return s.orchestrator
 }
 
 // logStreamInterceptor returns a stream interceptor for logging.
