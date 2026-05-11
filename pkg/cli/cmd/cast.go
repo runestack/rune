@@ -390,7 +390,7 @@ func deployServices(apiClient *client.Client, info *ResourceInfo, results *Deplo
 				action = "Deploying"
 			}
 
-			fmt.Printf("  [%d/%d] %s Service \"%s\" ", resourceIndex, resourceCount, action, format.Highlight(service.Name))
+			fmt.Printf("  [%d/%d] %s Service \"%s\" ", resourceIndex, resourceCount, action, format.Highlight("%s", service.Name))
 			fmt.Print(strings.Repeat(".", 25-len(service.Name)))
 
 			// Deploy the service; server handles update-on-exists
@@ -446,7 +446,7 @@ func deploySecrets(apiClient *client.Client, info *ResourceInfo, results *Deploy
 		for _, secret := range secrets {
 			resourceIndex++
 
-			fmt.Printf("  [%d/%d] Creating Secret \"%s\" ", resourceIndex, resourceCount, format.Highlight(secret.Name))
+			fmt.Printf("  [%d/%d] Creating Secret \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", secret.Name))
 			fmt.Print(strings.Repeat(".", 25-len(secret.Name)))
 
 			if err := secretClient.CreateSecret(secret, opts.createNamespace); err != nil {
@@ -482,7 +482,7 @@ func deployConfigmaps(apiClient *client.Client, info *ResourceInfo, results *Dep
 		for _, configmap := range configmaps {
 			resourceIndex++
 
-			fmt.Printf("  [%d/%d] Creating Config \"%s\" ", resourceIndex, resourceCount, format.Highlight(configmap.Name))
+			fmt.Printf("  [%d/%d] Creating Config \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", configmap.Name))
 			fmt.Print(strings.Repeat(".", 25-len(configmap.Name)))
 			if err := configClient.CreateConfigmap(configmap, opts.createNamespace); err != nil {
 				if uerr := configClient.UpdateConfigmap(configmap); uerr != nil {
@@ -507,7 +507,7 @@ func printCastBanner(args []string, isDetached bool) {
 	}
 
 	// Print source info
-	fmt.Println("\n- Source:", format.Highlight(strings.Join(args, ", ")))
+	fmt.Println("\n- Source:", format.Highlight("%s", strings.Join(args, ", ")))
 	fmt.Println()
 }
 
@@ -522,13 +522,13 @@ func printResourceInfo(info *ResourceInfo, opts *castOptions) {
 	}
 
 	if opts.namespace != "" {
-		fmt.Println("- Namespace:", format.Highlight(opts.namespace))
+		fmt.Println("- Namespace:", format.Highlight("%s", opts.namespace))
 	} else {
 		fmt.Println("- Namespace:", format.Highlight("from resource definition"))
 	}
 
 	targetDisplay := getTargetRuneServer()
-	fmt.Printf("- Target: %s (%s)\n", format.Highlight(targetDisplay), targetDisplay)
+	fmt.Printf("- Target: %s (%s)\n", format.Highlight("%s", targetDisplay), targetDisplay)
 	fmt.Println()
 
 	if opts.dryRun {

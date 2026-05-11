@@ -47,7 +47,7 @@ func (a *AuditClient) ListAuditEvents(opts AuditListOptions) ([]*types.AuditEven
 		Namespace:   opts.Namespace,
 		Actor:       opts.Actor,
 		Action:      opts.Action,
-		Limit:       int32(opts.Limit),
+		Limit:       int32(opts.Limit), //nolint:gosec // G115: API limit bounded by caller; proto field is int32
 	}
 	if !opts.Since.IsZero() {
 		req.Since = opts.Since.UTC().Format(time.RFC3339)

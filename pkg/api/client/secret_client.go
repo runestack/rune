@@ -278,7 +278,7 @@ func (s *SecretClient) ListSecretVersions(namespace, name string) ([]*types.Secr
 // version of a secret. Requires the secrets:reveal RBAC verb.
 func (s *SecretClient) RevealSecretVersion(namespace, name string, version int) (*types.Secret, error) {
 	s.logger.Debug("Revealing secret version", log.Str("name", name), log.Int("version", version))
-	req := &generated.RevealSecretVersionRequest{Name: name, Namespace: namespace, Version: int32(version)}
+	req := &generated.RevealSecretVersionRequest{Name: name, Namespace: namespace, Version: int32(version)} //nolint:gosec // G115: secret version bounded by caller; proto field is int32
 	ctx, cancel := s.client.Context()
 	defer cancel()
 	resp, err := s.svc.RevealSecretVersion(ctx, req)
@@ -301,7 +301,7 @@ func (s *SecretClient) RevealSecretVersion(namespace, name string, version int) 
 // (previous head), toVersion (target), and newVersion (the new head).
 func (s *SecretClient) RollbackSecret(namespace, name string, toVersion int) (*types.Secret, error) {
 	s.logger.Debug("Rolling back secret", log.Str("name", name), log.Int("toVersion", toVersion))
-	req := &generated.RollbackSecretRequest{Name: name, Namespace: namespace, ToVersion: int32(toVersion)}
+	req := &generated.RollbackSecretRequest{Name: name, Namespace: namespace, ToVersion: int32(toVersion)} //nolint:gosec // G115: rollback target version bounded by caller; proto field is int32
 	ctx, cancel := s.client.Context()
 	defer cancel()
 	resp, err := s.svc.RollbackSecret(ctx, req)

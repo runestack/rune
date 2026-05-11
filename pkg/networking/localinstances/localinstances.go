@@ -100,7 +100,7 @@ func Register(olog orderedlog.OrderedLog) error {
 // --- Op types ----------------------------------------------------------------
 
 type updateOp struct {
-	NodeID    string                          `json:"nodeId"`
+	NodeID    string                            `json:"nodeId"`
 	Instances map[string]types.InstanceIdentity `json:"instances"`
 }
 

@@ -193,7 +193,7 @@ func fromProtoEvent(p *pb.OrderedEvent) orderedlog.Event {
 	muts := make([]orderedlog.Mutation, 0, len(p.GetMutations()))
 	for _, m := range p.GetMutations() {
 		muts = append(muts, orderedlog.Mutation{
-			Kind:         orderedlog.MutationKind(m.GetKind()),
+			Kind:         orderedlog.MutationKind(m.GetKind()), //nolint:gosec // G115: MutationKind is a small enum (<256 values) carried as int32 over the wire
 			ResourceType: m.GetResourceType(),
 			Namespace:    m.GetNamespace(),
 			Name:         m.GetName(),

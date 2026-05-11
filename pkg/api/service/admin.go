@@ -821,8 +821,8 @@ func (s *AdminService) NetworkStatus(_ context.Context, _ *generated.NetworkStat
 	resp := &generated.NetworkStatusResponse{
 		Cidr:            cn.CIDR,
 		Allocations:     make([]*generated.NetworkAllocation, 0, len(cn.AllocatedVIPs)),
-		FreeListSize:    uint32(len(cn.FreeList)),
-		PendingReleases: uint32(pending),
+		FreeListSize:    uint32(len(cn.FreeList)), //nolint:gosec // G115: VIP free-list bounded by /16 cluster CIDR (~64K entries) which fits in uint32
+		PendingReleases: uint32(pending),          //nolint:gosec // G115: same bound as FreeListSize
 	}
 	for sid, ip := range cn.AllocatedVIPs {
 		resp.Allocations = append(resp.Allocations, &generated.NetworkAllocation{ServiceId: sid, Vip: ip})
@@ -844,7 +844,7 @@ func capacityForCIDR(cidr string) uint32 {
 	if bits != 32 {
 		return 0
 	}
-	hostBits := uint(bits - ones)
+	hostBits := uint(bits - ones) //nolint:gosec // G115: bits=32 and ones<=32 enforced by checks above
 	if hostBits >= 32 {
 		return 0
 	}

@@ -9,12 +9,12 @@
 //
 // Lifecycle of a single (service, host) request:
 //
-//   Pending --(Issuer.Issue ok)--> Issued
-//      |                              |
-//      |                              +-- (renewal cron, 30 days
-//      |                                  before expiry) --> Pending
-//      v
-//   Failed --(NextRetry elapsed)-----> Pending
+//	Pending --(Issuer.Issue ok)--> Issued
+//	   |                              |
+//	   |                              +-- (renewal cron, 30 days
+//	   |                                  before expiry) --> Pending
+//	   v
+//	Failed --(NextRetry elapsed)-----> Pending
 //
 // Default-deny does not apply here; missing IngressCertStatus means
 // no ACME work is requested. The orchestrator is single-writer per
@@ -156,12 +156,12 @@ func (rp RetryPolicy) nextDelay(attempt int) time.Duration {
 
 // Config bundles the orchestrator's dependencies.
 type Config struct {
-	Issuer         Issuer
-	Certs          CertStore
-	Status         StatusSink
-	Leader         LeaderProvider
-	Logger         log.Logger
-	Retry          RetryPolicy
+	Issuer Issuer
+	Certs  CertStore
+	Status StatusSink
+	Leader LeaderProvider
+	Logger log.Logger
+	Retry  RetryPolicy
 	// RenewBefore is how long before ExpiresAt to renew. Default 30 days.
 	RenewBefore time.Duration
 	// Now overrides the clock for tests.

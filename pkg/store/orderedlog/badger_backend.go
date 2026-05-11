@@ -527,7 +527,7 @@ func encodeEvent(ev *Event) ([]byte, error) {
 		return nil, err
 	}
 	var nMut [2]byte
-	binary.BigEndian.PutUint16(nMut[:], uint16(len(ev.Mutations)))
+	binary.BigEndian.PutUint16(nMut[:], uint16(len(ev.Mutations))) //nolint:gosec // G115: orderedlog rejects events with >65535 mutations upstream
 	buf.Write(nMut[:])
 	for i := range ev.Mutations {
 		m := &ev.Mutations[i]
@@ -544,7 +544,7 @@ func encodeEvent(ev *Event) ([]byte, error) {
 			return nil, err
 		}
 		var pl [4]byte
-		binary.BigEndian.PutUint32(pl[:], uint32(len(m.Payload)))
+		binary.BigEndian.PutUint32(pl[:], uint32(len(m.Payload))) //nolint:gosec // G115: payloads are bounded by orderedlog max-payload-size (<<4GiB)
 		buf.Write(pl[:])
 		buf.Write(m.Payload)
 	}
@@ -604,7 +604,7 @@ func writeShortString(buf *bytes.Buffer, s string) error {
 		return fmt.Errorf("orderedlog: string too long (%d)", len(s))
 	}
 	var l [2]byte
-	binary.BigEndian.PutUint16(l[:], uint16(len(s)))
+	binary.BigEndian.PutUint16(l[:], uint16(len(s))) //nolint:gosec // G115: writeShortString rejects len>0xFFFF on the line above
 	buf.Write(l[:])
 	buf.WriteString(s)
 	return nil

@@ -57,7 +57,7 @@ func runStop(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get service %s/%s: %w", stopNamespace, serviceName, err)
 	}
 
-	fmt.Printf("Stopping service %s (current scale: %d) → 0\n", format.Highlight(serviceName), svc.Scale)
+	fmt.Printf("Stopping service %s (current scale: %d) → 0\n", format.Highlight("%s", serviceName), svc.Scale)
 
 	req := &generated.ScaleServiceRequest{
 		Name:      serviceName,
@@ -76,7 +76,7 @@ func runStop(cmd *cobra.Command, args []string) error {
 		if err := waitForScalingComplete(apiClient, ctx, serviceName, stopNamespace, 0); err != nil {
 			return err
 		}
-		fmt.Printf("%s Service %s stopped\n", format.Success("✓"), format.Highlight(serviceName))
+		fmt.Printf("%s Service %s stopped\n", format.Success("✓"), format.Highlight("%s", serviceName))
 	}
 
 	return nil

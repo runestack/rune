@@ -130,4 +130,4 @@ func isLocalhost(addr string) bool {
 	return ip.IsLoopback()
 }
 
-func statusPermissionDenied(msg string) error { return status.Errorf(codes.PermissionDenied, msg) }
+func statusPermissionDenied(msg string) error { return status.Error(codes.PermissionDenied, msg) }

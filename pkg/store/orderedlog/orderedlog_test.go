@@ -117,8 +117,8 @@ func TestPropose_RejectsUnknownOpType(t *testing.T) {
 
 type unknownOp struct{}
 
-func (*unknownOp) OpType() string             { return "no.such.op" }
-func (*unknownOp) Marshal() ([]byte, error)   { return nil, nil }
+func (*unknownOp) OpType() string           { return "no.such.op" }
+func (*unknownOp) Marshal() ([]byte, error) { return nil, nil }
 
 func TestPropose_RollbackOnApplierError(t *testing.T) {
 	be, db := newTestBackend(t)
@@ -305,8 +305,8 @@ func TestWatch_ErrCompactedAfterPrune(t *testing.T) {
 
 	be := NewBadgerBackend(db, BackendOptions{
 		WatchBuffer:        64,
-		RetentionMaxEvents: 5,            // keep only the last 5
-		RetentionInterval:  time.Hour,    // we'll trigger manually
+		RetentionMaxEvents: 5,         // keep only the last 5
+		RetentionInterval:  time.Hour, // we'll trigger manually
 	})
 	require.NoError(t, be.Open())
 	require.NoError(t, be.Register("test.put", putApplier, unmarshalPut))

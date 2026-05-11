@@ -221,7 +221,7 @@ func (pm *ProxyManager) openListener(svc *types.Service, p types.ServicePort, pr
 		eval:        pm.eval,
 		pref:        pref,
 		localNode:   localNode,
-		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		rng:         rand.New(rand.NewSource(time.Now().UnixNano())), //nolint:gosec // G404: non-cryptographic RNG for endpoint load-balancing
 		drain:       pm.cfg.DrainTimeout,
 		stop:        make(chan struct{}),
 	}

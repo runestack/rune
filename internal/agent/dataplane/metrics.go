@@ -103,7 +103,9 @@ func (m *Metrics) observeListenerOpened(svc, proto string) {
 func (m *Metrics) observeListenerClosed(svc, proto string) {
 	m.ListenersOpen.WithLabelValues(svc, proto).Dec()
 }
-func (m *Metrics) setWatchLag(s float64)  { m.WatchLag.Set(s) }
+func (m *Metrics) setWatchLag(s float64) { m.WatchLag.Set(s) }
+
+//nolint:unused // wired in RUNE-114 (nftables Phase 2)
 func (m *Metrics) setNftablesRules(n int) { m.NftablesRules.Set(float64(n)) }
 
 func (m *Metrics) incPolicyDrop(svc, ns, pol, reason string) {

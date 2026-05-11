@@ -52,9 +52,9 @@ func (f *fakeIssuer) Issue(_ context.Context, _ string) ([]byte, []byte, error) 
 }
 
 type fakeStatus struct {
-	mu       sync.Mutex
-	last     map[string]types.IngressCertStatus
-	updates  int
+	mu      sync.Mutex
+	last    map[string]types.IngressCertStatus
+	updates int
 }
 
 func newFakeStatus() *fakeStatus {

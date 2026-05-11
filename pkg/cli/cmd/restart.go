@@ -64,7 +64,7 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		if desired <= 0 {
 			desired = 1
 		}
-		fmt.Printf("Service %s is stopped; restoring to previous scale %d\n", format.Highlight(serviceName), desired)
+		fmt.Printf("Service %s is stopped; restoring to previous scale %d\n", format.Highlight("%s", serviceName), desired)
 		upReq := &generated.ScaleServiceRequest{
 			Name:      serviceName,
 			Namespace: restartNamespace,
@@ -80,12 +80,12 @@ func runRestart(cmd *cobra.Command, args []string) error {
 			if err := waitForScalingComplete(apiClient, ctx, serviceName, restartNamespace, desired); err != nil {
 				return fmt.Errorf("error waiting for scale-up: %w", err)
 			}
-			fmt.Printf("%s Service %s started (%d instances)\n", format.Success("✓"), format.Highlight(serviceName), desired)
+			fmt.Printf("%s Service %s started (%d instances)\n", format.Success("✓"), format.Highlight("%s", serviceName), desired)
 		}
 		return nil
 	}
 
-	fmt.Printf("Restarting service %s by bouncing instances: %d → 0 → %d\n", format.Highlight(serviceName), current, current)
+	fmt.Printf("Restarting service %s by bouncing instances: %d → 0 → %d\n", format.Highlight("%s", serviceName), current, current)
 
 	// Scale to 0
 	downReq := &generated.ScaleServiceRequest{
@@ -123,7 +123,7 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		if err := waitForScalingComplete(apiClient, ctx, serviceName, restartNamespace, current); err != nil {
 			return fmt.Errorf("error waiting for scale-up: %w", err)
 		}
-		fmt.Printf("%s Service %s restarted (%d instances)\n", format.Success("✓"), format.Highlight(serviceName), current)
+		fmt.Printf("%s Service %s restarted (%d instances)\n", format.Success("✓"), format.Highlight("%s", serviceName), current)
 	}
 
 	return nil

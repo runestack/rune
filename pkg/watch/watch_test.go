@@ -28,8 +28,8 @@ type putOp struct {
 	Key, Val []byte
 }
 
-func (p *putOp) OpType() string            { return opPut }
-func (p *putOp) Marshal() ([]byte, error)  {
+func (p *putOp) OpType() string { return opPut }
+func (p *putOp) Marshal() ([]byte, error) {
 	out := make([]byte, 4+len(p.Key)+len(p.Val))
 	binary.BigEndian.PutUint16(out[0:2], uint16(len(p.Key)))
 	binary.BigEndian.PutUint16(out[2:4], uint16(len(p.Val)))
