@@ -28,17 +28,14 @@ import (
 
 // runefileExtras are top-level yaml keys legitimately present on
 // pkg/types.RuneFile that are NOT struct fields on internal/config.Config.
-// These are read directly out of viper at runed startup (see
-// cmd/runed/main.go SetDefault calls) rather than via Unmarshal,
-// so they have no representation on the Config struct itself but are
-// still real runefile keys that lint must accept.
-var runefileExtras = map[string]string{
-	"networking": "loaded directly via viper.GetString in cmd/runed/main.go",
-	"telemetry":  "loaded directly via viper.GetString in cmd/runed/main.go",
-	"node":       "loaded directly via viper.GetString in cmd/runed/main.go",
-	"ingress":    "loaded directly via viper.GetString in cmd/runed/main.go",
-	"acme":       "loaded directly via viper.GetString in cmd/runed/main.go",
-}
+//
+// Empty today. Both structs declare the full schema. (runed itself
+// still reads networking/telemetry/node/ingress/acme via
+// viper.GetString in cmd/runed/main.go rather than through Config —
+// see the doc-comments on those types in internal/config — but the
+// field declarations exist so this test stays a real bidirectional
+// check.)
+var runefileExtras = map[string]string{}
 
 // configExtras are top-level yaml keys legitimately present on
 // internal/config.Config that are NOT mirrored on pkg/types.RuneFile.
