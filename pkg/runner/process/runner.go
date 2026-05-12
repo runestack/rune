@@ -166,6 +166,16 @@ func (r *ProcessRunner) Create(ctx context.Context, instance *types.Instance) er
 			}
 			createdFiles = append(createdFiles, files...)
 		}
+		// Volumes — process runtime inherits the host filesystem, so there
+		// is no bind mount to set up; we only validate the host path is
+		// reachable so the operator gets a clear error before launch.
+		if len(instance.Metadata.VolumeMounts) > 0 {
+			if vErr := r.validateVolumeMounts(instance.Metadata.VolumeMounts); vErr != nil {
+				_ = logFile.Close()
+				_ = os.RemoveAll(workDir)
+				return fmt.Errorf("failed to validate volume mounts: %w", vErr)
+			}
+		}
 	}
 
 	// Prepare command (but don't start it)
@@ -940,6 +950,47 @@ func filterFilesUnder(base string, paths []string) []string {
 		}
 	}
 	return out
+}
+
+// validateVolumeMounts checks each resolved volume mount's host source path
+// exists, is a directory, and is readable (writable too unless ReadOnly).
+// The process runner doesn't bind-mount — it inherits the host filesystem —
+// so this is the only chance to surface a misconfigured host path before
+// the program starts.
+func (r *ProcessRunner) validateVolumeMounts(mounts []types.ResolvedVolumeMount) error {
+	for _, m := range mounts {
+		if m.Source == "" {
+			return fmt.Errorf("volume %q has empty source path", m.Name)
+		}
+		info, err := os.Stat(m.Source)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("host path %q for volume %q does not exist", m.Source, m.Name)
+			}
+			return fmt.Errorf("stat host path %q for volume %q: %w", m.Source, m.Name, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("host path %q for volume %q is not a directory", m.Source, m.Name)
+		}
+		// Probe readability with a directory open.
+		f, err := os.Open(m.Source)
+		if err != nil {
+			return fmt.Errorf("host path %q for volume %q is not readable: %w", m.Source, m.Name, err)
+		}
+		_ = f.Close()
+		if m.ReadOnly {
+			continue
+		}
+		// Probe writability by attempting to create and remove a sentinel file.
+		probe, err := os.CreateTemp(m.Source, ".rune-volume-probe-*")
+		if err != nil {
+			return fmt.Errorf("host path %q for volume %q is not writable: %w", m.Source, m.Name, err)
+		}
+		probeName := probe.Name()
+		_ = probe.Close()
+		_ = os.Remove(probeName)
+	}
+	return nil
 }
 
 // Status retrieves the current status of a process instance

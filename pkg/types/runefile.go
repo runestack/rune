@@ -100,7 +100,7 @@ type RuneFile struct {
 	// ACME (Let's Encrypt) configuration
 	ACME *ACMEConfig `yaml:"acme,omitempty"`
 
-	// Storage drivers (RUNE-069). Per-driver opaque config maps keyed
+	// Storage drivers. Per-driver opaque config maps keyed
 	// by registry name (e.g. "local", "local-host"). The shape of
 	// each inner map is driver-specific; the loader keeps it as raw
 	// `any` and hands it to the driver factory.
@@ -276,7 +276,7 @@ type ACMEConfig struct {
 	Email     string `yaml:"email,omitempty"`
 }
 
-// StorageConfig mirrors internal/config.Storage (RUNE-069). The shape
+// StorageConfig mirrors internal/config.Storage. The shape
 // of each per-driver inner map is opaque from the runefile's
 // perspective: drivers register a factory + a parseConfig that
 // validates whatever keys they care about. Keeping the value type as

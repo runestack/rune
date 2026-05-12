@@ -56,7 +56,7 @@ func DefaultFinalizerExecutor(
 		return NewServiceDeregisterFinalizer(storeInstance, logger)
 	})
 
-	// Register volume cleanup finalizer (RUNE-069/070).
+	// Register volume cleanup finalizer
 	registry.Register(types.FinalizerTypeVolumeCleanup, func() FinalizerInterface {
 		return NewVolumeCleanupFinalizer(storeInstance, logger)
 	})

@@ -11,7 +11,7 @@ import (
 
 // TestLoad_StorageDrivers verifies the runefile [storage.drivers]
 // table is round-tripped into Config.Storage.Drivers as a per-driver
-// opaque map[string]any. RUNE-069.
+// opaque map[string]any.
 func TestLoad_StorageDrivers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runefile.yaml")

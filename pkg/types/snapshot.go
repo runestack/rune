@@ -23,10 +23,10 @@ const (
 type Snapshot struct {
 	NamespacedResource `json:"-" yaml:"-"`
 
-	ID         string            `json:"id" yaml:"id"`
-	Name       string            `json:"name" yaml:"name"`
-	Namespace  string            `json:"namespace" yaml:"namespace"`
-	Labels     map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+	ID        string            `json:"id" yaml:"id"`
+	Name      string            `json:"name" yaml:"name"`
+	Namespace string            `json:"namespace" yaml:"namespace"`
+	Labels    map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
 
 	// SourceVolume is the bare name of the Volume in the same namespace
 	// (cross-namespace snapshots are out of scope).
