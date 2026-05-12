@@ -113,9 +113,27 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 		return handleRunesetCastSource(args, sourceType, opts)
 	}
 
-	// Warn if runeset-only flags are set in non-runeset mode
-	if opts.renderOnly || len(opts.valuesFiles) > 0 || len(opts.setValues) > 0 || opts.releaseName != "" {
-		fmt.Println("Note: runeset-specific flags (--render, --values, --set, --release) are ignored in non-runeset mode")
+	// Reject runeset-only flags in non-runeset mode. Previously these were
+	// silently ignored, but the template engine still ran on `{{ values:... }}`
+	// references and produced cryptic "__TEMPLATE_PLACEHOLDER_N__" errors when
+	// values weren't actually loaded. Fail fast with a clear message instead.
+	var badFlags []string
+	if opts.renderOnly {
+		badFlags = append(badFlags, "--render")
+	}
+	if len(opts.valuesFiles) > 0 {
+		badFlags = append(badFlags, "--values")
+	}
+	if len(opts.setValues) > 0 {
+		badFlags = append(badFlags, "--set")
+	}
+	if opts.releaseName != "" {
+		badFlags = append(badFlags, "--release")
+	}
+	if len(badFlags) > 0 {
+		return fmt.Errorf("the following flag(s) are only valid when casting a runeset: %s\n"+
+			"hint: pass a runeset directory, archive, or remote URL — or remove these flags",
+			strings.Join(badFlags, ", "))
 	}
 
 	return runCastNonRuneset(args, timeout, opts)
