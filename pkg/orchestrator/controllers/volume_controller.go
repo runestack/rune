@@ -58,6 +58,13 @@ type VolumeControllerOptions struct {
 	// retain for volumes provisioned by the in-tree "local" driver. Has
 	// no effect on other drivers.
 	PreserveOnDelete bool
+
+	// Provision retry tuning. Zero values fall back to defaults
+	// (5 attempts, 2s base, 30s cap) so existing callers don't need
+	// updating.
+	MaxProvisionAttempts int
+	ProvisionBaseBackoff time.Duration
+	ProvisionMaxBackoff  time.Duration
 }
 
 // volumeController is the default VolumeController.
@@ -91,6 +98,16 @@ type volumeController struct {
 	// Same idea for StorageClass writes from the uniqueness enforcer.
 	internalSCUpdates sync.Map
 
+	// Provision retry/backoff state. Indexed by "<namespace>/<name>".
+	// retries holds the attempt count so far; retryTimers holds the
+	// pending re-arm timer (if any). Both are protected by retryMu.
+	retryMu      sync.Mutex
+	retries      map[string]int
+	retryTimers  map[string]*time.Timer
+	maxAttempts  int
+	baseBackoff  time.Duration
+	maxBackoff   time.Duration
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -104,6 +121,21 @@ func NewVolumeController(opts VolumeControllerOptions) (VolumeController, error)
 	if opts.Logger == nil {
 		return nil, fmt.Errorf("volume controller: logger is required")
 	}
+	maxAttempts := opts.MaxProvisionAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 5
+	}
+	base := opts.ProvisionBaseBackoff
+	if base <= 0 {
+		base = 2 * time.Second
+	}
+	max := opts.ProvisionMaxBackoff
+	if max <= 0 {
+		max = 30 * time.Second
+	}
+	if max < base {
+		max = base
+	}
 	return &volumeController{
 		store:               opts.Store,
 		logger:              opts.Logger.WithComponent("volume-controller"),
@@ -111,6 +143,11 @@ func NewVolumeController(opts VolumeControllerOptions) (VolumeController, error)
 		defaultStorageClass: opts.DefaultStorageClass,
 		preserveOnDelete:    opts.PreserveOnDelete,
 		drivers:             make(map[string]driver.Driver),
+		retries:             make(map[string]int),
+		retryTimers:         make(map[string]*time.Timer),
+		maxAttempts:         maxAttempts,
+		baseBackoff:         base,
+		maxBackoff:          max,
 	}, nil
 }
 
@@ -155,6 +192,12 @@ func (c *volumeController) Stop() error {
 	if c.cancel != nil {
 		c.cancel()
 	}
+	c.retryMu.Lock()
+	for k, t := range c.retryTimers {
+		t.Stop()
+		delete(c.retryTimers, k)
+	}
+	c.retryMu.Unlock()
 	c.wg.Wait()
 	c.logger.Info("Volume controller stopped")
 	return nil
@@ -227,11 +270,21 @@ func (c *volumeController) handle(ctx context.Context, ev store.WatchEvent) erro
 
 // reconcile drives Pending/Provisioning volumes to Available. It is a no-op
 // for volumes already in a terminal-ish state (Available, Bound, Released,
-// Failed) — those transitions belong to the binder/claim system, not here.
+// Failed, Stalled) — those transitions belong to the binder/claim system,
+// not here.
+//
+// Pending entry implicitly clears any in-memory retry/backoff bookkeeping
+// (see clearRetry) so an explicit operator retry — `rune volume
+// retry-provision` flips status back to Pending via the API — restarts
+// the attempt counter from 1. Provisioning re-entry preserves it so a
+// scheduled retry continues to count up against MaxProvisionAttempts.
 func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) error {
 	switch vol.Status {
-	case "", types.VolumeStatusPending, types.VolumeStatusProvisioning:
-		// fall through
+	case "", types.VolumeStatusPending:
+		// Fresh attempt — reset retry state.
+		c.clearRetry(volumeKey(vol.Namespace, vol.Name))
+	case types.VolumeStatusProvisioning:
+		// Mid-flight; preserve retry counter.
 	default:
 		return nil
 	}
@@ -263,11 +316,127 @@ func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) err
 		SizeBytes:        0, // size parsing lives in the binder; drivers fall back to a sane default for now
 	})
 	if err != nil {
-		return c.markFailed(ctx, vol, "ProvisionFailed", err.Error())
+		return c.handleProvisionFail(ctx, vol, err)
 	}
 
 	vol.Handle = string(handle)
+	c.clearRetry(volumeKey(vol.Namespace, vol.Name))
 	return c.updateStatus(ctx, vol, types.VolumeStatusAvailable, "", "")
+}
+
+// handleProvisionFail records a Provision attempt failure, schedules a
+// retry with exponential backoff, and transitions the volume to
+// VolumeStatusStalled once MaxProvisionAttempts has been exceeded.
+//
+// While retries are scheduled the volume sits at VolumeStatusFailed with
+// reason "ProvisionFailedWillRetry" and a message that includes the
+// remaining attempt count + next-retry delay; once exhausted, it
+// transitions to VolumeStatusStalled with reason
+// "ProvisionRetriesExhausted" — terminal until an operator runs
+// `rune volume retry-provision`.
+func (c *volumeController) handleProvisionFail(ctx context.Context, vol *types.Volume, provErr error) error {
+	key := volumeKey(vol.Namespace, vol.Name)
+
+	c.retryMu.Lock()
+	if t := c.retryTimers[key]; t != nil {
+		t.Stop()
+		delete(c.retryTimers, key)
+	}
+	attempts := c.retries[key] + 1
+	c.retries[key] = attempts
+
+	if attempts >= c.maxAttempts {
+		delete(c.retries, key)
+		c.retryMu.Unlock()
+		c.logger.Warn("Volume provision retries exhausted; marking Stalled",
+			log.Str("namespace", vol.Namespace),
+			log.Str("name", vol.Name),
+			log.Int("attempts", attempts),
+			log.Err(provErr))
+		return c.updateStatus(ctx, vol, types.VolumeStatusStalled,
+			"ProvisionRetriesExhausted",
+			fmt.Sprintf("provision failed after %d attempts: %v (rune volume retry-provision to re-arm)", attempts, provErr))
+	}
+
+	delay := c.backoffFor(attempts)
+	ns, name := vol.Namespace, vol.Name
+	c.retryTimers[key] = time.AfterFunc(delay, func() {
+		c.retryProvision(ns, name)
+	})
+	c.retryMu.Unlock()
+
+	c.logger.Info("Volume provision failed; scheduling retry",
+		log.Str("namespace", vol.Namespace),
+		log.Str("name", vol.Name),
+		log.Int("attempt", attempts),
+		log.Int("max", c.maxAttempts),
+		log.Duration("delay", delay),
+		log.Err(provErr))
+	return c.updateStatus(ctx, vol, types.VolumeStatusFailed,
+		"ProvisionFailedWillRetry",
+		fmt.Sprintf("attempt %d/%d failed: %v (next retry in %s)", attempts, c.maxAttempts, provErr, delay))
+}
+
+// retryProvision is invoked by the per-volume backoff timer. It re-fetches
+// the current Volume row and, if it's still in a retryable state, drives
+// a fresh Provision attempt without resetting the retry counter (the
+// timer-driven path uses VolumeStatusProvisioning so reconcile preserves
+// the count).
+func (c *volumeController) retryProvision(ns, name string) {
+	if c.ctx == nil || c.ctx.Err() != nil {
+		return
+	}
+	c.retryMu.Lock()
+	delete(c.retryTimers, volumeKey(ns, name))
+	c.retryMu.Unlock()
+
+	var v types.Volume
+	if err := c.store.Get(c.ctx, types.ResourceTypeVolume, ns, name, &v); err != nil {
+		c.logger.Warn("Volume retry: get failed",
+			log.Str("namespace", ns), log.Str("name", name), log.Err(err))
+		return
+	}
+	// If the operator has moved the volume out of the retry path (e.g.
+	// deleted it, or RetryProvision flipped it to Pending which the
+	// watch loop is already reconciling), bail.
+	if v.Status != types.VolumeStatusFailed {
+		return
+	}
+	// Force into Provisioning locally so reconcile preserves the
+	// in-memory attempt counter.
+	v.Status = types.VolumeStatusProvisioning
+	if err := c.reconcile(c.ctx, &v); err != nil {
+		c.logger.Error("Volume retry: reconcile failed",
+			log.Str("namespace", ns), log.Str("name", name), log.Err(err))
+	}
+}
+
+// backoffFor returns the delay to wait before the (attempt+1)-th retry.
+// Exponential with a cap at maxBackoff; attempt is 1-based.
+func (c *volumeController) backoffFor(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := c.baseBackoff
+	for i := 1; i < attempt && d < c.maxBackoff; i++ {
+		d *= 2
+	}
+	if d > c.maxBackoff {
+		d = c.maxBackoff
+	}
+	return d
+}
+
+// clearRetry stops any pending backoff timer and forgets the attempt
+// counter for the given volume key. Safe to call when no entry exists.
+func (c *volumeController) clearRetry(key string) {
+	c.retryMu.Lock()
+	defer c.retryMu.Unlock()
+	if t := c.retryTimers[key]; t != nil {
+		t.Stop()
+		delete(c.retryTimers, key)
+	}
+	delete(c.retries, key)
 }
 
 // handleDeleted runs the reclaim path. The store has already removed the
