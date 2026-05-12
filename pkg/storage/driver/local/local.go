@@ -2,13 +2,13 @@
 // Rune binary:
 //
 //   - "local"      — Rune-managed directory under runefile [storage].localVolumeRoot.
-//                    Owns directory lifecycle; honours reclaimPolicy: delete with
-//                    bounded rm -rf; supports filesystem-level snapshots.
+//     Owns directory lifecycle; honours reclaimPolicy: delete with
+//     bounded rm -rf; supports filesystem-level snapshots.
 //
 //   - "local-host" — Operator-owned host path declared on Volume.parameters.hostPath.
-//                    Validated against runefile [storage].hostPathAllowlist.
-//                    Delete is a no-op; reclaimPolicy: delete is rejected.
-//                    No snapshot support.
+//     Validated against runefile [storage].hostPathAllowlist.
+//     Delete is a no-op; reclaimPolicy: delete is rejected.
+//     No snapshot support.
 //
 // The two driver names share helpers (path validation, snapshot copy, mount
 // target rewriting) but advertise different Capabilities. Each is its own

@@ -93,7 +93,6 @@ type Service struct {
 	// Volume mounts. Each entry references either a pre-existing
 	// VolumeClaim by name (Claim) or an inline ClaimTemplate that the
 	// VolumeController materializes into a per-instance Volume.
-	// Introduced in RUNE-069.
 	Volumes []VolumeMount `json:"volumes,omitempty" yaml:"volumes,omitempty"`
 
 	// Service discovery configuration

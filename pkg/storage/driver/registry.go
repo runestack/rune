@@ -3,8 +3,6 @@
 // Drivers register themselves in init() via Register(). The runed binary
 // blank-imports each built-in driver package from cmd/runed/main.go;
 // out-of-tree drivers are added by adding one more blank-import.
-//
-// Introduced in RUNE-069.
 package driver
 
 import (

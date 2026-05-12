@@ -56,12 +56,18 @@ func DefaultFinalizerExecutor(
 		return NewServiceDeregisterFinalizer(storeInstance, logger)
 	})
 
+	// Register volume cleanup finalizer (RUNE-069/070).
+	registry.Register(types.FinalizerTypeVolumeCleanup, func() FinalizerInterface {
+		return NewVolumeCleanupFinalizer(storeInstance, logger)
+	})
+
 	// Default timeout configuration
 	timeoutConfig := types.FinalizerTimeoutConfig{
 		DefaultTimeout: 5 * time.Minute,
 		TypeTimeouts: map[types.FinalizerType]time.Duration{
 			types.FinalizerTypeInstanceCleanup:   2 * time.Minute,
 			types.FinalizerTypeServiceDeregister: 30 * time.Second,
+			types.FinalizerTypeVolumeCleanup:     2 * time.Minute,
 		},
 		FailOnTimeout: true,
 	}

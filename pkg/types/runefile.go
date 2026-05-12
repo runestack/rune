@@ -100,6 +100,12 @@ type RuneFile struct {
 	// ACME (Let's Encrypt) configuration
 	ACME *ACMEConfig `yaml:"acme,omitempty"`
 
+	// Storage drivers (RUNE-069). Per-driver opaque config maps keyed
+	// by registry name (e.g. "local", "local-host"). The shape of
+	// each inner map is driver-specific; the loader keeps it as raw
+	// `any` and hands it to the driver factory.
+	Storage *StorageConfig `yaml:"storage,omitempty"`
+
 	// Internal tracking for line numbers (not serialized)
 	lineInfo map[string]int `json:"-" yaml:"-"`
 	rawNode  *yaml.Node     `json:"-" yaml:"-"`
@@ -270,6 +276,25 @@ type ACMEConfig struct {
 	Email     string `yaml:"email,omitempty"`
 }
 
+// StorageConfig mirrors internal/config.Storage (RUNE-069). The shape
+// of each per-driver inner map is opaque from the runefile's
+// perspective: drivers register a factory + a parseConfig that
+// validates whatever keys they care about. Keeping the value type as
+// `any` lets us add new drivers without touching the runefile parser.
+//
+// Example:
+//
+//	storage:
+//	  drivers:
+//	    local:
+//	      localVolumeRoot: /var/lib/rune/volumes
+//	    local-host:
+//	      hostPathAllowlist:
+//	        - /srv/data
+type StorageConfig struct {
+	Drivers map[string]map[string]any `yaml:"drivers,omitempty"`
+}
+
 // ParseRuneFile parses a Rune configuration file from the given file
 // path. Both YAML and TOML are accepted (TOML is detected via the
 // `.toml` extension and transcoded to YAML before parsing — see
@@ -339,6 +364,7 @@ func validateRuneFileTopLevelKeys(node *yaml.Node) error {
 		"node":       true,
 		"ingress":    true,
 		"acme":       true,
+		"storage":    true,
 	}
 
 	for i := 0; i < len(root.Content); i += 2 {
@@ -554,6 +580,11 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 		"node":       true,
 		"ingress":    true,
 		"acme":       true,
+		"storage":    true,
+
+		// storage.drivers (opaque, per-driver maps; key names
+		// are driver-specific so we accept anything underneath).
+		"drivers": true,
 
 		// server / client
 		"grpc_address": true,

@@ -835,7 +835,7 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 	if vipAlloc != nil {
 		opts = append(opts, server.WithVIPAllocator(vipAlloc))
 	}
-	// RUNE-069: thread per-driver storage config from the runefile
+	// Thread per-driver storage config from the runefile
 	// through to the orchestrator (e.g. local.localVolumeRoot,
 	// local-host.hostPathAllowlist).
 	if appCfg != nil && len(appCfg.Storage.Drivers) > 0 {

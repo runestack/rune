@@ -146,7 +146,7 @@ type ACME struct {
 }
 
 // Storage holds per-driver opaque configuration for the storage
-// subsystem (RUNE-069/070/073). The runefile schema is:
+// subsystem. The runefile schema is:
 //
 //	storage:
 //	  drivers:

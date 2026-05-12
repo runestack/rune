@@ -168,8 +168,7 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	}
 
 	// VolumeController owns the Volume CRUD reconciliation loop
-	// (provision/reclaim via the storage driver registry). Introduced in
-	// RUNE-069.
+	// (provision/reclaim via the storage driver registry).
 	volumeController, err := controllers.NewVolumeController(controllers.VolumeControllerOptions{
 		Store:         options.Store,
 		Logger:        options.Logger,
@@ -220,7 +219,7 @@ func (o *orchestrator) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start scaling controller: %w", err)
 	}
 
-	// Start volume controller (RUNE-069)
+	// Start volume controller
 	if err := o.volumeController.Start(o.ctx); err != nil {
 		return fmt.Errorf("failed to start volume controller: %w", err)
 	}
@@ -259,7 +258,7 @@ func (o *orchestrator) Stop() error {
 	// Stop scaling controller
 	o.scalingController.Stop()
 
-	// Stop volume controller (RUNE-069)
+	// Stop volume controller
 	if err := o.volumeController.Stop(); err != nil {
 		o.logger.Error("Failed to stop volume controller", log.Err(err))
 	}

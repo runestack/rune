@@ -849,7 +849,7 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 			hostConfig.Mounts = append(hostConfig.Mounts, configMounts...)
 		}
 
-		// Process volume mounts (RUNE-070). Source is the host-side path
+		// Process volume mounts. Source is the host-side path
 		// produced by the storage driver (a managed directory, an
 		// operator host path, or a block-device mount target). We only
 		// emit bind mounts here; agent-side Attach/Mount/Unmount/Detach

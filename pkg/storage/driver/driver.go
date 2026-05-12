@@ -184,13 +184,13 @@ type SnapshotRequest struct {
 // RestoreRequest is the input to Driver.RestoreFromSnapshot.
 type RestoreRequest struct {
 	// Source is the snapshot being restored.
-	Source         *types.Snapshot
-	SourceHandle   SnapshotHandle
+	Source       *types.Snapshot
+	SourceHandle SnapshotHandle
 	// Target is the new Volume that should receive the restored data.
-	Target         *types.Volume
-	StorageClass   *types.StorageClass
+	Target           *types.Volume
+	StorageClass     *types.StorageClass
 	MergedParameters map[string]string
-	SizeBytes      int64
+	SizeBytes        int64
 }
 
 // Sentinel errors. Drivers SHOULD wrap these with %w when returning richer

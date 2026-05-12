@@ -104,7 +104,7 @@ type InstanceMetadata struct {
 	// this instance: each entry maps a Service.VolumeMount to the
 	// concrete host-side source path produced by the storage driver.
 	// Populated by the orchestrator's instance controller from the bound
-	// Volume's Handle. Introduced in RUNE-070.
+	// Volume's Handle.
 	VolumeMounts []ResolvedVolumeMount `json:"volumeMounts,omitempty" yaml:"volumeMounts,omitempty"`
 
 	// Ports declared by the service (propagated for runner use)
@@ -163,8 +163,6 @@ type ResolvedConfigmapMount struct {
 // localVolumeRoot; for "local-host" it's the operator-declared host path;
 // for cloud block-device drivers it would be the agent's per-volume mount
 // target under /var/lib/rune/mounts/<volume-id>/.
-//
-// Introduced in RUNE-070.
 type ResolvedVolumeMount struct {
 	// Name is the mount's service-local identifier (matches
 	// Service.VolumeMount.Name).

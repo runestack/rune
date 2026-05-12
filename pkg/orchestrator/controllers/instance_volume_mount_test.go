@@ -43,7 +43,7 @@ func TestResolveVolumeMount_ClaimSuccess(t *testing.T) {
 	putVolume(t, ts, "default", "data", "/var/lib/rune/volumes/default/data", types.VolumeStatusAvailable)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	got, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
+	got, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "data",
 		MountPath: "/data",
 		Claim:     &types.VolumeClaim{Name: "data"},
@@ -61,7 +61,7 @@ func TestResolveVolumeMount_ClaimReadOnlyAndSubPath(t *testing.T) {
 	putVolume(t, ts, "default", "shared", "/srv/shared", types.VolumeStatusAvailable)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	got, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
+	got, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "shared",
 		MountPath: "/etc/shared",
 		ReadOnly:  true,
@@ -79,7 +79,7 @@ func TestResolveVolumeMount_CrossNamespaceClaim(t *testing.T) {
 	putVolume(t, ts, "shared-ns", "blob", "/srv/blob", types.VolumeStatusAvailable)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	got, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
+	got, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "blob",
 		MountPath: "/blob",
 		Claim:     &types.VolumeClaim{Name: "shared-ns/blob"},
@@ -94,7 +94,7 @@ func TestResolveVolumeMount_VolumeNotReady(t *testing.T) {
 	putVolume(t, ts, "default", "pending", "", types.VolumeStatusPending)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
+	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "x",
 		MountPath: "/x",
 		Claim:     &types.VolumeClaim{Name: "pending"},
@@ -108,7 +108,7 @@ func TestResolveVolumeMount_AvailableButNoHandle(t *testing.T) {
 	putVolume(t, ts, "default", "broken", "", types.VolumeStatusAvailable)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
+	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "x",
 		MountPath: "/x",
 		Claim:     &types.VolumeClaim{Name: "broken"},
@@ -121,7 +121,7 @@ func TestResolveVolumeMount_MissingVolume(t *testing.T) {
 	_, ic := newInstanceControllerForVolumeTests(t)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
+	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "x",
 		MountPath: "/x",
 		Claim:     &types.VolumeClaim{Name: "ghost"},
@@ -129,24 +129,89 @@ func TestResolveVolumeMount_MissingVolume(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestResolveVolumeMount_RejectsClaimTemplate(t *testing.T) {
-	_, ic := newInstanceControllerForVolumeTests(t)
+func TestResolveVolumeMount_ClaimTemplateAutoProvisions(t *testing.T) {
+	// First reconcile: volume row does not yet exist. ensureClaimTemplateVolume
+	// creates it in Pending state and the resolver reports "not ready" so
+	// the service reconciler will retry. We then assert the row was
+	// stamped with the expected ownership/binding metadata.
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	svc := &types.Service{Name: "api", Namespace: "default"}
+	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+		Name:      "data",
+		MountPath: "/data",
+		ClaimTemplate: &types.VolumeClaimTemplate{
+			StorageClassName: "fast",
+			Size:             "5Gi",
+			AccessMode:       types.AccessModeRWO,
+			ReclaimPolicy:    types.ReclaimPolicyDelete,
+		},
+	})
+	require.Error(t, err, "first call returns 'not ready' so reconciler retries")
+	assert.Contains(t, err.Error(), "not ready")
+
+	var v types.Volume
+	require.NoError(t, ts.Get(context.Background(), types.ResourceTypeVolume, "default", "data-api-0", &v))
+	assert.Equal(t, "fast", v.StorageClassName)
+	assert.Equal(t, "5Gi", v.Size)
+	assert.Equal(t, types.AccessModeRWO, v.AccessMode)
+	assert.Equal(t, types.ReclaimPolicyDelete, v.ReclaimPolicy)
+	assert.Equal(t, "default/api", v.OwnerService)
+	assert.Equal(t, "api/data/0", v.BoundClaim)
+	assert.Equal(t, types.VolumeStatusPending, v.Status)
+}
+
+func TestResolveVolumeMount_ClaimTemplateIdempotent(t *testing.T) {
+	// Second reconcile (volume already Available): resolver returns
+	// the runner-facing mount; the existing row is not overwritten.
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	pre := &types.Volume{
+		ID:               "data-api-0",
+		Name:             "data-api-0",
+		Namespace:        "default",
+		StorageClassName: "fast",
+		Size:             "5Gi",
+		AccessMode:       types.AccessModeRWO,
+		ReclaimPolicy:    types.ReclaimPolicyDelete,
+		OwnerService:     "default/api",
+		BoundClaim:       "api/data/0",
+		Status:           types.VolumeStatusAvailable,
+		Handle:           "/var/lib/rune/volumes/default/data-api-0",
+		CreatedAt:        time.Now().UTC().Add(-time.Hour),
+	}
+	require.NoError(t, ts.Create(context.Background(), types.ResourceTypeVolume, "default", "data-api-0", pre))
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
-		Name:          "x",
-		MountPath:     "/x",
+	got, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+		Name:      "data",
+		MountPath: "/data",
+		ClaimTemplate: &types.VolumeClaimTemplate{
+			StorageClassName: "fast",
+			Size:             "5Gi",
+			AccessMode:       types.AccessModeRWO,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "data-api-0", got.VolumeName)
+	assert.Equal(t, "/var/lib/rune/volumes/default/data-api-0", got.Source)
+}
+
+func TestResolveVolumeMount_ClaimTemplateUnparseableInstanceName(t *testing.T) {
+	_, ic := newInstanceControllerForVolumeTests(t)
+	svc := &types.Service{Name: "api", Namespace: "default"}
+	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "ad-hoc"}, types.VolumeMount{
+		Name:          "data",
+		MountPath:     "/data",
 		ClaimTemplate: &types.VolumeClaimTemplate{Size: "1Gi"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "claimTemplate")
+	assert.Contains(t, err.Error(), "ordinal")
 }
 
 func TestResolveVolumeMount_RejectsBoth(t *testing.T) {
 	_, ic := newInstanceControllerForVolumeTests(t)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
+	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:          "x",
 		MountPath:     "/x",
 		Claim:         &types.VolumeClaim{Name: "y"},
@@ -159,7 +224,7 @@ func TestResolveVolumeMount_RejectsNeither(t *testing.T) {
 	_, ic := newInstanceControllerForVolumeTests(t)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, types.VolumeMount{
+	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "x",
 		MountPath: "/x",
 	})
