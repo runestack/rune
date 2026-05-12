@@ -24,12 +24,6 @@
 //
 // Out of scope (deferred to follow-ups):
 //
-//   - Wiring into the instance controller's resolveVolumeMount: today
-//     the resolver still uses Volume.Handle directly, which is correct
-//     for the in-tree local / local-host drivers (their Mount returns
-//     the host path verbatim) but wrong once a block-device driver
-//     (do-volume) lands. The Subsystem ships first so that when the
-//     resolver is switched the data is already there.
 //   - VolumeBound writeback: this Subsystem does not flip status to
 //     Bound or write BoundNode itself; that remains the controller's
 //     job in a later slice.
@@ -243,9 +237,9 @@ func (s *Subsystem) Stop(ctx context.Context) error {
 
 // MountTargetFor returns the host path the named volume is currently
 // mounted at on this node (or false if the subsystem has not mounted
-// it). Intended to be called by the instance controller's
-// resolveVolumeMount in a follow-up slice; today's resolver still uses
-// Volume.Handle directly.
+// it). Called by the instance controller's resolveVolumeMount via the
+// MountResolver hook; the controller falls back to Volume.Handle when
+// this returns false.
 func (s *Subsystem) MountTargetFor(volumeID string) (string, bool) {
 	s.stateMu.RLock()
 	m, ok := s.mounts[volumeID]

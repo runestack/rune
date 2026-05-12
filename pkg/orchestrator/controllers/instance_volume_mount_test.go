@@ -230,3 +230,57 @@ func TestResolveVolumeMount_RejectsNeither(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+// fakeMountResolver is a tiny MountResolver used to test the
+// resolver-first / Volume.Handle-fallback policy in resolveVolumeMount.
+type fakeMountResolver struct {
+	targets map[string]string
+}
+
+func (f *fakeMountResolver) MountTargetFor(volumeID string) (string, bool) {
+	t, ok := f.targets[volumeID]
+	return t, ok
+}
+
+// When a MountResolver is wired and reports a target, that target wins
+// over Volume.Handle. This is the path that makes future block-device
+// drivers (do-volume, ...) usable, since for those Volume.Handle is a
+// cloud-side identifier rather than a host filesystem path.
+func TestResolveVolumeMount_ResolverPreferredOverHandle(t *testing.T) {
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	putVolume(t, ts, "default", "data", "do-vol-abc123", types.VolumeStatusAvailable)
+	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{
+		"vol-data": "/var/lib/rune/mounts/vol-data",
+	}})
+
+	svc := &types.Service{Name: "api", Namespace: "default"}
+	got, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+		Name:      "data",
+		MountPath: "/data",
+		Claim:     &types.VolumeClaim{Name: "data"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/var/lib/rune/mounts/vol-data", got.Source,
+		"resolver-reported target must win over Volume.Handle")
+}
+
+// When a MountResolver is wired but has no entry for this volume yet
+// (typical race: bind happened, mount has not), the resolver returns
+// (= , false) and we fall back to Volume.Handle. This preserves
+// correctness for the in-tree local / local-host drivers (their Mount
+// returns the host path verbatim, so target == handle).
+func TestResolveVolumeMount_ResolverMissFallsBackToHandle(t *testing.T) {
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	putVolume(t, ts, "default", "data", "/var/lib/rune/volumes/default/data", types.VolumeStatusAvailable)
+	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{}})
+
+	svc := &types.Service{Name: "api", Namespace: "default"}
+	got, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+		Name:      "data",
+		MountPath: "/data",
+		Claim:     &types.VolumeClaim{Name: "data"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/var/lib/rune/volumes/default/data", got.Source,
+		"with no resolver hit we must fall back to Volume.Handle")
+}

@@ -591,11 +591,12 @@ func main() {
 		// node, calls the registered driver's Attach + Mount under
 		// /var/lib/rune/mounts/<volume.ID>/. Symmetrically Unmount +
 		// Detach on unbind/delete and on agent Stop. The instance
-		// controller's resolveVolumeMount still uses Volume.Handle
-		// directly today (correct for the in-tree local /
-		// local-host drivers); a follow-up slice will switch it to
-		// consult the subsystem's MountTargetFor() so block-device
-		// drivers (do-volume, ...) start working.
+		// controller's resolveVolumeMount consults the subsystem's
+		// MountTargetFor() and falls back to Volume.Handle when no
+		// mount is recorded yet (correct for the in-tree local /
+		// local-host drivers, since their Mount returns the host
+		// path verbatim). The resolver-first path is what makes
+		// future block-device drivers (do-volume, ...) usable.
 		var driverConfigs map[string]map[string]any
 		if appCfg != nil {
 			driverConfigs = appCfg.Storage.Drivers
@@ -612,6 +613,10 @@ func main() {
 		if err := a.Register(volSub); err != nil {
 			return err
 		}
+		// Wire the subsystem into the orchestrator so the instance
+		// controller's resolveVolumeMount asks it for a mount target
+		// before falling back to Volume.Handle.
+		apiServer.GetOrchestrator().SetMountResolver(volSub)
 
 		// Embedded DNS subsystem (RUNE-063). Registers itself with
 		// the agent so it inherits supervised lifecycle. Bind list

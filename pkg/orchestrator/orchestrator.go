@@ -63,6 +63,11 @@ type Orchestrator interface {
 	// SetEndpointPublisher wires the networking data plane (RUNE-063).
 	// Optional; nil-safe. Call once at startup before Start().
 	SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string)
+
+	// SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
+	// into the instance controller. Optional; nil-safe. Call once at
+	// startup before Start().
+	SetMountResolver(resolver controllers.MountResolver)
 }
 
 // orchestrator implements the Orchestrator interface
@@ -487,4 +492,10 @@ func (o *orchestrator) GetActiveScalingOperation(ctx context.Context, namespace,
 // to the underlying instance controller.
 func (o *orchestrator) SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string) {
 	o.instanceController.SetEndpointPublisher(publisher, nodeID)
+}
+
+// SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
+// to the underlying instance controller.
+func (o *orchestrator) SetMountResolver(resolver controllers.MountResolver) {
+	o.instanceController.SetMountResolver(resolver)
 }

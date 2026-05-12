@@ -34,7 +34,7 @@ type fakeDriver struct {
 	rewriteTarget driver.MountTarget // when non-empty, Mount returns this instead of opts.Target
 }
 
-func (f *fakeDriver) Name() string                    { return f.name }
+func (f *fakeDriver) Name() string                      { return f.name }
 func (f *fakeDriver) Capabilities() driver.Capabilities { return driver.Capabilities{} }
 func (f *fakeDriver) Provision(context.Context, driver.ProvisionRequest) (driver.VolumeHandle, error) {
 	return "", driver.ErrUnsupported

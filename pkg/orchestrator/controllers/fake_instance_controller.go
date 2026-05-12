@@ -322,6 +322,9 @@ func (c *FakeInstanceController) isInstanceCompatibleWithService(ctx context.Con
 // SetEndpointPublisher is a no-op on the fake.
 func (c *FakeInstanceController) SetEndpointPublisher(_ EndpointPublisher, _ string) {}
 
+// SetMountResolver is a no-op on the fake.
+func (c *FakeInstanceController) SetMountResolver(_ MountResolver) {}
+
 func (c *FakeInstanceController) collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error) {
 	instances := make(map[string]*RunningInstance)
 	for id, instance := range c.instances {
