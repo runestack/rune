@@ -47,6 +47,14 @@ type VolumeControllerOptions struct {
 }
 
 // volumeController is the default VolumeController.
+//
+// In addition to the Volume reconciliation loop, the controller also owns
+// the at-most-one-Default `StorageClass` invariant. The full design (see
+// RUNE-073) calls for the API server to enforce this on the write path,
+// but until that lands the controller re-asserts the invariant at boot
+// (after seeding) and on every StorageClass Create/Update event: when a
+// new class arrives with `Default:true`, all other Default classes are
+// flipped to `false` so the most recent write wins.
 type volumeController struct {
 	store         store.Store
 	logger        log.Logger
@@ -61,6 +69,9 @@ type volumeController struct {
 	// Bookkeeping for self-triggered updates so the watch loop doesn't
 	// reconcile its own status writes into oblivion.
 	internalUpdates sync.Map
+
+	// Same idea for StorageClass writes from the uniqueness enforcer.
+	internalSCUpdates sync.Map
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -95,12 +106,20 @@ func (c *volumeController) Start(ctx context.Context) error {
 		// by hand-creating the classes. Log loudly and continue.
 		c.logger.Error("Failed to seed built-in storage classes", log.Err(err))
 	}
+	if err := c.enforceDefaultStorageClassUniqueness(c.ctx, ""); err != nil {
+		c.logger.Error("Failed to enforce Default StorageClass uniqueness at boot", log.Err(err))
+	}
 	watchCh, err := c.store.Watch(c.ctx, types.ResourceTypeVolume, "")
 	if err != nil {
 		return fmt.Errorf("volume controller: watch: %w", err)
 	}
-	c.wg.Add(1)
+	scWatchCh, err := c.store.Watch(c.ctx, types.ResourceTypeStorageClass, "")
+	if err != nil {
+		return fmt.Errorf("volume controller: storage-class watch: %w", err)
+	}
+	c.wg.Add(2)
 	go c.run(watchCh)
+	go c.runStorageClassWatch(scWatchCh)
 	c.logger.Info("Volume controller started")
 	return nil
 }
@@ -322,6 +341,119 @@ func (c *volumeController) findDefaultStorageClass(ctx context.Context) (*types.
 		return nil, fmt.Errorf("no storage class marked Default")
 	}
 	return found, nil
+}
+
+// runStorageClassWatch listens for StorageClass changes and enforces the
+// at-most-one-Default invariant. When a Create or Update event lands a
+// class with Default:true, all other Default classes are flipped to
+// false so the most recent write wins atomically. Self-writes are
+// suppressed via internalSCUpdates so the demotion does not loop.
+func (c *volumeController) runStorageClassWatch(initial <-chan store.WatchEvent) {
+	defer c.wg.Done()
+	watchCh := initial
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case ev, ok := <-watchCh:
+			if !ok {
+				next, err := c.store.Watch(c.ctx, types.ResourceTypeStorageClass, "")
+				if err != nil {
+					if errors.Is(c.ctx.Err(), context.Canceled) {
+						return
+					}
+					c.logger.Error("StorageClass watch restart failed",
+						log.Err(err))
+					time.Sleep(2 * time.Second)
+					continue
+				}
+				watchCh = next
+				continue
+			}
+			if c.isSelfStorageClassUpdate(ev) {
+				continue
+			}
+			if ev.Type != store.WatchEventCreated && ev.Type != store.WatchEventUpdated {
+				continue
+			}
+			sc, ok := ev.Resource.(*types.StorageClass)
+			if !ok || sc == nil || !sc.Default {
+				continue
+			}
+			if err := c.enforceDefaultStorageClassUniqueness(c.ctx, sc.Name); err != nil {
+				c.logger.Error("Failed to enforce Default StorageClass uniqueness",
+					log.Str("trigger", sc.Name),
+					log.Err(err))
+			}
+		}
+	}
+}
+
+// enforceDefaultStorageClassUniqueness ensures at most one StorageClass
+// has Default:true. When `keep` is non-empty it is treated as the
+// canonical Default and any other Default class is flipped to false.
+// When `keep` is empty (boot path), the most-recently-updated Default
+// class wins so existing-default-survives-restart is the default
+// behaviour.
+func (c *volumeController) enforceDefaultStorageClassUniqueness(ctx context.Context, keep string) error {
+	var all []types.StorageClass
+	if err := c.store.List(ctx, types.ResourceTypeStorageClass, "", &all); err != nil {
+		return fmt.Errorf("list storage classes: %w", err)
+	}
+	var defaults []*types.StorageClass
+	for i := range all {
+		if all[i].Default {
+			defaults = append(defaults, &all[i])
+		}
+	}
+	if len(defaults) <= 1 {
+		return nil
+	}
+	winner := keep
+	if winner == "" {
+		// Pick the most-recently-updated default; ties broken by name
+		// for determinism. UpdatedAt zero values sort first so a
+		// freshly-created default still wins over a zeroed one.
+		var w *types.StorageClass
+		for _, sc := range defaults {
+			if w == nil ||
+				sc.UpdatedAt.After(w.UpdatedAt) ||
+				(sc.UpdatedAt.Equal(w.UpdatedAt) && sc.Name < w.Name) {
+				w = sc
+			}
+		}
+		winner = w.Name
+	}
+	for _, sc := range defaults {
+		if sc.Name == winner {
+			continue
+		}
+		demoted := *sc
+		demoted.Default = false
+		demoted.UpdatedAt = time.Now().UTC()
+		c.markSelfStorageClassUpdate(demoted.Name)
+		if err := c.store.Update(ctx, types.ResourceTypeStorageClass, "", demoted.Name, &demoted); err != nil {
+			return fmt.Errorf("demote default storage class %q: %w", demoted.Name, err)
+		}
+		c.logger.Info("Demoted duplicate Default storage class",
+			log.Str("name", demoted.Name),
+			log.Str("winner", winner))
+	}
+	return nil
+}
+
+func (c *volumeController) markSelfStorageClassUpdate(name string) {
+	c.internalSCUpdates.Store(name, time.Now())
+}
+
+func (c *volumeController) isSelfStorageClassUpdate(ev store.WatchEvent) bool {
+	if ev.Type != store.WatchEventUpdated {
+		return false
+	}
+	if _, ok := c.internalSCUpdates.LoadAndDelete(ev.Name); ok {
+		return true
+	}
+	return false
 }
 
 // seedBuiltInStorageClasses idempotently creates the built-in "local"

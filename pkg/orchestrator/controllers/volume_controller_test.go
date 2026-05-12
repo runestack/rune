@@ -303,3 +303,114 @@ func TestVolumeController_ResolvesDefaultClassWhenUnspecified(t *testing.T) {
 		return nil
 	})
 }
+
+// TestVolumeController_DemotesDuplicateDefaultsAtBoot — if multiple
+// StorageClasses with Default:true exist before the controller starts
+// (e.g. an operator hand-edited two records), the boot enforcement step
+// must demote all but one (the most-recently-updated, ties broken by
+// name) so the cluster lands in a consistent state.
+func TestVolumeController_DemotesDuplicateDefaultsAtBoot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ts := store.NewTestStore()
+
+	// Two pre-existing duplicate Defaults; "newer" is the most-recently-
+	// updated of the two. The seed step also creates "local" Default:true
+	// at boot, but we override its UpdatedAt below so "newer" wins
+	// deterministically. (Without the override, real boot timing makes
+	// the freshly-seeded "local" the most recent, which is also valid
+	// behaviour — that path is covered by the noop/seed tests already.)
+	older := &types.StorageClass{
+		ID: "sc-older", Name: "older", Driver: "local",
+		Default: true, UpdatedAt: time.Now().Add(-2 * time.Hour),
+	}
+	newer := &types.StorageClass{
+		ID: "sc-newer", Name: "newer", Driver: "local",
+		Default: true, UpdatedAt: time.Now().Add(time.Hour),
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeStorageClass, "", older.Name, older))
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeStorageClass, "", newer.Name, newer))
+
+	controller, err := NewVolumeController(VolumeControllerOptions{
+		Store:  ts,
+		Logger: log.NewLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, controller.Start(ctx))
+	t.Cleanup(func() { _ = controller.Stop() })
+
+	// After boot, only "newer" (UpdatedAt = now+1h) should still be
+	// Default. "older" must be demoted, and the seeded "local" (which
+	// landed Default:true at boot) must also be demoted because "newer"
+	// is the most-recently-updated.
+	waitFor(t, 2*time.Second, func() error {
+		var n, o, l types.StorageClass
+		require.NoError(t, ts.Get(ctx, types.ResourceTypeStorageClass, "", "newer", &n))
+		require.NoError(t, ts.Get(ctx, types.ResourceTypeStorageClass, "", "older", &o))
+		require.NoError(t, ts.Get(ctx, types.ResourceTypeStorageClass, "", "local", &l))
+		if !n.Default {
+			return errors.New("newer should still be Default")
+		}
+		if o.Default {
+			return errors.New("older should be demoted")
+		}
+		if l.Default {
+			return errors.New("seeded 'local' should be demoted")
+		}
+		return nil
+	})
+}
+
+// TestVolumeController_DemotesPreviousDefaultOnNewWrite — when an
+// operator creates or updates a StorageClass with Default:true, the
+// previously-default class must be flipped to false atomically so the
+// invariant holds at all times.
+func TestVolumeController_DemotesPreviousDefaultOnNewWrite(t *testing.T) {
+	ctx, _, ts, _, _ := setupVolumeController(t)
+
+	// Boot completes with seeded "local" as Default. Now the operator
+	// creates a new class also marked Default:true. The watch should
+	// catch it and demote "local".
+	newDefault := &types.StorageClass{
+		ID:        "sc-cloud",
+		Name:      "do-block-ssd",
+		Driver:    "local",
+		Default:   true,
+		UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeStorageClass, "", newDefault.Name, newDefault))
+
+	waitFor(t, 2*time.Second, func() error {
+		var localSC types.StorageClass
+		require.NoError(t, ts.Get(ctx, types.ResourceTypeStorageClass, "", "local", &localSC))
+		if localSC.Default {
+			return errors.New("'local' should have been demoted")
+		}
+		var cloud types.StorageClass
+		require.NoError(t, ts.Get(ctx, types.ResourceTypeStorageClass, "", "do-block-ssd", &cloud))
+		if !cloud.Default {
+			return errors.New("'do-block-ssd' should still be Default")
+		}
+		return nil
+	})
+}
+
+// TestVolumeController_NonDefaultWriteIsNoop — writes to non-Default
+// classes must not trigger any demotion.
+func TestVolumeController_NonDefaultWriteIsNoop(t *testing.T) {
+	ctx, _, ts, _, _ := setupVolumeController(t)
+
+	notDefault := &types.StorageClass{
+		ID: "sc-x", Name: "x", Driver: "local",
+		Default:   false,
+		UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeStorageClass, "", notDefault.Name, notDefault))
+
+	// Give the watch a moment to (not) act.
+	time.Sleep(150 * time.Millisecond)
+
+	var localSC types.StorageClass
+	require.NoError(t, ts.Get(ctx, types.ResourceTypeStorageClass, "", "local", &localSC))
+	assert.True(t, localSC.Default, "seeded 'local' must remain Default when a non-Default class is written")
+}
