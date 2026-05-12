@@ -75,6 +75,9 @@ func (d *retryTestDriver) Snapshot(context.Context, driver.SnapshotRequest) (dri
 func (d *retryTestDriver) RestoreFromSnapshot(context.Context, driver.RestoreRequest) (driver.VolumeHandle, error) {
 	return "", driver.ErrUnsupported
 }
+func (d *retryTestDriver) DeleteSnapshot(context.Context, driver.SnapshotHandle) error {
+	return driver.ErrUnsupported
+}
 func (d *retryTestDriver) Expand(context.Context, driver.VolumeHandle, string) error {
 	return driver.ErrUnsupported
 }

@@ -50,6 +50,7 @@ type APIServer struct {
 	auditService        *service.AuditService
 	storageClassService *service.StorageClassService
 	volumeService       *service.VolumeService
+	snapshotService     *service.SnapshotService
 
 	// gRPC server
 	grpcServer *grpc.Server
@@ -176,6 +177,8 @@ func (s *APIServer) Start() error {
 	s.storageClassService = service.NewStorageClassService(s.store, s.logger)
 	s.volumeService = service.NewVolumeService(s.store, s.logger,
 		service.WithDriverConfigs(s.options.StorageDriverConfigs))
+	s.snapshotService = service.NewSnapshotService(s.store, s.logger,
+		service.WithSnapshotDriverConfigs(s.options.StorageDriverConfigs))
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
@@ -250,6 +253,7 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterAuditServiceServer(s.grpcServer, s.auditService)
 	generated.RegisterStorageClassServiceServer(s.grpcServer, s.storageClassService)
 	generated.RegisterVolumeServiceServer(s.grpcServer, s.volumeService)
+	generated.RegisterSnapshotServiceServer(s.grpcServer, s.snapshotService)
 
 	// Extra registrars (e.g. WatchService wired by runed for RUNE-028).
 	for _, reg := range s.options.ExtraGRPCRegistrars {

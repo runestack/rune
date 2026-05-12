@@ -613,3 +613,263 @@ var VolumeService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "pkg/api/proto/storage.proto",
 }
+
+const (
+	SnapshotService_CreateSnapshot_FullMethodName = "/rune.api.SnapshotService/CreateSnapshot"
+	SnapshotService_GetSnapshot_FullMethodName    = "/rune.api.SnapshotService/GetSnapshot"
+	SnapshotService_DeleteSnapshot_FullMethodName = "/rune.api.SnapshotService/DeleteSnapshot"
+	SnapshotService_ListSnapshots_FullMethodName  = "/rune.api.SnapshotService/ListSnapshots"
+	SnapshotService_RestoreVolume_FullMethodName  = "/rune.api.SnapshotService/RestoreVolume"
+)
+
+// SnapshotServiceClient is the client API for SnapshotService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type SnapshotServiceClient interface {
+	CreateSnapshot(ctx context.Context, in *CreateSnapshotRequest, opts ...grpc.CallOption) (*SnapshotResponse, error)
+	GetSnapshot(ctx context.Context, in *GetSnapshotRequest, opts ...grpc.CallOption) (*SnapshotResponse, error)
+	DeleteSnapshot(ctx context.Context, in *DeleteSnapshotRequest, opts ...grpc.CallOption) (*Status, error)
+	ListSnapshots(ctx context.Context, in *ListSnapshotsRequest, opts ...grpc.CallOption) (*ListSnapshotsResponse, error)
+	// RestoreVolume provisions a new Volume from this Snapshot. The
+	// returned Volume starts in Pending; the volume controller drives it
+	// to Available once the driver completes RestoreFromSnapshot.
+	RestoreVolume(ctx context.Context, in *RestoreVolumeRequest, opts ...grpc.CallOption) (*VolumeResponse, error)
+}
+
+type snapshotServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewSnapshotServiceClient(cc grpc.ClientConnInterface) SnapshotServiceClient {
+	return &snapshotServiceClient{cc}
+}
+
+func (c *snapshotServiceClient) CreateSnapshot(ctx context.Context, in *CreateSnapshotRequest, opts ...grpc.CallOption) (*SnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotResponse)
+	err := c.cc.Invoke(ctx, SnapshotService_CreateSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *snapshotServiceClient) GetSnapshot(ctx context.Context, in *GetSnapshotRequest, opts ...grpc.CallOption) (*SnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotResponse)
+	err := c.cc.Invoke(ctx, SnapshotService_GetSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *snapshotServiceClient) DeleteSnapshot(ctx context.Context, in *DeleteSnapshotRequest, opts ...grpc.CallOption) (*Status, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Status)
+	err := c.cc.Invoke(ctx, SnapshotService_DeleteSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *snapshotServiceClient) ListSnapshots(ctx context.Context, in *ListSnapshotsRequest, opts ...grpc.CallOption) (*ListSnapshotsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSnapshotsResponse)
+	err := c.cc.Invoke(ctx, SnapshotService_ListSnapshots_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *snapshotServiceClient) RestoreVolume(ctx context.Context, in *RestoreVolumeRequest, opts ...grpc.CallOption) (*VolumeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumeResponse)
+	err := c.cc.Invoke(ctx, SnapshotService_RestoreVolume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SnapshotServiceServer is the server API for SnapshotService service.
+// All implementations must embed UnimplementedSnapshotServiceServer
+// for forward compatibility.
+type SnapshotServiceServer interface {
+	CreateSnapshot(context.Context, *CreateSnapshotRequest) (*SnapshotResponse, error)
+	GetSnapshot(context.Context, *GetSnapshotRequest) (*SnapshotResponse, error)
+	DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*Status, error)
+	ListSnapshots(context.Context, *ListSnapshotsRequest) (*ListSnapshotsResponse, error)
+	// RestoreVolume provisions a new Volume from this Snapshot. The
+	// returned Volume starts in Pending; the volume controller drives it
+	// to Available once the driver completes RestoreFromSnapshot.
+	RestoreVolume(context.Context, *RestoreVolumeRequest) (*VolumeResponse, error)
+	mustEmbedUnimplementedSnapshotServiceServer()
+}
+
+// UnimplementedSnapshotServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedSnapshotServiceServer struct{}
+
+func (UnimplementedSnapshotServiceServer) CreateSnapshot(context.Context, *CreateSnapshotRequest) (*SnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateSnapshot not implemented")
+}
+func (UnimplementedSnapshotServiceServer) GetSnapshot(context.Context, *GetSnapshotRequest) (*SnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSnapshot not implemented")
+}
+func (UnimplementedSnapshotServiceServer) DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*Status, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteSnapshot not implemented")
+}
+func (UnimplementedSnapshotServiceServer) ListSnapshots(context.Context, *ListSnapshotsRequest) (*ListSnapshotsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListSnapshots not implemented")
+}
+func (UnimplementedSnapshotServiceServer) RestoreVolume(context.Context, *RestoreVolumeRequest) (*VolumeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RestoreVolume not implemented")
+}
+func (UnimplementedSnapshotServiceServer) mustEmbedUnimplementedSnapshotServiceServer() {}
+func (UnimplementedSnapshotServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeSnapshotServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SnapshotServiceServer will
+// result in compilation errors.
+type UnsafeSnapshotServiceServer interface {
+	mustEmbedUnimplementedSnapshotServiceServer()
+}
+
+func RegisterSnapshotServiceServer(s grpc.ServiceRegistrar, srv SnapshotServiceServer) {
+	// If the following call pancis, it indicates UnimplementedSnapshotServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&SnapshotService_ServiceDesc, srv)
+}
+
+func _SnapshotService_CreateSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).CreateSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_CreateSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).CreateSnapshot(ctx, req.(*CreateSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SnapshotService_GetSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).GetSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_GetSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).GetSnapshot(ctx, req.(*GetSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SnapshotService_DeleteSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).DeleteSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_DeleteSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).DeleteSnapshot(ctx, req.(*DeleteSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SnapshotService_ListSnapshots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSnapshotsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).ListSnapshots(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_ListSnapshots_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).ListSnapshots(ctx, req.(*ListSnapshotsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SnapshotService_RestoreVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SnapshotServiceServer).RestoreVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SnapshotService_RestoreVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SnapshotServiceServer).RestoreVolume(ctx, req.(*RestoreVolumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// SnapshotService_ServiceDesc is the grpc.ServiceDesc for SnapshotService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var SnapshotService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "rune.api.SnapshotService",
+	HandlerType: (*SnapshotServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateSnapshot",
+			Handler:    _SnapshotService_CreateSnapshot_Handler,
+		},
+		{
+			MethodName: "GetSnapshot",
+			Handler:    _SnapshotService_GetSnapshot_Handler,
+		},
+		{
+			MethodName: "DeleteSnapshot",
+			Handler:    _SnapshotService_DeleteSnapshot_Handler,
+		},
+		{
+			MethodName: "ListSnapshots",
+			Handler:    _SnapshotService_ListSnapshots_Handler,
+		},
+		{
+			MethodName: "RestoreVolume",
+			Handler:    _SnapshotService_RestoreVolume_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "pkg/api/proto/storage.proto",
+}

@@ -193,3 +193,92 @@ service VolumeService {
   // allowed regardless of current status.
   rpc DetachVolume(DetachVolumeRequest) returns (VolumeResponse);
 }
+
+// =============================================================================
+// Snapshot
+// =============================================================================
+
+// Snapshot mirrors pkg/types.Snapshot. Namespace-scoped point-in-time copy
+// of a Volume.
+message Snapshot {
+  string id = 1;
+  string name = 2;
+  string namespace = 3;
+  map<string, string> labels = 4;
+  // SourceVolume is the bare name of the Volume in the same namespace.
+  string source_volume = 5;
+  // Driver records which driver took the snapshot — needed at restore
+  // time to route the call.
+  string driver = 6;
+  // Handle is the driver-populated opaque snapshot identifier.
+  string handle = 7;
+  int64 size_bytes = 8;
+  // Scheduled is true when the snapshot was created by a SnapshotSchedule
+  // rather than an explicit create call.
+  bool scheduled = 9;
+  // Phase is one of: Pending, Creating, Ready, Deleting, Failed.
+  string phase = 10;
+  string reason = 11;
+  string message = 12;
+  string created_at = 13;
+  string updated_at = 14;
+}
+
+message CreateSnapshotRequest {
+  Snapshot snapshot = 1;
+  bool ensure_namespace = 2;
+}
+
+message GetSnapshotRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message DeleteSnapshotRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message ListSnapshotsRequest {
+  string namespace = 1;
+  map<string, string> label_selector = 2;
+  PagingParams paging = 3;
+}
+
+message SnapshotResponse {
+  Snapshot snapshot = 1;
+  Status status = 2;
+}
+
+message ListSnapshotsResponse {
+  repeated Snapshot snapshots = 1;
+  Status status = 2;
+}
+
+// RestoreVolumeRequest provisions a NEW Volume from an existing Snapshot.
+// The new Volume lives in target_namespace (defaults to the snapshot's
+// namespace when empty) under target_volume_name. The controller picks up
+// the resulting Pending volume, calls Driver.RestoreFromSnapshot, and
+// transitions the volume to Available with the restored handle.
+message RestoreVolumeRequest {
+  string snapshot_name = 1;
+  string snapshot_namespace = 2;
+  string target_volume_name = 3;
+  string target_namespace = 4;
+  map<string, string> labels = 5;
+  // StorageClassName overrides the snapshot's class on the restored
+  // Volume. Empty defers to the source volume's class.
+  string storage_class_name = 6;
+}
+
+service SnapshotService {
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (SnapshotResponse);
+  rpc GetSnapshot(GetSnapshotRequest) returns (SnapshotResponse);
+  rpc DeleteSnapshot(DeleteSnapshotRequest) returns (Status);
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+
+  // RestoreVolume provisions a new Volume from this Snapshot. The
+  // returned Volume starts in Pending; the volume controller drives it
+  // to Available once the driver completes RestoreFromSnapshot.
+  rpc RestoreVolume(RestoreVolumeRequest) returns (VolumeResponse);
+}

@@ -1337,6 +1337,574 @@ func (x *DetachVolumeRequest) GetForce() bool {
 	return false
 }
 
+// Snapshot mirrors pkg/types.Snapshot. Namespace-scoped point-in-time copy
+// of a Volume.
+type Snapshot struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Labels    map[string]string      `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// SourceVolume is the bare name of the Volume in the same namespace.
+	SourceVolume string `protobuf:"bytes,5,opt,name=source_volume,json=sourceVolume,proto3" json:"source_volume,omitempty"`
+	// Driver records which driver took the snapshot — needed at restore
+	// time to route the call.
+	Driver string `protobuf:"bytes,6,opt,name=driver,proto3" json:"driver,omitempty"`
+	// Handle is the driver-populated opaque snapshot identifier.
+	Handle    string `protobuf:"bytes,7,opt,name=handle,proto3" json:"handle,omitempty"`
+	SizeBytes int64  `protobuf:"varint,8,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	// Scheduled is true when the snapshot was created by a SnapshotSchedule
+	// rather than an explicit create call.
+	Scheduled bool `protobuf:"varint,9,opt,name=scheduled,proto3" json:"scheduled,omitempty"`
+	// Phase is one of: Pending, Creating, Ready, Deleting, Failed.
+	Phase         string `protobuf:"bytes,10,opt,name=phase,proto3" json:"phase,omitempty"`
+	Reason        string `protobuf:"bytes,11,opt,name=reason,proto3" json:"reason,omitempty"`
+	Message       string `protobuf:"bytes,12,opt,name=message,proto3" json:"message,omitempty"`
+	CreatedAt     string `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     string `protobuf:"bytes,14,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Snapshot) Reset() {
+	*x = Snapshot{}
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Snapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Snapshot) ProtoMessage() {}
+
+func (x *Snapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Snapshot.ProtoReflect.Descriptor instead.
+func (*Snapshot) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_storage_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *Snapshot) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Snapshot) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Snapshot) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *Snapshot) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *Snapshot) GetSourceVolume() string {
+	if x != nil {
+		return x.SourceVolume
+	}
+	return ""
+}
+
+func (x *Snapshot) GetDriver() string {
+	if x != nil {
+		return x.Driver
+	}
+	return ""
+}
+
+func (x *Snapshot) GetHandle() string {
+	if x != nil {
+		return x.Handle
+	}
+	return ""
+}
+
+func (x *Snapshot) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *Snapshot) GetScheduled() bool {
+	if x != nil {
+		return x.Scheduled
+	}
+	return false
+}
+
+func (x *Snapshot) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *Snapshot) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *Snapshot) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *Snapshot) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *Snapshot) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+type CreateSnapshotRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Snapshot        *Snapshot              `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	EnsureNamespace bool                   `protobuf:"varint,2,opt,name=ensure_namespace,json=ensureNamespace,proto3" json:"ensure_namespace,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CreateSnapshotRequest) Reset() {
+	*x = CreateSnapshotRequest{}
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSnapshotRequest) ProtoMessage() {}
+
+func (x *CreateSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*CreateSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_storage_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *CreateSnapshotRequest) GetSnapshot() *Snapshot {
+	if x != nil {
+		return x.Snapshot
+	}
+	return nil
+}
+
+func (x *CreateSnapshotRequest) GetEnsureNamespace() bool {
+	if x != nil {
+		return x.EnsureNamespace
+	}
+	return false
+}
+
+type GetSnapshotRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSnapshotRequest) Reset() {
+	*x = GetSnapshotRequest{}
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSnapshotRequest) ProtoMessage() {}
+
+func (x *GetSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*GetSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_storage_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *GetSnapshotRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GetSnapshotRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+type DeleteSnapshotRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSnapshotRequest) Reset() {
+	*x = DeleteSnapshotRequest{}
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSnapshotRequest) ProtoMessage() {}
+
+func (x *DeleteSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*DeleteSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_storage_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *DeleteSnapshotRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DeleteSnapshotRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+type ListSnapshotsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	LabelSelector map[string]string      `protobuf:"bytes,2,rep,name=label_selector,json=labelSelector,proto3" json:"label_selector,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Paging        *PagingParams          `protobuf:"bytes,3,opt,name=paging,proto3" json:"paging,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSnapshotsRequest) Reset() {
+	*x = ListSnapshotsRequest{}
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSnapshotsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSnapshotsRequest) ProtoMessage() {}
+
+func (x *ListSnapshotsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSnapshotsRequest.ProtoReflect.Descriptor instead.
+func (*ListSnapshotsRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_storage_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ListSnapshotsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ListSnapshotsRequest) GetLabelSelector() map[string]string {
+	if x != nil {
+		return x.LabelSelector
+	}
+	return nil
+}
+
+func (x *ListSnapshotsRequest) GetPaging() *PagingParams {
+	if x != nil {
+		return x.Paging
+	}
+	return nil
+}
+
+type SnapshotResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Snapshot      *Snapshot              `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotResponse) Reset() {
+	*x = SnapshotResponse{}
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotResponse) ProtoMessage() {}
+
+func (x *SnapshotResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotResponse.ProtoReflect.Descriptor instead.
+func (*SnapshotResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_storage_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *SnapshotResponse) GetSnapshot() *Snapshot {
+	if x != nil {
+		return x.Snapshot
+	}
+	return nil
+}
+
+func (x *SnapshotResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+type ListSnapshotsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Snapshots     []*Snapshot            `protobuf:"bytes,1,rep,name=snapshots,proto3" json:"snapshots,omitempty"`
+	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSnapshotsResponse) Reset() {
+	*x = ListSnapshotsResponse{}
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSnapshotsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSnapshotsResponse) ProtoMessage() {}
+
+func (x *ListSnapshotsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSnapshotsResponse.ProtoReflect.Descriptor instead.
+func (*ListSnapshotsResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_storage_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ListSnapshotsResponse) GetSnapshots() []*Snapshot {
+	if x != nil {
+		return x.Snapshots
+	}
+	return nil
+}
+
+func (x *ListSnapshotsResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+// RestoreVolumeRequest provisions a NEW Volume from an existing Snapshot.
+// The new Volume lives in target_namespace (defaults to the snapshot's
+// namespace when empty) under target_volume_name. The controller picks up
+// the resulting Pending volume, calls Driver.RestoreFromSnapshot, and
+// transitions the volume to Available with the restored handle.
+type RestoreVolumeRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SnapshotName      string                 `protobuf:"bytes,1,opt,name=snapshot_name,json=snapshotName,proto3" json:"snapshot_name,omitempty"`
+	SnapshotNamespace string                 `protobuf:"bytes,2,opt,name=snapshot_namespace,json=snapshotNamespace,proto3" json:"snapshot_namespace,omitempty"`
+	TargetVolumeName  string                 `protobuf:"bytes,3,opt,name=target_volume_name,json=targetVolumeName,proto3" json:"target_volume_name,omitempty"`
+	TargetNamespace   string                 `protobuf:"bytes,4,opt,name=target_namespace,json=targetNamespace,proto3" json:"target_namespace,omitempty"`
+	Labels            map[string]string      `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// StorageClassName overrides the snapshot's class on the restored
+	// Volume. Empty defers to the source volume's class.
+	StorageClassName string `protobuf:"bytes,6,opt,name=storage_class_name,json=storageClassName,proto3" json:"storage_class_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RestoreVolumeRequest) Reset() {
+	*x = RestoreVolumeRequest{}
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RestoreVolumeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RestoreVolumeRequest) ProtoMessage() {}
+
+func (x *RestoreVolumeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_storage_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RestoreVolumeRequest.ProtoReflect.Descriptor instead.
+func (*RestoreVolumeRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_storage_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *RestoreVolumeRequest) GetSnapshotName() string {
+	if x != nil {
+		return x.SnapshotName
+	}
+	return ""
+}
+
+func (x *RestoreVolumeRequest) GetSnapshotNamespace() string {
+	if x != nil {
+		return x.SnapshotNamespace
+	}
+	return ""
+}
+
+func (x *RestoreVolumeRequest) GetTargetVolumeName() string {
+	if x != nil {
+		return x.TargetVolumeName
+	}
+	return ""
+}
+
+func (x *RestoreVolumeRequest) GetTargetNamespace() string {
+	if x != nil {
+		return x.TargetNamespace
+	}
+	return ""
+}
+
+func (x *RestoreVolumeRequest) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *RestoreVolumeRequest) GetStorageClassName() string {
+	if x != nil {
+		return x.StorageClassName
+	}
+	return ""
+}
+
 var File_pkg_api_proto_storage_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_storage_proto_rawDesc = "" +
@@ -1466,7 +2034,61 @@ const file_pkg_api_proto_storage_proto_rawDesc = "" +
 	"\x13DetachVolumeRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x14\n" +
-	"\x05force\x18\x03 \x01(\bR\x05force2\xce\x03\n" +
+	"\x05force\x18\x03 \x01(\bR\x05force\"\xd7\x03\n" +
+	"\bSnapshot\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x126\n" +
+	"\x06labels\x18\x04 \x03(\v2\x1e.rune.api.Snapshot.LabelsEntryR\x06labels\x12#\n" +
+	"\rsource_volume\x18\x05 \x01(\tR\fsourceVolume\x12\x16\n" +
+	"\x06driver\x18\x06 \x01(\tR\x06driver\x12\x16\n" +
+	"\x06handle\x18\a \x01(\tR\x06handle\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\b \x01(\x03R\tsizeBytes\x12\x1c\n" +
+	"\tscheduled\x18\t \x01(\bR\tscheduled\x12\x14\n" +
+	"\x05phase\x18\n" +
+	" \x01(\tR\x05phase\x12\x16\n" +
+	"\x06reason\x18\v \x01(\tR\x06reason\x12\x18\n" +
+	"\amessage\x18\f \x01(\tR\amessage\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\r \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\x0e \x01(\tR\tupdatedAt\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"r\n" +
+	"\x15CreateSnapshotRequest\x12.\n" +
+	"\bsnapshot\x18\x01 \x01(\v2\x12.rune.api.SnapshotR\bsnapshot\x12)\n" +
+	"\x10ensure_namespace\x18\x02 \x01(\bR\x0fensureNamespace\"F\n" +
+	"\x12GetSnapshotRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"I\n" +
+	"\x15DeleteSnapshotRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"\x80\x02\n" +
+	"\x14ListSnapshotsRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12X\n" +
+	"\x0elabel_selector\x18\x02 \x03(\v21.rune.api.ListSnapshotsRequest.LabelSelectorEntryR\rlabelSelector\x12.\n" +
+	"\x06paging\x18\x03 \x01(\v2\x16.rune.api.PagingParamsR\x06paging\x1a@\n" +
+	"\x12LabelSelectorEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"l\n" +
+	"\x10SnapshotResponse\x12.\n" +
+	"\bsnapshot\x18\x01 \x01(\v2\x12.rune.api.SnapshotR\bsnapshot\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"s\n" +
+	"\x15ListSnapshotsResponse\x120\n" +
+	"\tsnapshots\x18\x01 \x03(\v2\x12.rune.api.SnapshotR\tsnapshots\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"\xf0\x02\n" +
+	"\x14RestoreVolumeRequest\x12#\n" +
+	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\x12-\n" +
+	"\x12snapshot_namespace\x18\x02 \x01(\tR\x11snapshotNamespace\x12,\n" +
+	"\x12target_volume_name\x18\x03 \x01(\tR\x10targetVolumeName\x12)\n" +
+	"\x10target_namespace\x18\x04 \x01(\tR\x0ftargetNamespace\x12B\n" +
+	"\x06labels\x18\x05 \x03(\v2*.rune.api.RestoreVolumeRequest.LabelsEntryR\x06labels\x12,\n" +
+	"\x12storage_class_name\x18\x06 \x01(\tR\x10storageClassName\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xce\x03\n" +
 	"\x13StorageClassService\x12Y\n" +
 	"\x12CreateStorageClass\x12#.rune.api.CreateStorageClassRequest\x1a\x1e.rune.api.StorageClassResponse\x12S\n" +
 	"\x0fGetStorageClass\x12 .rune.api.GetStorageClassRequest\x1a\x1e.rune.api.StorageClassResponse\x12Y\n" +
@@ -1480,7 +2102,13 @@ const file_pkg_api_proto_storage_proto_rawDesc = "" +
 	"\fDeleteVolume\x12\x1d.rune.api.DeleteVolumeRequest\x1a\x10.rune.api.Status\x12J\n" +
 	"\vListVolumes\x12\x1c.rune.api.ListVolumesRequest\x1a\x1d.rune.api.ListVolumesResponse\x12W\n" +
 	"\x14RetryProvisionVolume\x12%.rune.api.RetryProvisionVolumeRequest\x1a\x18.rune.api.VolumeResponse\x12G\n" +
-	"\fDetachVolume\x12\x1d.rune.api.DetachVolumeRequest\x1a\x18.rune.api.VolumeResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\fDetachVolume\x12\x1d.rune.api.DetachVolumeRequest\x1a\x18.rune.api.VolumeResponse2\x8b\x03\n" +
+	"\x0fSnapshotService\x12M\n" +
+	"\x0eCreateSnapshot\x12\x1f.rune.api.CreateSnapshotRequest\x1a\x1a.rune.api.SnapshotResponse\x12G\n" +
+	"\vGetSnapshot\x12\x1c.rune.api.GetSnapshotRequest\x1a\x1a.rune.api.SnapshotResponse\x12C\n" +
+	"\x0eDeleteSnapshot\x12\x1f.rune.api.DeleteSnapshotRequest\x1a\x10.rune.api.Status\x12P\n" +
+	"\rListSnapshots\x12\x1e.rune.api.ListSnapshotsRequest\x1a\x1f.rune.api.ListSnapshotsResponse\x12I\n" +
+	"\rRestoreVolume\x12\x1e.rune.api.RestoreVolumeRequest\x1a\x18.rune.api.VolumeResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_storage_proto_rawDescOnce sync.Once
@@ -1494,7 +2122,7 @@ func file_pkg_api_proto_storage_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_storage_proto_rawDescData
 }
 
-var file_pkg_api_proto_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_pkg_api_proto_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
 var file_pkg_api_proto_storage_proto_goTypes = []any{
 	(*TopologyMatchExpression)(nil),     // 0: rune.api.TopologyMatchExpression
 	(*TopologySelector)(nil),            // 1: rune.api.TopologySelector
@@ -1517,72 +2145,102 @@ var file_pkg_api_proto_storage_proto_goTypes = []any{
 	(*ListVolumesResponse)(nil),         // 18: rune.api.ListVolumesResponse
 	(*RetryProvisionVolumeRequest)(nil), // 19: rune.api.RetryProvisionVolumeRequest
 	(*DetachVolumeRequest)(nil),         // 20: rune.api.DetachVolumeRequest
-	nil,                                 // 21: rune.api.TopologySelector.MatchLabelsEntry
-	nil,                                 // 22: rune.api.StorageClass.ParametersEntry
-	nil,                                 // 23: rune.api.StorageClass.LabelsEntry
-	nil,                                 // 24: rune.api.ListStorageClassesRequest.LabelSelectorEntry
-	nil,                                 // 25: rune.api.Volume.LabelsEntry
-	nil,                                 // 26: rune.api.Volume.ParametersEntry
-	nil,                                 // 27: rune.api.ListVolumesRequest.LabelSelectorEntry
-	nil,                                 // 28: rune.api.ListVolumesRequest.FieldSelectorEntry
-	(*PagingParams)(nil),                // 29: rune.api.PagingParams
-	(*Status)(nil),                      // 30: rune.api.Status
+	(*Snapshot)(nil),                    // 21: rune.api.Snapshot
+	(*CreateSnapshotRequest)(nil),       // 22: rune.api.CreateSnapshotRequest
+	(*GetSnapshotRequest)(nil),          // 23: rune.api.GetSnapshotRequest
+	(*DeleteSnapshotRequest)(nil),       // 24: rune.api.DeleteSnapshotRequest
+	(*ListSnapshotsRequest)(nil),        // 25: rune.api.ListSnapshotsRequest
+	(*SnapshotResponse)(nil),            // 26: rune.api.SnapshotResponse
+	(*ListSnapshotsResponse)(nil),       // 27: rune.api.ListSnapshotsResponse
+	(*RestoreVolumeRequest)(nil),        // 28: rune.api.RestoreVolumeRequest
+	nil,                                 // 29: rune.api.TopologySelector.MatchLabelsEntry
+	nil,                                 // 30: rune.api.StorageClass.ParametersEntry
+	nil,                                 // 31: rune.api.StorageClass.LabelsEntry
+	nil,                                 // 32: rune.api.ListStorageClassesRequest.LabelSelectorEntry
+	nil,                                 // 33: rune.api.Volume.LabelsEntry
+	nil,                                 // 34: rune.api.Volume.ParametersEntry
+	nil,                                 // 35: rune.api.ListVolumesRequest.LabelSelectorEntry
+	nil,                                 // 36: rune.api.ListVolumesRequest.FieldSelectorEntry
+	nil,                                 // 37: rune.api.Snapshot.LabelsEntry
+	nil,                                 // 38: rune.api.ListSnapshotsRequest.LabelSelectorEntry
+	nil,                                 // 39: rune.api.RestoreVolumeRequest.LabelsEntry
+	(*PagingParams)(nil),                // 40: rune.api.PagingParams
+	(*Status)(nil),                      // 41: rune.api.Status
 }
 var file_pkg_api_proto_storage_proto_depIdxs = []int32{
-	21, // 0: rune.api.TopologySelector.match_labels:type_name -> rune.api.TopologySelector.MatchLabelsEntry
+	29, // 0: rune.api.TopologySelector.match_labels:type_name -> rune.api.TopologySelector.MatchLabelsEntry
 	0,  // 1: rune.api.TopologySelector.match_expressions:type_name -> rune.api.TopologyMatchExpression
-	22, // 2: rune.api.StorageClass.parameters:type_name -> rune.api.StorageClass.ParametersEntry
+	30, // 2: rune.api.StorageClass.parameters:type_name -> rune.api.StorageClass.ParametersEntry
 	1,  // 3: rune.api.StorageClass.allowed_topologies:type_name -> rune.api.TopologySelector
-	23, // 4: rune.api.StorageClass.labels:type_name -> rune.api.StorageClass.LabelsEntry
+	31, // 4: rune.api.StorageClass.labels:type_name -> rune.api.StorageClass.LabelsEntry
 	2,  // 5: rune.api.CreateStorageClassRequest.storage_class:type_name -> rune.api.StorageClass
 	2,  // 6: rune.api.UpdateStorageClassRequest.storage_class:type_name -> rune.api.StorageClass
-	24, // 7: rune.api.ListStorageClassesRequest.label_selector:type_name -> rune.api.ListStorageClassesRequest.LabelSelectorEntry
-	29, // 8: rune.api.ListStorageClassesRequest.paging:type_name -> rune.api.PagingParams
+	32, // 7: rune.api.ListStorageClassesRequest.label_selector:type_name -> rune.api.ListStorageClassesRequest.LabelSelectorEntry
+	40, // 8: rune.api.ListStorageClassesRequest.paging:type_name -> rune.api.PagingParams
 	2,  // 9: rune.api.StorageClassResponse.storage_class:type_name -> rune.api.StorageClass
-	30, // 10: rune.api.StorageClassResponse.status:type_name -> rune.api.Status
+	41, // 10: rune.api.StorageClassResponse.status:type_name -> rune.api.Status
 	2,  // 11: rune.api.ListStorageClassesResponse.storage_classes:type_name -> rune.api.StorageClass
-	30, // 12: rune.api.ListStorageClassesResponse.status:type_name -> rune.api.Status
-	25, // 13: rune.api.Volume.labels:type_name -> rune.api.Volume.LabelsEntry
-	26, // 14: rune.api.Volume.parameters:type_name -> rune.api.Volume.ParametersEntry
+	41, // 12: rune.api.ListStorageClassesResponse.status:type_name -> rune.api.Status
+	33, // 13: rune.api.Volume.labels:type_name -> rune.api.Volume.LabelsEntry
+	34, // 14: rune.api.Volume.parameters:type_name -> rune.api.Volume.ParametersEntry
 	10, // 15: rune.api.Volume.snapshot_schedule:type_name -> rune.api.SnapshotSchedule
 	11, // 16: rune.api.CreateVolumeRequest.volume:type_name -> rune.api.Volume
 	11, // 17: rune.api.UpdateVolumeRequest.volume:type_name -> rune.api.Volume
-	27, // 18: rune.api.ListVolumesRequest.label_selector:type_name -> rune.api.ListVolumesRequest.LabelSelectorEntry
-	28, // 19: rune.api.ListVolumesRequest.field_selector:type_name -> rune.api.ListVolumesRequest.FieldSelectorEntry
-	29, // 20: rune.api.ListVolumesRequest.paging:type_name -> rune.api.PagingParams
+	35, // 18: rune.api.ListVolumesRequest.label_selector:type_name -> rune.api.ListVolumesRequest.LabelSelectorEntry
+	36, // 19: rune.api.ListVolumesRequest.field_selector:type_name -> rune.api.ListVolumesRequest.FieldSelectorEntry
+	40, // 20: rune.api.ListVolumesRequest.paging:type_name -> rune.api.PagingParams
 	11, // 21: rune.api.VolumeResponse.volume:type_name -> rune.api.Volume
-	30, // 22: rune.api.VolumeResponse.status:type_name -> rune.api.Status
+	41, // 22: rune.api.VolumeResponse.status:type_name -> rune.api.Status
 	11, // 23: rune.api.ListVolumesResponse.volumes:type_name -> rune.api.Volume
-	30, // 24: rune.api.ListVolumesResponse.status:type_name -> rune.api.Status
-	3,  // 25: rune.api.StorageClassService.CreateStorageClass:input_type -> rune.api.CreateStorageClassRequest
-	4,  // 26: rune.api.StorageClassService.GetStorageClass:input_type -> rune.api.GetStorageClassRequest
-	5,  // 27: rune.api.StorageClassService.UpdateStorageClass:input_type -> rune.api.UpdateStorageClassRequest
-	6,  // 28: rune.api.StorageClassService.DeleteStorageClass:input_type -> rune.api.DeleteStorageClassRequest
-	7,  // 29: rune.api.StorageClassService.ListStorageClasses:input_type -> rune.api.ListStorageClassesRequest
-	12, // 30: rune.api.VolumeService.CreateVolume:input_type -> rune.api.CreateVolumeRequest
-	13, // 31: rune.api.VolumeService.GetVolume:input_type -> rune.api.GetVolumeRequest
-	14, // 32: rune.api.VolumeService.UpdateVolume:input_type -> rune.api.UpdateVolumeRequest
-	15, // 33: rune.api.VolumeService.DeleteVolume:input_type -> rune.api.DeleteVolumeRequest
-	16, // 34: rune.api.VolumeService.ListVolumes:input_type -> rune.api.ListVolumesRequest
-	19, // 35: rune.api.VolumeService.RetryProvisionVolume:input_type -> rune.api.RetryProvisionVolumeRequest
-	20, // 36: rune.api.VolumeService.DetachVolume:input_type -> rune.api.DetachVolumeRequest
-	8,  // 37: rune.api.StorageClassService.CreateStorageClass:output_type -> rune.api.StorageClassResponse
-	8,  // 38: rune.api.StorageClassService.GetStorageClass:output_type -> rune.api.StorageClassResponse
-	8,  // 39: rune.api.StorageClassService.UpdateStorageClass:output_type -> rune.api.StorageClassResponse
-	30, // 40: rune.api.StorageClassService.DeleteStorageClass:output_type -> rune.api.Status
-	9,  // 41: rune.api.StorageClassService.ListStorageClasses:output_type -> rune.api.ListStorageClassesResponse
-	17, // 42: rune.api.VolumeService.CreateVolume:output_type -> rune.api.VolumeResponse
-	17, // 43: rune.api.VolumeService.GetVolume:output_type -> rune.api.VolumeResponse
-	17, // 44: rune.api.VolumeService.UpdateVolume:output_type -> rune.api.VolumeResponse
-	30, // 45: rune.api.VolumeService.DeleteVolume:output_type -> rune.api.Status
-	18, // 46: rune.api.VolumeService.ListVolumes:output_type -> rune.api.ListVolumesResponse
-	17, // 47: rune.api.VolumeService.RetryProvisionVolume:output_type -> rune.api.VolumeResponse
-	17, // 48: rune.api.VolumeService.DetachVolume:output_type -> rune.api.VolumeResponse
-	37, // [37:49] is the sub-list for method output_type
-	25, // [25:37] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	41, // 24: rune.api.ListVolumesResponse.status:type_name -> rune.api.Status
+	37, // 25: rune.api.Snapshot.labels:type_name -> rune.api.Snapshot.LabelsEntry
+	21, // 26: rune.api.CreateSnapshotRequest.snapshot:type_name -> rune.api.Snapshot
+	38, // 27: rune.api.ListSnapshotsRequest.label_selector:type_name -> rune.api.ListSnapshotsRequest.LabelSelectorEntry
+	40, // 28: rune.api.ListSnapshotsRequest.paging:type_name -> rune.api.PagingParams
+	21, // 29: rune.api.SnapshotResponse.snapshot:type_name -> rune.api.Snapshot
+	41, // 30: rune.api.SnapshotResponse.status:type_name -> rune.api.Status
+	21, // 31: rune.api.ListSnapshotsResponse.snapshots:type_name -> rune.api.Snapshot
+	41, // 32: rune.api.ListSnapshotsResponse.status:type_name -> rune.api.Status
+	39, // 33: rune.api.RestoreVolumeRequest.labels:type_name -> rune.api.RestoreVolumeRequest.LabelsEntry
+	3,  // 34: rune.api.StorageClassService.CreateStorageClass:input_type -> rune.api.CreateStorageClassRequest
+	4,  // 35: rune.api.StorageClassService.GetStorageClass:input_type -> rune.api.GetStorageClassRequest
+	5,  // 36: rune.api.StorageClassService.UpdateStorageClass:input_type -> rune.api.UpdateStorageClassRequest
+	6,  // 37: rune.api.StorageClassService.DeleteStorageClass:input_type -> rune.api.DeleteStorageClassRequest
+	7,  // 38: rune.api.StorageClassService.ListStorageClasses:input_type -> rune.api.ListStorageClassesRequest
+	12, // 39: rune.api.VolumeService.CreateVolume:input_type -> rune.api.CreateVolumeRequest
+	13, // 40: rune.api.VolumeService.GetVolume:input_type -> rune.api.GetVolumeRequest
+	14, // 41: rune.api.VolumeService.UpdateVolume:input_type -> rune.api.UpdateVolumeRequest
+	15, // 42: rune.api.VolumeService.DeleteVolume:input_type -> rune.api.DeleteVolumeRequest
+	16, // 43: rune.api.VolumeService.ListVolumes:input_type -> rune.api.ListVolumesRequest
+	19, // 44: rune.api.VolumeService.RetryProvisionVolume:input_type -> rune.api.RetryProvisionVolumeRequest
+	20, // 45: rune.api.VolumeService.DetachVolume:input_type -> rune.api.DetachVolumeRequest
+	22, // 46: rune.api.SnapshotService.CreateSnapshot:input_type -> rune.api.CreateSnapshotRequest
+	23, // 47: rune.api.SnapshotService.GetSnapshot:input_type -> rune.api.GetSnapshotRequest
+	24, // 48: rune.api.SnapshotService.DeleteSnapshot:input_type -> rune.api.DeleteSnapshotRequest
+	25, // 49: rune.api.SnapshotService.ListSnapshots:input_type -> rune.api.ListSnapshotsRequest
+	28, // 50: rune.api.SnapshotService.RestoreVolume:input_type -> rune.api.RestoreVolumeRequest
+	8,  // 51: rune.api.StorageClassService.CreateStorageClass:output_type -> rune.api.StorageClassResponse
+	8,  // 52: rune.api.StorageClassService.GetStorageClass:output_type -> rune.api.StorageClassResponse
+	8,  // 53: rune.api.StorageClassService.UpdateStorageClass:output_type -> rune.api.StorageClassResponse
+	41, // 54: rune.api.StorageClassService.DeleteStorageClass:output_type -> rune.api.Status
+	9,  // 55: rune.api.StorageClassService.ListStorageClasses:output_type -> rune.api.ListStorageClassesResponse
+	17, // 56: rune.api.VolumeService.CreateVolume:output_type -> rune.api.VolumeResponse
+	17, // 57: rune.api.VolumeService.GetVolume:output_type -> rune.api.VolumeResponse
+	17, // 58: rune.api.VolumeService.UpdateVolume:output_type -> rune.api.VolumeResponse
+	41, // 59: rune.api.VolumeService.DeleteVolume:output_type -> rune.api.Status
+	18, // 60: rune.api.VolumeService.ListVolumes:output_type -> rune.api.ListVolumesResponse
+	17, // 61: rune.api.VolumeService.RetryProvisionVolume:output_type -> rune.api.VolumeResponse
+	17, // 62: rune.api.VolumeService.DetachVolume:output_type -> rune.api.VolumeResponse
+	26, // 63: rune.api.SnapshotService.CreateSnapshot:output_type -> rune.api.SnapshotResponse
+	26, // 64: rune.api.SnapshotService.GetSnapshot:output_type -> rune.api.SnapshotResponse
+	41, // 65: rune.api.SnapshotService.DeleteSnapshot:output_type -> rune.api.Status
+	27, // 66: rune.api.SnapshotService.ListSnapshots:output_type -> rune.api.ListSnapshotsResponse
+	17, // 67: rune.api.SnapshotService.RestoreVolume:output_type -> rune.api.VolumeResponse
+	51, // [51:68] is the sub-list for method output_type
+	34, // [34:51] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_storage_proto_init() }
@@ -1597,9 +2255,9 @@ func file_pkg_api_proto_storage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_storage_proto_rawDesc), len(file_pkg_api_proto_storage_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   29,
+			NumMessages:   40,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_pkg_api_proto_storage_proto_goTypes,
 		DependencyIndexes: file_pkg_api_proto_storage_proto_depIdxs,

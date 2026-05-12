@@ -289,6 +289,32 @@ func (d *managedDriver) Expand(ctx context.Context, handle driver.VolumeHandle, 
 	return driver.ErrUnsupported
 }
 
+// DeleteSnapshot removes the on-disk snapshot tree. Bounded to SnapshotRoot.
+func (d *managedDriver) DeleteSnapshot(ctx context.Context, handle driver.SnapshotHandle) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	dir := string(handle)
+	if dir == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("local: resolve snapshot %q: %w", dir, err)
+	}
+	rootAbs, err := filepath.Abs(d.cfg.SnapshotRoot)
+	if err != nil {
+		return fmt.Errorf("local: resolve snapshot root %q: %w", d.cfg.SnapshotRoot, err)
+	}
+	if !pathHasPrefix(abs, rootAbs) {
+		return fmt.Errorf("local: refusing to delete snapshot %q outside snapshotRoot %q: %w", abs, rootAbs, driver.ErrInvalidConfig)
+	}
+	if err := os.RemoveAll(abs); err != nil {
+		return fmt.Errorf("local: rm -rf snapshot %q: %w", abs, err)
+	}
+	return nil
+}
+
 func (d *managedDriver) volumeDir(v *types.Volume) string {
 	// Volumes live at <root>/<namespace>/<name>/. ID would also work but
 	// keeping the human-readable layout makes operator debugging easier.
@@ -390,6 +416,10 @@ func (d *hostDriver) RestoreFromSnapshot(ctx context.Context, req driver.Restore
 }
 
 func (d *hostDriver) Expand(ctx context.Context, handle driver.VolumeHandle, newSize string) error {
+	return driver.ErrUnsupported
+}
+
+func (d *hostDriver) DeleteSnapshot(ctx context.Context, handle driver.SnapshotHandle) error {
 	return driver.ErrUnsupported
 }
 

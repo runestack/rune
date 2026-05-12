@@ -100,3 +100,52 @@ func handleVolumeGet(_ *cobra.Command, opts *getOptions, resourceName string) er
 	}
 	return renderVolumes(vols, format, opts.allNamespaces)
 }
+
+// handleSnapshotGet handles `rune get snapshot(s) [<name>]`.
+func handleSnapshotGet(_ *cobra.Command, opts *getOptions, resourceName string) error {
+	api, err := createAPIClient(&opts.cmdOptions)
+	if err != nil {
+		return fmt.Errorf("failed to create API client: %w", err)
+	}
+	defer api.Close()
+	sc := client.NewSnapshotClient(api)
+
+	format := opts.outputFormat
+	if format == "" {
+		format = "table"
+	}
+
+	if resourceName != "" {
+		ns := opts.namespace
+		if ns == "" {
+			ns = "default"
+		}
+		s, err := sc.GetSnapshot(ns, resourceName)
+		if err != nil {
+			return fmt.Errorf("failed to get snapshot %s: %w", resourceName, err)
+		}
+		return renderSnapshot(s, format)
+	}
+
+	target := opts.namespace
+	if target == "" {
+		target = "default"
+	}
+	if opts.allNamespaces {
+		target = "*"
+	}
+	snaps, err := sc.ListSnapshots(target, parseLabelSelectorString(opts.labelSelector))
+	if err != nil {
+		return fmt.Errorf("failed to list snapshots: %w", err)
+	}
+	sort.Slice(snaps, func(i, j int) bool {
+		if snaps[i].Namespace != snaps[j].Namespace {
+			return snaps[i].Namespace < snaps[j].Namespace
+		}
+		return snaps[i].Name < snaps[j].Name
+	})
+	if opts.limit > 0 && len(snaps) > opts.limit {
+		snaps = snaps[:opts.limit]
+	}
+	return renderSnapshots(snaps, format, opts.allNamespaces)
+}

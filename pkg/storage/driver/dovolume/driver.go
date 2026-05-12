@@ -270,6 +270,16 @@ func (d *doVolumeDriver) RestoreFromSnapshot(ctx context.Context, req driver.Res
 	return driver.VolumeHandle(vol.ID), nil
 }
 
+func (d *doVolumeDriver) DeleteSnapshot(ctx context.Context, handle driver.SnapshotHandle) error {
+	if handle == "" {
+		return nil
+	}
+	if err := d.client.deleteSnapshot(ctx, string(handle)); err != nil {
+		return fmt.Errorf("dovolume: deleteSnapshot %s: %w", handle, err)
+	}
+	return nil
+}
+
 func (d *doVolumeDriver) Expand(ctx context.Context, handle driver.VolumeHandle, newSize string) error {
 	if handle == "" {
 		return fmt.Errorf("dovolume: Expand: empty handle")

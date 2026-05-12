@@ -203,6 +203,14 @@ func testLifecycle(t *testing.T, cfg Config) {
 			t.Fatalf("RestoreFromSnapshot: %v", err)
 		}
 		t.Cleanup(func() { _ = cfg.Driver.Delete(context.Background(), restoredHandle) })
+
+		// DeleteSnapshot must be idempotent — calling twice is OK.
+		if err := cfg.Driver.DeleteSnapshot(ctx, snapHandle); err != nil {
+			t.Fatalf("DeleteSnapshot: %v", err)
+		}
+		if err := cfg.Driver.DeleteSnapshot(ctx, snapHandle); err != nil {
+			t.Fatalf("DeleteSnapshot (second call must be idempotent): %v", err)
+		}
 	}
 
 	if caps.Expand && !cfg.SkipExpand {

@@ -309,6 +309,21 @@ func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) err
 		}
 	}
 
+	// Restore-from-snapshot path: when a Volume carries the
+	// well-known parameter "rune.io/restoreFromSnapshot=<ns>/<name>",
+	// route this reconcile through Driver.RestoreFromSnapshot instead
+	// of Driver.Provision. The SnapshotService stamps the parameter
+	// when handling RestoreVolume.
+	if ref, ok := merged[types.RestoreFromSnapshotParam]; ok && ref != "" {
+		handle, err := c.restoreFromSnapshot(ctx, vol, class, merged, ref, d)
+		if err != nil {
+			return c.handleProvisionFail(ctx, vol, err)
+		}
+		vol.Handle = string(handle)
+		c.clearRetry(volumeKey(vol.Namespace, vol.Name))
+		return c.updateStatus(ctx, vol, types.VolumeStatusAvailable, "", "")
+	}
+
 	handle, err := d.Provision(ctx, driver.ProvisionRequest{
 		Volume:           vol,
 		StorageClass:     class,
@@ -833,6 +848,53 @@ func (c *volumeController) isSelfUpdate(ev store.WatchEvent) bool {
 }
 
 func volumeKey(ns, name string) string { return ns + "/" + name }
+
+// restoreFromSnapshot resolves the snapshot referenced by ref
+// ("<namespace>/<name>"), validates it belongs to the same driver as the
+// target volume, and invokes Driver.RestoreFromSnapshot.
+func (c *volumeController) restoreFromSnapshot(
+	ctx context.Context,
+	target *types.Volume,
+	class *types.StorageClass,
+	merged map[string]string,
+	ref string,
+	d driver.Driver,
+) (driver.VolumeHandle, error) {
+	ns, name := splitNamespacedRef(ref)
+	if ns == "" || name == "" {
+		return "", fmt.Errorf("invalid restoreFromSnapshot reference %q (want <namespace>/<name>)", ref)
+	}
+	var snap types.Snapshot
+	if err := c.store.Get(ctx, types.ResourceTypeSnapshot, ns, name, &snap); err != nil {
+		return "", fmt.Errorf("get snapshot %s/%s: %w", ns, name, err)
+	}
+	if snap.Phase != types.SnapshotPhaseReady {
+		return "", fmt.Errorf("snapshot %s/%s is in phase %q (must be Ready)", ns, name, snap.Phase)
+	}
+	if snap.Driver != "" && snap.Driver != class.Driver {
+		return "", fmt.Errorf("snapshot %s/%s belongs to driver %q but target storage class uses %q",
+			ns, name, snap.Driver, class.Driver)
+	}
+	return d.RestoreFromSnapshot(ctx, driver.RestoreRequest{
+		Source:           &snap,
+		SourceHandle:     driver.SnapshotHandle(snap.Handle),
+		Target:           target,
+		StorageClass:     class,
+		MergedParameters: merged,
+		SizeBytes:        0,
+	})
+}
+
+// splitNamespacedRef parses "<namespace>/<name>" into its parts. Returns
+// empty strings if the input isn't well-formed.
+func splitNamespacedRef(ref string) (string, string) {
+	for i := 0; i < len(ref); i++ {
+		if ref[i] == '/' {
+			return ref[:i], ref[i+1:]
+		}
+	}
+	return "", ""
+}
 
 // mergeParameters layers Volume.Parameters on top of StorageClass.Parameters,
 // matching the design's "user-supplied wins for the same key" rule.

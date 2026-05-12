@@ -82,6 +82,9 @@ func (f *fakeDriver) RestoreFromSnapshot(context.Context, driver.RestoreRequest)
 func (f *fakeDriver) Expand(context.Context, driver.VolumeHandle, string) error {
 	return driver.ErrUnsupported
 }
+func (f *fakeDriver) DeleteSnapshot(context.Context, driver.SnapshotHandle) error {
+	return driver.ErrUnsupported
+}
 
 func (f *fakeDriver) snapshot() (attaches, detaches int, mounts int, unmounts int) {
 	f.mu.Lock()

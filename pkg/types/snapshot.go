@@ -10,6 +10,14 @@ import "time"
 // SnapshotPhase is the lifecycle phase of a Snapshot resource.
 type SnapshotPhase string
 
+// RestoreFromSnapshotParam is the well-known Volume.Parameters key the
+// SnapshotService stamps on a restore-target Volume so the
+// VolumeController routes its first reconcile through
+// Driver.RestoreFromSnapshot instead of Driver.Provision.
+//
+// Format: "<snapshot-namespace>/<snapshot-name>".
+const RestoreFromSnapshotParam = "rune.io/restoreFromSnapshot"
+
 const (
 	SnapshotPhasePending  SnapshotPhase = "Pending"
 	SnapshotPhaseCreating SnapshotPhase = "Creating"

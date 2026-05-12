@@ -67,6 +67,9 @@ var resourceAliases = map[string]string{
 	"storageclass":   "storageclass",
 	"storageclasses": "storageclass",
 	"sc":             "storageclass",
+	"snapshot":       "snapshot",
+	"snapshots":      "snapshot",
+	"snap":           "snapshot",
 }
 
 // getCmd represents the get command
@@ -173,6 +176,8 @@ func runGet(cmd *cobra.Command, args []string, opts *getOptions) error {
 		return handleVolumeGet(cmd, opts, resourceName)
 	case "storageclass":
 		return handleStorageClassGet(cmd, opts, resourceName)
+	case "snapshot":
+		return handleSnapshotGet(cmd, opts, resourceName)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", args[0])
 	}

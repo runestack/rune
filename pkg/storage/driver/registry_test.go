@@ -36,6 +36,9 @@ func (s *stubDriver) Snapshot(context.Context, driver.SnapshotRequest) (driver.S
 func (s *stubDriver) RestoreFromSnapshot(context.Context, driver.RestoreRequest) (driver.VolumeHandle, error) {
 	return "", driver.ErrUnsupported
 }
+func (s *stubDriver) DeleteSnapshot(context.Context, driver.SnapshotHandle) error {
+	return driver.ErrUnsupported
+}
 func (s *stubDriver) Expand(context.Context, driver.VolumeHandle, string) error {
 	return driver.ErrUnsupported
 }

@@ -74,6 +74,12 @@ type Driver interface {
 	// Drivers without snapshot support MUST return ErrUnsupported.
 	RestoreFromSnapshot(ctx context.Context, req RestoreRequest) (VolumeHandle, error)
 
+	// DeleteSnapshot destroys the snapshot identified by handle. MUST be
+	// idempotent — implementations should swallow ErrNotFound and return
+	// nil so the controller can re-drive a Deleting snapshot safely.
+	// Drivers without snapshot support MUST return ErrUnsupported.
+	DeleteSnapshot(ctx context.Context, handle SnapshotHandle) error
+
 	// Expand grows the volume to NewSize. Online expansion vs offline is
 	// driver-dependent; drivers that only support offline expand (e.g.
 	// do-volume) MUST refuse if the volume is currently Bound and return

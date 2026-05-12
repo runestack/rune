@@ -82,6 +82,7 @@ type orchestrator struct {
 	healthController   controllers.HealthController
 	scalingController  controllers.ScalingController
 	volumeController   controllers.VolumeController
+	snapshotController controllers.SnapshotController
 
 	// Runner manager for executing commands
 	runnerManager manager.IRunnerManager
@@ -194,6 +195,16 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		return nil, fmt.Errorf("failed to create volume controller: %w", err)
 	}
 
+	// SnapshotController owns the Snapshot CRUD reconciliation loop.
+	snapshotController, err := controllers.NewSnapshotController(controllers.SnapshotControllerOptions{
+		Store:         options.Store,
+		Logger:        options.Logger,
+		DriverConfigs: options.StorageDriverConfigs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create snapshot controller: %w", err)
+	}
+
 	return &orchestrator{
 		store:              options.Store,
 		logger:             options.Logger.WithComponent("orchestrator"),
@@ -202,6 +213,7 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		healthController:   healthController,
 		scalingController:  scalingController,
 		volumeController:   volumeController,
+		snapshotController: snapshotController,
 		runnerManager:      options.RunnerManager,
 	}, nil
 }
@@ -238,6 +250,11 @@ func (o *orchestrator) Start(ctx context.Context) error {
 	// Start volume controller
 	if err := o.volumeController.Start(o.ctx); err != nil {
 		return fmt.Errorf("failed to start volume controller: %w", err)
+	}
+
+	// Start snapshot controller
+	if err := o.snapshotController.Start(o.ctx); err != nil {
+		return fmt.Errorf("failed to start snapshot controller: %w", err)
 	}
 
 	o.started = true
@@ -277,6 +294,11 @@ func (o *orchestrator) Stop() error {
 	// Stop volume controller
 	if err := o.volumeController.Stop(); err != nil {
 		o.logger.Error("Failed to stop volume controller", log.Err(err))
+	}
+
+	// Stop snapshot controller
+	if err := o.snapshotController.Stop(); err != nil {
+		o.logger.Error("Failed to stop snapshot controller", log.Err(err))
 	}
 
 	// Wait for all goroutines to finish
