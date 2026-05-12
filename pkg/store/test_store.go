@@ -202,8 +202,10 @@ func (s *TestStore) Create(ctx context.Context, resourceType types.ResourceType,
 
 	fmt.Println("After Create", s.data[resourceType])
 
-	// Send watch event with a copy
-	s.sendWatchEvent(resourceType, namespace, WatchEventCreated, name, storeCopy)
+	// Send watch event with an independent deep-copy so subscribers that mutate
+	// the received resource in-place (e.g. controllers) do not race with later
+	// readers of the stored value via Get.
+	s.sendWatchEvent(resourceType, namespace, WatchEventCreated, name, s.deepCopy(storeCopy))
 
 	return nil
 }
@@ -217,17 +219,19 @@ func (s *TestStore) Get(ctx context.Context, resourceType types.ResourceType, na
 		return errors.New("store is not opened")
 	}
 
-	// Initialize the resource type map if it doesn't exist
-	if _, exists := s.data[resourceType]; !exists {
-		s.data[resourceType] = make(map[string]map[string]interface{})
+	// Read-only path: do not mutate s.data here. Mutating maps under RLock
+	// races with other Get callers and with Update/Create writers when the
+	// race detector is enabled.
+	typeBucket, ok := s.data[resourceType]
+	if !ok {
+		return fmt.Errorf("resource %s/%s/%s not found", resourceType, namespace, name)
+	}
+	nsBucket, ok := typeBucket[namespace]
+	if !ok {
+		return fmt.Errorf("resource %s/%s/%s not found", resourceType, namespace, name)
 	}
 
-	// Initialize the namespace map if it doesn't exist
-	if _, exists := s.data[resourceType][namespace]; !exists {
-		s.data[resourceType][namespace] = make(map[string]interface{})
-	}
-
-	if data, exists := s.data[resourceType][namespace][name]; exists {
+	if data, exists := nsBucket[name]; exists {
 		// For testing purposes, we're implementing a simplified struct copying approach
 		// This works with common test patterns where you pass a pointer to a struct
 
@@ -495,8 +499,11 @@ func (s *TestStore) Update(ctx context.Context, resourceType types.ResourceType,
 		Resource:  storeCopy,
 	})
 
-	// Send watch event with source info and a copy
-	s.sendWatchEventWithSource(resourceType, namespace, WatchEventUpdated, name, storeCopy, options.Source)
+	// Send watch event with source info and an independent deep-copy so
+	// subscribers that mutate the received resource in-place (e.g.
+	// controllers) do not race with later readers of the stored value via
+	// Get.
+	s.sendWatchEventWithSource(resourceType, namespace, WatchEventUpdated, name, s.deepCopy(storeCopy), options.Source)
 
 	return nil
 }
