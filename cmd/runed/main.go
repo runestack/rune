@@ -41,6 +41,9 @@ import (
 	// names with pkg/storage/driver.Registry at init() time. Adding a new
 	// driver (Hetzner, AWS EBS, ...) is one more line here.
 	_ "github.com/runestack/rune/pkg/storage/driver/local"
+
+	"github.com/runestack/rune/pkg/storage/driver/dovolume"
+	"github.com/runestack/rune/pkg/store/repos"
 	"google.golang.org/grpc"
 )
 
@@ -497,6 +500,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Inject a SecretLookup into the do-volume driver config so it can
+	// resolve apiTokenSecretRef at call time. The lookup is plumbed via
+	// the reserved key dovolume.configKeySecretLookup (a leading
+	// underscore signals "not a runefile field"). We mutate the same
+	// appCfg.Storage.Drivers map that's threaded into both the agent's
+	// driver lookup and the volume controller, so the closure is shared.
+	// No-op when the operator has not declared the do-volume driver.
+	injectDOVolumeSecretLookup(appCfg, stateStore)
+
 	// Token-based auth is always enabled in MVP
 	logger.Info("Authentication enabled (token-based)")
 
@@ -863,6 +875,49 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 		return nil, nil, storeDir, err
 	}
 	return st, appCfg, storeDir, nil
+}
+
+// injectDOVolumeSecretLookup wires a SecretRepo-backed SecretLookup
+// into the do-volume driver's runefile config under the reserved key
+// dovolume.configKeySecretLookup. The closure resolves apiTokenSecretRef
+// at every API call so DO token rotation takes effect on the next
+// reconcile without restarting runed.
+//
+// The same Drivers map is threaded into both the agent driver lookup
+// (Attach/Mount/Unmount/Detach) and the API-server's volume controller
+// (Provision/Delete/Snapshot/Restore/Expand), so injecting once here
+// covers both paths. No-op when the operator hasn't declared the
+// driver — we don't want to allocate an empty stanza for clusters
+// that aren't on DO.
+func injectDOVolumeSecretLookup(appCfg *config.Config, st store.Store) {
+	if appCfg == nil {
+		return
+	}
+	if _, present := appCfg.Storage.Drivers[dovolume.DriverName]; !present {
+		// Operator has not configured do-volume; nothing to wire.
+		return
+	}
+	if appCfg.Storage.Drivers == nil {
+		appCfg.Storage.Drivers = map[string]map[string]any{}
+	}
+	if appCfg.Storage.Drivers[dovolume.DriverName] == nil {
+		appCfg.Storage.Drivers[dovolume.DriverName] = map[string]any{}
+	}
+	repo := repos.NewSecretRepo(st)
+	lookup := dovolume.SecretLookup(func(ctx context.Context, ns, name, key string) (string, error) {
+		sec, err := repo.Get(ctx, ns, name)
+		if err != nil {
+			return "", err
+		}
+		v, ok := sec.Data[key]
+		if !ok {
+			return "", fmt.Errorf("secret %s/%s has no key %q", ns, name, key)
+		}
+		return v, nil
+	})
+	// configKeySecretLookup is unexported; use the public string by
+	// agreement with the dovolume package.
+	appCfg.Storage.Drivers[dovolume.DriverName][dovolume.ConfigKeySecretLookup] = lookup
 }
 
 // makeAgentDriverLookup returns a volsub.DriverLookup closure that
