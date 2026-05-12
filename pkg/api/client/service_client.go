@@ -508,6 +508,34 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		}
 	}
 
+	// Convert volume mounts (RUNE-070/072). Exactly one of claim /
+	// claim_template is set per mount; binding state lives on the Volume
+	// resource itself and is not transported on the Service.
+	if len(service.Volumes) > 0 {
+		protoService.Volumes = make([]*generated.VolumeMount, len(service.Volumes))
+		for i, m := range service.Volumes {
+			pv := &generated.VolumeMount{
+				Name:      m.Name,
+				MountPath: m.MountPath,
+				ReadOnly:  m.ReadOnly,
+				SubPath:   m.SubPath,
+			}
+			if m.Claim != nil {
+				pv.Claim = &generated.VolumeClaim{Name: m.Claim.Name}
+			}
+			if m.ClaimTemplate != nil {
+				pv.ClaimTemplate = &generated.VolumeClaimTemplate{
+					StorageClassName: m.ClaimTemplate.StorageClassName,
+					Size:             m.ClaimTemplate.Size,
+					AccessMode:       string(m.ClaimTemplate.AccessMode),
+					Parameters:       m.ClaimTemplate.Parameters,
+					ReclaimPolicy:    string(m.ClaimTemplate.ReclaimPolicy),
+				}
+			}
+			protoService.Volumes[i] = pv
+		}
+	}
+
 	// Convert status
 	switch service.Status {
 	case types.ServiceStatusPending:
@@ -728,6 +756,32 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 				ConfigmapName: m.ConfigmapName,
 				Items:         items,
 			}
+		}
+	}
+
+	// Convert volume mounts (RUNE-070/072).
+	if len(proto.Volumes) > 0 {
+		service.Volumes = make([]types.VolumeMount, len(proto.Volumes))
+		for i, m := range proto.Volumes {
+			vm := types.VolumeMount{
+				Name:      m.Name,
+				MountPath: m.MountPath,
+				ReadOnly:  m.ReadOnly,
+				SubPath:   m.SubPath,
+			}
+			if m.Claim != nil {
+				vm.Claim = &types.VolumeClaim{Name: m.Claim.Name}
+			}
+			if m.ClaimTemplate != nil {
+				vm.ClaimTemplate = &types.VolumeClaimTemplate{
+					StorageClassName: m.ClaimTemplate.StorageClassName,
+					Size:             m.ClaimTemplate.Size,
+					AccessMode:       types.AccessMode(m.ClaimTemplate.AccessMode),
+					Parameters:       m.ClaimTemplate.Parameters,
+					ReclaimPolicy:    types.ReclaimPolicy(m.ClaimTemplate.ReclaimPolicy),
+				}
+			}
+			service.Volumes[i] = vm
 		}
 	}
 

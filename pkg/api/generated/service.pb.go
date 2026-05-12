@@ -190,6 +190,9 @@ type Service struct {
 	// StatusMessage. Used by the CLI to show "why" without a second
 	// command.
 	StatusMessage string `protobuf:"bytes,25,opt,name=status_message,json=statusMessage,proto3" json:"status_message,omitempty"`
+	// Volume mounts (RUNE-070/072). Exactly one of claim / claim_template
+	// is set per mount; binding state lives on the Volume resource itself.
+	Volumes       []*VolumeMount `protobuf:"bytes,26,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -397,6 +400,13 @@ func (x *Service) GetStatusMessage() string {
 		return x.StatusMessage
 	}
 	return ""
+}
+
+func (x *Service) GetVolumes() []*VolumeMount {
+	if x != nil {
+		return x.Volumes
+	}
+	return nil
 }
 
 // EnvFromSource represents an environment import source
@@ -750,6 +760,215 @@ func (x *ConfigmapMount) GetItems() []*KeyToPath {
 	return nil
 }
 
+// VolumeClaim references an existing Volume by bare name (resolved in
+// the service's namespace) or "<namespace>/<name>".
+type VolumeClaim struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VolumeClaim) Reset() {
+	*x = VolumeClaim{}
+	mi := &file_pkg_api_proto_service_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VolumeClaim) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VolumeClaim) ProtoMessage() {}
+
+func (x *VolumeClaim) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_service_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VolumeClaim.ProtoReflect.Descriptor instead.
+func (*VolumeClaim) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *VolumeClaim) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// VolumeClaimTemplate provisions one Volume per replica.
+type VolumeClaimTemplate struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	StorageClassName string                 `protobuf:"bytes,1,opt,name=storage_class_name,json=storageClassName,proto3" json:"storage_class_name,omitempty"`
+	Size             string                 `protobuf:"bytes,2,opt,name=size,proto3" json:"size,omitempty"`
+	AccessMode       string                 `protobuf:"bytes,3,opt,name=access_mode,json=accessMode,proto3" json:"access_mode,omitempty"`
+	Parameters       map[string]string      `protobuf:"bytes,4,rep,name=parameters,proto3" json:"parameters,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ReclaimPolicy    string                 `protobuf:"bytes,5,opt,name=reclaim_policy,json=reclaimPolicy,proto3" json:"reclaim_policy,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *VolumeClaimTemplate) Reset() {
+	*x = VolumeClaimTemplate{}
+	mi := &file_pkg_api_proto_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VolumeClaimTemplate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VolumeClaimTemplate) ProtoMessage() {}
+
+func (x *VolumeClaimTemplate) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VolumeClaimTemplate.ProtoReflect.Descriptor instead.
+func (*VolumeClaimTemplate) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *VolumeClaimTemplate) GetStorageClassName() string {
+	if x != nil {
+		return x.StorageClassName
+	}
+	return ""
+}
+
+func (x *VolumeClaimTemplate) GetSize() string {
+	if x != nil {
+		return x.Size
+	}
+	return ""
+}
+
+func (x *VolumeClaimTemplate) GetAccessMode() string {
+	if x != nil {
+		return x.AccessMode
+	}
+	return ""
+}
+
+func (x *VolumeClaimTemplate) GetParameters() map[string]string {
+	if x != nil {
+		return x.Parameters
+	}
+	return nil
+}
+
+func (x *VolumeClaimTemplate) GetReclaimPolicy() string {
+	if x != nil {
+		return x.ReclaimPolicy
+	}
+	return ""
+}
+
+// VolumeMount declares a volume reference inside a container.
+// Exactly one of claim / claim_template is set.
+type VolumeMount struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	MountPath     string                 `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
+	ReadOnly      bool                   `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	SubPath       string                 `protobuf:"bytes,4,opt,name=sub_path,json=subPath,proto3" json:"sub_path,omitempty"`
+	Claim         *VolumeClaim           `protobuf:"bytes,5,opt,name=claim,proto3" json:"claim,omitempty"`
+	ClaimTemplate *VolumeClaimTemplate   `protobuf:"bytes,6,opt,name=claim_template,json=claimTemplate,proto3" json:"claim_template,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VolumeMount) Reset() {
+	*x = VolumeMount{}
+	mi := &file_pkg_api_proto_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VolumeMount) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VolumeMount) ProtoMessage() {}
+
+func (x *VolumeMount) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VolumeMount.ProtoReflect.Descriptor instead.
+func (*VolumeMount) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *VolumeMount) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *VolumeMount) GetMountPath() string {
+	if x != nil {
+		return x.MountPath
+	}
+	return ""
+}
+
+func (x *VolumeMount) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *VolumeMount) GetSubPath() string {
+	if x != nil {
+		return x.SubPath
+	}
+	return ""
+}
+
+func (x *VolumeMount) GetClaim() *VolumeClaim {
+	if x != nil {
+		return x.Claim
+	}
+	return nil
+}
+
+func (x *VolumeMount) GetClaimTemplate() *VolumeClaimTemplate {
+	if x != nil {
+		return x.ClaimTemplate
+	}
+	return nil
+}
+
 // CreateServiceRequest represents a request to create a new service.
 type CreateServiceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -765,7 +984,7 @@ type CreateServiceRequest struct {
 
 func (x *CreateServiceRequest) Reset() {
 	*x = CreateServiceRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[6]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -777,7 +996,7 @@ func (x *CreateServiceRequest) String() string {
 func (*CreateServiceRequest) ProtoMessage() {}
 
 func (x *CreateServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[6]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -790,7 +1009,7 @@ func (x *CreateServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateServiceRequest.ProtoReflect.Descriptor instead.
 func (*CreateServiceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{6}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CreateServiceRequest) GetService() *Service {
@@ -827,7 +1046,7 @@ type ServiceResponse struct {
 
 func (x *ServiceResponse) Reset() {
 	*x = ServiceResponse{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -839,7 +1058,7 @@ func (x *ServiceResponse) String() string {
 func (*ServiceResponse) ProtoMessage() {}
 
 func (x *ServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -852,7 +1071,7 @@ func (x *ServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceResponse.ProtoReflect.Descriptor instead.
 func (*ServiceResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{7}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ServiceResponse) GetService() *Service {
@@ -882,7 +1101,7 @@ type GetServiceRequest struct {
 
 func (x *GetServiceRequest) Reset() {
 	*x = GetServiceRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[8]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -894,7 +1113,7 @@ func (x *GetServiceRequest) String() string {
 func (*GetServiceRequest) ProtoMessage() {}
 
 func (x *GetServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[8]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -907,7 +1126,7 @@ func (x *GetServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServiceRequest.ProtoReflect.Descriptor instead.
 func (*GetServiceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{8}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetServiceRequest) GetName() string {
@@ -941,7 +1160,7 @@ type ListServicesRequest struct {
 
 func (x *ListServicesRequest) Reset() {
 	*x = ListServicesRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[9]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -953,7 +1172,7 @@ func (x *ListServicesRequest) String() string {
 func (*ListServicesRequest) ProtoMessage() {}
 
 func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[9]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -966,7 +1185,7 @@ func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesRequest.ProtoReflect.Descriptor instead.
 func (*ListServicesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{9}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListServicesRequest) GetNamespace() string {
@@ -1012,7 +1231,7 @@ type ListServicesResponse struct {
 
 func (x *ListServicesResponse) Reset() {
 	*x = ListServicesResponse{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[10]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1024,7 +1243,7 @@ func (x *ListServicesResponse) String() string {
 func (*ListServicesResponse) ProtoMessage() {}
 
 func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[10]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1037,7 +1256,7 @@ func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesResponse.ProtoReflect.Descriptor instead.
 func (*ListServicesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{10}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListServicesResponse) GetServices() []*Service {
@@ -1076,7 +1295,7 @@ type WatchServicesRequest struct {
 
 func (x *WatchServicesRequest) Reset() {
 	*x = WatchServicesRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[11]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1088,7 +1307,7 @@ func (x *WatchServicesRequest) String() string {
 func (*WatchServicesRequest) ProtoMessage() {}
 
 func (x *WatchServicesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[11]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1101,7 +1320,7 @@ func (x *WatchServicesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchServicesRequest.ProtoReflect.Descriptor instead.
 func (*WatchServicesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{11}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *WatchServicesRequest) GetNamespace() string {
@@ -1140,7 +1359,7 @@ type WatchServicesResponse struct {
 
 func (x *WatchServicesResponse) Reset() {
 	*x = WatchServicesResponse{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[12]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1152,7 +1371,7 @@ func (x *WatchServicesResponse) String() string {
 func (*WatchServicesResponse) ProtoMessage() {}
 
 func (x *WatchServicesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[12]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1165,7 +1384,7 @@ func (x *WatchServicesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchServicesResponse.ProtoReflect.Descriptor instead.
 func (*WatchServicesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{12}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *WatchServicesResponse) GetService() *Service {
@@ -1204,7 +1423,7 @@ type UpdateServiceRequest struct {
 
 func (x *UpdateServiceRequest) Reset() {
 	*x = UpdateServiceRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[13]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1216,7 +1435,7 @@ func (x *UpdateServiceRequest) String() string {
 func (*UpdateServiceRequest) ProtoMessage() {}
 
 func (x *UpdateServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[13]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1229,7 +1448,7 @@ func (x *UpdateServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateServiceRequest.ProtoReflect.Descriptor instead.
 func (*UpdateServiceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{13}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *UpdateServiceRequest) GetService() *Service {
@@ -1284,7 +1503,7 @@ type DeleteServiceRequest struct {
 
 func (x *DeleteServiceRequest) Reset() {
 	*x = DeleteServiceRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[14]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1296,7 +1515,7 @@ func (x *DeleteServiceRequest) String() string {
 func (*DeleteServiceRequest) ProtoMessage() {}
 
 func (x *DeleteServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[14]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1309,7 +1528,7 @@ func (x *DeleteServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteServiceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteServiceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{14}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeleteServiceRequest) GetName() string {
@@ -1412,7 +1631,7 @@ type DeleteServiceResponse struct {
 
 func (x *DeleteServiceResponse) Reset() {
 	*x = DeleteServiceResponse{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[15]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1424,7 +1643,7 @@ func (x *DeleteServiceResponse) String() string {
 func (*DeleteServiceResponse) ProtoMessage() {}
 
 func (x *DeleteServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[15]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1437,7 +1656,7 @@ func (x *DeleteServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteServiceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteServiceResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{15}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DeleteServiceResponse) GetDeletionId() string {
@@ -1500,7 +1719,7 @@ type GetDeletionStatusRequest struct {
 
 func (x *GetDeletionStatusRequest) Reset() {
 	*x = GetDeletionStatusRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[16]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1512,7 +1731,7 @@ func (x *GetDeletionStatusRequest) String() string {
 func (*GetDeletionStatusRequest) ProtoMessage() {}
 
 func (x *GetDeletionStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[16]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1525,7 +1744,7 @@ func (x *GetDeletionStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeletionStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetDeletionStatusRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{16}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetDeletionStatusRequest) GetNamespace() string {
@@ -1552,7 +1771,7 @@ type GetDeletionStatusResponse struct {
 
 func (x *GetDeletionStatusResponse) Reset() {
 	*x = GetDeletionStatusResponse{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[17]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1564,7 +1783,7 @@ func (x *GetDeletionStatusResponse) String() string {
 func (*GetDeletionStatusResponse) ProtoMessage() {}
 
 func (x *GetDeletionStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[17]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1577,7 +1796,7 @@ func (x *GetDeletionStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeletionStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetDeletionStatusResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{17}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetDeletionStatusResponse) GetOperation() *DeletionOperation {
@@ -1598,7 +1817,7 @@ type ListDeletionOperationsRequest struct {
 
 func (x *ListDeletionOperationsRequest) Reset() {
 	*x = ListDeletionOperationsRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[18]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1610,7 +1829,7 @@ func (x *ListDeletionOperationsRequest) String() string {
 func (*ListDeletionOperationsRequest) ProtoMessage() {}
 
 func (x *ListDeletionOperationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[18]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1623,7 +1842,7 @@ func (x *ListDeletionOperationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDeletionOperationsRequest.ProtoReflect.Descriptor instead.
 func (*ListDeletionOperationsRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{18}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListDeletionOperationsRequest) GetNamespace() string {
@@ -1650,7 +1869,7 @@ type ListDeletionOperationsResponse struct {
 
 func (x *ListDeletionOperationsResponse) Reset() {
 	*x = ListDeletionOperationsResponse{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[19]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1662,7 +1881,7 @@ func (x *ListDeletionOperationsResponse) String() string {
 func (*ListDeletionOperationsResponse) ProtoMessage() {}
 
 func (x *ListDeletionOperationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[19]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1675,7 +1894,7 @@ func (x *ListDeletionOperationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDeletionOperationsResponse.ProtoReflect.Descriptor instead.
 func (*ListDeletionOperationsResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{19}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListDeletionOperationsResponse) GetOperations() []*DeletionOperation {
@@ -1709,7 +1928,7 @@ type DeletionOperation struct {
 
 func (x *DeletionOperation) Reset() {
 	*x = DeletionOperation{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[20]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1721,7 +1940,7 @@ func (x *DeletionOperation) String() string {
 func (*DeletionOperation) ProtoMessage() {}
 
 func (x *DeletionOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[20]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1734,7 +1953,7 @@ func (x *DeletionOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletionOperation.ProtoReflect.Descriptor instead.
 func (*DeletionOperation) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{20}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *DeletionOperation) GetId() string {
@@ -1860,7 +2079,7 @@ type Finalizer struct {
 
 func (x *Finalizer) Reset() {
 	*x = Finalizer{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[21]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1872,7 +2091,7 @@ func (x *Finalizer) String() string {
 func (*Finalizer) ProtoMessage() {}
 
 func (x *Finalizer) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[21]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1885,7 +2104,7 @@ func (x *Finalizer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Finalizer.ProtoReflect.Descriptor instead.
 func (*Finalizer) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{21}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *Finalizer) GetId() string {
@@ -1962,7 +2181,7 @@ type FinalizerDependency struct {
 
 func (x *FinalizerDependency) Reset() {
 	*x = FinalizerDependency{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[22]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1974,7 +2193,7 @@ func (x *FinalizerDependency) String() string {
 func (*FinalizerDependency) ProtoMessage() {}
 
 func (x *FinalizerDependency) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[22]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1987,7 +2206,7 @@ func (x *FinalizerDependency) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizerDependency.ProtoReflect.Descriptor instead.
 func (*FinalizerDependency) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{22}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *FinalizerDependency) GetDependsOn() string {
@@ -2025,7 +2244,7 @@ type ScaleServiceRequest struct {
 
 func (x *ScaleServiceRequest) Reset() {
 	*x = ScaleServiceRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[23]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2037,7 +2256,7 @@ func (x *ScaleServiceRequest) String() string {
 func (*ScaleServiceRequest) ProtoMessage() {}
 
 func (x *ScaleServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[23]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2050,7 +2269,7 @@ func (x *ScaleServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScaleServiceRequest.ProtoReflect.Descriptor instead.
 func (*ScaleServiceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{23}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ScaleServiceRequest) GetName() string {
@@ -2110,7 +2329,7 @@ type WatchScalingRequest struct {
 
 func (x *WatchScalingRequest) Reset() {
 	*x = WatchScalingRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[24]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2122,7 +2341,7 @@ func (x *WatchScalingRequest) String() string {
 func (*WatchScalingRequest) ProtoMessage() {}
 
 func (x *WatchScalingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[24]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2135,7 +2354,7 @@ func (x *WatchScalingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchScalingRequest.ProtoReflect.Descriptor instead.
 func (*WatchScalingRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{24}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *WatchScalingRequest) GetServiceName() string {
@@ -2180,7 +2399,7 @@ type ScalingStatusResponse struct {
 
 func (x *ScalingStatusResponse) Reset() {
 	*x = ScalingStatusResponse{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[25]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2192,7 +2411,7 @@ func (x *ScalingStatusResponse) String() string {
 func (*ScalingStatusResponse) ProtoMessage() {}
 
 func (x *ScalingStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[25]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2205,7 +2424,7 @@ func (x *ScalingStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScalingStatusResponse.ProtoReflect.Descriptor instead.
 func (*ScalingStatusResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{25}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ScalingStatusResponse) GetCurrentScale() int32 {
@@ -2254,7 +2473,7 @@ var File_pkg_api_proto_service_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\x8d\t\n" +
+	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\xbe\t\n" +
 	"\aService\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -2282,7 +2501,8 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\n" +
 	"image_pull\x18\x17 \x01(\tR\timagePull\x12#\n" +
 	"\rstatus_reason\x18\x18 \x01(\tR\fstatusReason\x12%\n" +
-	"\x0estatus_message\x18\x19 \x01(\tR\rstatusMessage\x1a9\n" +
+	"\x0estatus_message\x18\x19 \x01(\tR\rstatusMessage\x12/\n" +
+	"\avolumes\x18\x1a \x03(\v2\x15.rune.api.VolumeMountR\avolumes\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a6\n" +
@@ -2321,7 +2541,29 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\n" +
 	"mount_path\x18\x02 \x01(\tR\tmountPath\x12%\n" +
 	"\x0econfigmap_name\x18\x03 \x01(\tR\rconfigmapName\x12)\n" +
-	"\x05items\x18\x04 \x03(\v2\x13.rune.api.KeyToPathR\x05items\"\x95\x01\n" +
+	"\x05items\x18\x04 \x03(\v2\x13.rune.api.KeyToPathR\x05items\"!\n" +
+	"\vVolumeClaim\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\xad\x02\n" +
+	"\x13VolumeClaimTemplate\x12,\n" +
+	"\x12storage_class_name\x18\x01 \x01(\tR\x10storageClassName\x12\x12\n" +
+	"\x04size\x18\x02 \x01(\tR\x04size\x12\x1f\n" +
+	"\vaccess_mode\x18\x03 \x01(\tR\n" +
+	"accessMode\x12M\n" +
+	"\n" +
+	"parameters\x18\x04 \x03(\v2-.rune.api.VolumeClaimTemplate.ParametersEntryR\n" +
+	"parameters\x12%\n" +
+	"\x0ereclaim_policy\x18\x05 \x01(\tR\rreclaimPolicy\x1a=\n" +
+	"\x0fParametersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xeb\x01\n" +
+	"\vVolumeMount\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
+	"\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\x12\x1b\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\x12\x19\n" +
+	"\bsub_path\x18\x04 \x01(\tR\asubPath\x12+\n" +
+	"\x05claim\x18\x05 \x01(\v2\x15.rune.api.VolumeClaimR\x05claim\x12D\n" +
+	"\x0eclaim_template\x18\x06 \x01(\v2\x1d.rune.api.VolumeClaimTemplateR\rclaimTemplate\"\x95\x01\n" +
 	"\x14CreateServiceRequest\x12+\n" +
 	"\aservice\x18\x01 \x01(\v2\x11.rune.api.ServiceR\aservice\x12%\n" +
 	"\x0edeployment_tag\x18\x02 \x01(\tR\rdeploymentTag\x12)\n" +
@@ -2495,7 +2737,7 @@ func file_pkg_api_proto_service_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_pkg_api_proto_service_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_pkg_api_proto_service_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_pkg_api_proto_service_proto_goTypes = []any{
 	(ServiceStatus)(0),                     // 0: rune.api.ServiceStatus
 	(ScalingMode)(0),                       // 1: rune.api.ScalingMode
@@ -2505,112 +2747,120 @@ var file_pkg_api_proto_service_proto_goTypes = []any{
 	(*DependencyRef)(nil),                  // 5: rune.api.DependencyRef
 	(*SecretMount)(nil),                    // 6: rune.api.SecretMount
 	(*ConfigmapMount)(nil),                 // 7: rune.api.ConfigmapMount
-	(*CreateServiceRequest)(nil),           // 8: rune.api.CreateServiceRequest
-	(*ServiceResponse)(nil),                // 9: rune.api.ServiceResponse
-	(*GetServiceRequest)(nil),              // 10: rune.api.GetServiceRequest
-	(*ListServicesRequest)(nil),            // 11: rune.api.ListServicesRequest
-	(*ListServicesResponse)(nil),           // 12: rune.api.ListServicesResponse
-	(*WatchServicesRequest)(nil),           // 13: rune.api.WatchServicesRequest
-	(*WatchServicesResponse)(nil),          // 14: rune.api.WatchServicesResponse
-	(*UpdateServiceRequest)(nil),           // 15: rune.api.UpdateServiceRequest
-	(*DeleteServiceRequest)(nil),           // 16: rune.api.DeleteServiceRequest
-	(*DeleteServiceResponse)(nil),          // 17: rune.api.DeleteServiceResponse
-	(*GetDeletionStatusRequest)(nil),       // 18: rune.api.GetDeletionStatusRequest
-	(*GetDeletionStatusResponse)(nil),      // 19: rune.api.GetDeletionStatusResponse
-	(*ListDeletionOperationsRequest)(nil),  // 20: rune.api.ListDeletionOperationsRequest
-	(*ListDeletionOperationsResponse)(nil), // 21: rune.api.ListDeletionOperationsResponse
-	(*DeletionOperation)(nil),              // 22: rune.api.DeletionOperation
-	(*Finalizer)(nil),                      // 23: rune.api.Finalizer
-	(*FinalizerDependency)(nil),            // 24: rune.api.FinalizerDependency
-	(*ScaleServiceRequest)(nil),            // 25: rune.api.ScaleServiceRequest
-	(*WatchScalingRequest)(nil),            // 26: rune.api.WatchScalingRequest
-	(*ScalingStatusResponse)(nil),          // 27: rune.api.ScalingStatusResponse
-	nil,                                    // 28: rune.api.Service.LabelsEntry
-	nil,                                    // 29: rune.api.Service.EnvEntry
-	nil,                                    // 30: rune.api.ListServicesRequest.LabelSelectorEntry
-	nil,                                    // 31: rune.api.ListServicesRequest.FieldSelectorEntry
-	nil,                                    // 32: rune.api.WatchServicesRequest.LabelSelectorEntry
-	nil,                                    // 33: rune.api.WatchServicesRequest.FieldSelectorEntry
-	(*ServicePort)(nil),                    // 34: rune.api.ServicePort
-	(*Resources)(nil),                      // 35: rune.api.Resources
-	(*HealthCheck)(nil),                    // 36: rune.api.HealthCheck
-	(*ProcessSpec)(nil),                    // 37: rune.api.ProcessSpec
-	(RestartPolicy)(0),                     // 38: rune.api.RestartPolicy
-	(*ServiceExpose)(nil),                  // 39: rune.api.ServiceExpose
-	(*KeyToPath)(nil),                      // 40: rune.api.KeyToPath
-	(*Status)(nil),                         // 41: rune.api.Status
-	(*PagingParams)(nil),                   // 42: rune.api.PagingParams
-	(EventType)(0),                         // 43: rune.api.EventType
-	(*ListInstancesRequest)(nil),           // 44: rune.api.ListInstancesRequest
-	(*ListInstancesResponse)(nil),          // 45: rune.api.ListInstancesResponse
+	(*VolumeClaim)(nil),                    // 8: rune.api.VolumeClaim
+	(*VolumeClaimTemplate)(nil),            // 9: rune.api.VolumeClaimTemplate
+	(*VolumeMount)(nil),                    // 10: rune.api.VolumeMount
+	(*CreateServiceRequest)(nil),           // 11: rune.api.CreateServiceRequest
+	(*ServiceResponse)(nil),                // 12: rune.api.ServiceResponse
+	(*GetServiceRequest)(nil),              // 13: rune.api.GetServiceRequest
+	(*ListServicesRequest)(nil),            // 14: rune.api.ListServicesRequest
+	(*ListServicesResponse)(nil),           // 15: rune.api.ListServicesResponse
+	(*WatchServicesRequest)(nil),           // 16: rune.api.WatchServicesRequest
+	(*WatchServicesResponse)(nil),          // 17: rune.api.WatchServicesResponse
+	(*UpdateServiceRequest)(nil),           // 18: rune.api.UpdateServiceRequest
+	(*DeleteServiceRequest)(nil),           // 19: rune.api.DeleteServiceRequest
+	(*DeleteServiceResponse)(nil),          // 20: rune.api.DeleteServiceResponse
+	(*GetDeletionStatusRequest)(nil),       // 21: rune.api.GetDeletionStatusRequest
+	(*GetDeletionStatusResponse)(nil),      // 22: rune.api.GetDeletionStatusResponse
+	(*ListDeletionOperationsRequest)(nil),  // 23: rune.api.ListDeletionOperationsRequest
+	(*ListDeletionOperationsResponse)(nil), // 24: rune.api.ListDeletionOperationsResponse
+	(*DeletionOperation)(nil),              // 25: rune.api.DeletionOperation
+	(*Finalizer)(nil),                      // 26: rune.api.Finalizer
+	(*FinalizerDependency)(nil),            // 27: rune.api.FinalizerDependency
+	(*ScaleServiceRequest)(nil),            // 28: rune.api.ScaleServiceRequest
+	(*WatchScalingRequest)(nil),            // 29: rune.api.WatchScalingRequest
+	(*ScalingStatusResponse)(nil),          // 30: rune.api.ScalingStatusResponse
+	nil,                                    // 31: rune.api.Service.LabelsEntry
+	nil,                                    // 32: rune.api.Service.EnvEntry
+	nil,                                    // 33: rune.api.VolumeClaimTemplate.ParametersEntry
+	nil,                                    // 34: rune.api.ListServicesRequest.LabelSelectorEntry
+	nil,                                    // 35: rune.api.ListServicesRequest.FieldSelectorEntry
+	nil,                                    // 36: rune.api.WatchServicesRequest.LabelSelectorEntry
+	nil,                                    // 37: rune.api.WatchServicesRequest.FieldSelectorEntry
+	(*ServicePort)(nil),                    // 38: rune.api.ServicePort
+	(*Resources)(nil),                      // 39: rune.api.Resources
+	(*HealthCheck)(nil),                    // 40: rune.api.HealthCheck
+	(*ProcessSpec)(nil),                    // 41: rune.api.ProcessSpec
+	(RestartPolicy)(0),                     // 42: rune.api.RestartPolicy
+	(*ServiceExpose)(nil),                  // 43: rune.api.ServiceExpose
+	(*KeyToPath)(nil),                      // 44: rune.api.KeyToPath
+	(*Status)(nil),                         // 45: rune.api.Status
+	(*PagingParams)(nil),                   // 46: rune.api.PagingParams
+	(EventType)(0),                         // 47: rune.api.EventType
+	(*ListInstancesRequest)(nil),           // 48: rune.api.ListInstancesRequest
+	(*ListInstancesResponse)(nil),          // 49: rune.api.ListInstancesResponse
 }
 var file_pkg_api_proto_service_proto_depIdxs = []int32{
-	28, // 0: rune.api.Service.labels:type_name -> rune.api.Service.LabelsEntry
-	29, // 1: rune.api.Service.env:type_name -> rune.api.Service.EnvEntry
+	31, // 0: rune.api.Service.labels:type_name -> rune.api.Service.LabelsEntry
+	32, // 1: rune.api.Service.env:type_name -> rune.api.Service.EnvEntry
 	3,  // 2: rune.api.Service.env_from:type_name -> rune.api.EnvFromSource
-	34, // 3: rune.api.Service.ports:type_name -> rune.api.ServicePort
-	35, // 4: rune.api.Service.resources:type_name -> rune.api.Resources
-	36, // 5: rune.api.Service.health:type_name -> rune.api.HealthCheck
+	38, // 3: rune.api.Service.ports:type_name -> rune.api.ServicePort
+	39, // 4: rune.api.Service.resources:type_name -> rune.api.Resources
+	40, // 5: rune.api.Service.health:type_name -> rune.api.HealthCheck
 	0,  // 6: rune.api.Service.status:type_name -> rune.api.ServiceStatus
-	37, // 7: rune.api.Service.process:type_name -> rune.api.ProcessSpec
-	38, // 8: rune.api.Service.restart_policy:type_name -> rune.api.RestartPolicy
+	41, // 7: rune.api.Service.process:type_name -> rune.api.ProcessSpec
+	42, // 8: rune.api.Service.restart_policy:type_name -> rune.api.RestartPolicy
 	6,  // 9: rune.api.Service.secret_mounts:type_name -> rune.api.SecretMount
 	7,  // 10: rune.api.Service.configmap_mounts:type_name -> rune.api.ConfigmapMount
 	4,  // 11: rune.api.Service.metadata:type_name -> rune.api.ServiceMetadata
 	5,  // 12: rune.api.Service.dependencies:type_name -> rune.api.DependencyRef
-	39, // 13: rune.api.Service.expose:type_name -> rune.api.ServiceExpose
-	40, // 14: rune.api.SecretMount.items:type_name -> rune.api.KeyToPath
-	40, // 15: rune.api.ConfigmapMount.items:type_name -> rune.api.KeyToPath
-	2,  // 16: rune.api.CreateServiceRequest.service:type_name -> rune.api.Service
-	2,  // 17: rune.api.ServiceResponse.service:type_name -> rune.api.Service
-	41, // 18: rune.api.ServiceResponse.status:type_name -> rune.api.Status
-	30, // 19: rune.api.ListServicesRequest.label_selector:type_name -> rune.api.ListServicesRequest.LabelSelectorEntry
-	31, // 20: rune.api.ListServicesRequest.field_selector:type_name -> rune.api.ListServicesRequest.FieldSelectorEntry
-	42, // 21: rune.api.ListServicesRequest.paging:type_name -> rune.api.PagingParams
-	2,  // 22: rune.api.ListServicesResponse.services:type_name -> rune.api.Service
-	41, // 23: rune.api.ListServicesResponse.status:type_name -> rune.api.Status
-	42, // 24: rune.api.ListServicesResponse.paging:type_name -> rune.api.PagingParams
-	32, // 25: rune.api.WatchServicesRequest.label_selector:type_name -> rune.api.WatchServicesRequest.LabelSelectorEntry
-	33, // 26: rune.api.WatchServicesRequest.field_selector:type_name -> rune.api.WatchServicesRequest.FieldSelectorEntry
-	2,  // 27: rune.api.WatchServicesResponse.service:type_name -> rune.api.Service
-	43, // 28: rune.api.WatchServicesResponse.event_type:type_name -> rune.api.EventType
-	41, // 29: rune.api.WatchServicesResponse.status:type_name -> rune.api.Status
-	2,  // 30: rune.api.UpdateServiceRequest.service:type_name -> rune.api.Service
-	41, // 31: rune.api.DeleteServiceResponse.status:type_name -> rune.api.Status
-	23, // 32: rune.api.DeleteServiceResponse.finalizers:type_name -> rune.api.Finalizer
-	22, // 33: rune.api.GetDeletionStatusResponse.operation:type_name -> rune.api.DeletionOperation
-	22, // 34: rune.api.ListDeletionOperationsResponse.operations:type_name -> rune.api.DeletionOperation
-	23, // 35: rune.api.DeletionOperation.finalizers:type_name -> rune.api.Finalizer
-	24, // 36: rune.api.Finalizer.dependencies:type_name -> rune.api.FinalizerDependency
-	1,  // 37: rune.api.ScaleServiceRequest.mode:type_name -> rune.api.ScalingMode
-	41, // 38: rune.api.ScalingStatusResponse.status:type_name -> rune.api.Status
-	8,  // 39: rune.api.ServiceService.CreateService:input_type -> rune.api.CreateServiceRequest
-	10, // 40: rune.api.ServiceService.GetService:input_type -> rune.api.GetServiceRequest
-	11, // 41: rune.api.ServiceService.ListServices:input_type -> rune.api.ListServicesRequest
-	13, // 42: rune.api.ServiceService.WatchServices:input_type -> rune.api.WatchServicesRequest
-	15, // 43: rune.api.ServiceService.UpdateService:input_type -> rune.api.UpdateServiceRequest
-	16, // 44: rune.api.ServiceService.DeleteService:input_type -> rune.api.DeleteServiceRequest
-	18, // 45: rune.api.ServiceService.GetDeletionStatus:input_type -> rune.api.GetDeletionStatusRequest
-	20, // 46: rune.api.ServiceService.ListDeletionOperations:input_type -> rune.api.ListDeletionOperationsRequest
-	25, // 47: rune.api.ServiceService.ScaleService:input_type -> rune.api.ScaleServiceRequest
-	26, // 48: rune.api.ServiceService.WatchScaling:input_type -> rune.api.WatchScalingRequest
-	44, // 49: rune.api.ServiceService.ListInstances:input_type -> rune.api.ListInstancesRequest
-	9,  // 50: rune.api.ServiceService.CreateService:output_type -> rune.api.ServiceResponse
-	9,  // 51: rune.api.ServiceService.GetService:output_type -> rune.api.ServiceResponse
-	12, // 52: rune.api.ServiceService.ListServices:output_type -> rune.api.ListServicesResponse
-	14, // 53: rune.api.ServiceService.WatchServices:output_type -> rune.api.WatchServicesResponse
-	9,  // 54: rune.api.ServiceService.UpdateService:output_type -> rune.api.ServiceResponse
-	17, // 55: rune.api.ServiceService.DeleteService:output_type -> rune.api.DeleteServiceResponse
-	19, // 56: rune.api.ServiceService.GetDeletionStatus:output_type -> rune.api.GetDeletionStatusResponse
-	21, // 57: rune.api.ServiceService.ListDeletionOperations:output_type -> rune.api.ListDeletionOperationsResponse
-	9,  // 58: rune.api.ServiceService.ScaleService:output_type -> rune.api.ServiceResponse
-	27, // 59: rune.api.ServiceService.WatchScaling:output_type -> rune.api.ScalingStatusResponse
-	45, // 60: rune.api.ServiceService.ListInstances:output_type -> rune.api.ListInstancesResponse
-	50, // [50:61] is the sub-list for method output_type
-	39, // [39:50] is the sub-list for method input_type
-	39, // [39:39] is the sub-list for extension type_name
-	39, // [39:39] is the sub-list for extension extendee
-	0,  // [0:39] is the sub-list for field type_name
+	43, // 13: rune.api.Service.expose:type_name -> rune.api.ServiceExpose
+	10, // 14: rune.api.Service.volumes:type_name -> rune.api.VolumeMount
+	44, // 15: rune.api.SecretMount.items:type_name -> rune.api.KeyToPath
+	44, // 16: rune.api.ConfigmapMount.items:type_name -> rune.api.KeyToPath
+	33, // 17: rune.api.VolumeClaimTemplate.parameters:type_name -> rune.api.VolumeClaimTemplate.ParametersEntry
+	8,  // 18: rune.api.VolumeMount.claim:type_name -> rune.api.VolumeClaim
+	9,  // 19: rune.api.VolumeMount.claim_template:type_name -> rune.api.VolumeClaimTemplate
+	2,  // 20: rune.api.CreateServiceRequest.service:type_name -> rune.api.Service
+	2,  // 21: rune.api.ServiceResponse.service:type_name -> rune.api.Service
+	45, // 22: rune.api.ServiceResponse.status:type_name -> rune.api.Status
+	34, // 23: rune.api.ListServicesRequest.label_selector:type_name -> rune.api.ListServicesRequest.LabelSelectorEntry
+	35, // 24: rune.api.ListServicesRequest.field_selector:type_name -> rune.api.ListServicesRequest.FieldSelectorEntry
+	46, // 25: rune.api.ListServicesRequest.paging:type_name -> rune.api.PagingParams
+	2,  // 26: rune.api.ListServicesResponse.services:type_name -> rune.api.Service
+	45, // 27: rune.api.ListServicesResponse.status:type_name -> rune.api.Status
+	46, // 28: rune.api.ListServicesResponse.paging:type_name -> rune.api.PagingParams
+	36, // 29: rune.api.WatchServicesRequest.label_selector:type_name -> rune.api.WatchServicesRequest.LabelSelectorEntry
+	37, // 30: rune.api.WatchServicesRequest.field_selector:type_name -> rune.api.WatchServicesRequest.FieldSelectorEntry
+	2,  // 31: rune.api.WatchServicesResponse.service:type_name -> rune.api.Service
+	47, // 32: rune.api.WatchServicesResponse.event_type:type_name -> rune.api.EventType
+	45, // 33: rune.api.WatchServicesResponse.status:type_name -> rune.api.Status
+	2,  // 34: rune.api.UpdateServiceRequest.service:type_name -> rune.api.Service
+	45, // 35: rune.api.DeleteServiceResponse.status:type_name -> rune.api.Status
+	26, // 36: rune.api.DeleteServiceResponse.finalizers:type_name -> rune.api.Finalizer
+	25, // 37: rune.api.GetDeletionStatusResponse.operation:type_name -> rune.api.DeletionOperation
+	25, // 38: rune.api.ListDeletionOperationsResponse.operations:type_name -> rune.api.DeletionOperation
+	26, // 39: rune.api.DeletionOperation.finalizers:type_name -> rune.api.Finalizer
+	27, // 40: rune.api.Finalizer.dependencies:type_name -> rune.api.FinalizerDependency
+	1,  // 41: rune.api.ScaleServiceRequest.mode:type_name -> rune.api.ScalingMode
+	45, // 42: rune.api.ScalingStatusResponse.status:type_name -> rune.api.Status
+	11, // 43: rune.api.ServiceService.CreateService:input_type -> rune.api.CreateServiceRequest
+	13, // 44: rune.api.ServiceService.GetService:input_type -> rune.api.GetServiceRequest
+	14, // 45: rune.api.ServiceService.ListServices:input_type -> rune.api.ListServicesRequest
+	16, // 46: rune.api.ServiceService.WatchServices:input_type -> rune.api.WatchServicesRequest
+	18, // 47: rune.api.ServiceService.UpdateService:input_type -> rune.api.UpdateServiceRequest
+	19, // 48: rune.api.ServiceService.DeleteService:input_type -> rune.api.DeleteServiceRequest
+	21, // 49: rune.api.ServiceService.GetDeletionStatus:input_type -> rune.api.GetDeletionStatusRequest
+	23, // 50: rune.api.ServiceService.ListDeletionOperations:input_type -> rune.api.ListDeletionOperationsRequest
+	28, // 51: rune.api.ServiceService.ScaleService:input_type -> rune.api.ScaleServiceRequest
+	29, // 52: rune.api.ServiceService.WatchScaling:input_type -> rune.api.WatchScalingRequest
+	48, // 53: rune.api.ServiceService.ListInstances:input_type -> rune.api.ListInstancesRequest
+	12, // 54: rune.api.ServiceService.CreateService:output_type -> rune.api.ServiceResponse
+	12, // 55: rune.api.ServiceService.GetService:output_type -> rune.api.ServiceResponse
+	15, // 56: rune.api.ServiceService.ListServices:output_type -> rune.api.ListServicesResponse
+	17, // 57: rune.api.ServiceService.WatchServices:output_type -> rune.api.WatchServicesResponse
+	12, // 58: rune.api.ServiceService.UpdateService:output_type -> rune.api.ServiceResponse
+	20, // 59: rune.api.ServiceService.DeleteService:output_type -> rune.api.DeleteServiceResponse
+	22, // 60: rune.api.ServiceService.GetDeletionStatus:output_type -> rune.api.GetDeletionStatusResponse
+	24, // 61: rune.api.ServiceService.ListDeletionOperations:output_type -> rune.api.ListDeletionOperationsResponse
+	12, // 62: rune.api.ServiceService.ScaleService:output_type -> rune.api.ServiceResponse
+	30, // 63: rune.api.ServiceService.WatchScaling:output_type -> rune.api.ScalingStatusResponse
+	49, // 64: rune.api.ServiceService.ListInstances:output_type -> rune.api.ListInstancesResponse
+	54, // [54:65] is the sub-list for method output_type
+	43, // [43:54] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_service_proto_init() }
@@ -2626,7 +2876,7 @@ func file_pkg_api_proto_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_service_proto_rawDesc), len(file_pkg_api_proto_service_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   32,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -475,6 +475,12 @@ func (s *ServiceSpec) Validate() error {
 		return err
 	}
 
+	// Cross-mount lint (RUNE-070/072): shared paths, system blocklist, RWO+scale>1.
+	owner := fmt.Sprintf("service %q", s.Name)
+	if err := ValidateMountPathConflicts(owner, s.Scale, s.Volumes, s.SecretMounts, s.ConfigmapMounts); err != nil {
+		return err
+	}
+
 	return nil
 }
 

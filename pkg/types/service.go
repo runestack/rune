@@ -583,6 +583,12 @@ func (s *Service) Validate() error {
 		return err
 	}
 
+	// Cross-mount lint: shared mountPaths, system-path blocklist, RWO+scale>1.
+	owner := fmt.Sprintf("service %q", s.Name)
+	if err := ValidateMountPathConflicts(owner, s.Scale, s.Volumes, s.SecretMounts, s.ConfigmapMounts); err != nil {
+		return err
+	}
+
 	return nil
 }
 

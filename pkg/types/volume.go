@@ -301,3 +301,82 @@ func ValidateVolumeMounts(mounts []VolumeMount) error {
 	}
 	return nil
 }
+
+// systemMountBlocklist is the set of host paths that may never be used as a
+// container mount-point. Mounting these confuses the runtime and is a
+// common foot-gun (writing to /proc breaks PID semantics, mounting over
+// /dev hides device nodes, exposing docker.sock is a sandbox escape).
+var systemMountBlocklist = map[string]bool{
+	"/proc":                       true,
+	"/sys":                        true,
+	"/dev":                        true,
+	"/var/run/docker.sock":        true,
+	"/run/docker.sock":            true,
+	"/var/run/containerd.sock":    true,
+	"/run/containerd/containerd.sock": true,
+}
+
+// ValidateMountPathConflicts enforces cast-time invariants that span multiple
+// mount kinds on a single Service spec. All checks are statically evaluable
+// — no store or driver lookups required.
+//
+// Rules enforced:
+//   - No two mounts (volume + secret + configmap) may share a mountPath.
+//   - No mountPath may sit inside (or equal) any path in
+//     systemMountBlocklist (/proc, /sys, /dev, container-runtime sockets).
+//   - When a service is RWO-attached and Scale > 1, the controller cannot
+//     bind the same volume to N replicas; flag the spec at cast-time.
+//
+// The owner argument is a free-form label ("service foo", "job bar")
+// included in error messages.
+func ValidateMountPathConflicts(owner string, scale int, vols []VolumeMount, secs []SecretMount, cfgs []ConfigmapMount) error {
+	type pathSrc struct {
+		kind string
+		name string
+	}
+	seen := make(map[string]pathSrc)
+	check := func(kind, name, mp string) error {
+		if mp == "" {
+			return nil
+		}
+		clean := path.Clean(mp)
+		// system-path blocklist (exact OR prefix).
+		for blocked := range systemMountBlocklist {
+			if clean == blocked || strings.HasPrefix(clean, blocked+"/") {
+				return NewValidationError(fmt.Sprintf("%s: %s mount %q: mountPath %q is on the system blocklist (%s)", owner, kind, name, mp, blocked))
+			}
+		}
+		if prev, ok := seen[clean]; ok {
+			return NewValidationError(fmt.Sprintf("%s: %s mount %q: mountPath %q already used by %s mount %q", owner, kind, name, mp, prev.kind, prev.name))
+		}
+		seen[clean] = pathSrc{kind: kind, name: name}
+		return nil
+	}
+	for _, m := range vols {
+		if err := check("volume", m.Name, m.MountPath); err != nil {
+			return err
+		}
+	}
+	for _, m := range secs {
+		if err := check("secret", m.Name, m.MountPath); err != nil {
+			return err
+		}
+	}
+	for _, m := range cfgs {
+		if err := check("configmap", m.Name, m.MountPath); err != nil {
+			return err
+		}
+	}
+	// RWO + scale>1 invariant: a `claim:` reference (existing volume) at
+	// scale>1 cannot bind, because RWO is single-attach. claimTemplate is
+	// fine — each replica gets its own volume.
+	if scale > 1 {
+		for _, m := range vols {
+			if m.Claim != nil {
+				return NewValidationError(fmt.Sprintf("%s: volume mount %q: claim references a single volume but scale=%d (use claimTemplate for per-replica volumes)", owner, m.Name, scale))
+			}
+		}
+	}
+	return nil
+}
+
