@@ -130,3 +130,55 @@ func TestServiceHash_ConfigmapMountsOrderInsensitive(t *testing.T) {
 
 	assert.Equal(t, h1, h2, "hash should not depend on order of configmap mounts or their items")
 }
+
+func TestServiceHash_VolumesOrderInsensitive(t *testing.T) {
+	mkVolumes := func() []VolumeMount {
+		return []VolumeMount{
+			{
+				Name:      "data",
+				MountPath: "/data",
+				ClaimTemplate: &VolumeClaimTemplate{
+					StorageClassName: "local",
+					Size:             "1Gi",
+					AccessMode:       AccessModeRWO,
+					Parameters:       map[string]string{"a": "1", "b": "2"},
+				},
+			},
+			{
+				Name:      "cache",
+				MountPath: "/cache",
+				ReadOnly:  true,
+				Claim:     &VolumeClaim{Name: "shared-cache"},
+			},
+		}
+	}
+
+	s1 := makeBaseService()
+	s1.Volumes = mkVolumes()
+	h1 := s1.CalculateHash()
+
+	// Same volumes, different slice order + reordered parameter map.
+	s2 := makeBaseService()
+	v := mkVolumes()
+	v[0], v[1] = v[1], v[0]
+	v[1].ClaimTemplate.Parameters = map[string]string{"b": "2", "a": "1"}
+	s2.Volumes = v
+	h2 := s2.CalculateHash()
+	assert.Equal(t, h1, h2, "hash should not depend on volume slice or parameter map ordering")
+
+	// Mutating any field should change the hash.
+	s3 := makeBaseService()
+	s3.Volumes = mkVolumes()
+	s3.Volumes[0].MountPath = "/data2"
+	assert.NotEqual(t, h1, s3.CalculateHash(), "changing mountPath should change hash")
+
+	s4 := makeBaseService()
+	s4.Volumes = mkVolumes()
+	s4.Volumes[0].ClaimTemplate.Size = "2Gi"
+	assert.NotEqual(t, h1, s4.CalculateHash(), "changing claimTemplate size should change hash")
+
+	s5 := makeBaseService()
+	s5.Volumes = mkVolumes()
+	s5.Volumes[1].ReadOnly = false
+	assert.NotEqual(t, h1, s5.CalculateHash(), "changing readOnly should change hash")
+}

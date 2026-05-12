@@ -94,39 +94,6 @@ type RetryPolicy struct {
 	BackoffSeconds int `json:"backoffSeconds,omitempty" yaml:"backoffSeconds,omitempty"`
 }
 
-// VolumeMount defines a volume to be mounted in a job or service container.
-type VolumeMount struct {
-	// Name of the volume mount (for identification)
-	Name string `json:"name" yaml:"name"`
-
-	// Path where the volume should be mounted
-	MountPath string `json:"mountPath" yaml:"mountPath"`
-
-	// Volume details
-	Volume Volume `json:"volume,omitempty" yaml:"volume,omitempty"`
-}
-
-// Volume defines a persistent volume that can be mounted.
-type Volume struct {
-	// Name of the persistent volume
-	Name string `json:"name,omitempty" yaml:"name,omitempty"`
-
-	// Storage details
-	Storage VolumeStorage `json:"storage,omitempty" yaml:"storage,omitempty"`
-}
-
-// VolumeStorage defines storage requirements for a volume.
-type VolumeStorage struct {
-	// Size of the volume (e.g., "10Gi")
-	Size string `json:"size" yaml:"size"`
-
-	// Storage class to use for provisioning
-	StorageClassName string `json:"storageClassName" yaml:"storageClassName"`
-
-	// Access mode (ReadWriteOnce, ReadOnlyMany, ReadWriteMany)
-	AccessMode string `json:"accessMode" yaml:"accessMode"`
-}
-
 // SecretMount defines a secret to be mounted in a container.
 type SecretMount struct {
 	// Name of the mount (for identification)

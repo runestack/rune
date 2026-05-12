@@ -33,6 +33,11 @@ import (
 	"github.com/runestack/rune/pkg/version"
 	watchsvc "github.com/runestack/rune/pkg/watch"
 	"github.com/spf13/viper"
+
+	// Storage drivers — each blank-import registers one or more driver
+	// names with pkg/storage/driver.Registry at init() time. Adding a new
+	// driver (Hetzner, AWS EBS, ...) is one more line here.
+	_ "github.com/runestack/rune/pkg/storage/driver/local"
 	"google.golang.org/grpc"
 )
 

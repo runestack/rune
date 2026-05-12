@@ -90,6 +90,12 @@ type Service struct {
 	// Config mounts
 	ConfigmapMounts []ConfigmapMount `json:"configmapMounts,omitempty" yaml:"configmapMounts,omitempty"`
 
+	// Volume mounts. Each entry references either a pre-existing
+	// VolumeClaim by name (Claim) or an inline ClaimTemplate that the
+	// VolumeController materializes into a per-instance Volume.
+	// Introduced in RUNE-069.
+	Volumes []VolumeMount `json:"volumes,omitempty" yaml:"volumes,omitempty"`
+
 	// Service discovery configuration
 	Discovery *ServiceDiscovery `json:"discovery,omitempty" yaml:"discovery,omitempty"`
 
@@ -761,6 +767,58 @@ func (s *Service) CalculateHash() string {
 				fmt.Fprintf(h, "%s=%s", it.Key, it.Path)
 			}
 			fmt.Fprintf(h, "}")
+		}
+		fmt.Fprintf(h, "]\n")
+	}
+
+	// Volume mounts (deterministic ordering). Mutating any field here
+	// must roll instances — a changed mountPath, a changed claim
+	// reference, or a changed claimTemplate all need a fresh container.
+	if len(s.Volumes) == 0 {
+		fmt.Fprintf(h, "volumes:[]\n")
+	} else {
+		volMounts := make([]VolumeMount, len(s.Volumes))
+		copy(volMounts, s.Volumes)
+		sort.Slice(volMounts, func(i, j int) bool {
+			if volMounts[i].Name != volMounts[j].Name {
+				return volMounts[i].Name < volMounts[j].Name
+			}
+			return volMounts[i].MountPath < volMounts[j].MountPath
+		})
+		fmt.Fprintf(h, "volumes:[")
+		for i, m := range volMounts {
+			if i > 0 {
+				fmt.Fprintf(h, ",")
+			}
+			claimRef := ""
+			if m.Claim != nil {
+				claimRef = m.Claim.Name
+			}
+			tmpl := "nil"
+			if m.ClaimTemplate != nil {
+				// Hash-stable rendering: sort parameters by key.
+				keys := make([]string, 0, len(m.ClaimTemplate.Parameters))
+				for k := range m.ClaimTemplate.Parameters {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				params := ""
+				for j, k := range keys {
+					if j > 0 {
+						params += ","
+					}
+					params += k + "=" + m.ClaimTemplate.Parameters[k]
+				}
+				tmpl = fmt.Sprintf("{class:%s,size:%s,mode:%s,reclaim:%s,params:{%s}}",
+					m.ClaimTemplate.StorageClassName,
+					m.ClaimTemplate.Size,
+					m.ClaimTemplate.AccessMode,
+					m.ClaimTemplate.ReclaimPolicy,
+					params,
+				)
+			}
+			fmt.Fprintf(h, "%s:%s:ro=%t:sub=%s:claim=%s:tmpl=%s",
+				m.Name, m.MountPath, m.ReadOnly, m.SubPath, claimRef, tmpl)
 		}
 		fmt.Fprintf(h, "]\n")
 	}
