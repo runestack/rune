@@ -409,6 +409,12 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 		instance.Metadata.ImagePull = service.ImagePull
 	}
 
+	// Run init steps before the main container is created (RUNE-121).
+	// On failure this sets instance.Status=Failed and returns an error.
+	if err := c.runInitSteps(ctx, serviceRunner, service, instance); err != nil {
+		return nil, fmt.Errorf("init steps failed: %w", err)
+	}
+
 	// Update instance with pending status
 	instance.Status = types.InstanceStatusStarting
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, service.Namespace, instance.ID, instance); err != nil {
