@@ -145,3 +145,73 @@ func TestStorageClassServiceCreateDuplicate(t *testing.T) {
 		t.Fatalf("expected AlreadyExists, got %v", err)
 	}
 }
+
+// TestStorageClassServiceDefaultUniqueness verifies the at-most-one-Default
+// invariant is enforced on the API write path: the second Default-true
+// Create wins, and the first class is atomically demoted; an Update that
+// flips Default=true on an existing class likewise demotes its peers.
+func TestStorageClassServiceDefaultUniqueness(t *testing.T) {
+	ctx := context.Background()
+	svc := newStorageClassTestService(t)
+
+	// First default class.
+	if _, err := svc.CreateStorageClass(ctx, &generated.CreateStorageClassRequest{
+		StorageClass: &generated.StorageClass{Name: "first", Driver: "local", Default: true},
+	}); err != nil {
+		t.Fatalf("create first: %v", err)
+	}
+
+	// Second default class — should win and demote "first".
+	if _, err := svc.CreateStorageClass(ctx, &generated.CreateStorageClassRequest{
+		StorageClass: &generated.StorageClass{Name: "second", Driver: "local", Default: true},
+	}); err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+
+	// Verify only "second" carries Default=true.
+	resp, err := svc.ListStorageClasses(ctx, &generated.ListStorageClassesRequest{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	defaults := map[string]bool{}
+	for _, c := range resp.StorageClasses {
+		defaults[c.Name] = c.Default
+	}
+	if defaults["first"] {
+		t.Errorf("first should have been demoted, got Default=true")
+	}
+	if !defaults["second"] {
+		t.Errorf("second should be the new Default, got Default=false")
+	}
+
+	// A third non-default class doesn't disturb anything.
+	if _, err := svc.CreateStorageClass(ctx, &generated.CreateStorageClassRequest{
+		StorageClass: &generated.StorageClass{Name: "third", Driver: "local"},
+	}); err != nil {
+		t.Fatalf("create third: %v", err)
+	}
+
+	// Update "first" to Default=true — should now demote "second".
+	if _, err := svc.UpdateStorageClass(ctx, &generated.UpdateStorageClassRequest{
+		StorageClass: &generated.StorageClass{Name: "first", Driver: "local", Default: true},
+	}); err != nil {
+		t.Fatalf("update first: %v", err)
+	}
+	resp, err = svc.ListStorageClasses(ctx, &generated.ListStorageClassesRequest{})
+	if err != nil {
+		t.Fatalf("list after update: %v", err)
+	}
+	defaults = map[string]bool{}
+	for _, c := range resp.StorageClasses {
+		defaults[c.Name] = c.Default
+	}
+	if !defaults["first"] {
+		t.Errorf("first should be Default after update, got Default=false")
+	}
+	if defaults["second"] {
+		t.Errorf("second should have been demoted, got Default=true")
+	}
+	if defaults["third"] {
+		t.Errorf("third was never Default, got Default=true")
+	}
+}

@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -16,10 +17,25 @@ import (
 
 // StorageClassService implements generated.StorageClassServiceServer.
 // StorageClass is cluster-scoped (no namespace).
+//
+// The service enforces the at-most-one-Default invariant on the API
+// write path: when a Create or Update lands a class with Default=true,
+// the handler atomically demotes any other class that currently has
+// Default=true (writes go through the repo with EventSourceAPI so the
+// VolumeController's watch-side enforcer treats them as external and
+// skips its own re-demote pass). The orchestrator-side enforcer in
+// pkg/orchestrator/controllers/volume_controller.go remains as
+// belt-and-braces for clusters whose StorageClass rows pre-date this
+// API check.
 type StorageClassService struct {
 	generated.UnimplementedStorageClassServiceServer
 	repo   *repos.StorageClassRepo
 	logger log.Logger
+
+	// defaultMu serialises Default-uniqueness enforcement across
+	// concurrent Create/Update calls so two writers can't both observe
+	// no Default class and then both create one.
+	defaultMu sync.Mutex
 }
 
 // NewStorageClassService constructs a StorageClassService.
@@ -37,6 +53,14 @@ func (s *StorageClassService) CreateStorageClass(ctx context.Context, req *gener
 	sc, err := protoToStorageClass(req.StorageClass)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid storage_class: %v", err)
+	}
+	if sc.Default {
+		s.defaultMu.Lock()
+		defer s.defaultMu.Unlock()
+		if err := s.demoteOtherDefaults(ctx, sc.Name); err != nil {
+			s.logger.Error("Failed to demote other Default storage classes", log.Err(err), log.Str("incoming", sc.Name))
+			return nil, status.Errorf(codes.Internal, "enforce default uniqueness: %v", err)
+		}
 	}
 	if err := s.repo.Create(ctx, sc); err != nil {
 		if store.IsAlreadyExistsError(err) {
@@ -76,6 +100,14 @@ func (s *StorageClassService) UpdateStorageClass(ctx context.Context, req *gener
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid storage_class: %v", err)
 	}
+	if sc.Default {
+		s.defaultMu.Lock()
+		defer s.defaultMu.Unlock()
+		if err := s.demoteOtherDefaults(ctx, sc.Name); err != nil {
+			s.logger.Error("Failed to demote other Default storage classes", log.Err(err), log.Str("incoming", sc.Name))
+			return nil, status.Errorf(codes.Internal, "enforce default uniqueness: %v", err)
+		}
+	}
 	if err := s.repo.Update(ctx, sc, store.WithSource(store.EventSourceAPI)); err != nil {
 		if store.IsNotFoundError(err) {
 			return nil, status.Errorf(codes.NotFound, "storage class not found: %s", sc.Name)
@@ -87,6 +119,32 @@ func (s *StorageClassService) UpdateStorageClass(ctx context.Context, req *gener
 		StorageClass: storageClassToProto(sc),
 		Status:       &generated.Status{Code: int32(codes.OK)},
 	}, nil
+}
+
+// demoteOtherDefaults flips Default:false on every StorageClass other
+// than `keep` that currently has Default:true. Called under defaultMu
+// from Create/Update when the incoming class is Default=true.
+func (s *StorageClassService) demoteOtherDefaults(ctx context.Context, keep string) error {
+	classes, err := s.repo.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range classes {
+		if c == nil || !c.Default || c.Name == keep {
+			continue
+		}
+		demoted := *c
+		demoted.Default = false
+		if err := s.repo.Update(ctx, &demoted, store.WithSource(store.EventSourceAPI)); err != nil {
+			if store.IsNotFoundError(err) {
+				continue
+			}
+			return err
+		}
+		s.logger.Info("Demoted prior Default storage class",
+			log.Str("demoted", c.Name), log.Str("new_default", keep))
+	}
+	return nil
 }
 
 func (s *StorageClassService) DeleteStorageClass(ctx context.Context, req *generated.DeleteStorageClassRequest) (*generated.Status, error) {
