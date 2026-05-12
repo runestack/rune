@@ -100,6 +100,13 @@ type InstanceMetadata struct {
 	// ConfigmapMounts contains the resolved config mount information for this instance
 	ConfigmapMounts []ResolvedConfigmapMount `json:"configMounts,omitempty" yaml:"configMounts,omitempty"`
 
+	// VolumeMounts contains the resolved volume mount information for
+	// this instance: each entry maps a Service.VolumeMount to the
+	// concrete host-side source path produced by the storage driver.
+	// Populated by the orchestrator's instance controller from the bound
+	// Volume's Handle. Introduced in RUNE-070.
+	VolumeMounts []ResolvedVolumeMount `json:"volumeMounts,omitempty" yaml:"volumeMounts,omitempty"`
+
 	// Ports declared by the service (propagated for runner use)
 	Ports []ServicePort `json:"ports,omitempty" yaml:"ports,omitempty"`
 
@@ -145,6 +152,42 @@ type ResolvedConfigmapMount struct {
 
 	// Optional: specific keys to project from the config
 	Items []KeyToPath `json:"items,omitempty" yaml:"items,omitempty"`
+}
+
+// ResolvedVolumeMount is the runner-facing representation of a Service
+// VolumeMount after the orchestrator has resolved the underlying Volume
+// to a concrete host-side source path.
+//
+// Source is whatever the storage driver's Mount step produced — for the
+// in-tree "local" driver that's the managed directory under
+// localVolumeRoot; for "local-host" it's the operator-declared host path;
+// for cloud block-device drivers it would be the agent's per-volume mount
+// target under /var/lib/rune/mounts/<volume-id>/.
+//
+// Introduced in RUNE-070.
+type ResolvedVolumeMount struct {
+	// Name is the mount's service-local identifier (matches
+	// Service.VolumeMount.Name).
+	Name string `json:"name" yaml:"name"`
+
+	// MountPath is the absolute container path the volume is mounted at.
+	MountPath string `json:"mountPath" yaml:"mountPath"`
+
+	// Source is the host-side path to bind into the container.
+	Source string `json:"source" yaml:"source"`
+
+	// VolumeName is the name of the bound Volume resource (in the same
+	// namespace as the owning service unless the mount used an FQDN).
+	VolumeName string `json:"volumeName" yaml:"volumeName"`
+
+	// VolumeNamespace is the namespace of the bound Volume.
+	VolumeNamespace string `json:"volumeNamespace,omitempty" yaml:"volumeNamespace,omitempty"`
+
+	// ReadOnly mounts the volume read-only inside the container.
+	ReadOnly bool `json:"readOnly,omitempty" yaml:"readOnly,omitempty"`
+
+	// SubPath, if non-empty, selects a sub-path within the volume.
+	SubPath string `json:"subPath,omitempty" yaml:"subPath,omitempty"`
 }
 
 // Exec represents execution configuration for a command

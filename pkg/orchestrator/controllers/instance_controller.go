@@ -1311,5 +1311,69 @@ func (c *instanceController) resolveMounts(ctx context.Context, service *types.S
 		}
 	}
 
+	// Resolve volume mounts (RUNE-070). Only the Claim form is wired
+	// in this iteration; ClaimTemplate (per-replica auto-provisioning)
+	// is a separate slice. Mounts with neither set, or with a Claim
+	// pointing at an unknown / not-yet-Available volume, surface as a
+	// reconcile error so the instance status reports the cause.
+	if len(service.Volumes) > 0 {
+		instance.Metadata.VolumeMounts = make([]types.ResolvedVolumeMount, 0, len(service.Volumes))
+		for _, m := range service.Volumes {
+			resolved, err := c.resolveVolumeMount(ctx, service, m)
+			if err != nil {
+				return fmt.Errorf("failed to resolve volume mount %q: %w", m.Name, err)
+			}
+			instance.Metadata.VolumeMounts = append(instance.Metadata.VolumeMounts, resolved)
+		}
+	}
+
 	return nil
+}
+
+// resolveVolumeMount converts a Service.VolumeMount into the runner-facing
+// ResolvedVolumeMount by looking up the bound Volume and using its Handle
+// as the host-side bind source. Only the Claim form is supported in this
+// slice; ClaimTemplate is rejected with a clear error.
+func (c *instanceController) resolveVolumeMount(ctx context.Context, service *types.Service, m types.VolumeMount) (types.ResolvedVolumeMount, error) {
+	switch {
+	case m.Claim != nil && m.ClaimTemplate != nil:
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume mount %q sets both claim and claimTemplate; pick one", m.Name)
+	case m.Claim == nil && m.ClaimTemplate == nil:
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume mount %q sets neither claim nor claimTemplate", m.Name)
+	case m.ClaimTemplate != nil:
+		// Per-replica auto-provisioning lands in a follow-up slice;
+		// document the boundary loudly rather than silently dropping
+		// the mount.
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume mount %q uses claimTemplate; per-replica provisioning not yet implemented", m.Name)
+	}
+
+	// Resolve the Volume reference. Bare name → service namespace; an
+	// FQDN-style "<ns>/<name>" picks an explicit namespace.
+	ns := service.Namespace
+	name := m.Claim.Name
+	if idx := strings.Index(name, "/"); idx > 0 {
+		ns, name = name[:idx], name[idx+1:]
+	}
+
+	var vol types.Volume
+	if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &vol); err != nil {
+		return types.ResolvedVolumeMount{}, fmt.Errorf("get volume %s/%s: %w", ns, name, err)
+	}
+
+	if vol.Status != types.VolumeStatusAvailable && vol.Status != types.VolumeStatusBound {
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.Reason)
+	}
+	if vol.Handle == "" {
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s has no handle", ns, name)
+	}
+
+	return types.ResolvedVolumeMount{
+		Name:            m.Name,
+		MountPath:       m.MountPath,
+		Source:          vol.Handle,
+		VolumeName:      name,
+		VolumeNamespace: ns,
+		ReadOnly:        m.ReadOnly,
+		SubPath:         m.SubPath,
+	}, nil
 }
