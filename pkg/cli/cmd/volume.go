@@ -4,9 +4,8 @@
 // underlying gRPC service is namespace-scoped, so all subcommands accept
 // --namespace (default: "default"). list adds --all-namespaces.
 //
-// detach / retry-provision / restore are stubbed out — the corresponding
-// VolumeService RPCs are not yet implemented (follow-up: provision retry,
-// --force detach, snapshot restore land alongside RUNE-071).
+// detach and retry-provision call the VolumeService RPCs of the same
+// name. restore is still stubbed pending the SnapshotService (RUNE-071).
 package cmd
 
 import (
@@ -187,44 +186,64 @@ reclaimPolicy.`,
 	return cmd
 }
 
-// --- detach (stub) ---
+// --- detach ---
 
 func newVolumeDetachCmd() *cobra.Command {
 	var ns string
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "detach <name>",
-		Short: "Detach a Bound volume from its instance (not yet implemented)",
-		Long: `Detach forces a Bound volume back to Available so a replacement instance
-can attach it. Without --force the controller refuses while the bound
-node is reachable.
-
-This subcommand is a placeholder — the corresponding VolumeService RPC
-is not yet implemented. Tracked alongside provision-retry and
-Stalled-state handling in RUNE-073.`,
+		Short: "Detach a Bound volume so a replacement instance can attach it",
+		Long: `Detach clears bind state (BoundClaim/BoundNode) on a volume so a
+replacement instance may attach it. Without --force the server
+refuses to disturb a Bound volume; pass --force to override (caller
+assumes responsibility for any data-loss risk if the previous holder
+is still alive).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = ns
-			_ = force
-			return fmt.Errorf("rune volume detach: not yet implemented (volume %q)", args[0])
+			ns = effectiveCmdNS(ns)
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			v, err := client.NewVolumeClient(api).DetachVolume(ns, args[0], force)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Volume %s/%s detached (status=%s)\n", v.Namespace, v.Name, v.Status)
+			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
-	cmd.Flags().BoolVar(&force, "force", false, "Force detach even if the bound node is reachable (data-loss risk)")
+	cmd.Flags().BoolVar(&force, "force", false, "Force detach even if the volume is currently Bound (data-loss risk)")
 	return cmd
 }
 
-// --- retry-provision (stub) ---
+// --- retry-provision ---
 
 func newVolumeRetryProvisionCmd() *cobra.Command {
 	var ns string
 	cmd := &cobra.Command{
 		Use:   "retry-provision <name>",
-		Short: "Retry provisioning a Failed/Stalled volume (not yet implemented)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Retry provisioning a Failed/Stalled volume",
+		Long: `Retry-provision resets a Failed or Stalled volume back to Pending so
+the controller will attempt provisioning again on its next watch
+event. Volumes in any other state are rejected.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = ns
-			return fmt.Errorf("rune volume retry-provision: not yet implemented (volume %q)", args[0])
+			ns = effectiveCmdNS(ns)
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			v, err := client.NewVolumeClient(api).RetryProvisionVolume(ns, args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Volume %s/%s retry queued (status=%s)\n", v.Namespace, v.Name, v.Status)
+			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")

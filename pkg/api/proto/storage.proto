@@ -152,10 +152,38 @@ message ListVolumesResponse {
   Status status = 2;
 }
 
+// RetryProvisionVolumeRequest resets a Failed/Stalled volume back to Pending
+// so the controller will attempt provisioning again.
+message RetryProvisionVolumeRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+// DetachVolumeRequest clears bind state on a volume so a replacement
+// instance may attach it. Without force the volume must already be
+// Released (or never bound). With force=true the bind state is cleared
+// regardless of current status — caller assumes responsibility for any
+// data-loss risk if the previous holder is still alive.
+message DetachVolumeRequest {
+  string name = 1;
+  string namespace = 2;
+  bool force = 3;
+}
+
 service VolumeService {
   rpc CreateVolume(CreateVolumeRequest) returns (VolumeResponse);
   rpc GetVolume(GetVolumeRequest) returns (VolumeResponse);
   rpc UpdateVolume(UpdateVolumeRequest) returns (VolumeResponse);
   rpc DeleteVolume(DeleteVolumeRequest) returns (Status);
   rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
+
+  // RetryProvisionVolume re-arms a Failed/Stalled volume by transitioning
+  // it back to Pending so the controller picks it up on the next watch
+  // event. Returns the updated Volume.
+  rpc RetryProvisionVolume(RetryProvisionVolumeRequest) returns (VolumeResponse);
+
+  // DetachVolume clears bind state (BoundClaim/BoundNode) on a volume so
+  // a replacement instance can attach it. With force=true the call is
+  // allowed regardless of current status.
+  rpc DetachVolume(DetachVolumeRequest) returns (VolumeResponse);
 }

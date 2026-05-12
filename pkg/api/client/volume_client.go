@@ -111,6 +111,37 @@ func (c *VolumeClient) ListVolumes(namespace string, labelSelector, fieldSelecto
 	return out, nil
 }
 
+// RetryProvisionVolume re-arms a Failed/Stalled volume by transitioning
+// it back to Pending. Returns the updated Volume.
+func (c *VolumeClient) RetryProvisionVolume(namespace, name string) (*types.Volume, error) {
+	ctx, cancel := c.client.Context()
+	defer cancel()
+	resp, err := c.svc.RetryProvisionVolume(ctx, &generated.RetryProvisionVolumeRequest{Name: name, Namespace: namespace})
+	if err != nil {
+		return nil, convertGRPCError("retry-provision volume", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	return ProtoToVolume(resp.Volume), nil
+}
+
+// DetachVolume clears bind state on a volume so a replacement instance
+// can attach it. With force=true the call is allowed regardless of
+// current status.
+func (c *VolumeClient) DetachVolume(namespace, name string, force bool) (*types.Volume, error) {
+	ctx, cancel := c.client.Context()
+	defer cancel()
+	resp, err := c.svc.DetachVolume(ctx, &generated.DetachVolumeRequest{Name: name, Namespace: namespace, Force: force})
+	if err != nil {
+		return nil, convertGRPCError("detach volume", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	return ProtoToVolume(resp.Volume), nil
+}
+
 // VolumeToProto converts a domain Volume to its wire form.
 func VolumeToProto(v *types.Volume) *generated.Volume {
 	if v == nil {

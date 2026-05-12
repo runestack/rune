@@ -273,11 +273,13 @@ var StorageClassService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	VolumeService_CreateVolume_FullMethodName = "/rune.api.VolumeService/CreateVolume"
-	VolumeService_GetVolume_FullMethodName    = "/rune.api.VolumeService/GetVolume"
-	VolumeService_UpdateVolume_FullMethodName = "/rune.api.VolumeService/UpdateVolume"
-	VolumeService_DeleteVolume_FullMethodName = "/rune.api.VolumeService/DeleteVolume"
-	VolumeService_ListVolumes_FullMethodName  = "/rune.api.VolumeService/ListVolumes"
+	VolumeService_CreateVolume_FullMethodName         = "/rune.api.VolumeService/CreateVolume"
+	VolumeService_GetVolume_FullMethodName            = "/rune.api.VolumeService/GetVolume"
+	VolumeService_UpdateVolume_FullMethodName         = "/rune.api.VolumeService/UpdateVolume"
+	VolumeService_DeleteVolume_FullMethodName         = "/rune.api.VolumeService/DeleteVolume"
+	VolumeService_ListVolumes_FullMethodName          = "/rune.api.VolumeService/ListVolumes"
+	VolumeService_RetryProvisionVolume_FullMethodName = "/rune.api.VolumeService/RetryProvisionVolume"
+	VolumeService_DetachVolume_FullMethodName         = "/rune.api.VolumeService/DetachVolume"
 )
 
 // VolumeServiceClient is the client API for VolumeService service.
@@ -289,6 +291,14 @@ type VolumeServiceClient interface {
 	UpdateVolume(ctx context.Context, in *UpdateVolumeRequest, opts ...grpc.CallOption) (*VolumeResponse, error)
 	DeleteVolume(ctx context.Context, in *DeleteVolumeRequest, opts ...grpc.CallOption) (*Status, error)
 	ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error)
+	// RetryProvisionVolume re-arms a Failed/Stalled volume by transitioning
+	// it back to Pending so the controller picks it up on the next watch
+	// event. Returns the updated Volume.
+	RetryProvisionVolume(ctx context.Context, in *RetryProvisionVolumeRequest, opts ...grpc.CallOption) (*VolumeResponse, error)
+	// DetachVolume clears bind state (BoundClaim/BoundNode) on a volume so
+	// a replacement instance can attach it. With force=true the call is
+	// allowed regardless of current status.
+	DetachVolume(ctx context.Context, in *DetachVolumeRequest, opts ...grpc.CallOption) (*VolumeResponse, error)
 }
 
 type volumeServiceClient struct {
@@ -349,6 +359,26 @@ func (c *volumeServiceClient) ListVolumes(ctx context.Context, in *ListVolumesRe
 	return out, nil
 }
 
+func (c *volumeServiceClient) RetryProvisionVolume(ctx context.Context, in *RetryProvisionVolumeRequest, opts ...grpc.CallOption) (*VolumeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumeResponse)
+	err := c.cc.Invoke(ctx, VolumeService_RetryProvisionVolume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumeServiceClient) DetachVolume(ctx context.Context, in *DetachVolumeRequest, opts ...grpc.CallOption) (*VolumeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumeResponse)
+	err := c.cc.Invoke(ctx, VolumeService_DetachVolume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VolumeServiceServer is the server API for VolumeService service.
 // All implementations must embed UnimplementedVolumeServiceServer
 // for forward compatibility.
@@ -358,6 +388,14 @@ type VolumeServiceServer interface {
 	UpdateVolume(context.Context, *UpdateVolumeRequest) (*VolumeResponse, error)
 	DeleteVolume(context.Context, *DeleteVolumeRequest) (*Status, error)
 	ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error)
+	// RetryProvisionVolume re-arms a Failed/Stalled volume by transitioning
+	// it back to Pending so the controller picks it up on the next watch
+	// event. Returns the updated Volume.
+	RetryProvisionVolume(context.Context, *RetryProvisionVolumeRequest) (*VolumeResponse, error)
+	// DetachVolume clears bind state (BoundClaim/BoundNode) on a volume so
+	// a replacement instance can attach it. With force=true the call is
+	// allowed regardless of current status.
+	DetachVolume(context.Context, *DetachVolumeRequest) (*VolumeResponse, error)
 	mustEmbedUnimplementedVolumeServiceServer()
 }
 
@@ -382,6 +420,12 @@ func (UnimplementedVolumeServiceServer) DeleteVolume(context.Context, *DeleteVol
 }
 func (UnimplementedVolumeServiceServer) ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListVolumes not implemented")
+}
+func (UnimplementedVolumeServiceServer) RetryProvisionVolume(context.Context, *RetryProvisionVolumeRequest) (*VolumeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RetryProvisionVolume not implemented")
+}
+func (UnimplementedVolumeServiceServer) DetachVolume(context.Context, *DetachVolumeRequest) (*VolumeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DetachVolume not implemented")
 }
 func (UnimplementedVolumeServiceServer) mustEmbedUnimplementedVolumeServiceServer() {}
 func (UnimplementedVolumeServiceServer) testEmbeddedByValue()                       {}
@@ -494,6 +538,42 @@ func _VolumeService_ListVolumes_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VolumeService_RetryProvisionVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetryProvisionVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeServiceServer).RetryProvisionVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeService_RetryProvisionVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeServiceServer).RetryProvisionVolume(ctx, req.(*RetryProvisionVolumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VolumeService_DetachVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DetachVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeServiceServer).DetachVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeService_DetachVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeServiceServer).DetachVolume(ctx, req.(*DetachVolumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VolumeService_ServiceDesc is the grpc.ServiceDesc for VolumeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -520,6 +600,14 @@ var VolumeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListVolumes",
 			Handler:    _VolumeService_ListVolumes_Handler,
+		},
+		{
+			MethodName: "RetryProvisionVolume",
+			Handler:    _VolumeService_RetryProvisionVolume_Handler,
+		},
+		{
+			MethodName: "DetachVolume",
+			Handler:    _VolumeService_DetachVolume_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -97,6 +97,10 @@ func methodToAction(method string) (string, string) {
 		return "volumes", "update"
 	case strings.HasPrefix(method, "/rune.api.VolumeService/Delete"):
 		return "volumes", "delete"
+	case strings.HasPrefix(method, "/rune.api.VolumeService/RetryProvision"):
+		return "volumes", "update"
+	case strings.HasPrefix(method, "/rune.api.VolumeService/Detach"):
+		return "volumes", "update"
 
 	case strings.HasPrefix(method, "/rune.api.AuthService/WhoAmI"):
 		return "auth", "get"

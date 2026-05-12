@@ -221,3 +221,86 @@ func protoToVolume(p *generated.Volume) (*types.Volume, error) {
 	}
 	return v, nil
 }
+
+// RetryProvisionVolume resets a Failed/Stalled volume back to Pending so
+// the controller will attempt provisioning again. Volumes already in any
+// other state are rejected with FailedPrecondition.
+func (s *VolumeService) RetryProvisionVolume(ctx context.Context, req *generated.RetryProvisionVolumeRequest) (*generated.VolumeResponse, error) {
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	v, err := s.repo.Get(ctx, types.NS(req.Namespace), req.Name)
+	if err != nil {
+		if store.IsNotFoundError(err) {
+			return nil, status.Errorf(codes.NotFound, "volume not found: %s/%s", req.Namespace, req.Name)
+		}
+		return nil, status.Errorf(codes.Internal, "get: %v", err)
+	}
+	switch v.Status {
+	case types.VolumeStatusFailed, types.VolumeStatusStalled:
+		// allowed
+	default:
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"retry-provision: volume %s/%s is in %q (only Failed or Stalled may be retried)",
+			v.Namespace, v.Name, v.Status)
+	}
+	v.Status = types.VolumeStatusPending
+	v.Reason = ""
+	v.Message = ""
+	if err := s.repo.Update(ctx, v, store.WithSource(store.EventSourceAPI)); err != nil {
+		s.logger.Error("retry-provision update failed", log.Err(err), log.Str("ns", v.Namespace), log.Str("name", v.Name))
+		return nil, status.Errorf(codes.Internal, "update: %v", err)
+	}
+	return &generated.VolumeResponse{
+		Volume: volumeToProto(v),
+		Status: &generated.Status{Code: int32(codes.OK)},
+	}, nil
+}
+
+// DetachVolume clears bind state on a volume so a replacement instance can
+// attach it. Without force=true the volume must already be Released or
+// have no BoundClaim (i.e. it's safe to clear). With force=true the
+// caller assumes responsibility for any data-loss risk if the previous
+// holder is still alive; bind state is cleared regardless of status and
+// the volume is moved to Available.
+func (s *VolumeService) DetachVolume(ctx context.Context, req *generated.DetachVolumeRequest) (*generated.VolumeResponse, error) {
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	v, err := s.repo.Get(ctx, types.NS(req.Namespace), req.Name)
+	if err != nil {
+		if store.IsNotFoundError(err) {
+			return nil, status.Errorf(codes.NotFound, "volume not found: %s/%s", req.Namespace, req.Name)
+		}
+		return nil, status.Errorf(codes.Internal, "get: %v", err)
+	}
+	if !req.Force {
+		// Soft path: refuse to disturb a live binding.
+		if v.BoundClaim != "" && v.Status == types.VolumeStatusBound {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"detach: volume %s/%s is Bound to %q; pass --force to override (data-loss risk)",
+				v.Namespace, v.Name, v.BoundClaim)
+		}
+	}
+	v.BoundClaim = ""
+	v.BoundNode = ""
+	// Drop OwnerService too so reclaim no longer fires when its parent
+	// service is later deleted; an operator who force-detaches has
+	// taken explicit ownership.
+	v.OwnerService = ""
+	if v.Handle != "" {
+		v.Status = types.VolumeStatusAvailable
+	} else {
+		v.Status = types.VolumeStatusPending
+	}
+	v.Reason = ""
+	v.Message = ""
+	if err := s.repo.Update(ctx, v, store.WithSource(store.EventSourceAPI)); err != nil {
+		s.logger.Error("detach update failed", log.Err(err), log.Str("ns", v.Namespace), log.Str("name", v.Name))
+		return nil, status.Errorf(codes.Internal, "update: %v", err)
+	}
+	return &generated.VolumeResponse{
+		Volume: volumeToProto(v),
+		Status: &generated.Status{Code: int32(codes.OK)},
+	}, nil
+}

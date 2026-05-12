@@ -190,7 +190,7 @@ type Service struct {
 	// StatusMessage. Used by the CLI to show "why" without a second
 	// command.
 	StatusMessage string `protobuf:"bytes,25,opt,name=status_message,json=statusMessage,proto3" json:"status_message,omitempty"`
-	// Volume mounts (RUNE-070/072). Exactly one of claim / claim_template
+	// Volume mounts. Exactly one of claim / claim_template
 	// is set per mount; binding state lives on the Volume resource itself.
 	Volumes       []*VolumeMount `protobuf:"bytes,26,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
