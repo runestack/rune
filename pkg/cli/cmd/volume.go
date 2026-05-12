@@ -250,27 +250,46 @@ event. Volumes in any other state are rejected.`,
 	return cmd
 }
 
-// --- restore (stub) ---
+// --- restore ---
 
 func newVolumeRestoreCmd() *cobra.Command {
-	var ns, fromSnapshot string
+	var ns, fromSnapshot, snapshotNS, scName string
 	cmd := &cobra.Command{
 		Use:   "restore <name> --from-snapshot <snap>",
-		Short: "Provision a new volume from a snapshot (not yet implemented)",
+		Short: "Provision a new volume from a snapshot",
 		Long: `Restore creates a new volume named <name> populated from the named
-snapshot's handle. The SnapshotService is not yet implemented (RUNE-071);
-this subcommand is a placeholder so its shape is documented in --help.`,
+snapshot's handle. The snapshot must be in phase Ready. The new volume
+is created in the same namespace as the snapshot unless -n/--namespace
+is given.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = ns
 			if fromSnapshot == "" {
 				return fmt.Errorf("--from-snapshot is required")
 			}
-			return fmt.Errorf("rune volume restore: not yet implemented (target %q from snapshot %q)", args[0], fromSnapshot)
+			snapNS := snapshotNS
+			if snapNS == "" {
+				snapNS = effectiveCmdNS(ns)
+			}
+			targetNS := effectiveCmdNS(ns)
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			vol, err := client.NewSnapshotClient(api).RestoreVolume(
+				snapNS, fromSnapshot, args[0], targetNS, scName, nil)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Volume %s/%s created from snapshot %s/%s (status=%s)\n",
+				vol.Namespace, vol.Name, snapNS, fromSnapshot, vol.Status)
+			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
-	cmd.Flags().StringVar(&fromSnapshot, "from-snapshot", "", "Source snapshot name")
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace for the new volume (and source snapshot, unless --snapshot-namespace is set)")
+	cmd.Flags().StringVar(&fromSnapshot, "from-snapshot", "", "Source snapshot name (required)")
+	cmd.Flags().StringVar(&snapshotNS, "snapshot-namespace", "", "Source snapshot namespace (default: --namespace)")
+	cmd.Flags().StringVar(&scName, "storage-class", "", "Override storage class for the new volume (default: source volume's class)")
 	return cmd
 }
 
