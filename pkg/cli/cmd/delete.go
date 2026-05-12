@@ -105,7 +105,7 @@ func runDelete(cmd *cobra.Command, args []string, opts *deleteOptions) error {
 		target := args[0]
 		// Try deleting as a service first
 		if err := runServiceDelete(cmd.Context(), target, opts); err != nil {
-			// Only fall back to secret/config when the service truly doesn't exist
+			// Only fall back to secret/config/volume/storageclass when the service truly doesn't exist
 			if strings.Contains(strings.ToLower(err.Error()), "not found") {
 				// Secret path
 				if err := runDeleteSecret(cmd.Context(), target, opts); err == nil {
@@ -113,6 +113,14 @@ func runDelete(cmd *cobra.Command, args []string, opts *deleteOptions) error {
 				}
 				// Config path
 				if err := runDeleteConfigmap(cmd.Context(), target, opts); err == nil {
+					return nil
+				}
+				// Volume path (namespaced)
+				if err := runDeleteVolume(cmd.Context(), target, opts); err == nil {
+					return nil
+				}
+				// StorageClass path (cluster-scoped)
+				if err := runDeleteStorageClass(cmd.Context(), target, opts); err == nil {
 					return nil
 				}
 				return fmt.Errorf("failed to delete resource '%s' in namespace %s (not found)", target, opts.namespace)
@@ -831,6 +839,41 @@ func runDeleteConfigmap(ctx context.Context, name string, opts *deleteOptions) e
 		return err
 	}
 	fmt.Printf("Config %s/%s deleted\n", opts.namespace, name)
+	return nil
+}
+
+// runDeleteVolume deletes a volume by name using the VolumeClient.
+// Honours the volume's reclaimPolicy (driver decides whether the
+// underlying storage is destroyed); used by the `rune delete <name>`
+// shorthand chain.
+func runDeleteVolume(ctx context.Context, name string, opts *deleteOptions) error {
+	apiClient, err := createAPIClient(&opts.cmdOptions)
+	if err != nil {
+		return err
+	}
+	defer apiClient.Close()
+	vc := client.NewVolumeClient(apiClient)
+	if err := vc.DeleteVolume(opts.namespace, name); err != nil {
+		return err
+	}
+	fmt.Printf("Volume %s/%s deleted\n", opts.namespace, name)
+	return nil
+}
+
+// runDeleteStorageClass deletes a cluster-scoped StorageClass by name
+// using the StorageClassClient. Used by the `rune delete <name>`
+// shorthand chain.
+func runDeleteStorageClass(ctx context.Context, name string, opts *deleteOptions) error {
+	apiClient, err := createAPIClient(&opts.cmdOptions)
+	if err != nil {
+		return err
+	}
+	defer apiClient.Close()
+	scc := client.NewStorageClassClient(apiClient)
+	if err := scc.DeleteStorageClass(name); err != nil {
+		return err
+	}
+	fmt.Printf("StorageClass %s deleted\n", name)
 	return nil
 }
 

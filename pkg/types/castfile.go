@@ -11,10 +11,12 @@ import (
 
 // CastFile represents a YAML file that may contain multiple resource specifications.
 type CastFile struct {
-	Specs      []Spec          `yaml:"specs,omitempty"`
-	Services   []ServiceSpec   `yaml:"services,omitempty"`
-	Secrets    []SecretSpec    `yaml:"secrets,omitempty"`
-	Configmaps []ConfigmapSpec `yaml:"configmaps,omitempty"`
+	Specs           []Spec          `yaml:"specs,omitempty"`
+	Services        []ServiceSpec   `yaml:"services,omitempty"`
+	Secrets         []SecretSpec    `yaml:"secrets,omitempty"`
+	Configmaps      []ConfigmapSpec `yaml:"configmaps,omitempty"`
+	StorageClasses  []StorageClass  `yaml:"storageClasses,omitempty"`
+	Volumes         []Volume        `yaml:"volumes,omitempty"`
 	// Internal tracking for line numbers (not serialized)
 	lineInfo map[string]int `json:"-" yaml:"-"`
 	// Template references extracted during preprocessing
@@ -106,7 +108,7 @@ func IsCastFile(filename string) (bool, error) {
 	if m == nil {
 		return false, nil
 	}
-	keys := []string{"service", "services", "secret", "secrets", "configmap", "configmaps"}
+	keys := []string{"service", "services", "secret", "secrets", "configmap", "configmaps", "storageclass", "storageclasses", "volume", "volumes"}
 	for _, k := range keys {
 		if _, ok := m[k]; ok {
 			return true, nil
@@ -188,6 +190,26 @@ func collectRepeatedSpecs(node *yaml.Node, cf *CastFile) {
 				// record line info
 				name, ns := extractNameNamespace(val)
 				cf.lineInfo[makeLineKey("Secret", ns, name)] = val.Line
+			}
+		}
+		if key.Value == "storageclass" && val.Kind == yaml.MappingNode {
+			collectStorageClassNode(val, cf)
+		}
+		if key.Value == "storageclasses" && val.Kind == yaml.SequenceNode {
+			for _, item := range val.Content {
+				if item.Kind == yaml.MappingNode {
+					collectStorageClassNode(item, cf)
+				}
+			}
+		}
+		if key.Value == "volume" && val.Kind == yaml.MappingNode {
+			collectVolumeNode(val, cf)
+		}
+		if key.Value == "volumes" && val.Kind == yaml.SequenceNode {
+			for _, item := range val.Content {
+				if item.Kind == yaml.MappingNode {
+					collectVolumeNode(item, cf)
+				}
 			}
 		}
 		if key.Value == "configmap" && val.Kind == yaml.MappingNode {
@@ -325,12 +347,16 @@ func validateTopLevelKeys(node *yaml.Node) error {
 		return fmt.Errorf("cast file must be a YAML mapping at the top level")
 	}
 	valid := map[string]bool{
-		"service":    true,
-		"services":   true,
-		"secrets":    true,
-		"secret":     true,
-		"configmap":  true,
-		"configmaps": true,
+		"service":        true,
+		"services":       true,
+		"secrets":        true,
+		"secret":         true,
+		"configmap":      true,
+		"configmaps":     true,
+		"storageclass":   true,
+		"storageclasses": true,
+		"volume":         true,
+		"volumes":        true,
 	}
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key := node.Content[i]
@@ -622,6 +648,94 @@ func (cf *CastFile) GetConfigmaps() ([]*Configmap, error) {
 			return nil, err
 		}
 		result = append(result, cfg)
+	}
+	return result, nil
+}
+
+// collectStorageClassNode decodes a single YAML mapping node into a StorageClass
+// and appends it to cf.StorageClasses. Parse errors are recorded on cf.
+func collectStorageClassNode(node *yaml.Node, cf *CastFile) {
+	var sc StorageClass
+	b, err := yaml.Marshal(node)
+	if err != nil {
+		cf.AddParseError(fmt.Errorf("failed to marshal storageclass at line %d: %w", node.Line, err))
+		return
+	}
+	if err := yaml.Unmarshal(b, &sc); err != nil {
+		cf.AddParseError(fmt.Errorf("failed to unmarshal storageclass at line %d: %w", node.Line, err))
+		return
+	}
+	cf.StorageClasses = append(cf.StorageClasses, sc)
+	name, _ := extractNameNamespace(node)
+	cf.lineInfo[makeLineKey("StorageClass", "", name)] = node.Line
+}
+
+// collectVolumeNode decodes a single YAML mapping node into a Volume and
+// appends it to cf.Volumes. Parse errors are recorded on cf.
+func collectVolumeNode(node *yaml.Node, cf *CastFile) {
+	var v Volume
+	b, err := yaml.Marshal(node)
+	if err != nil {
+		cf.AddParseError(fmt.Errorf("failed to marshal volume at line %d: %w", node.Line, err))
+		return
+	}
+	if err := yaml.Unmarshal(b, &v); err != nil {
+		cf.AddParseError(fmt.Errorf("failed to unmarshal volume at line %d: %w", node.Line, err))
+		return
+	}
+	if cf.overrideNamespace != "" {
+		v.Namespace = cf.overrideNamespace
+	}
+	cf.Volumes = append(cf.Volumes, v)
+	name, ns := extractNameNamespace(node)
+	cf.lineInfo[makeLineKey("Volume", ns, name)] = node.Line
+}
+
+// GetStorageClasses returns concrete StorageClass objects parsed from the
+// cast file. StorageClasses are cluster-scoped (no namespace).
+func (cf *CastFile) GetStorageClasses() ([]*StorageClass, error) {
+	if len(cf.StorageClasses) == 0 {
+		return nil, nil
+	}
+	result := make([]*StorageClass, 0, len(cf.StorageClasses))
+	for i := range cf.StorageClasses {
+		sc := cf.StorageClasses[i]
+		if sc.Name == "" {
+			return nil, NewValidationError("storageclass name is required")
+		}
+		if sc.Driver == "" {
+			return nil, NewValidationError(fmt.Sprintf("storageclass %q: driver is required", sc.Name))
+		}
+		result = append(result, &sc)
+	}
+	return result, nil
+}
+
+// GetVolumes returns concrete Volume objects parsed from the cast file,
+// defaulting an empty namespace to "default" (or to the cast-file override).
+func (cf *CastFile) GetVolumes() ([]*Volume, error) {
+	if len(cf.Volumes) == 0 {
+		return nil, nil
+	}
+	result := make([]*Volume, 0, len(cf.Volumes))
+	for i := range cf.Volumes {
+		v := cf.Volumes[i]
+		if v.Namespace == "" {
+			v.Namespace = "default"
+		}
+		if v.Name == "" {
+			return nil, NewValidationError("volume name is required")
+		}
+		if v.StorageClassName == "" {
+			return nil, NewValidationError(fmt.Sprintf("volume %q: storageClassName is required", v.Name))
+		}
+		if v.Size == "" {
+			return nil, NewValidationError(fmt.Sprintf("volume %q: size is required", v.Name))
+		}
+		if v.AccessMode == "" {
+			v.AccessMode = AccessModeRWO
+		}
+		result = append(result, &v)
 	}
 	return result, nil
 }
