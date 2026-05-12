@@ -268,12 +268,12 @@ func (f *fakeDO) handleListDroplets(w http.ResponseWriter, name string) {
 // ============================================================================
 
 type fakeMounter struct {
-	mu          sync.Mutex
-	formatted   map[string]string // dev -> fsType
-	mounts      map[string]string // target -> dev
-	dirs        map[string]bool   // target -> created
-	failOn      string            // method name to fail (one-shot)
-	failErr     error
+	mu        sync.Mutex
+	formatted map[string]string // dev -> fsType
+	mounts    map[string]string // target -> dev
+	dirs      map[string]bool   // target -> created
+	failOn    string            // method name to fail (one-shot)
+	failErr   error
 }
 
 func newFakeMounter() *fakeMounter {
@@ -712,11 +712,11 @@ func TestExpand(t *testing.T) {
 
 func TestExpand_ParsesQuantityFormats(t *testing.T) {
 	cases := map[string]int64{
-		"5Gi":          5 * (1 << 30),
-		"5G":           5_000_000_000,
-		"1024Mi":       1024 * (1 << 20),
-		"500":          500,
-		"1Ti":          1 << 40,
+		"5Gi":    5 * (1 << 30),
+		"5G":     5_000_000_000,
+		"1024Mi": 1024 * (1 << 20),
+		"500":    500,
+		"1Ti":    1 << 40,
 	}
 	for input, want := range cases {
 		got, err := parseQuantity(input)
@@ -738,10 +738,10 @@ func TestExpand_ParsesQuantityFormats(t *testing.T) {
 
 func TestBytesToGigabytes(t *testing.T) {
 	cases := map[int64]int64{
-		1:                  1, // tiny -> rounds to 1GB minimum
-		1_000_000_000:      1,
-		1_500_000_000:      2, // round up
-		10_000_000_000:     10,
+		1:              1, // tiny -> rounds to 1GB minimum
+		1_000_000_000:  1,
+		1_500_000_000:  2, // round up
+		10_000_000_000: 10,
 	}
 	for in, want := range cases {
 		got, err := bytesToGigabytes(in)
@@ -760,11 +760,11 @@ func TestBytesToGigabytes(t *testing.T) {
 
 func TestSanitizeDOName(t *testing.T) {
 	cases := map[string]string{
-		"rune-default-data":               "rune-default-data",
-		"rune-Default/Data":               "rune-default-data",
-		"rune-_-_-strip":                  "rune-strip",
-		"123-leading-digit":               "v123-leading-digit",
-		strings.Repeat("a", 80):           strings.Repeat("a", 64),
+		"rune-default-data":     "rune-default-data",
+		"rune-Default/Data":     "rune-default-data",
+		"rune-_-_-strip":        "rune-strip",
+		"123-leading-digit":     "v123-leading-digit",
+		strings.Repeat("a", 80): strings.Repeat("a", 64),
 	}
 	for in, want := range cases {
 		if got := sanitizeDOName(in, 64); got != want {

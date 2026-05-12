@@ -295,9 +295,9 @@ func (d *doVolumeDriver) Expand(ctx context.Context, handle driver.VolumeHandle,
 		return nil
 	}
 	act, err := d.client.volumeAction(ctx, string(handle), map[string]any{
-		"type":            "resize",
-		"size_gigabytes":  gigabytes,
-		"region":          vol.Region.Slug,
+		"type":           "resize",
+		"size_gigabytes": gigabytes,
+		"region":         vol.Region.Slug,
 	})
 	if err != nil {
 		return fmt.Errorf("dovolume: resize action: %w", err)

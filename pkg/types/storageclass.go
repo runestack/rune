@@ -103,6 +103,66 @@ type TopologyMatchExpression struct {
 	Values []string `json:"values,omitempty" yaml:"values,omitempty"`
 }
 
+// Matches reports whether the given label set satisfies the selector.
+// MatchLabels and MatchExpressions are AND-ed: every key in MatchLabels
+// must be present with the listed value, and every expression must
+// evaluate true. An empty selector (no MatchLabels and no
+// MatchExpressions) matches any label set.
+//
+// Operator semantics:
+//   - In:           label is present and its value is one of Values.
+//   - NotIn:        label is absent OR its value is not one of Values.
+//   - Exists:       label key is present (Values ignored).
+//   - DoesNotExist: label key is absent (Values ignored).
+//
+// An expression with an unknown Operator is treated as non-matching;
+// callers that need stricter validation should validate selectors at
+// admission time.
+func (s TopologySelector) Matches(labels map[string]string) bool {
+	for k, v := range s.MatchLabels {
+		if got, ok := labels[k]; !ok || got != v {
+			return false
+		}
+	}
+	for _, expr := range s.MatchExpressions {
+		val, present := labels[expr.Key]
+		switch expr.Operator {
+		case TopologyOperatorIn:
+			if !present {
+				return false
+			}
+			if !containsString(expr.Values, val) {
+				return false
+			}
+		case TopologyOperatorNotIn:
+			if present && containsString(expr.Values, val) {
+				return false
+			}
+		case TopologyOperatorExists:
+			if !present {
+				return false
+			}
+		case TopologyOperatorDoesNotExist:
+			if present {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// containsString returns true if needle appears in haystack.
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // TopologyOperator names the set-based operators supported by
 // TopologyMatchExpression.
 type TopologyOperator string
