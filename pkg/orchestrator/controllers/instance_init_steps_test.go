@@ -172,7 +172,7 @@ func TestRunInitSteps_OnFailure_ExhaustsRetries(t *testing.T) {
 	assert.Equal(t, types.InitStepReasonNonZeroExit, inst.InitStates[0].Reason)
 }
 
-func TestRunInitSteps_RunIfAlways_RunsEvenWithPriorSucceeded(t *testing.T) {
+func TestRunInitSteps_RunIfAlways_RunsEvenWithInitializedVolume(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
 	c := controllerIface.(*instanceController)
@@ -181,18 +181,32 @@ func TestRunInitSteps_RunIfAlways_RunsEvenWithPriorSucceeded(t *testing.T) {
 		{Name: "tick", Image: "x:1", Command: "x", RunIf: types.RunIf{Type: types.RunIfAlways}},
 	})
 	require.NoError(t, ts.CreateService(ctx, svc))
+
+	// Seed a volume already initialised for this service to prove that
+	// runIf=always still runs.
+	vol := &types.Volume{
+		ID: "vol-always", Name: "data", Namespace: "default",
+		Status:         types.VolumeStatusBound,
+		InitializedFor: map[string]time.Time{svc.Namespace + "/" + svc.ID: time.Now()},
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+
 	inst := &types.Instance{
 		ID: "inst-always", Name: "inst-always", ServiceID: svc.ID, Namespace: "default",
-		InitStates: []types.InitStepState{{Name: "tick", Status: types.InitStepStatusSucceeded, Attempts: 1}},
+		Metadata: &types.InstanceMetadata{
+			VolumeMounts: []types.ResolvedVolumeMount{
+				{Name: "data", VolumeName: vol.Name, VolumeNamespace: vol.Namespace, MountPath: "/data", Source: t.TempDir()},
+			},
+		},
 	}
 	require.NoError(t, ts.CreateInstance(ctx, inst))
 
 	err := c.runInitSteps(ctx, testRunner, svc, inst)
 	require.NoError(t, err)
-	require.Len(t, testRunner.InitCalls, 1, "always-step must run despite prior Succeeded state")
+	require.Len(t, testRunner.InitCalls, 1, "always-step must run despite initialised parent volume")
 }
 
-func TestRunInitSteps_FreshVolume_SkipsWhenPriorSucceeded(t *testing.T) {
+func TestRunInitSteps_FreshVolume_SkipsWhenInitializedForServicePresent(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
 	c := controllerIface.(*instanceController)
@@ -201,18 +215,70 @@ func TestRunInitSteps_FreshVolume_SkipsWhenPriorSucceeded(t *testing.T) {
 		{Name: "format", Image: "x:1", Command: "x"}, // default freshVolume
 	})
 	require.NoError(t, ts.CreateService(ctx, svc))
+
+	serviceKey := svc.Namespace + "/" + svc.ID
+	vol := &types.Volume{
+		ID: "vol-fresh", Name: "data", Namespace: "default",
+		Status:         types.VolumeStatusBound,
+		InitializedFor: map[string]time.Time{serviceKey: time.Now().Add(-time.Hour)},
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+
 	inst := &types.Instance{
 		ID: "inst-fresh", Name: "inst-fresh", ServiceID: svc.ID, Namespace: "default",
-		InitStates: []types.InitStepState{{Name: "format", Status: types.InitStepStatusSucceeded, Attempts: 1}},
+		Metadata: &types.InstanceMetadata{
+			VolumeMounts: []types.ResolvedVolumeMount{
+				{Name: "data", VolumeName: vol.Name, VolumeNamespace: vol.Namespace, MountPath: "/data", Source: t.TempDir()},
+			},
+		},
 	}
 	require.NoError(t, ts.CreateInstance(ctx, inst))
 
 	err := c.runInitSteps(ctx, testRunner, svc, inst)
 	require.NoError(t, err)
-	assert.Empty(t, testRunner.InitCalls, "freshVolume must skip when prior Succeeded exists")
+	assert.Empty(t, testRunner.InitCalls, "freshVolume must skip when Volume.InitializedFor[serviceKey] is set")
 	require.Len(t, inst.InitStates, 1)
 	assert.Equal(t, types.InitStepStatusSkipped, inst.InitStates[0].Status)
 	assert.Contains(t, inst.InitStates[0].Message, "freshVolume")
+}
+
+func TestRunInitSteps_FreshVolume_RunsWhenVolumeNotYetInitialized(t *testing.T) {
+	shrinkInitBackoffs(t)
+	ctx, ts, testRunner, controllerIface := setupTestController(t)
+	c := controllerIface.(*instanceController)
+
+	svc := makeInitStepService(ctx, t, ts, "first-cast", []types.InitStep{
+		{Name: "format", Image: "x:1", Command: "x"},
+	})
+	require.NoError(t, ts.CreateService(ctx, svc))
+
+	vol := &types.Volume{
+		ID: "vol-fresh-run", Name: "data", Namespace: "default",
+		Status: types.VolumeStatusBound,
+		// no InitializedFor entry
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+
+	inst := &types.Instance{
+		ID: "inst-fresh-run", Name: "inst-fresh-run", ServiceID: svc.ID, Namespace: "default",
+		Metadata: &types.InstanceMetadata{
+			VolumeMounts: []types.ResolvedVolumeMount{
+				{Name: "data", VolumeName: vol.Name, VolumeNamespace: vol.Namespace, MountPath: "/data", Source: t.TempDir()},
+			},
+		},
+	}
+	require.NoError(t, ts.CreateInstance(ctx, inst))
+
+	err := c.runInitSteps(ctx, testRunner, svc, inst)
+	require.NoError(t, err)
+	require.Len(t, testRunner.InitCalls, 1)
+
+	// Verify the controller stamped the volume after the step succeeded.
+	var reloaded types.Volume
+	require.NoError(t, ts.Get(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &reloaded))
+	serviceKey := svc.Namespace + "/" + svc.ID
+	_, ok := reloaded.InitializedFor[serviceKey]
+	assert.True(t, ok, "successful init step must stamp Volume.InitializedFor[%q], got %v", serviceKey, reloaded.InitializedFor)
 }
 
 func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {

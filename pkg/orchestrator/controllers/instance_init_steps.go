@@ -50,6 +50,8 @@ func (c *instanceController) runInitSteps(ctx context.Context, serviceRunner run
 		return nil
 	}
 
+	serviceKey := initStepServiceKey(service)
+
 	// Move to Initializing so watchers (cast --wait, get service) can
 	// surface the new phase.
 	instance.Status = types.InstanceStatusInitializing
@@ -63,7 +65,6 @@ func (c *instanceController) runInitSteps(ctx context.Context, serviceRunner run
 	// Pre-allocate one row per declared step so observers see the full
 	// plan immediately (Pending entries become Succeeded/Failed/Skipped
 	// as we progress).
-	prior := indexInitStates(instance.InitStates)
 	instance.InitStates = make([]types.InitStepState, 0, len(service.InitSteps))
 	for _, step := range service.InitSteps {
 		instance.InitStates = append(instance.InitStates, types.InitStepState{
@@ -77,7 +78,7 @@ func (c *instanceController) runInitSteps(ctx context.Context, serviceRunner run
 		step := service.InitSteps[i]
 		state := &instance.InitStates[i]
 
-		shouldRun, skipReason := evaluateRunIf(step, instance, prior[step.Name])
+		shouldRun, skipReason := c.evaluateRunIf(ctx, step, instance, serviceKey)
 		if !shouldRun {
 			state.Status = types.InitStepStatusSkipped
 			state.Message = skipReason
@@ -100,9 +101,66 @@ func (c *instanceController) runInitSteps(ctx context.Context, serviceRunner run
 			}
 			return fmt.Errorf("init step %q failed: %w", step.Name, err)
 		}
+
+		// On success, anchor freshness on the parent volumes so that
+		// crash-recovery and restart correctly skip the step. Failures
+		// here are logged but do not bubble: the next init pass will see
+		// the missing flag and re-run, which is the safer of the two
+		// failure modes (re-running an idempotent format script vs
+		// silently corrupting an already-formatted volume).
+		c.markVolumesInitialized(ctx, instance, step, serviceKey)
 	}
 
 	return nil
+}
+
+// initStepServiceKey is the canonical key used in
+// Volume.InitializedFor for a given Service. Format: "<namespace>/<id>"
+// — the ID rather than the name so that re-creating a service under
+// the same name after a delete does not falsely skip its init steps
+// against an old volume that happened to be reclaim-retained.
+func initStepServiceKey(svc *types.Service) string {
+	return svc.Namespace + "/" + svc.ID
+}
+
+// markVolumesInitialized stamps every parent volume permitted by the
+// step's Volumes filter with InitializedFor[serviceKey]=now. Volumes
+// that fail to load or update are logged and skipped.
+func (c *instanceController) markVolumesInitialized(
+	ctx context.Context,
+	instance *types.Instance,
+	step types.InitStep,
+	serviceKey string,
+) {
+	mounts := selectInitVolumes(instance, step, "")
+	now := time.Now().UTC()
+	for _, m := range mounts {
+		if m.VolumeName == "" {
+			continue // host-only mount, no Volume resource to anchor on
+		}
+		ns := m.VolumeNamespace
+		if ns == "" {
+			ns = instance.Namespace
+		}
+		var vol types.Volume
+		if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, m.VolumeName, &vol); err != nil {
+			c.logger.Warn("Init step succeeded but failed to load parent volume for InitializedFor",
+				log.Str("volume", ns+"/"+m.VolumeName),
+				log.Str("step", step.Name),
+				log.Err(err))
+			continue
+		}
+		if vol.InitializedFor == nil {
+			vol.InitializedFor = make(map[string]time.Time, 1)
+		}
+		vol.InitializedFor[serviceKey] = now
+		if err := c.store.Update(ctx, types.ResourceTypeVolume, ns, vol.Name, &vol); err != nil {
+			c.logger.Warn("Failed to persist Volume.InitializedFor",
+				log.Str("volume", ns+"/"+m.VolumeName),
+				log.Str("step", step.Name),
+				log.Err(err))
+		}
+	}
 }
 
 // executeInitStep runs a single step honouring its restart policy and
@@ -228,25 +286,14 @@ func (c *instanceController) persistInitStates(ctx context.Context, instance *ty
 	}
 }
 
-// indexInitStates returns the most recent state per step name, used for
-// freshVolume evaluation. Multiple entries with the same name take the
-// last one (post-S3 the slice is rebuilt per run, so this is mainly for
-// future-proofing against migrations from earlier formats).
-func indexInitStates(states []types.InitStepState) map[string]types.InitStepState {
-	out := make(map[string]types.InitStepState, len(states))
-	for _, s := range states {
-		out[s.Name] = s
-	}
-	return out
-}
-
 // evaluateRunIf returns (run, skipReason).
 //
-// freshVolume  — run iff no prior Succeeded state for this step on this
+// freshVolume  — run iff no parent volume permitted by step.Volumes
 //
-//	instance. S4 will replace this with a Volume.Status.InitializedFor
-//	check so that crash-recovery and `rune restart` correctly skip the
-//	step when the volume already carries initialised data.
+//	carries an InitializedFor entry for this service. The volume
+//	controller clears the entry on reclaim, so `rune volume delete &&
+//	rune cast` correctly re-formats while crash-recovery and `rune
+//	restart` correctly skip.
 //
 // fileMissing  — stat <volumeSource>/<runIf.path> for every parent
 //
@@ -256,7 +303,12 @@ func indexInitStates(states []types.InitStepState) map[string]types.InitStepStat
 //	non-empty one restricts to that single name.
 //
 // always       — always run.
-func evaluateRunIf(step types.InitStep, instance *types.Instance, prior types.InitStepState) (bool, string) {
+func (c *instanceController) evaluateRunIf(
+	ctx context.Context,
+	step types.InitStep,
+	instance *types.Instance,
+	serviceKey string,
+) (bool, string) {
 	rt := step.RunIf.Type
 	if rt == "" {
 		rt = types.RunIfFreshVolume
@@ -266,8 +318,28 @@ func evaluateRunIf(step types.InitStep, instance *types.Instance, prior types.In
 		return true, ""
 
 	case types.RunIfFreshVolume:
-		if prior.Status == types.InitStepStatusSucceeded {
-			return false, "freshVolume: already succeeded on this instance"
+		mounts := selectInitVolumes(instance, step, "")
+		if len(mounts) == 0 {
+			// No parent volume to anchor on — validation should have
+			// rejected this; treat as not-fresh and run.
+			return true, ""
+		}
+		for _, m := range mounts {
+			if m.VolumeName == "" {
+				continue // host-only mount, no Volume resource to consult
+			}
+			ns := m.VolumeNamespace
+			if ns == "" {
+				ns = instance.Namespace
+			}
+			var vol types.Volume
+			if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, m.VolumeName, &vol); err != nil {
+				// Volume disappeared underneath us — not fresh, run.
+				continue
+			}
+			if _, ok := vol.InitializedFor[serviceKey]; ok {
+				return false, fmt.Sprintf("freshVolume: %s/%s already initialised for %s", ns, m.VolumeName, serviceKey)
+			}
 		}
 		return true, ""
 
