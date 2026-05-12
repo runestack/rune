@@ -121,14 +121,14 @@ func TestVolumeServiceCreateValidation(t *testing.T) {
 	}
 
 	if _, err := svc.CreateVolume(ctx, &generated.CreateVolumeRequest{
-		Volume: &generated.Volume{Name: "Bad_Name", Namespace: "ns", StorageClassName: "local"},
+		Volume:          &generated.Volume{Name: "Bad_Name", Namespace: "ns", StorageClassName: "local"},
 		EnsureNamespace: true,
 	}); err == nil {
 		t.Fatalf("expected error for invalid name")
 	}
 
 	if _, err := svc.CreateVolume(ctx, &generated.CreateVolumeRequest{
-		Volume: &generated.Volume{Name: "ok", Namespace: "ns", StorageClassName: ""},
+		Volume:          &generated.Volume{Name: "ok", Namespace: "ns", StorageClassName: ""},
 		EnsureNamespace: true,
 	}); err == nil {
 		t.Fatalf("expected error for missing storageClassName")

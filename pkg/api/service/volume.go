@@ -1,4 +1,4 @@
-// VolumeService — namespace-scoped gRPC handlers for Volume resources. RUNE-072.
+// VolumeService — namespace-scoped gRPC handlers for Volume resources.
 package service
 
 import (

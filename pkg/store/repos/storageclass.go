@@ -1,4 +1,4 @@
-// Package repos — StorageClass and Volume repositories. RUNE-072.
+// Package repos — StorageClass and Volume repositories.
 package repos
 
 import (

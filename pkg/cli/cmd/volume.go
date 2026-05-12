@@ -1,0 +1,386 @@
+// Package cmd — `rune volume` noun-tree subcommands.
+//
+// Mirrors the `rune secret` precedent at pkg/cli/cmd/secret.go. The
+// underlying gRPC service is namespace-scoped, so all subcommands accept
+// --namespace (default: "default"). list adds --all-namespaces.
+//
+// detach / retry-provision / restore are stubbed out — the corresponding
+// VolumeService RPCs are not yet implemented (follow-up: provision retry,
+// --force detach, snapshot restore land alongside RUNE-071).
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"text/tabwriter"
+
+	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/types"
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+)
+
+// newVolumeCmd builds the `rune volume` command group.
+func newVolumeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "volume",
+		Aliases: []string{"vol", "volumes"},
+		Short:   "Manage persistent volumes (list, get, create, delete)",
+	}
+	cmd.AddCommand(newVolumeListCmd())
+	cmd.AddCommand(newVolumeGetCmd())
+	cmd.AddCommand(newVolumeCreateCmd())
+	cmd.AddCommand(newVolumeDeleteCmd())
+	cmd.AddCommand(newVolumeDetachCmd())
+	cmd.AddCommand(newVolumeRetryProvisionCmd())
+	cmd.AddCommand(newVolumeRestoreCmd())
+	return cmd
+}
+
+// --- list ---
+
+func newVolumeListCmd() *cobra.Command {
+	var ns, format, labelSelector, fieldSelector string
+	var allNamespaces bool
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List volumes in a namespace",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ns = effectiveCmdNS(ns)
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			labels := parseLabelSelectorString(labelSelector)
+			fields := parseLabelSelectorString(fieldSelector)
+			target := ns
+			if allNamespaces {
+				target = "*"
+			}
+			vols, err := client.NewVolumeClient(api).ListVolumes(target, labels, fields)
+			if err != nil {
+				return err
+			}
+			sort.Slice(vols, func(i, j int) bool {
+				if vols[i].Namespace != vols[j].Namespace {
+					return vols[i].Namespace < vols[j].Namespace
+				}
+				return vols[i].Name < vols[j].Name
+			})
+			return renderVolumes(vols, format, allNamespaces)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
+	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "List volumes across all namespaces")
+	cmd.Flags().StringVarP(&format, "output", "o", "table", "Output format: table|json|yaml|name")
+	cmd.Flags().StringVarP(&labelSelector, "selector", "l", "", "Label selector (key=value,key=value)")
+	cmd.Flags().StringVar(&fieldSelector, "field-selector", "", "Field selector (key=value,key=value)")
+	return cmd
+}
+
+// --- get ---
+
+func newVolumeGetCmd() *cobra.Command {
+	var ns, format string
+	cmd := &cobra.Command{
+		Use:   "get <name>",
+		Short: "Get a volume's full status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ns = effectiveCmdNS(ns)
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			v, err := client.NewVolumeClient(api).GetVolume(ns, args[0])
+			if err != nil {
+				return err
+			}
+			return renderVolume(v, format)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
+	cmd.Flags().StringVarP(&format, "output", "o", "table", "Output format: table|json|yaml")
+	return cmd
+}
+
+// --- create ---
+
+func newVolumeCreateCmd() *cobra.Command {
+	var fromFile, ns string
+	var ensureNamespace bool
+	cmd := &cobra.Command{
+		Use:   "create -f <file>",
+		Short: "Create a volume from a YAML or JSON spec file",
+		Long: `Reads a Volume spec from --file (YAML or JSON) and creates it on the
+server. The volume is created with status=Pending; the volume controller
+then drives it through Provisioning -> Available.
+
+If --namespace is set on the command line and the spec file does not
+declare a namespace, the flag value is used. If both are set the spec
+file wins (mirrors kubectl semantics).`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if fromFile == "" {
+				return fmt.Errorf("--file is required")
+			}
+			v, err := readVolumeFile(fromFile)
+			if err != nil {
+				return err
+			}
+			if v.Namespace == "" {
+				v.Namespace = effectiveCmdNS(ns)
+			}
+			if v.Namespace == "" {
+				v.Namespace = "default"
+			}
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			if err := client.NewVolumeClient(api).CreateVolume(v, ensureNamespace); err != nil {
+				return err
+			}
+			fmt.Printf("Volume %s/%s created\n", v.Namespace, v.Name)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&fromFile, "file", "f", "", "Path to YAML or JSON spec file")
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace (used when spec omits one)")
+	cmd.Flags().BoolVar(&ensureNamespace, "ensure-namespace", false, "Auto-create the target namespace if missing")
+	return cmd
+}
+
+// --- delete ---
+
+func newVolumeDeleteCmd() *cobra.Command {
+	var ns string
+	cmd := &cobra.Command{
+		Use:     "delete <name>",
+		Aliases: []string{"remove", "rm"},
+		Short:   "Delete a volume by name",
+		Long: `Delete the named Volume row. The driver's reclaimPolicy then determines
+whether the underlying storage is destroyed (delete) or left in place
+(retain). Operator-owned volumes (no OwnerService) follow the row's own
+reclaimPolicy.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ns = effectiveCmdNS(ns)
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			if err := client.NewVolumeClient(api).DeleteVolume(ns, args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("Volume %s/%s deleted\n", ns, args[0])
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
+	return cmd
+}
+
+// --- detach (stub) ---
+
+func newVolumeDetachCmd() *cobra.Command {
+	var ns string
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "detach <name>",
+		Short: "Detach a Bound volume from its instance (not yet implemented)",
+		Long: `Detach forces a Bound volume back to Available so a replacement instance
+can attach it. Without --force the controller refuses while the bound
+node is reachable.
+
+This subcommand is a placeholder — the corresponding VolumeService RPC
+is not yet implemented. Tracked alongside provision-retry and
+Stalled-state handling in RUNE-073.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_ = ns
+			_ = force
+			return fmt.Errorf("rune volume detach: not yet implemented (volume %q)", args[0])
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
+	cmd.Flags().BoolVar(&force, "force", false, "Force detach even if the bound node is reachable (data-loss risk)")
+	return cmd
+}
+
+// --- retry-provision (stub) ---
+
+func newVolumeRetryProvisionCmd() *cobra.Command {
+	var ns string
+	cmd := &cobra.Command{
+		Use:   "retry-provision <name>",
+		Short: "Retry provisioning a Failed/Stalled volume (not yet implemented)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_ = ns
+			return fmt.Errorf("rune volume retry-provision: not yet implemented (volume %q)", args[0])
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
+	return cmd
+}
+
+// --- restore (stub) ---
+
+func newVolumeRestoreCmd() *cobra.Command {
+	var ns, fromSnapshot string
+	cmd := &cobra.Command{
+		Use:   "restore <name> --from-snapshot <snap>",
+		Short: "Provision a new volume from a snapshot (not yet implemented)",
+		Long: `Restore creates a new volume named <name> populated from the named
+snapshot's handle. The SnapshotService is not yet implemented (RUNE-071);
+this subcommand is a placeholder so its shape is documented in --help.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_ = ns
+			if fromSnapshot == "" {
+				return fmt.Errorf("--from-snapshot is required")
+			}
+			return fmt.Errorf("rune volume restore: not yet implemented (target %q from snapshot %q)", args[0], fromSnapshot)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
+	cmd.Flags().StringVar(&fromSnapshot, "from-snapshot", "", "Source snapshot name")
+	return cmd
+}
+
+// --- file loading ---
+
+// readVolumeFile loads a single Volume spec from a YAML or JSON file.
+func readVolumeFile(path string) (*types.Volume, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var v types.Volume
+	if err := yaml.Unmarshal(data, &v); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if v.Name == "" {
+		return nil, fmt.Errorf("%s: volume name is required", path)
+	}
+	if v.StorageClassName == "" {
+		return nil, fmt.Errorf("%s: storageClassName is required", path)
+	}
+	return &v, nil
+}
+
+// --- rendering helpers ---
+
+func renderVolumes(vols []*types.Volume, format string, allNamespaces bool) error {
+	switch strings.ToLower(format) {
+	case "json":
+		return writeJSON(vols)
+	case "yaml":
+		return writeYAML(vols)
+	case "name":
+		for _, v := range vols {
+			if allNamespaces {
+				fmt.Printf("%s/%s\n", v.Namespace, v.Name)
+			} else {
+				fmt.Println(v.Name)
+			}
+		}
+		return nil
+	case "", "table":
+		if len(vols) == 0 {
+			fmt.Println("No volumes found")
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if allNamespaces {
+			fmt.Fprintln(w, "NAMESPACE\tNAME\tSTATUS\tCLASS\tSIZE\tACCESS\tBOUND\tAGE")
+		} else {
+			fmt.Fprintln(w, "NAME\tSTATUS\tCLASS\tSIZE\tACCESS\tBOUND\tAGE")
+		}
+		for _, v := range vols {
+			bound := "-"
+			if v.BoundClaim != "" {
+				bound = v.BoundClaim
+			}
+			access := string(v.AccessMode)
+			if access == "" {
+				access = "-"
+			}
+			size := v.Size
+			if size == "" {
+				size = "-"
+			}
+			if allNamespaces {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					v.Namespace, v.Name, v.Status, v.StorageClassName, size, access, bound, formatAgeTable(v.CreatedAt))
+			} else {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					v.Name, v.Status, v.StorageClassName, size, access, bound, formatAgeTable(v.CreatedAt))
+			}
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unknown output format: %s", format)
+	}
+}
+
+func renderVolume(v *types.Volume, format string) error {
+	if v == nil {
+		return fmt.Errorf("nil volume")
+	}
+	switch strings.ToLower(format) {
+	case "json":
+		return writeJSON(v)
+	case "yaml":
+		return writeYAML(v)
+	case "", "table":
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintf(w, "Namespace:\t%s\n", v.Namespace)
+		fmt.Fprintf(w, "Name:\t%s\n", v.Name)
+		fmt.Fprintf(w, "StorageClass:\t%s\n", v.StorageClassName)
+		fmt.Fprintf(w, "Size:\t%s\n", emptyDash(v.Size))
+		fmt.Fprintf(w, "AccessMode:\t%s\n", emptyDash(string(v.AccessMode)))
+		fmt.Fprintf(w, "ReclaimPolicy:\t%s\n", emptyDash(string(v.ReclaimPolicy)))
+		fmt.Fprintf(w, "Status:\t%s\n", v.Status)
+		if v.Reason != "" {
+			fmt.Fprintf(w, "Reason:\t%s\n", v.Reason)
+		}
+		if v.Message != "" {
+			fmt.Fprintf(w, "Message:\t%s\n", v.Message)
+		}
+		fmt.Fprintf(w, "Handle:\t%s\n", emptyDash(v.Handle))
+		fmt.Fprintf(w, "BoundNode:\t%s\n", emptyDash(v.BoundNode))
+		fmt.Fprintf(w, "BoundClaim:\t%s\n", emptyDash(v.BoundClaim))
+		if v.OwnerService != "" {
+			fmt.Fprintf(w, "OwnerService:\t%s\n", v.OwnerService)
+		}
+		fmt.Fprintf(w, "Created:\t%s\n", formatTime(v.CreatedAt))
+		fmt.Fprintf(w, "Updated:\t%s\n", formatTime(v.UpdatedAt))
+		if len(v.Parameters) > 0 {
+			fmt.Fprintln(w, "Parameters:")
+			for _, k := range sortedKeys(v.Parameters) {
+				fmt.Fprintf(w, "  %s:\t%s\n", k, v.Parameters[k])
+			}
+		}
+		if len(v.Labels) > 0 {
+			fmt.Fprintln(w, "Labels:")
+			for _, k := range sortedKeys(v.Labels) {
+				fmt.Fprintf(w, "  %s:\t%s\n", k, v.Labels[k])
+			}
+		}
+		if v.SnapshotSchedule != nil {
+			fmt.Fprintf(w, "SnapshotSchedule:\t%s (retention: %d)\n",
+				v.SnapshotSchedule.Cron, v.SnapshotSchedule.Retention)
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unknown output format: %s", format)
+	}
+}

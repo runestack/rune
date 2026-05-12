@@ -1,4 +1,4 @@
-// Package client — StorageClassClient gRPC wrapper. RUNE-072.
+// Package client — StorageClassClient gRPC wrapper.
 package client
 
 import (

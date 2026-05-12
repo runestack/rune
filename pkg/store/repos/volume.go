@@ -1,4 +1,4 @@
-// Volume repository — namespaced CRUD over types.Volume. RUNE-072.
+// Volume repository — namespaced CRUD over types.Volume.
 package repos
 
 import (
