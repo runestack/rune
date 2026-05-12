@@ -44,6 +44,20 @@ type VolumeControllerOptions struct {
 	Store         store.Store
 	Logger        log.Logger
 	DriverConfigs map[string]map[string]any
+
+	// DefaultStorageClass mirrors the runefile [storage].defaultStorageClass
+	// knob. nil keeps the built-in default ("local"); a non-nil pointer
+	// to a non-empty name promotes that class to Default:true at boot
+	// (creating it as a no-op marker if needed); a non-nil pointer to
+	// the empty string disables the cluster default entirely (any
+	// existing Default flag is cleared, and Volumes with empty
+	// storageClassName fail to resolve).
+	DefaultStorageClass *string
+
+	// PreserveOnDelete, when true, demotes ReclaimPolicy:delete to
+	// retain for volumes provisioned by the in-tree "local" driver. Has
+	// no effect on other drivers.
+	PreserveOnDelete bool
 }
 
 // volumeController is the default VolumeController.
@@ -59,6 +73,10 @@ type volumeController struct {
 	store         store.Store
 	logger        log.Logger
 	driverConfigs map[string]map[string]any
+
+	// Operator-supplied [storage] knobs.
+	defaultStorageClass *string
+	preserveOnDelete    bool
 
 	// Cached driver instances keyed by driver name. Drivers are stateless
 	// for the purposes of the controller, so a single instance per
@@ -87,10 +105,12 @@ func NewVolumeController(opts VolumeControllerOptions) (VolumeController, error)
 		return nil, fmt.Errorf("volume controller: logger is required")
 	}
 	return &volumeController{
-		store:         opts.Store,
-		logger:        opts.Logger.WithComponent("volume-controller"),
-		driverConfigs: opts.DriverConfigs,
-		drivers:       make(map[string]driver.Driver),
+		store:               opts.Store,
+		logger:              opts.Logger.WithComponent("volume-controller"),
+		driverConfigs:       opts.DriverConfigs,
+		defaultStorageClass: opts.DefaultStorageClass,
+		preserveOnDelete:    opts.PreserveOnDelete,
+		drivers:             make(map[string]driver.Driver),
 	}, nil
 }
 
@@ -106,7 +126,14 @@ func (c *volumeController) Start(ctx context.Context) error {
 		// by hand-creating the classes. Log loudly and continue.
 		c.logger.Error("Failed to seed built-in storage classes", log.Err(err))
 	}
-	if err := c.enforceDefaultStorageClassUniqueness(c.ctx, ""); err != nil {
+	if err := c.applyDefaultStorageClassConfig(c.ctx); err != nil {
+		c.logger.Error("Failed to apply [storage].defaultStorageClass", log.Err(err))
+	}
+	keep := ""
+	if c.defaultStorageClass != nil {
+		keep = *c.defaultStorageClass
+	}
+	if err := c.enforceDefaultStorageClassUniqueness(c.ctx, keep); err != nil {
 		c.logger.Error("Failed to enforce Default StorageClass uniqueness at boot", log.Err(err))
 	}
 	watchCh, err := c.store.Watch(c.ctx, types.ResourceTypeVolume, "")
@@ -281,6 +308,17 @@ func (c *volumeController) handleDeleted(ctx context.Context, vol *types.Volume)
 			log.Str("handle", vol.Handle))
 		return nil
 	}
+	// Honour the runefile [storage].preserveOnDelete knob: when set and
+	// the volume was provisioned by the in-tree "local" driver, treat
+	// reclaimPolicy:delete as retain. Other drivers (operator-owned
+	// host paths, cloud block devices) are unaffected.
+	if c.preserveOnDelete && driverName == "local" {
+		c.logger.Info("Preserving local volume on delete (storage.preserveOnDelete=true)",
+			log.Str("namespace", vol.Namespace),
+			log.Str("name", vol.Name),
+			log.Str("handle", vol.Handle))
+		return nil
+	}
 	d, err := c.driverFor(driverName)
 	if err != nil {
 		return fmt.Errorf("reclaim: driver %q: %w", driverName, err)
@@ -387,6 +425,68 @@ func (c *volumeController) runStorageClassWatch(initial <-chan store.WatchEvent)
 			}
 		}
 	}
+}
+
+// applyDefaultStorageClassConfig honours the runefile
+// [storage].defaultStorageClass knob:
+//
+//   - nil pointer: leave whatever Default state the store currently has.
+//     Built-in seeding may have just installed `local` Default:true.
+//   - pointer to non-empty name: ensure that named class exists and
+//     carries Default:true. Returns an error if the named class is
+//     missing (the operator chose a class we don't know about).
+//   - pointer to empty string: explicit "no cluster default" \u2014 demote
+//     every Default:true class to Default:false. Volumes with empty
+//     storageClassName will then surface a clear resolution error.
+//
+// The uniqueness enforcer is the second pass; it demotes any
+// duplicates this step might leave behind.
+func (c *volumeController) applyDefaultStorageClassConfig(ctx context.Context) error {
+	if c.defaultStorageClass == nil {
+		return nil
+	}
+	target := *c.defaultStorageClass
+
+	if target == "" {
+		// Disable the cluster default entirely.
+		var all []types.StorageClass
+		if err := c.store.List(ctx, types.ResourceTypeStorageClass, "", &all); err != nil {
+			return fmt.Errorf("list storage classes: %w", err)
+		}
+		for i := range all {
+			if !all[i].Default {
+				continue
+			}
+			cleared := all[i]
+			cleared.Default = false
+			cleared.UpdatedAt = time.Now().UTC()
+			c.markSelfStorageClassUpdate(cleared.Name)
+			if err := c.store.Update(ctx, types.ResourceTypeStorageClass, "", cleared.Name, &cleared); err != nil {
+				return fmt.Errorf("clear default on storage class %q: %w", cleared.Name, err)
+			}
+			c.logger.Info("Cleared Default flag (storage.defaultStorageClass=\"\")",
+				log.Str("name", cleared.Name))
+		}
+		return nil
+	}
+
+	// Promote the named class to Default:true.
+	var sc types.StorageClass
+	if err := c.store.Get(ctx, types.ResourceTypeStorageClass, "", target, &sc); err != nil {
+		return fmt.Errorf("get configured default storage class %q: %w", target, err)
+	}
+	if sc.Default {
+		return nil
+	}
+	sc.Default = true
+	sc.UpdatedAt = time.Now().UTC()
+	c.markSelfStorageClassUpdate(sc.Name)
+	if err := c.store.Update(ctx, types.ResourceTypeStorageClass, "", sc.Name, &sc); err != nil {
+		return fmt.Errorf("promote storage class %q to Default: %w", sc.Name, err)
+	}
+	c.logger.Info("Promoted storage class to Default per runefile",
+		log.Str("name", sc.Name))
+	return nil
 }
 
 // enforceDefaultStorageClassUniqueness ensures at most one StorageClass

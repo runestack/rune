@@ -105,8 +105,17 @@ type OrchestratorOptions struct {
 	// the runefile [storage] table. Key is the driver name as registered in
 	// pkg/storage/driver (e.g. "local", "local-host"); value is the opaque
 	// configuration map handed to the driver factory. Optional; nil-safe.
-	// Introduced in RUNE-069.
 	StorageDriverConfigs map[string]map[string]any
+
+	// DefaultStorageClass mirrors the runefile [storage].defaultStorageClass
+	// knob. *string so the empty-string case ("no cluster default") is
+	// distinguishable from "unset — keep built-in default".
+	DefaultStorageClass *string
+
+	// StoragePreserveOnDelete mirrors the runefile [storage].preserveOnDelete
+	// knob. When true, the volume controller demotes ReclaimPolicy:delete
+	// to retain for volumes provisioned by the in-tree "local" driver.
+	StoragePreserveOnDelete bool
 }
 
 // NewDefaultOrchestrator creates a new orchestrator with default options
@@ -170,9 +179,11 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	// VolumeController owns the Volume CRUD reconciliation loop
 	// (provision/reclaim via the storage driver registry).
 	volumeController, err := controllers.NewVolumeController(controllers.VolumeControllerOptions{
-		Store:         options.Store,
-		Logger:        options.Logger,
-		DriverConfigs: options.StorageDriverConfigs,
+		Store:               options.Store,
+		Logger:              options.Logger,
+		DriverConfigs:       options.StorageDriverConfigs,
+		DefaultStorageClass: options.DefaultStorageClass,
+		PreserveOnDelete:    options.StoragePreserveOnDelete,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create volume controller: %w", err)

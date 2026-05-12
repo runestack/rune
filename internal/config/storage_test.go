@@ -57,4 +57,45 @@ data_dir: /tmp/rune
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Nil(t, cfg.Storage.Drivers)
+	assert.Nil(t, cfg.Storage.DefaultStorageClass)
+	assert.False(t, cfg.Storage.PreserveOnDelete)
+	assert.False(t, cfg.Storage.AllowCreateMissing)
+}
+
+// TestLoad_StorageTypedKnobs verifies the typed [storage] knobs
+// (defaultStorageClass, preserveOnDelete, allowCreateMissing) are
+// round-tripped onto Config.Storage. *string distinguishes the
+// "explicitly empty" case from "unset".
+func TestLoad_StorageTypedKnobs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runefile.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+storage:
+  defaultStorageClass: do-block-ssd
+  preserveOnDelete: true
+  allowCreateMissing: true
+`), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Storage.DefaultStorageClass)
+	assert.Equal(t, "do-block-ssd", *cfg.Storage.DefaultStorageClass)
+	assert.True(t, cfg.Storage.PreserveOnDelete)
+	assert.True(t, cfg.Storage.AllowCreateMissing)
+}
+
+// TestLoad_StorageDefaultStorageClassEmpty verifies the explicit
+// empty-string case is preserved (vs being elided to nil).
+func TestLoad_StorageDefaultStorageClassEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runefile.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+storage:
+  defaultStorageClass: ""
+`), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Storage.DefaultStorageClass, "empty string should be preserved as *string, not nil")
+	assert.Equal(t, "", *cfg.Storage.DefaultStorageClass)
 }

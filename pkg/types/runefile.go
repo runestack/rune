@@ -285,6 +285,9 @@ type ACMEConfig struct {
 // Example:
 //
 //	storage:
+//	  defaultStorageClass: local
+//	  preserveOnDelete: false
+//	  allowCreateMissing: false
 //	  drivers:
 //	    local:
 //	      localVolumeRoot: /var/lib/rune/volumes
@@ -292,6 +295,15 @@ type ACMEConfig struct {
 //	      hostPathAllowlist:
 //	        - /srv/data
 type StorageConfig struct {
+	// DefaultStorageClass — see internal/config.Storage.DefaultStorageClass.
+	DefaultStorageClass *string `yaml:"defaultStorageClass,omitempty"`
+
+	// PreserveOnDelete — see internal/config.Storage.PreserveOnDelete.
+	PreserveOnDelete bool `yaml:"preserveOnDelete,omitempty"`
+
+	// AllowCreateMissing — see internal/config.Storage.AllowCreateMissing.
+	AllowCreateMissing bool `yaml:"allowCreateMissing,omitempty"`
+
 	Drivers map[string]map[string]any `yaml:"drivers,omitempty"`
 }
 
@@ -582,9 +594,13 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 		"acme":       true,
 		"storage":    true,
 
-		// storage.drivers (opaque, per-driver maps; key names
-		// are driver-specific so we accept anything underneath).
-		"drivers": true,
+		// storage.* (typed knobs + opaque per-driver maps; key names
+		// under .drivers are driver-specific so we accept anything
+		// underneath).
+		"defaultstorageclass": true,
+		"preserveondelete":    true,
+		"allowcreatemissing":  true,
+		"drivers":             true,
 
 		// server / client
 		"grpc_address": true,

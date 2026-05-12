@@ -414,3 +414,145 @@ func TestVolumeController_NonDefaultWriteIsNoop(t *testing.T) {
 	require.NoError(t, ts.Get(ctx, types.ResourceTypeStorageClass, "", "local", &localSC))
 	assert.True(t, localSC.Default, "seeded 'local' must remain Default when a non-Default class is written")
 }
+
+// startKnobController boots a controller with the given typed-knob
+// overrides and tears it down on test cleanup. Mirrors
+// setupVolumeController but lets the test set DefaultStorageClass and
+// PreserveOnDelete.
+func startKnobController(t *testing.T, defaultSC *string, preserve bool) (context.Context, *store.TestStore, string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	ts := store.NewTestStore()
+	root := t.TempDir()
+
+	controller, err := NewVolumeController(VolumeControllerOptions{
+		Store:  ts,
+		Logger: log.NewLogger(),
+		DriverConfigs: map[string]map[string]any{
+			local.DriverNameLocal: {"localVolumeRoot": root},
+		},
+		DefaultStorageClass: defaultSC,
+		PreserveOnDelete:    preserve,
+	})
+	require.NoError(t, err)
+	require.NoError(t, controller.Start(ctx))
+
+	t.Cleanup(func() {
+		_ = controller.Stop()
+		cancel()
+	})
+	return ctx, ts, root
+}
+
+// TestVolumeController_DefaultStorageClassOverridePromotesNamed —
+// runefile [storage].defaultStorageClass set to a non-built-in name
+// promotes that class to Default:true at boot and demotes the seeded
+// "local" class.
+func TestVolumeController_DefaultStorageClassOverridePromotesNamed(t *testing.T) {
+	ctx, _ := context.WithCancel(context.Background())
+	_ = ctx
+
+	// Pre-seed the named class into the store BEFORE Start so the
+	// override path has something to promote.
+	ts := store.NewTestStore()
+	root := t.TempDir()
+	custom := &types.StorageClass{
+		ID: "sc-custom", Name: "custom", Driver: local.DriverNameLocal,
+		Default:   false,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, ts.Create(context.Background(), types.ResourceTypeStorageClass, "", custom.Name, custom))
+
+	target := "custom"
+	ctrl, err := NewVolumeController(VolumeControllerOptions{
+		Store:  ts,
+		Logger: log.NewLogger(),
+		DriverConfigs: map[string]map[string]any{
+			local.DriverNameLocal: {"localVolumeRoot": root},
+		},
+		DefaultStorageClass: &target,
+	})
+	require.NoError(t, err)
+	bgCtx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, ctrl.Start(bgCtx))
+	t.Cleanup(func() { _ = ctrl.Stop(); cancel() })
+
+	waitFor(t, 2*time.Second, func() error {
+		var sc types.StorageClass
+		if err := ts.Get(bgCtx, types.ResourceTypeStorageClass, "", "custom", &sc); err != nil {
+			return err
+		}
+		if !sc.Default {
+			return errors.New("custom not yet Default")
+		}
+		var localSC types.StorageClass
+		if err := ts.Get(bgCtx, types.ResourceTypeStorageClass, "", "local", &localSC); err != nil {
+			return err
+		}
+		if localSC.Default {
+			return errors.New("local still Default")
+		}
+		return nil
+	})
+}
+
+// TestVolumeController_DefaultStorageClassEmptyDemotesAll —
+// `defaultStorageClass: ""` in the runefile clears every Default flag
+// at boot.
+func TestVolumeController_DefaultStorageClassEmptyDemotesAll(t *testing.T) {
+	empty := ""
+	ctx, ts, _ := startKnobController(t, &empty, false)
+
+	waitFor(t, 2*time.Second, func() error {
+		var all []types.StorageClass
+		if err := ts.List(ctx, types.ResourceTypeStorageClass, "", &all); err != nil {
+			return err
+		}
+		for i := range all {
+			if all[i].Default {
+				return errors.New("class still Default: " + all[i].Name)
+			}
+		}
+		return nil
+	})
+}
+
+// TestVolumeController_PreserveOnDeleteSkipsLocalDriverDelete — when
+// preserveOnDelete is set and a local-driver Volume is deleted, the
+// reclaimer must NOT remove the on-disk handle even though the
+// reclaim policy is Delete.
+func TestVolumeController_PreserveOnDeleteSkipsLocalDriverDelete(t *testing.T) {
+	ctx, ts, _ := startKnobController(t, nil, true)
+	putStorageClass(t, ts, "sc-preserve", local.DriverNameLocal)
+
+	vol := &types.Volume{
+		ID:               "v-preserve",
+		Name:             "keepme",
+		Namespace:        "default",
+		StorageClassName: "sc-preserve",
+		AccessMode:       types.AccessModeRWO,
+		ReclaimPolicy:    types.ReclaimPolicyDelete,
+		Status:           types.VolumeStatusPending,
+		CreatedAt:        time.Now().UTC(),
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+
+	waitFor(t, 2*time.Second, func() error {
+		got := loadVolume(t, ts, vol.Namespace, vol.Name)
+		if got.Status != types.VolumeStatusAvailable {
+			return errors.New("not yet available")
+		}
+		return nil
+	})
+	provisioned := loadVolume(t, ts, vol.Namespace, vol.Name)
+	require.NotEmpty(t, provisioned.Handle)
+
+	// Delete the volume row and assert the handle directory survives.
+	require.NoError(t, ts.Delete(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name))
+	// Give the reconcile loop time to (not) reclaim.
+	time.Sleep(300 * time.Millisecond)
+	if _, err := os.Stat(provisioned.Handle); err != nil {
+		t.Fatalf("handle directory was reclaimed despite preserveOnDelete=true: %v", err)
+	}
+}

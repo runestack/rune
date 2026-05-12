@@ -135,12 +135,16 @@ func (s *APIServer) Start() error {
 		// build the orchestrator internally; fall back to the
 		// default constructor when none were supplied so existing
 		// callers keep their previous behaviour.
-		if len(s.options.StorageDriverConfigs) > 0 {
+		if len(s.options.StorageDriverConfigs) > 0 ||
+			s.options.StorageDefaultStorageClass != nil ||
+			s.options.StoragePreserveOnDelete {
 			s.orchestrator, err = orchestrator.NewOrchestrator(orchestrator.OrchestratorOptions{
-				Store:                s.store,
-				Logger:               s.logger,
-				RunnerManager:        s.runnerManager,
-				StorageDriverConfigs: s.options.StorageDriverConfigs,
+				Store:                   s.store,
+				Logger:                  s.logger,
+				RunnerManager:           s.runnerManager,
+				StorageDriverConfigs:    s.options.StorageDriverConfigs,
+				DefaultStorageClass:     s.options.StorageDefaultStorageClass,
+				StoragePreserveOnDelete: s.options.StoragePreserveOnDelete,
 			})
 		} else {
 			s.orchestrator, err = orchestrator.NewDefaultOrchestrator(s.store, s.logger, s.runnerManager)

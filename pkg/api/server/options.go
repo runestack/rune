@@ -61,8 +61,18 @@ type Options struct {
 	// the server constructs one itself (i.e. when WithOrchestrator
 	// was not used). Sourced from the runefile [storage.drivers]
 	// table by runed. Nil-safe — drivers fall back to their own
-	// defaults. Introduced for RUNE-069.
+	// defaults.
 	StorageDriverConfigs map[string]map[string]any
+
+	// StorageDefaultStorageClass mirrors the runefile [storage].
+	// defaultStorageClass knob. *string so empty-string ("no cluster
+	// default") is distinguishable from unset.
+	StorageDefaultStorageClass *string
+
+	// StoragePreserveOnDelete mirrors the runefile [storage].
+	// preserveOnDelete knob. When true the local driver treats
+	// ReclaimPolicy:delete as retain.
+	StoragePreserveOnDelete bool
 }
 
 // Option is a function that configures options.
@@ -177,5 +187,23 @@ func WithVIPAllocator(a service.VIPAllocator) Option {
 func WithStorageDriverConfigs(cfg map[string]map[string]any) Option {
 	return func(opts *Options) {
 		opts.StorageDriverConfigs = cfg
+	}
+}
+
+// WithStorageDefaultStorageClass threads the runefile
+// [storage].defaultStorageClass knob through to the orchestrator. Nil
+// means "keep built-in default"; pointer-to-empty-string means "no
+// cluster default — error on missing storageClassName".
+func WithStorageDefaultStorageClass(name *string) Option {
+	return func(opts *Options) {
+		opts.StorageDefaultStorageClass = name
+	}
+}
+
+// WithStoragePreserveOnDelete threads the runefile
+// [storage].preserveOnDelete knob through to the orchestrator.
+func WithStoragePreserveOnDelete(preserve bool) Option {
+	return func(opts *Options) {
+		opts.StoragePreserveOnDelete = preserve
 	}
 }

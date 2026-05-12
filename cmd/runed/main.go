@@ -841,6 +841,16 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 	if appCfg != nil && len(appCfg.Storage.Drivers) > 0 {
 		opts = append(opts, server.WithStorageDriverConfigs(appCfg.Storage.Drivers))
 	}
+	// Thread typed [storage] knobs (defaultStorageClass,
+	// preserveOnDelete) through to the volume controller. Each is
+	// only set when the operator explicitly supplied it; nil/false
+	// preserve the built-in defaults.
+	if appCfg != nil && appCfg.Storage.DefaultStorageClass != nil {
+		opts = append(opts, server.WithStorageDefaultStorageClass(appCfg.Storage.DefaultStorageClass))
+	}
+	if appCfg != nil && appCfg.Storage.PreserveOnDelete {
+		opts = append(opts, server.WithStoragePreserveOnDelete(true))
+	}
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
 	}
