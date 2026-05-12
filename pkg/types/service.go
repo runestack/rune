@@ -578,6 +578,11 @@ func (s *Service) Validate() error {
 		}
 	}
 
+	// Validate volume mounts (RUNE-070).
+	if err := ValidateVolumeMounts(s.Volumes); err != nil {
+		return err
+	}
+
 	return nil
 }
 

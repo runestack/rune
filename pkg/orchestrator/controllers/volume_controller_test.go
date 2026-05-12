@@ -449,9 +449,6 @@ func startKnobController(t *testing.T, defaultSC *string, preserve bool) (contex
 // promotes that class to Default:true at boot and demotes the seeded
 // "local" class.
 func TestVolumeController_DefaultStorageClassOverridePromotesNamed(t *testing.T) {
-	ctx, _ := context.WithCancel(context.Background())
-	_ = ctx
-
 	// Pre-seed the named class into the store BEFORE Start so the
 	// override path has something to promote.
 	ts := store.NewTestStore()

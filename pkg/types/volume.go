@@ -3,7 +3,12 @@
 // Introduced in RUNE-069. See _docs/designs/RUNE-069-Storage-Management.md.
 package types
 
-import "time"
+import (
+	"fmt"
+	"path"
+	"strings"
+	"time"
+)
 
 // AccessMode describes how a Volume may be mounted by attached instances.
 type AccessMode string
@@ -196,4 +201,103 @@ type SnapshotSchedule struct {
 	// Retention is the number of historical snapshots to keep. Older
 	// snapshots are reaped after each successful new snapshot.
 	Retention int `json:"retention,omitempty" yaml:"retention,omitempty"`
+}
+
+// validVolumeAccessModes lists the AccessMode constants accepted on
+// VolumeClaimTemplate. Drivers further restrict this set via their
+// Capabilities; this is just the syntactic check the cast linter applies.
+var validVolumeAccessModes = map[AccessMode]bool{
+	AccessModeRWO: true,
+	AccessModeROX: true,
+	AccessModeRWX: true,
+}
+
+// validVolumeReclaimPolicies lists the ReclaimPolicy constants accepted on
+// VolumeClaimTemplate.
+var validVolumeReclaimPolicies = map[ReclaimPolicy]bool{
+	ReclaimPolicyRetain: true,
+	ReclaimPolicyDelete: true,
+}
+
+// ValidateVolumeMounts checks per-mount invariants that can be evaluated
+// statically from the spec alone (no store / driver lookups). Used by both
+// Service.Validate and ServiceSpec.Validate so the same rules fire from
+// the API server's CreateService path and from `rune cast` / `rune lint`.
+//
+// Rules enforced:
+//   - mount.Name and mount.MountPath are required.
+//   - MountPath is absolute and not "/".
+//   - SubPath, when set, is relative and contains no ".." segments.
+//   - Exactly one of Claim / ClaimTemplate is set.
+//   - Claim.Name is non-empty.
+//   - ClaimTemplate.Size is non-empty and parses with ParseMemory.
+//   - ClaimTemplate.AccessMode is required and a known constant.
+//   - ClaimTemplate.ReclaimPolicy, if set, is a known constant.
+//   - Mount.Name and MountPath are unique within the slice.
+func ValidateVolumeMounts(mounts []VolumeMount) error {
+	seenNames := make(map[string]bool, len(mounts))
+	seenPaths := make(map[string]bool, len(mounts))
+	for i, m := range mounts {
+		if m.Name == "" {
+			return NewValidationError(fmt.Sprintf("volume mount at index %d: name is required", i))
+		}
+		if seenNames[m.Name] {
+			return NewValidationError(fmt.Sprintf("volume mount %q: duplicate name", m.Name))
+		}
+		seenNames[m.Name] = true
+
+		if m.MountPath == "" {
+			return NewValidationError(fmt.Sprintf("volume mount %q: mountPath is required", m.Name))
+		}
+		if !path.IsAbs(m.MountPath) {
+			return NewValidationError(fmt.Sprintf("volume mount %q: mountPath %q must be absolute", m.Name, m.MountPath))
+		}
+		if path.Clean(m.MountPath) == "/" {
+			return NewValidationError(fmt.Sprintf("volume mount %q: mountPath cannot be \"/\"", m.Name))
+		}
+		if seenPaths[m.MountPath] {
+			return NewValidationError(fmt.Sprintf("volume mount %q: duplicate mountPath %q", m.Name, m.MountPath))
+		}
+		seenPaths[m.MountPath] = true
+
+		if m.SubPath != "" {
+			if path.IsAbs(m.SubPath) {
+				return NewValidationError(fmt.Sprintf("volume mount %q: subPath %q must be relative", m.Name, m.SubPath))
+			}
+			for _, seg := range strings.Split(m.SubPath, "/") {
+				if seg == ".." {
+					return NewValidationError(fmt.Sprintf("volume mount %q: subPath %q cannot contain \"..\"", m.Name, m.SubPath))
+				}
+			}
+		}
+
+		switch {
+		case m.Claim == nil && m.ClaimTemplate == nil:
+			return NewValidationError(fmt.Sprintf("volume mount %q: exactly one of claim or claimTemplate must be set", m.Name))
+		case m.Claim != nil && m.ClaimTemplate != nil:
+			return NewValidationError(fmt.Sprintf("volume mount %q: claim and claimTemplate are mutually exclusive", m.Name))
+		case m.Claim != nil:
+			if strings.TrimSpace(m.Claim.Name) == "" {
+				return NewValidationError(fmt.Sprintf("volume mount %q: claim.name is required", m.Name))
+			}
+		case m.ClaimTemplate != nil:
+			ct := m.ClaimTemplate
+			if strings.TrimSpace(ct.Size) == "" {
+				return NewValidationError(fmt.Sprintf("volume mount %q: claimTemplate.size is required", m.Name))
+			}
+			if _, err := ParseMemory(ct.Size); err != nil {
+				return NewValidationError(fmt.Sprintf("volume mount %q: invalid claimTemplate.size %q: %v", m.Name, ct.Size, err))
+			}
+			if ct.AccessMode == "" {
+				return NewValidationError(fmt.Sprintf("volume mount %q: claimTemplate.accessMode is required", m.Name))
+			}
+			if !validVolumeAccessModes[ct.AccessMode] {
+				return NewValidationError(fmt.Sprintf("volume mount %q: invalid claimTemplate.accessMode %q (allowed: ReadWriteOnce, ReadOnlyMany, ReadWriteMany)", m.Name, ct.AccessMode))
+			}
+			if ct.ReclaimPolicy != "" && !validVolumeReclaimPolicies[ct.ReclaimPolicy] {
+				return NewValidationError(fmt.Sprintf("volume mount %q: invalid claimTemplate.reclaimPolicy %q (allowed: retain, delete)", m.Name, ct.ReclaimPolicy))
+			}
+		}
+	}
+	return nil
 }
