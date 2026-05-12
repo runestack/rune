@@ -69,6 +69,38 @@ func (r *VolumeRepo) List(ctx context.Context, namespace string) ([]*types.Volum
 	return r.base.List(ctx, namespace)
 }
 
+// ListAll returns every Volume across every namespace. This is the
+// cross-namespace projection used by cluster-scoped operations like the
+// StorageClass cascade-delete safety check.
+//
+// We deliberately enumerate via NamespaceRepo + per-namespace List
+// rather than the underlying store.ListAll, because the in-memory test
+// stores do not implement true cross-namespace listing — they treat the
+// empty namespace as a literal key. Going through the namespace list
+// keeps this correct on every backend.
+func (r *VolumeRepo) ListAll(ctx context.Context) ([]*types.Volume, error) {
+	nsRepo := NewNamespaceRepo(r.base.core)
+	namespaces, err := nsRepo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []*types.Volume
+	for _, ns := range namespaces {
+		if ns == nil || ns.Name == "" {
+			continue
+		}
+		vols, err := r.base.List(ctx, ns.Name)
+		if err != nil {
+			// Per-namespace store quirks (e.g. namespace exists in the
+			// namespace table but no volumes have ever been written under
+			// it) shouldn't poison the whole cross-namespace projection.
+			continue
+		}
+		out = append(out, vols...)
+	}
+	return out, nil
+}
+
 // Update writes an updated Volume, preserving CreatedAt/ID and refreshing
 // UpdatedAt.
 func (r *VolumeRepo) Update(ctx context.Context, v *types.Volume, opts ...store.UpdateOption) error {

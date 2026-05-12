@@ -870,7 +870,11 @@ func runDeleteStorageClass(ctx context.Context, name string, opts *deleteOptions
 	}
 	defer apiClient.Close()
 	scc := client.NewStorageClassClient(apiClient)
-	if err := scc.DeleteStorageClass(name); err != nil {
+	// `rune delete --force` is the existing knob users learn to reach for
+	// when a delete is blocked by dependents; thread it through as the
+	// StorageClass cascade flag so the shorthand stays consistent with
+	// the `rune storageclass delete --cascade` form.
+	if err := scc.DeleteStorageClass(name, opts.force); err != nil {
 		return err
 	}
 	fmt.Printf("StorageClass %s deleted\n", name)

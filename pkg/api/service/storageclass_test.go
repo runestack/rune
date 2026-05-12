@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
+	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -213,5 +216,75 @@ func TestStorageClassServiceDefaultUniqueness(t *testing.T) {
 	}
 	if defaults["third"] {
 		t.Errorf("third was never Default, got Default=true")
+	}
+}
+
+// TestStorageClassServiceDeleteCascade exercises the in-use guard added by
+// RUNE-073: deletion is refused while any Volume still references the
+// class, and --cascade bypasses that guard (without deleting the
+// dependent volumes).
+func TestStorageClassServiceDeleteCascade(t *testing.T) {
+	ctx := context.Background()
+
+	// Need to share one store between the service-under-test and the
+	// volume repo so the volume seeded below is visible to the service's
+	// cascade check. We use MemoryStore (not TestStore) because TestStore
+	// rejects List(""), but the production BadgerStore — and our cascade
+	// check — relies on cross-namespace listing semantics.
+	st := store.NewMemoryStore()
+	_ = st.Open("")
+	svc := NewStorageClassService(st, log.GetDefaultLogger())
+	volRepo := repos.NewVolumeRepo(st)
+	// Cascade enumeration walks namespaces; ensure the test namespace
+	// exists ("default" is reserved, so use a non-reserved name).
+	nsRepo := repos.NewNamespaceRepo(st)
+	if err := nsRepo.Create(ctx, &types.Namespace{Name: "team-a"}); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
+
+	if _, err := svc.CreateStorageClass(ctx, &generated.CreateStorageClassRequest{
+		StorageClass: &generated.StorageClass{Name: "fast", Driver: "local"},
+	}); err != nil {
+		t.Fatalf("create class: %v", err)
+	}
+
+	// Seed a volume that references the class.
+	if err := volRepo.Create(ctx, &types.Volume{
+		Name:             "data",
+		Namespace:        "team-a",
+		StorageClassName: "fast",
+		AccessMode:       types.AccessModeRWO,
+		Size:             "1Gi",
+		CreatedAt:        time.Now(),
+	}); err != nil {
+		t.Fatalf("seed volume: %v", err)
+	}
+
+	// Delete without --cascade must be refused with FailedPrecondition
+	// and the message must surface the dependent volume.
+	_, err := svc.DeleteStorageClass(ctx, &generated.DeleteStorageClassRequest{Name: "fast"})
+	if err == nil {
+		t.Fatalf("expected FailedPrecondition while volume still references class")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
+	}
+
+	// Delete with --cascade succeeds; the volume itself is intentionally
+	// left in place.
+	if _, err := svc.DeleteStorageClass(ctx, &generated.DeleteStorageClassRequest{
+		Name: "fast", Cascade: true,
+	}); err != nil {
+		t.Fatalf("cascade delete: %v", err)
+	}
+	if _, err := svc.GetStorageClass(ctx, &generated.GetStorageClassRequest{Name: "fast"}); err == nil {
+		t.Fatalf("class should be gone after cascade delete")
+	}
+	got, err := volRepo.Get(ctx, "team-a", "data")
+	if err != nil {
+		t.Fatalf("volume should still exist after --cascade: %v", err)
+	}
+	if got.StorageClassName != "fast" {
+		t.Fatalf("volume StorageClassName should be unchanged, got %q", got.StorageClassName)
 	}
 }

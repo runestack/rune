@@ -380,3 +380,41 @@ func ValidateMountPathConflicts(owner string, scale int, vols []VolumeMount, sec
 	return nil
 }
 
+// processRuntimeAllowedStorageClasses lists the StorageClass names a
+// process-runtime service is permitted to bind to via claimTemplate.
+// Process services run as host processes (no container mount namespace),
+// so anything that needs a real driver mount (NFS, S3 FUSE, block
+// devices, etc.) is meaningless or unsafe; only the local host-path
+// drivers make sense.
+var processRuntimeAllowedStorageClasses = map[string]struct{}{
+	"":           {}, // empty == cluster default; resolved server-side. Allowed.
+	"local":      {},
+	"local-host": {},
+}
+
+// ValidateProcessRuntimeVolumes flags claimTemplate mounts on process-runtime
+// services that target a StorageClass other than the local host-path
+// classes. This is a static cast-time check intended to catch obvious
+// misuse early — it does NOT cover Claim references to pre-existing
+// volumes (those require a store lookup and are validated at bind time).
+//
+// The owner argument is a free-form label included in error messages.
+func ValidateProcessRuntimeVolumes(owner string, runtime RuntimeType, vols []VolumeMount) error {
+	if runtime != RuntimeTypeProcess {
+		return nil
+	}
+	for _, m := range vols {
+		if m.ClaimTemplate == nil {
+			continue
+		}
+		sc := m.ClaimTemplate.StorageClassName
+		if _, ok := processRuntimeAllowedStorageClasses[sc]; ok {
+			continue
+		}
+		return NewValidationError(fmt.Sprintf(
+			"%s: volume mount %q: storageClassName %q is not supported for runtime=process (use one of: local, local-host, or omit for cluster default)",
+			owner, m.Name, sc))
+	}
+	return nil
+}
+

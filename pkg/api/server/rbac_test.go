@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc"
@@ -85,6 +86,54 @@ func TestRBACStreamInterceptor(t *testing.T) {
 	// with subject allowed via policy
 	if err := call(true, "/rune.api.ExecService/StreamExec"); err != nil {
 		t.Fatalf("expected allow with subject: %v", err)
+	}
+}
+
+// TestRBACSetDefaultStorageClass exercises the per-request RBAC requirement
+// added by extraRBACRequirements (RUNE-073): setting Default:true on a
+// StorageClass requires the additional `set-default` verb on top of the
+// standard create/update verb. The built-in `readwrite` policy grants
+// create/update but NOT set-default, so it must be denied. `root` (verb "*")
+// must still be allowed.
+func TestRBACSetDefaultStorageClass(t *testing.T) {
+	ctx := context.Background()
+
+	st := store.NewTestStore()
+	_ = st.Open("")
+	_ = SeedBuiltinPolicies(ctx, st)
+
+	rwUser := &types.User{Name: "rw", ID: "rw", Policies: []string{"readwrite"}}
+	_ = st.Create(ctx, types.ResourceTypeUser, "system", "rw", rwUser)
+	rootUser := &types.User{Name: "root-user", ID: "root-user", Policies: []string{"root"}}
+	_ = st.Create(ctx, types.ResourceTypeUser, "system", "root-user", rootUser)
+
+	s, err := New(WithAuth(nil), WithStore(st))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	call := func(subjectID string, defaultFlag bool) error {
+		c := context.WithValue(context.Background(), authCtxKey, &AuthInfo{SubjectID: subjectID})
+		req := &generated.CreateStorageClassRequest{
+			StorageClass: &generated.StorageClass{Name: "fast", Driver: "local", Default: defaultFlag},
+		}
+		info := &grpc.UnaryServerInfo{FullMethod: "/rune.api.StorageClassService/CreateStorageClass"}
+		h := func(ctx context.Context, req interface{}) (interface{}, error) { return nil, nil }
+		_, err := s.rbacUnaryInterceptor()(c, req, info, h)
+		return err
+	}
+
+	// readwrite token: create without Default is allowed.
+	if err := call("rw", false); err != nil {
+		t.Fatalf("readwrite create (default=false) expected allow, got %v", err)
+	}
+	// readwrite token: create WITH Default:true is denied (no set-default verb).
+	if err := call("rw", true); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("readwrite create (default=true) expected PermissionDenied, got %v", err)
+	}
+	// root token: both allowed.
+	if err := call("root-user", true); err != nil {
+		t.Fatalf("root create (default=true) expected allow, got %v", err)
 	}
 }
 

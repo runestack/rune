@@ -1,8 +1,9 @@
-// Package service — StorageClassService gRPC handlers. RUNE-072.
+// Package service — StorageClassService gRPC handlers
 package service
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,8 +30,9 @@ import (
 // API check.
 type StorageClassService struct {
 	generated.UnimplementedStorageClassServiceServer
-	repo   *repos.StorageClassRepo
-	logger log.Logger
+	repo    *repos.StorageClassRepo
+	volRepo *repos.VolumeRepo
+	logger  log.Logger
 
 	// defaultMu serialises Default-uniqueness enforcement across
 	// concurrent Create/Update calls so two writers can't both observe
@@ -41,8 +43,9 @@ type StorageClassService struct {
 // NewStorageClassService constructs a StorageClassService.
 func NewStorageClassService(st store.Store, logger log.Logger) *StorageClassService {
 	return &StorageClassService{
-		repo:   repos.NewStorageClassRepo(st),
-		logger: logger.WithComponent("storageclass-service"),
+		repo:    repos.NewStorageClassRepo(st),
+		volRepo: repos.NewVolumeRepo(st),
+		logger:  logger.WithComponent("storageclass-service"),
 	}
 }
 
@@ -151,11 +154,42 @@ func (s *StorageClassService) DeleteStorageClass(ctx context.Context, req *gener
 	if req.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
+	// Block deletion when any Volume still references this StorageClass,
+	// unless the caller opts into --cascade. Cascade does NOT delete the
+	// dependent volumes; it only bypasses the safety check so the
+	// operator can clean up afterwards (volumes will surface a clear
+	// "StorageClassMissing" reason on next provision attempt).
+	if !req.Cascade {
+		vols, err := s.volRepo.ListAll(ctx)
+		if err != nil {
+			s.logger.Error("Failed to list volumes for cascade check", log.Err(err), log.Str("class", req.Name))
+			return nil, status.Errorf(codes.Internal, "list volumes: %v", err)
+		}
+		var dependents []string
+		for _, v := range vols {
+			if v == nil || v.StorageClassName != req.Name {
+				continue
+			}
+			dependents = append(dependents, v.Namespace+"/"+v.Name)
+			if len(dependents) >= 5 {
+				break
+			}
+		}
+		if len(dependents) > 0 {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"storage class %q is in use by %d volume(s) (e.g. %s); pass --cascade to delete anyway",
+				req.Name, len(dependents), strings.Join(dependents, ", "))
+		}
+	}
 	if err := s.repo.Delete(ctx, req.Name); err != nil {
 		if store.IsNotFoundError(err) {
 			return nil, status.Errorf(codes.NotFound, "storage class not found: %s", req.Name)
 		}
 		return nil, status.Errorf(codes.Internal, "delete: %v", err)
+	}
+	if req.Cascade {
+		s.logger.Warn("Deleted storage class with --cascade; dependent volumes still reference it",
+			log.Str("name", req.Name))
 	}
 	return &generated.Status{Code: int32(codes.OK)}, nil
 }

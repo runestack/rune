@@ -481,6 +481,11 @@ func (s *ServiceSpec) Validate() error {
 		return err
 	}
 
+	// Note: ValidateProcessRuntimeVolumes lives on Service.Validate, not
+	// here — ServiceSpec is the user-facing castfile shape and does not
+	// carry a Runtime field; runtime is resolved later when the spec is
+	// converted to a Service.
+
 	return nil
 }
 

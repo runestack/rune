@@ -108,3 +108,48 @@ func TestValidateMountPathConflicts_RWOClaimAtScale(t *testing.T) {
 		t.Fatalf("claimTemplate at scale=3 should be fine, got %v", err)
 	}
 }
+
+// TestValidateProcessRuntimeVolumes covers the static cast-time check that
+// prevents a runtime=process service from binding a non-local
+// StorageClass via claimTemplate (RUNE-070). The whitelist is "",
+// "local", and "local-host"; everything else is refused.
+func TestValidateProcessRuntimeVolumes(t *testing.T) {
+	mk := func(sc string) []VolumeMount {
+		return []VolumeMount{{
+			Name:      "data",
+			MountPath: "/data",
+			ClaimTemplate: &VolumeClaimTemplate{
+				StorageClassName: sc,
+				Size:             "1Gi",
+				AccessMode:       AccessModeRWO,
+			},
+		}}
+	}
+
+	// Container runtime: rule does not apply.
+	if err := ValidateProcessRuntimeVolumes("service \"x\"", RuntimeTypeContainer, mk("nfs-prod")); err != nil {
+		t.Fatalf("container runtime should be unaffected, got %v", err)
+	}
+
+	// Process runtime + allowed classes.
+	for _, sc := range []string{"", "local", "local-host"} {
+		if err := ValidateProcessRuntimeVolumes("service \"x\"", RuntimeTypeProcess, mk(sc)); err != nil {
+			t.Fatalf("process runtime + sc=%q should be allowed, got %v", sc, err)
+		}
+	}
+
+	// Process runtime + disallowed class.
+	err := ValidateProcessRuntimeVolumes("service \"x\"", RuntimeTypeProcess, mk("nfs-prod"))
+	if err == nil || !strings.Contains(err.Error(), "runtime=process") {
+		t.Fatalf("want runtime=process refusal, got %v", err)
+	}
+
+	// Claim references (vs. claimTemplate) are not subject to the
+	// static check — they require a store lookup.
+	err = ValidateProcessRuntimeVolumes("service \"x\"", RuntimeTypeProcess, []VolumeMount{{
+		Name: "data", MountPath: "/data", Claim: &VolumeClaim{Name: "shared"},
+	}})
+	if err != nil {
+		t.Fatalf("claim references should bypass the static check, got %v", err)
+	}
+}

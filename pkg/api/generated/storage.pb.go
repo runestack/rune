@@ -387,8 +387,14 @@ func (x *UpdateStorageClassRequest) GetStorageClass() *StorageClass {
 }
 
 type DeleteStorageClassRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Cascade bypasses the in-use safety check. Without it, deletion is
+	// refused when any Volume still references this StorageClass; with it,
+	// the StorageClass is removed even if dependent volumes exist (the
+	// volumes themselves are NOT deleted — they keep a now-dangling
+	// StorageClassName until the operator addresses them).
+	Cascade       bool `protobuf:"varint,2,opt,name=cascade,proto3" json:"cascade,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -428,6 +434,13 @@ func (x *DeleteStorageClassRequest) GetName() string {
 		return x.Name
 	}
 	return ""
+}
+
+func (x *DeleteStorageClassRequest) GetCascade() bool {
+	if x != nil {
+		return x.Cascade
+	}
+	return false
 }
 
 type ListStorageClassesRequest struct {
@@ -1366,9 +1379,10 @@ const file_pkg_api_proto_storage_proto_rawDesc = "" +
 	"\x16GetStorageClassRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"X\n" +
 	"\x19UpdateStorageClassRequest\x12;\n" +
-	"\rstorage_class\x18\x01 \x01(\v2\x16.rune.api.StorageClassR\fstorageClass\"/\n" +
+	"\rstorage_class\x18\x01 \x01(\v2\x16.rune.api.StorageClassR\fstorageClass\"I\n" +
 	"\x19DeleteStorageClassRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"\xec\x01\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\acascade\x18\x02 \x01(\bR\acascade\"\xec\x01\n" +
 	"\x19ListStorageClassesRequest\x12]\n" +
 	"\x0elabel_selector\x18\x01 \x03(\v26.rune.api.ListStorageClassesRequest.LabelSelectorEntryR\rlabelSelector\x12.\n" +
 	"\x06paging\x18\x02 \x01(\v2\x16.rune.api.PagingParamsR\x06paging\x1a@\n" +

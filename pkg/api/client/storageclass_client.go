@@ -78,10 +78,10 @@ func (c *StorageClassClient) UpdateStorageClass(sc *types.StorageClass) error {
 	return nil
 }
 
-func (c *StorageClassClient) DeleteStorageClass(name string) error {
+func (c *StorageClassClient) DeleteStorageClass(name string, cascade bool) error {
 	ctx, cancel := c.client.Context()
 	defer cancel()
-	resp, err := c.svc.DeleteStorageClass(ctx, &generated.DeleteStorageClassRequest{Name: name})
+	resp, err := c.svc.DeleteStorageClass(ctx, &generated.DeleteStorageClassRequest{Name: name, Cascade: cascade})
 	if err != nil {
 		return convertGRPCError("delete storage class", err)
 	}

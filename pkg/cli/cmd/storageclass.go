@@ -126,24 +126,33 @@ demote any prior Default class.`,
 // --- delete ---
 
 func newStorageClassDeleteCmd() *cobra.Command {
+	var cascade bool
 	cmd := &cobra.Command{
 		Use:     "delete <name>",
 		Aliases: []string{"remove", "rm"},
 		Short:   "Delete a storage class by name",
-		Args:    cobra.ExactArgs(1),
+		Long: `Deletes a cluster-scoped StorageClass. By default the API server
+refuses to delete a class that is still referenced by one or more
+Volumes; pass --cascade to bypass this safety check.
+
+--cascade does NOT delete the dependent volumes; it only removes the
+StorageClass row. Existing volumes will keep a now-dangling
+StorageClassName until the operator addresses them.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			api, err := newAPIClient("", "")
 			if err != nil {
 				return err
 			}
 			defer api.Close()
-			if err := client.NewStorageClassClient(api).DeleteStorageClass(args[0]); err != nil {
+			if err := client.NewStorageClassClient(api).DeleteStorageClass(args[0], cascade); err != nil {
 				return err
 			}
 			fmt.Printf("StorageClass %s deleted\n", args[0])
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&cascade, "cascade", false, "Delete even if volumes still reference this storage class")
 	return cmd
 }
 

@@ -589,6 +589,12 @@ func (s *Service) Validate() error {
 		return err
 	}
 
+	// Process-runtime services may only bind local host-path StorageClasses
+	// via claimTemplate (RUNE-070).
+	if err := ValidateProcessRuntimeVolumes(owner, s.Runtime, s.Volumes); err != nil {
+		return err
+	}
+
 	return nil
 }
 

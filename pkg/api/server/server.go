@@ -324,8 +324,45 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if !allowed {
 			return nil, statusPermissionDenied("access denied for resource: " + resource + " verb: " + verb)
 		}
+		// Per-request additional RBAC requirements (RUNE-073): some writes
+		// carry a privileged side-effect (e.g. flipping a StorageClass to
+		// Default:true) that we gate behind a separate verb so operators
+		// can grant a `readwrite` token without also granting the
+		// privileged action.
+		for _, extra := range extraRBACRequirements(info.FullMethod, req) {
+			ok, err := s.evaluatePolicies(ctx, subjectID, extra.resource, extra.verb, ns)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "authorization error: %v", err)
+			}
+			if !ok {
+				return nil, statusPermissionDenied("access denied for resource: " + extra.resource + " verb: " + extra.verb)
+			}
+		}
 		return handler(ctx, req)
 	}
+}
+
+// rbacRequirement is a (resource, verb) tuple representing an additional
+// RBAC check the request must pass. See extraRBACRequirements.
+type rbacRequirement struct{ resource, verb string }
+
+// extraRBACRequirements returns extra (resource, verb) pairs that the
+// authenticated subject must also be authorised for, on top of the
+// default verb derived from the method name. Used to gate privileged
+// payload-shaped operations (e.g. setting a StorageClass Default:true)
+// without inventing a separate gRPC method.
+func extraRBACRequirements(fullMethod string, req interface{}) []rbacRequirement {
+	switch fullMethod {
+	case "/rune.api.StorageClassService/CreateStorageClass":
+		if r, ok := req.(*generated.CreateStorageClassRequest); ok && r.GetStorageClass().GetDefault() {
+			return []rbacRequirement{{resource: "storageclasses", verb: "set-default"}}
+		}
+	case "/rune.api.StorageClassService/UpdateStorageClass":
+		if r, ok := req.(*generated.UpdateStorageClassRequest); ok && r.GetStorageClass().GetDefault() {
+			return []rbacRequirement{{resource: "storageclasses", verb: "set-default"}}
+		}
+	}
+	return nil
 }
 
 // admin interceptors (local-only)

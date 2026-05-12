@@ -53,6 +53,12 @@ message UpdateStorageClassRequest {
 
 message DeleteStorageClassRequest {
   string name = 1;
+  // Cascade bypasses the in-use safety check. Without it, deletion is
+  // refused when any Volume still references this StorageClass; with it,
+  // the StorageClass is removed even if dependent volumes exist (the
+  // volumes themselves are NOT deleted — they keep a now-dangling
+  // StorageClassName until the operator addresses them).
+  bool cascade = 2;
 }
 
 message ListStorageClassesRequest {
