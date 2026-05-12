@@ -1104,3 +1104,10 @@ func (r *ProcessRunner) Exec(ctx context.Context, instance *types.Instance, opti
 
 	return execStream, nil
 }
+
+// RunInit is a placeholder for RUNE-121 slice S5. Process-runtime
+// services that declare initSteps will fail to deploy until S5 lights
+// up subprocess-based init execution.
+func (r *ProcessRunner) RunInit(ctx context.Context, instance *types.Instance, step types.InitStep) (int, error) {
+	return 0, runner.ErrInitNotSupported
+}
