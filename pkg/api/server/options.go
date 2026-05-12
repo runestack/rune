@@ -55,6 +55,14 @@ type Options struct {
 	// CreateService call assigns a stable VIP from the pool.
 	// Supplied by runed at startup.
 	VIPAllocator service.VIPAllocator
+
+	// StorageDriverConfigs is the per-driver opaque configuration
+	// map (driver name → key/value) passed to the orchestrator when
+	// the server constructs one itself (i.e. when WithOrchestrator
+	// was not used). Sourced from the runefile [storage.drivers]
+	// table by runed. Nil-safe — drivers fall back to their own
+	// defaults. Introduced for RUNE-069.
+	StorageDriverConfigs map[string]map[string]any
 }
 
 // Option is a function that configures options.
@@ -159,5 +167,15 @@ func WithNetworkStatusProvider(p service.NetworkStatusProvider) Option {
 func WithVIPAllocator(a service.VIPAllocator) Option {
 	return func(opts *Options) {
 		opts.VIPAllocator = a
+	}
+}
+
+// WithStorageDriverConfigs threads per-driver opaque configuration
+// from the runefile through to the orchestrator that the API server
+// constructs internally. No-op when the caller also supplies an
+// already-built orchestrator via WithOrchestrator.
+func WithStorageDriverConfigs(cfg map[string]map[string]any) Option {
+	return func(opts *Options) {
+		opts.StorageDriverConfigs = cfg
 	}
 }

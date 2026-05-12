@@ -131,10 +131,22 @@ func (s *APIServer) Start() error {
 	if s.orchestrator == nil {
 		var err error
 
-		// Use the default orchestrator creation which handles all component setup internally
-		s.orchestrator, err = orchestrator.NewDefaultOrchestrator(s.store, s.logger, s.runnerManager)
+		// Honour runefile-supplied storage driver configs when we
+		// build the orchestrator internally; fall back to the
+		// default constructor when none were supplied so existing
+		// callers keep their previous behaviour.
+		if len(s.options.StorageDriverConfigs) > 0 {
+			s.orchestrator, err = orchestrator.NewOrchestrator(orchestrator.OrchestratorOptions{
+				Store:                s.store,
+				Logger:               s.logger,
+				RunnerManager:        s.runnerManager,
+				StorageDriverConfigs: s.options.StorageDriverConfigs,
+			})
+		} else {
+			s.orchestrator, err = orchestrator.NewDefaultOrchestrator(s.store, s.logger, s.runnerManager)
+		}
 		if err != nil {
-			return fmt.Errorf("failed to create default orchestrator: %w", err)
+			return fmt.Errorf("failed to create orchestrator: %w", err)
 		}
 	}
 

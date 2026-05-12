@@ -99,33 +99,61 @@ func factoryHost(raw map[string]any) (driver.Driver, error) {
 // reflective config library to keep the storage tree dependency-free; the
 // runefile loader is responsible for type-coercing strings/bools/slices
 // before handing them here.
+//
+// Keys are matched case-insensitively because the runefile loader
+// (viper) lowercases nested map keys, while in-process callers and
+// driver tests typically use the camelCase spelling published in the
+// design doc. The lookup checks the lowercased form first and falls
+// back to the original spelling for callers who pre-normalised.
 func parseConfig(raw map[string]any) (*Config, error) {
 	cfg := &Config{}
 	if raw == nil {
 		return cfg, nil
 	}
-	if v, ok := raw["localVolumeRoot"].(string); ok {
-		cfg.LocalVolumeRoot = v
+	// Build a case-folded view once so each lookup is a single map hit.
+	lc := make(map[string]any, len(raw))
+	for k, v := range raw {
+		lc[strings.ToLower(k)] = v
 	}
-	if v, ok := raw["snapshotRoot"].(string); ok {
-		cfg.SnapshotRoot = v
+	get := func(camel string) (any, bool) {
+		if v, ok := lc[strings.ToLower(camel)]; ok {
+			return v, true
+		}
+		return nil, false
 	}
-	if v, ok := raw["allowCreateMissing"].(bool); ok {
-		cfg.AllowCreateMissing = v
+
+	if v, ok := get("localVolumeRoot"); ok {
+		if s, ok := v.(string); ok {
+			cfg.LocalVolumeRoot = s
+		}
 	}
-	if v, ok := raw["preserveOnDelete"].(bool); ok {
-		cfg.PreserveOnDelete = v
+	if v, ok := get("snapshotRoot"); ok {
+		if s, ok := v.(string); ok {
+			cfg.SnapshotRoot = s
+		}
 	}
-	switch v := raw["hostPathAllowlist"].(type) {
-	case []string:
-		cfg.HostPathAllowlist = append(cfg.HostPathAllowlist, v...)
-	case []any:
-		for _, e := range v {
-			s, ok := e.(string)
-			if !ok {
-				return nil, fmt.Errorf("%w: hostPathAllowlist entry %v is not a string", driver.ErrInvalidConfig, e)
+	if v, ok := get("allowCreateMissing"); ok {
+		if b, ok := v.(bool); ok {
+			cfg.AllowCreateMissing = b
+		}
+	}
+	if v, ok := get("preserveOnDelete"); ok {
+		if b, ok := v.(bool); ok {
+			cfg.PreserveOnDelete = b
+		}
+	}
+	if v, ok := get("hostPathAllowlist"); ok {
+		switch vv := v.(type) {
+		case []string:
+			cfg.HostPathAllowlist = append(cfg.HostPathAllowlist, vv...)
+		case []any:
+			for _, e := range vv {
+				s, ok := e.(string)
+				if !ok {
+					return nil, fmt.Errorf("%w: hostPathAllowlist entry %v is not a string", driver.ErrInvalidConfig, e)
+				}
+				cfg.HostPathAllowlist = append(cfg.HostPathAllowlist, s)
 			}
-			cfg.HostPathAllowlist = append(cfg.HostPathAllowlist, s)
 		}
 	}
 	return cfg, nil

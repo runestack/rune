@@ -145,6 +145,24 @@ type ACME struct {
 	Email     string `yaml:"email"`
 }
 
+// Storage holds per-driver opaque configuration for the storage
+// subsystem (RUNE-069/070/073). The runefile schema is:
+//
+//	storage:
+//	  drivers:
+//	    local:
+//	      localVolumeRoot: /var/lib/rune/volumes
+//	    local-host:
+//	      hostPathAllowlist: ["/srv/rune"]
+//
+// Keys under `drivers` are driver names registered with the storage
+// driver registry. Values are passed verbatim to Driver constructors
+// via OrchestratorOptions.StorageDriverConfigs; missing entries fall
+// back to the driver's own defaults.
+type Storage struct {
+	Drivers map[string]map[string]any `yaml:"drivers"`
+}
+
 type Config struct {
 	Server    Server    `yaml:"server"`
 	DataDir   string    `yaml:"data_dir"`
@@ -167,6 +185,7 @@ type Config struct {
 	Node       Node       `yaml:"node"`
 	Ingress    Ingress    `yaml:"ingress"`
 	ACME       ACME       `yaml:"acme"`
+	Storage    Storage    `yaml:"storage"`
 }
 
 func Default() *Config {

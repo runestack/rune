@@ -529,7 +529,7 @@ func main() {
 	}
 
 	// Create and start API server (with WatchService registered).
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, logger, vipAllocator, vipAllocator, watchRegistrar)...)
+	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)
@@ -820,7 +820,7 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 	return st, appCfg, storeDir, nil
 }
 
-func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
 	opts := []server.Option{
 		server.WithGRPCAddr(grpcAddress),
 		server.WithHTTPAddr(httpAddress),
@@ -834,6 +834,12 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger 
 	}
 	if vipAlloc != nil {
 		opts = append(opts, server.WithVIPAllocator(vipAlloc))
+	}
+	// RUNE-069: thread per-driver storage config from the runefile
+	// through to the orchestrator (e.g. local.localVolumeRoot,
+	// local-host.hostPathAllowlist).
+	if appCfg != nil && len(appCfg.Storage.Drivers) > 0 {
+		opts = append(opts, server.WithStorageDriverConfigs(appCfg.Storage.Drivers))
 	}
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
