@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Cross-mount conflict tests (RUNE-070/072).
+// Cross-mount conflict tests.
 //
 // ValidateMountPathConflicts is the single spot where mountPath
 // collisions across volume / secret / configmap mounts are caught,

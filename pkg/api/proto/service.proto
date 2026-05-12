@@ -100,7 +100,7 @@ message Service {
   // command.
   string status_message = 25;
 
-  // Volume mounts (RUNE-070/072). Exactly one of claim / claim_template
+  // Volume mounts. Exactly one of claim / claim_template
   // is set per mount; binding state lives on the Volume resource itself.
   repeated VolumeMount volumes = 26;
 }

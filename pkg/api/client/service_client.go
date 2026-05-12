@@ -759,7 +759,7 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		}
 	}
 
-	// Convert volume mounts (RUNE-070/072).
+	// Convert volume mounts.
 	if len(proto.Volumes) > 0 {
 		service.Volumes = make([]types.VolumeMount, len(proto.Volumes))
 		for i, m := range proto.Volumes {

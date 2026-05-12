@@ -82,7 +82,7 @@ func renderServiceDetail(w io.Writer, svc *types.Service, instClient *client.Ins
 		}
 	}
 
-	// Volumes block (RUNE-070/072). Show declared mounts so a developer
+	// Volumes block. Show declared mounts so a developer
 	// can immediately see which Volumes back the service. Binding/Node
 	// state lives on the Volume itself (`rune get volume`); we keep this
 	// section short — name, mountPath, and how the volume is sourced.
