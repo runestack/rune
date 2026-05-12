@@ -87,6 +87,17 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.StorageClassService/Delete"):
 		return "storageclasses", "delete"
 
+	case strings.HasPrefix(method, "/rune.api.VolumeService/Get"):
+		return "volumes", "get"
+	case strings.HasPrefix(method, "/rune.api.VolumeService/List"):
+		return "volumes", "list"
+	case strings.HasPrefix(method, "/rune.api.VolumeService/Create"):
+		return "volumes", "create"
+	case strings.HasPrefix(method, "/rune.api.VolumeService/Update"):
+		return "volumes", "update"
+	case strings.HasPrefix(method, "/rune.api.VolumeService/Delete"):
+		return "volumes", "delete"
+
 	case strings.HasPrefix(method, "/rune.api.AuthService/WhoAmI"):
 		return "auth", "get"
 	case strings.HasPrefix(method, "/rune.api.AdminService/"):

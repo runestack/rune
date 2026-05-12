@@ -387,6 +387,18 @@ func (s *TestStore) Get(ctx context.Context, resourceType types.ResourceType, na
 				return nil
 			}
 
+		case *types.Namespace:
+			if targetNs, ok := resource.(*types.Namespace); ok && storedData != nil {
+				*targetNs = *storedData
+				return nil
+			}
+
+		case types.Namespace:
+			if targetNs, ok := resource.(*types.Namespace); ok {
+				*targetNs = storedData
+				return nil
+			}
+
 		}
 
 		// Store the data - for testing we assume this will work
