@@ -76,6 +76,17 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.AuditService/Get"):
 		return "audit", "get"
 
+	case strings.HasPrefix(method, "/rune.api.StorageClassService/Get"):
+		return "storageclasses", "get"
+	case strings.HasPrefix(method, "/rune.api.StorageClassService/List"):
+		return "storageclasses", "list"
+	case strings.HasPrefix(method, "/rune.api.StorageClassService/Create"):
+		return "storageclasses", "create"
+	case strings.HasPrefix(method, "/rune.api.StorageClassService/Update"):
+		return "storageclasses", "update"
+	case strings.HasPrefix(method, "/rune.api.StorageClassService/Delete"):
+		return "storageclasses", "delete"
+
 	case strings.HasPrefix(method, "/rune.api.AuthService/WhoAmI"):
 		return "auth", "get"
 	case strings.HasPrefix(method, "/rune.api.AdminService/"):

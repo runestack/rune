@@ -43,11 +43,12 @@ type APIServer struct {
 	logService       *service.LogService
 	execService      *service.ExecService
 	healthService    *service.HealthService
-	secretService    *service.SecretService
-	configService    *service.ConfigmapService
-	authService      *service.AuthService
-	adminService     *service.AdminService
-	auditService     *service.AuditService
+	secretService       *service.SecretService
+	configService       *service.ConfigmapService
+	authService         *service.AuthService
+	adminService        *service.AdminService
+	auditService        *service.AuditService
+	storageClassService *service.StorageClassService
 
 	// gRPC server
 	grpcServer *grpc.Server
@@ -171,6 +172,7 @@ func (s *APIServer) Start() error {
 	s.authService = service.NewAuthService(s.store, s.logger)
 	s.adminService = service.NewAdminService(s.store, s.logger)
 	s.auditService = service.NewAuditService(s.store, s.logger)
+	s.storageClassService = service.NewStorageClassService(s.store, s.logger)
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
@@ -243,6 +245,7 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterAdminServiceServer(s.grpcServer, s.adminService)
 	generated.RegisterNamespaceServiceServer(s.grpcServer, s.namespaceService)
 	generated.RegisterAuditServiceServer(s.grpcServer, s.auditService)
+	generated.RegisterStorageClassServiceServer(s.grpcServer, s.storageClassService)
 
 	// Extra registrars (e.g. WatchService wired by runed for RUNE-028).
 	for _, reg := range s.options.ExtraGRPCRegistrars {
