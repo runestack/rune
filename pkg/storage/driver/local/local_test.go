@@ -245,6 +245,78 @@ func TestLocalSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+// TestLocalHostWriteRestartRead is the RUNE-070 e2e persistence proof
+// for the local-host driver: write a payload through one driver
+// instance, then construct a SECOND driver against the same allowlist
+// (the in-process equivalent of an agent restart) and assert the
+// payload is still readable. This is the host-path twin of
+// TestLocalSnapshotRoundTrip's content-survival check.
+func TestLocalHostWriteRestartRead(t *testing.T) {
+	allowRoot := t.TempDir()
+	hostPath := filepath.Join(allowRoot, "vol-restart")
+	if err := os.MkdirAll(hostPath, 0o750); err != nil {
+		t.Fatalf("mkdir host path: %v", err)
+	}
+
+	mkDriver := func() driver.Driver {
+		d, err := driver.New(local.DriverNameLocalHost, map[string]any{
+			"hostPathAllowlist":  []string{allowRoot},
+			"allowCreateMissing": false,
+		})
+		if err != nil {
+			t.Fatalf("New(local-host): %v", err)
+		}
+		return d
+	}
+
+	vol := &types.Volume{
+		Name:       "host-restart",
+		Namespace:  "default",
+		AccessMode: types.AccessModeRWO,
+		Parameters: map[string]string{"hostPath": hostPath},
+	}
+
+	ctx := context.Background()
+
+	d1 := mkDriver()
+	handle, err := d1.Provision(ctx, driver.ProvisionRequest{
+		Volume:           vol,
+		MergedParameters: vol.Parameters,
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	target1, err := d1.Mount(ctx, driver.MountOpts{Volume: vol, Handle: handle})
+	if err != nil {
+		t.Fatalf("Mount: %v", err)
+	}
+
+	payload := filepath.Join(string(target1), "payload.txt")
+	if err := os.WriteFile(payload, []byte("survives-restart"), 0o600); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	if err := d1.Unmount(ctx, target1); err != nil {
+		t.Fatalf("Unmount: %v", err)
+	}
+
+	// Fresh driver, fresh process state — same on-disk host path.
+	d2 := mkDriver()
+	target2, err := d2.Mount(ctx, driver.MountOpts{Volume: vol, Handle: handle})
+	if err != nil {
+		t.Fatalf("Mount (post-restart): %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(string(target2), "payload.txt"))
+	if err != nil {
+		t.Fatalf("read payload after restart: %v", err)
+	}
+	if string(got) != "survives-restart" {
+		t.Fatalf("payload mismatch after restart: got %q", got)
+	}
+	if err := d2.Unmount(ctx, target2); err != nil {
+		t.Fatalf("Unmount (post-restart): %v", err)
+	}
+}
+
 func sprintfInt(n int) string {
 	if n == 0 {
 		return "0"
