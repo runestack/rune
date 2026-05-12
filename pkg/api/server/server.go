@@ -174,7 +174,8 @@ func (s *APIServer) Start() error {
 	s.adminService = service.NewAdminService(s.store, s.logger)
 	s.auditService = service.NewAuditService(s.store, s.logger)
 	s.storageClassService = service.NewStorageClassService(s.store, s.logger)
-	s.volumeService = service.NewVolumeService(s.store, s.logger)
+	s.volumeService = service.NewVolumeService(s.store, s.logger,
+		service.WithDriverConfigs(s.options.StorageDriverConfigs))
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)

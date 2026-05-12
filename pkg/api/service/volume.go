@@ -17,18 +17,39 @@ import (
 // VolumeService implements generated.VolumeServiceServer.
 type VolumeService struct {
 	generated.UnimplementedVolumeServiceServer
-	repo   *repos.VolumeRepo
-	nsRepo *repos.NamespaceRepo
-	logger log.Logger
+	repo          *repos.VolumeRepo
+	nsRepo        *repos.NamespaceRepo
+	scRepo        *repos.StorageClassRepo
+	driverConfigs map[string]map[string]any
+	logger        log.Logger
+}
+
+// VolumeServiceOption configures optional VolumeService behaviour.
+type VolumeServiceOption func(*VolumeService)
+
+// WithDriverConfigs supplies the runefile [storage.drivers] map so the
+// service can perform driver-capability lint at the write path (e.g.
+// reject Volumes whose AccessMode is not in the driver's
+// Capabilities.AccessModes, or whose local-host hostPath is outside the
+// runefile allowlist). Optional — when omitted, driver-capability lint
+// is skipped and the controller surfaces capability errors at provision
+// time instead.
+func WithDriverConfigs(cfg map[string]map[string]any) VolumeServiceOption {
+	return func(s *VolumeService) { s.driverConfigs = cfg }
 }
 
 // NewVolumeService constructs a VolumeService.
-func NewVolumeService(st store.Store, logger log.Logger) *VolumeService {
-	return &VolumeService{
+func NewVolumeService(st store.Store, logger log.Logger, opts ...VolumeServiceOption) *VolumeService {
+	s := &VolumeService{
 		repo:   repos.NewVolumeRepo(st),
 		nsRepo: repos.NewNamespaceRepo(st),
+		scRepo: repos.NewStorageClassRepo(st),
 		logger: logger.WithComponent("volume-service"),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 func (s *VolumeService) CreateVolume(ctx context.Context, req *generated.CreateVolumeRequest) (*generated.VolumeResponse, error) {
@@ -42,6 +63,9 @@ func (s *VolumeService) CreateVolume(ctx context.Context, req *generated.CreateV
 	v.Namespace = types.NS(v.Namespace)
 	if err := ensureNamespaceExists(ctx, s.nsRepo, v.Namespace, req.EnsureNamespace); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "ensure namespace: %v", err)
+	}
+	if err := s.validateAgainstStorageClass(ctx, v); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	if err := s.repo.Create(ctx, v); err != nil {
 		if store.IsAlreadyExistsError(err) {
@@ -82,6 +106,9 @@ func (s *VolumeService) UpdateVolume(ctx context.Context, req *generated.UpdateV
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume: %v", err)
 	}
 	v.Namespace = types.NS(v.Namespace)
+	if err := s.validateAgainstStorageClass(ctx, v); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
 	if err := s.repo.Update(ctx, v, store.WithSource(store.EventSourceAPI)); err != nil {
 		if store.IsNotFoundError(err) {
 			return nil, status.Errorf(codes.NotFound, "volume not found: %s/%s", v.Namespace, v.Name)

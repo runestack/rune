@@ -394,7 +394,18 @@ func (d *hostDriver) Expand(ctx context.Context, handle driver.VolumeHandle, new
 }
 
 func (d *hostDriver) allowed(abs string) bool {
-	for _, prefix := range d.cfg.HostPathAllowlist {
+	return IsHostPathAllowed(abs, d.cfg.HostPathAllowlist)
+}
+
+// IsHostPathAllowed reports whether abs is inside any prefix in
+// allowlist. Each prefix is resolved with filepath.Abs and compared with
+// proper path-segment semantics (so /var/lib/rune/volumes2 does NOT
+// match a /var/lib/rune/volumes prefix).
+//
+// Exported so the API server can perform the same cast-time check the
+// driver performs at provision time, without instantiating the driver.
+func IsHostPathAllowed(abs string, allowlist []string) bool {
+	for _, prefix := range allowlist {
 		p, err := filepath.Abs(prefix)
 		if err != nil {
 			continue
@@ -404,6 +415,36 @@ func (d *hostDriver) allowed(abs string) bool {
 		}
 	}
 	return false
+}
+
+// AllowlistFromConfig extracts the hostPathAllowlist entries from a raw
+// runefile config map (the same shape consumed by factoryHost). Returns
+// nil for missing/empty/malformed entries — never errors. Exported so
+// the API server can read the allowlist without round-tripping through
+// driver instantiation.
+func AllowlistFromConfig(raw map[string]any) []string {
+	if raw == nil {
+		return nil
+	}
+	for k, v := range raw {
+		if strings.EqualFold(k, "hostPathAllowlist") {
+			switch vv := v.(type) {
+			case []string:
+				out := make([]string, 0, len(vv))
+				out = append(out, vv...)
+				return out
+			case []any:
+				out := make([]string, 0, len(vv))
+				for _, e := range vv {
+					if s, ok := e.(string); ok {
+						out = append(out, s)
+					}
+				}
+				return out
+			}
+		}
+	}
+	return nil
 }
 
 // ============================================================================
