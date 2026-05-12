@@ -69,6 +69,12 @@ type Instance struct {
 	// Metadata contains additional information about the instance
 	// Use for storing system properties that aren't part of the core spec
 	Metadata *InstanceMetadata `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+
+	// InitStates records the per-instance execution state for each
+	// of the parent service's InitSteps (RUNE-121). One entry per
+	// declared step, in declaration order. Empty for instances of
+	// services with no init steps.
+	InitStates []InitStepState `json:"initStates,omitempty" yaml:"initStates,omitempty"`
 }
 
 func (i *Instance) GetResourceType() ResourceType {

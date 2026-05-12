@@ -95,6 +95,11 @@ type Service struct {
 	// VolumeController materializes into a per-instance Volume.
 	Volumes []VolumeMount `json:"volumes,omitempty" yaml:"volumes,omitempty"`
 
+	// InitSteps run sequentially before each instance's main
+	// container starts. They share the parent's volumes / secret /
+	// config / env by default. See RUNE-121.
+	InitSteps []InitStep `json:"initSteps,omitempty" yaml:"initSteps,omitempty"`
+
 	// Service discovery configuration
 	Discovery *ServiceDiscovery `json:"discovery,omitempty" yaml:"discovery,omitempty"`
 
@@ -592,6 +597,11 @@ func (s *Service) Validate() error {
 	// Process-runtime services may only bind local host-path StorageClasses
 	// via claimTemplate (RUNE-070).
 	if err := ValidateProcessRuntimeVolumes(owner, s.Runtime, s.Volumes); err != nil {
+		return err
+	}
+
+	// Init steps (RUNE-121).
+	if err := s.validateInitSteps(); err != nil {
 		return err
 	}
 
