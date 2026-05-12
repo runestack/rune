@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/runestack/rune/internal/agent/dataplane"
 	dnssub "github.com/runestack/rune/internal/agent/dns"
 	"github.com/runestack/rune/internal/agent/ingressctl"
+	volsub "github.com/runestack/rune/internal/agent/volumes"
 	"github.com/runestack/rune/internal/config"
 	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
@@ -27,6 +29,7 @@ import (
 	acmesvc "github.com/runestack/rune/pkg/networking/acme"
 	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/networking/vip"
+	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/types"
@@ -583,6 +586,33 @@ func main() {
 		}
 		dpRef = dp
 
+		// Per-node storage subsystem (RUNE-069). Watches Volume rows
+		// and, for each volume the orchestrator has bound to this
+		// node, calls the registered driver's Attach + Mount under
+		// /var/lib/rune/mounts/<volume.ID>/. Symmetrically Unmount +
+		// Detach on unbind/delete and on agent Stop. The instance
+		// controller's resolveVolumeMount still uses Volume.Handle
+		// directly today (correct for the in-tree local /
+		// local-host drivers); a follow-up slice will switch it to
+		// consult the subsystem's MountTargetFor() so block-device
+		// drivers (do-volume, ...) start working.
+		var driverConfigs map[string]map[string]any
+		if appCfg != nil {
+			driverConfigs = appCfg.Storage.Drivers
+		}
+		volSub, vsErr := volsub.New(volsub.Config{
+			Store:  stateStore,
+			NodeID: a.Identity().NodeID,
+			Lookup: makeAgentDriverLookup(stateStore, driverConfigs),
+			Logger: logger.WithComponent("agent.volumes"),
+		})
+		if vsErr != nil {
+			return fmt.Errorf("agent volumes: %w", vsErr)
+		}
+		if err := a.Register(volSub); err != nil {
+			return err
+		}
+
 		// Embedded DNS subsystem (RUNE-063). Registers itself with
 		// the agent so it inherits supervised lifecycle. Bind list
 		// stays at the loopback default in MVP; bridge enumeration
@@ -828,6 +858,41 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 		return nil, nil, storeDir, err
 	}
 	return st, appCfg, storeDir, nil
+}
+
+// makeAgentDriverLookup returns a volsub.DriverLookup closure that
+// resolves a Volume to its driver by reading the Volume's StorageClass
+// from the store and instantiating the driver from the registry, with
+// per-driver config drawn from the runefile [storage.drivers] section.
+// Driver instances are cached so repeated lookups don't allocate.
+func makeAgentDriverLookup(st store.Store, driverConfigs map[string]map[string]any) volsub.DriverLookup {
+	var (
+		mu      sync.Mutex
+		drivers = make(map[string]driver.Driver)
+	)
+	return func(ctx context.Context, vol *types.Volume) (driver.Driver, error) {
+		if vol.StorageClassName == "" {
+			return nil, fmt.Errorf("volume %s has no storageClassName", vol.String())
+		}
+		var sc types.StorageClass
+		if err := st.Get(ctx, types.ResourceTypeStorageClass, "", vol.StorageClassName, &sc); err != nil {
+			return nil, fmt.Errorf("get storage class %q: %w", vol.StorageClassName, err)
+		}
+		if sc.Driver == "" {
+			return nil, fmt.Errorf("storage class %q has empty driver", sc.Name)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if d, ok := drivers[sc.Driver]; ok {
+			return d, nil
+		}
+		d, err := driver.New(sc.Driver, driverConfigs[sc.Driver])
+		if err != nil {
+			return nil, fmt.Errorf("instantiate driver %q: %w", sc.Driver, err)
+		}
+		drivers[sc.Driver] = d
+		return d, nil
+	}
 }
 
 func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
