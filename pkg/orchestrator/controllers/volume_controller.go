@@ -89,6 +89,12 @@ func NewVolumeController(opts VolumeControllerOptions) (VolumeController, error)
 
 func (c *volumeController) Start(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
+	if err := c.seedBuiltInStorageClasses(c.ctx); err != nil {
+		// Seeding failure must not prevent the controller from starting:
+		// the watch loop is the source of truth and the operator can recover
+		// by hand-creating the classes. Log loudly and continue.
+		c.logger.Error("Failed to seed built-in storage classes", log.Err(err))
+	}
 	watchCh, err := c.store.Watch(c.ctx, types.ResourceTypeVolume, "")
 	if err != nil {
 		return fmt.Errorf("volume controller: watch: %w", err)
@@ -278,16 +284,89 @@ func (c *volumeController) handleDeleted(ctx context.Context, vol *types.Volume)
 func (c *volumeController) resolveStorageClass(ctx context.Context, vol *types.Volume) (*types.StorageClass, error) {
 	name := vol.StorageClassName
 	if name == "" {
-		// In a future ticket we'll look up the cluster-wide Default class.
-		// For now, an empty class is a hard error: the user has to pick
-		// one explicitly.
-		return nil, fmt.Errorf("volume %q has empty storageClassName (no default class lookup yet)", vol.Name)
+		// Fall back to the cluster-default class. Both the API server
+		// (RUNE-073) and the seeder maintain the at-most-one invariant; if
+		// somehow zero or many are flagged here we treat it as a hard error
+		// rather than guessing.
+		def, err := c.findDefaultStorageClass(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("volume %q has empty storageClassName and no default class: %w", vol.Name, err)
+		}
+		name = def.Name
 	}
 	var sc types.StorageClass
 	if err := c.store.Get(ctx, types.ResourceTypeStorageClass, "", name, &sc); err != nil {
 		return nil, fmt.Errorf("get storage class %q: %w", name, err)
 	}
 	return &sc, nil
+}
+
+// findDefaultStorageClass returns the single StorageClass with Default:true
+// in the store. Returns an error if zero or more than one are flagged.
+func (c *volumeController) findDefaultStorageClass(ctx context.Context) (*types.StorageClass, error) {
+	var all []types.StorageClass
+	if err := c.store.List(ctx, types.ResourceTypeStorageClass, "", &all); err != nil {
+		return nil, fmt.Errorf("list storage classes: %w", err)
+	}
+	var found *types.StorageClass
+	for i := range all {
+		if !all[i].Default {
+			continue
+		}
+		if found != nil {
+			return nil, fmt.Errorf("multiple storage classes marked Default (%q and %q); fix one", found.Name, all[i].Name)
+		}
+		found = &all[i]
+	}
+	if found == nil {
+		return nil, fmt.Errorf("no storage class marked Default")
+	}
+	return found, nil
+}
+
+// seedBuiltInStorageClasses idempotently creates the built-in "local"
+// (Default:true) and "local-host" StorageClass resources at controller
+// boot if they don't already exist. Operators can override either by
+// pre-creating a class with the same name (the existence check below skips
+// the seed) or by creating their own Default class (the API server's
+// at-most-one invariant will then flip ours off).
+func (c *volumeController) seedBuiltInStorageClasses(ctx context.Context) error {
+	now := time.Now()
+	builtIns := []types.StorageClass{
+		{
+			Name:          "local",
+			Driver:        "local",
+			ReclaimPolicy: types.ReclaimPolicyRetain,
+			Default:       true,
+			Labels:        map[string]string{"rune.io/builtin": "true"},
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			Name:          "local-host",
+			Driver:        "local-host",
+			ReclaimPolicy: types.ReclaimPolicyRetain,
+			Labels:        map[string]string{"rune.io/builtin": "true"},
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+	}
+	for i := range builtIns {
+		sc := builtIns[i]
+		var existing types.StorageClass
+		if err := c.store.Get(ctx, types.ResourceTypeStorageClass, "", sc.Name, &existing); err == nil {
+			// Already present — operator may have customised it; leave alone.
+			continue
+		}
+		if err := c.store.Create(ctx, types.ResourceTypeStorageClass, "", sc.Name, &sc); err != nil {
+			return fmt.Errorf("seed storage class %q: %w", sc.Name, err)
+		}
+		c.logger.Info("Seeded built-in storage class",
+			log.Str("name", sc.Name),
+			log.Str("driver", sc.Driver),
+			log.Bool("default", sc.Default))
+	}
+	return nil
 }
 
 // driverFor returns a cached driver instance, building it on first use.

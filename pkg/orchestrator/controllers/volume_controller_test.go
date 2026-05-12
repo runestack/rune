@@ -218,3 +218,88 @@ func TestVolumeController_RetainsOnDeleteWithRetainPolicy(t *testing.T) {
 		t.Fatalf("retain policy must leave handle in place, got: %v", err)
 	}
 }
+
+// TestVolumeController_SeedsBuiltInStorageClasses verifies that Start
+// idempotently creates the built-in "local" (Default:true) and "local-host"
+// classes. setupVolumeController already calls Start, so we just inspect
+// the store.
+func TestVolumeController_SeedsBuiltInStorageClasses(t *testing.T) {
+	_, _, ts, _, _ := setupVolumeController(t)
+
+	var localSC types.StorageClass
+	require.NoError(t, ts.Get(context.Background(), types.ResourceTypeStorageClass, "", "local", &localSC))
+	assert.Equal(t, "local", localSC.Driver)
+	assert.True(t, localSC.Default, "built-in 'local' class must be Default:true")
+	assert.Equal(t, types.ReclaimPolicyRetain, localSC.ReclaimPolicy)
+	assert.Equal(t, "true", localSC.Labels["rune.io/builtin"])
+
+	var hostSC types.StorageClass
+	require.NoError(t, ts.Get(context.Background(), types.ResourceTypeStorageClass, "", "local-host", &hostSC))
+	assert.Equal(t, "local-host", hostSC.Driver)
+	assert.False(t, hostSC.Default, "built-in 'local-host' must not be Default")
+}
+
+// TestVolumeController_SeedRespectsExistingClass — if an operator (or a
+// previous boot) has already created a class with the same name, the seed
+// step must not clobber it.
+func TestVolumeController_SeedRespectsExistingClass(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ts := store.NewTestStore()
+
+	// Pre-create a customised "local" class with Default:false. Seeding
+	// must leave it alone.
+	preExisting := &types.StorageClass{
+		ID:            "user-local",
+		Name:          "local",
+		Driver:        "local",
+		ReclaimPolicy: types.ReclaimPolicyDelete,
+		Default:       false,
+		Labels:        map[string]string{"operator": "owned"},
+		CreatedAt:     time.Now().UTC(),
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeStorageClass, "", "local", preExisting))
+
+	controller, err := NewVolumeController(VolumeControllerOptions{
+		Store:  ts,
+		Logger: log.NewLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, controller.Start(ctx))
+	t.Cleanup(func() { _ = controller.Stop() })
+
+	var got types.StorageClass
+	require.NoError(t, ts.Get(ctx, types.ResourceTypeStorageClass, "", "local", &got))
+	assert.Equal(t, "user-local", got.ID, "operator-owned class must not be overwritten")
+	assert.False(t, got.Default, "operator-set Default:false must be preserved")
+	assert.Equal(t, "owned", got.Labels["operator"])
+}
+
+// TestVolumeController_ResolvesDefaultClassWhenUnspecified — a Volume with
+// an empty StorageClassName must provision against the seeded Default class.
+func TestVolumeController_ResolvesDefaultClassWhenUnspecified(t *testing.T) {
+	ctx, _, ts, _, _ := setupVolumeController(t)
+
+	vol := &types.Volume{
+		ID:            "v-default",
+		Name:          "no-class-specified",
+		Namespace:     "default",
+		AccessMode:    types.AccessModeRWO,
+		ReclaimPolicy: types.ReclaimPolicyRetain,
+		Status:        types.VolumeStatusPending,
+		// StorageClassName intentionally empty — should resolve to seeded
+		// "local" class which is Default:true.
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+
+	waitFor(t, 2*time.Second, func() error {
+		got := loadVolume(t, ts, vol.Namespace, vol.Name)
+		if got.Status != types.VolumeStatusAvailable {
+			return errors.New("not yet available: " + string(got.Status))
+		}
+		if got.Handle == "" {
+			return errors.New("handle empty")
+		}
+		return nil
+	})
+}
