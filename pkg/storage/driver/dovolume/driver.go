@@ -454,7 +454,7 @@ func parseQuantity(s string) (int64, error) {
 	if n < 0 {
 		return 0, fmt.Errorf("quantity %q is negative", s)
 	}
-	mult := int64(1)
+	var mult int64
 	switch suffix {
 	case "":
 		mult = 1

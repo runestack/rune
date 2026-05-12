@@ -154,10 +154,10 @@ func parseConfig(raw map[string]any) (*Config, error) {
 	if cfg.APIToken != "" && cfg.APITokenSecretRef != "" {
 		return nil, fmt.Errorf("dovolume: apiToken and apiTokenSecretRef are mutually exclusive")
 	}
-	if cfg.APIToken == "" && cfg.APITokenSecretRef == "" {
-		// Defer the error to first use — if no DO StorageClass is
-		// declared, we should not block runed startup.
-	}
+	// If neither apiToken nor apiTokenSecretRef is set we defer the
+	// error to first use — if no DO StorageClass is declared, we should
+	// not block runed startup. resolveToken surfaces the missing-config
+	// error on the first request.
 	return cfg, nil
 }
 

@@ -307,12 +307,12 @@ func ValidateVolumeMounts(mounts []VolumeMount) error {
 // common foot-gun (writing to /proc breaks PID semantics, mounting over
 // /dev hides device nodes, exposing docker.sock is a sandbox escape).
 var systemMountBlocklist = map[string]bool{
-	"/proc":                       true,
-	"/sys":                        true,
-	"/dev":                        true,
-	"/var/run/docker.sock":        true,
-	"/run/docker.sock":            true,
-	"/var/run/containerd.sock":    true,
+	"/proc":                           true,
+	"/sys":                            true,
+	"/dev":                            true,
+	"/var/run/docker.sock":            true,
+	"/run/docker.sock":                true,
+	"/var/run/containerd.sock":        true,
 	"/run/containerd/containerd.sock": true,
 }
 
@@ -417,4 +417,3 @@ func ValidateProcessRuntimeVolumes(owner string, runtime RuntimeType, vols []Vol
 	}
 	return nil
 }
-

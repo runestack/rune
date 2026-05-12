@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -210,9 +211,15 @@ func volumeToProto(v *types.Volume) *generated.Volume {
 		UpdatedAt:        v.UpdatedAt.Format(time.RFC3339),
 	}
 	if v.SnapshotSchedule != nil {
+		ret := v.SnapshotSchedule.Retention
+		if ret < 0 {
+			ret = 0
+		} else if ret > math.MaxInt32 {
+			ret = math.MaxInt32
+		}
 		out.SnapshotSchedule = &generated.SnapshotSchedule{
 			Cron:      v.SnapshotSchedule.Cron,
-			Retention: int32(v.SnapshotSchedule.Retention),
+			Retention: int32(ret), //nolint:gosec // bounds-checked above
 		}
 	}
 	return out

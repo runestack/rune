@@ -101,12 +101,12 @@ type volumeController struct {
 	// Provision retry/backoff state. Indexed by "<namespace>/<name>".
 	// retries holds the attempt count so far; retryTimers holds the
 	// pending re-arm timer (if any). Both are protected by retryMu.
-	retryMu      sync.Mutex
-	retries      map[string]int
-	retryTimers  map[string]*time.Timer
-	maxAttempts  int
-	baseBackoff  time.Duration
-	maxBackoff   time.Duration
+	retryMu     sync.Mutex
+	retries     map[string]int
+	retryTimers map[string]*time.Timer
+	maxAttempts int
+	baseBackoff time.Duration
+	maxBackoff  time.Duration
 
 	ctx    context.Context
 	cancel context.CancelFunc

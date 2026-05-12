@@ -11,12 +11,12 @@ import (
 
 // CastFile represents a YAML file that may contain multiple resource specifications.
 type CastFile struct {
-	Specs           []Spec          `yaml:"specs,omitempty"`
-	Services        []ServiceSpec   `yaml:"services,omitempty"`
-	Secrets         []SecretSpec    `yaml:"secrets,omitempty"`
-	Configmaps      []ConfigmapSpec `yaml:"configmaps,omitempty"`
-	StorageClasses  []StorageClass  `yaml:"storageClasses,omitempty"`
-	Volumes         []Volume        `yaml:"volumes,omitempty"`
+	Specs          []Spec          `yaml:"specs,omitempty"`
+	Services       []ServiceSpec   `yaml:"services,omitempty"`
+	Secrets        []SecretSpec    `yaml:"secrets,omitempty"`
+	Configmaps     []ConfigmapSpec `yaml:"configmaps,omitempty"`
+	StorageClasses []StorageClass  `yaml:"storageClasses,omitempty"`
+	Volumes        []Volume        `yaml:"volumes,omitempty"`
 	// Internal tracking for line numbers (not serialized)
 	lineInfo map[string]int `json:"-" yaml:"-"`
 	// Template references extracted during preprocessing

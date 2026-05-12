@@ -30,7 +30,7 @@ func TestVolumeCleanupFinalizer_DeletesOwnedVolumes(t *testing.T) {
 	ts := store.NewTestStore()
 	mkVolume(t, ts, "default", "data-api-0", "default/api")
 	mkVolume(t, ts, "default", "data-api-1", "default/api")
-	mkVolume(t, ts, "default", "shared", "")              // operator-owned, must be left alone
+	mkVolume(t, ts, "default", "shared", "")                    // operator-owned, must be left alone
 	mkVolume(t, ts, "default", "data-other-0", "default/other") // owned by a different service
 
 	f := NewVolumeCleanupFinalizer(ts, log.NewLogger())

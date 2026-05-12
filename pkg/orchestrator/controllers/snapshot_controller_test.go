@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,8 +164,8 @@ func TestSnapshotController_DeletingDrivesDriverThenRemovesRow(t *testing.T) {
 	if _, err := os.Stat(ready.Handle); err != nil {
 		t.Fatalf("snapshot dir missing: %v", err)
 	}
-	if !filepath.HasPrefix(ready.Handle, snapRoot) {
-		t.Fatalf("snapshot handle %q not under root %q", ready.Handle, snapRoot)
+	if rel, err := filepath.Rel(snapRoot, ready.Handle); err != nil || strings.HasPrefix(rel, "..") {
+		t.Fatalf("snapshot handle %q not under root %q (rel=%q err=%v)", ready.Handle, snapRoot, rel, err)
 	}
 
 	// Flip to Deleting; controller must call DeleteSnapshot and remove the row.

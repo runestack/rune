@@ -92,11 +92,3 @@ func Registered() []string {
 	sort.Strings(names)
 	return names
 }
-
-// resetForTest clears the registry. Test-only — never call from production
-// code. Exported via registry_testing.go for use by test packages.
-func resetForTest() {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registry = make(map[string]Factory)
-}

@@ -37,12 +37,12 @@ type APIServer struct {
 	logger  log.Logger
 
 	// Core services
-	namespaceService *service.NamespaceService
-	serviceService   *service.ServiceService
-	instanceService  *service.InstanceService
-	logService       *service.LogService
-	execService      *service.ExecService
-	healthService    *service.HealthService
+	namespaceService    *service.NamespaceService
+	serviceService      *service.ServiceService
+	instanceService     *service.InstanceService
+	logService          *service.LogService
+	execService         *service.ExecService
+	healthService       *service.HealthService
 	secretService       *service.SecretService
 	configService       *service.ConfigmapService
 	authService         *service.AuthService
