@@ -1,0 +1,161 @@
+syntax = "proto3";
+
+package rune.api;
+
+import "pkg/api/proto/common.proto";
+
+option go_package = "github.com/runestack/rune/pkg/api/generated";
+
+// =============================================================================
+// StorageClass
+// =============================================================================
+
+// TopologyMatchExpression mirrors pkg/types.TopologyMatchExpression.
+message TopologyMatchExpression {
+  string key = 1;
+  // Operator is one of: In, NotIn, Exists, DoesNotExist.
+  string operator = 2;
+  repeated string values = 3;
+}
+
+// TopologySelector mirrors pkg/types.TopologySelector.
+message TopologySelector {
+  map<string, string> match_labels = 1;
+  repeated TopologyMatchExpression match_expressions = 2;
+}
+
+// StorageClass mirrors pkg/types.StorageClass. Cluster-scoped (no namespace).
+message StorageClass {
+  string id = 1;
+  string name = 2;
+  string driver = 3;
+  map<string, string> parameters = 4;
+  // ReclaimPolicy is one of: "retain", "delete".
+  string reclaim_policy = 5;
+  repeated TopologySelector allowed_topologies = 6;
+  bool default = 7;
+  map<string, string> labels = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+
+message CreateStorageClassRequest {
+  StorageClass storage_class = 1;
+}
+
+message GetStorageClassRequest {
+  string name = 1;
+}
+
+message UpdateStorageClassRequest {
+  StorageClass storage_class = 1;
+}
+
+message DeleteStorageClassRequest {
+  string name = 1;
+}
+
+message ListStorageClassesRequest {
+  map<string, string> label_selector = 1;
+  PagingParams paging = 2;
+}
+
+message StorageClassResponse {
+  StorageClass storage_class = 1;
+  Status status = 2;
+}
+
+message ListStorageClassesResponse {
+  repeated StorageClass storage_classes = 1;
+  Status status = 2;
+}
+
+service StorageClassService {
+  rpc CreateStorageClass(CreateStorageClassRequest) returns (StorageClassResponse);
+  rpc GetStorageClass(GetStorageClassRequest) returns (StorageClassResponse);
+  rpc UpdateStorageClass(UpdateStorageClassRequest) returns (StorageClassResponse);
+  rpc DeleteStorageClass(DeleteStorageClassRequest) returns (Status);
+  rpc ListStorageClasses(ListStorageClassesRequest) returns (ListStorageClassesResponse);
+}
+
+// =============================================================================
+// Volume
+// =============================================================================
+
+// SnapshotSchedule mirrors pkg/types.SnapshotSchedule.
+message SnapshotSchedule {
+  string cron = 1;
+  int32 retention = 2;
+}
+
+// Volume mirrors pkg/types.Volume. Namespace-scoped.
+message Volume {
+  string id = 1;
+  string name = 2;
+  string namespace = 3;
+  map<string, string> labels = 4;
+  string storage_class_name = 5;
+  string size = 6;
+  // AccessMode is one of: "ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany".
+  string access_mode = 7;
+  // ReclaimPolicy override; one of: "retain", "delete". Empty defers to the
+  // owning StorageClass.
+  string reclaim_policy = 8;
+  map<string, string> parameters = 9;
+  SnapshotSchedule snapshot_schedule = 10;
+  string handle = 11;
+  string owner_service = 12;
+  string bound_node = 13;
+  string bound_claim = 14;
+  // Status is one of: Pending, Provisioning, Available, Bound, Released,
+  // Stalled, Failed.
+  string status = 15;
+  string reason = 16;
+  string message = 17;
+  string created_at = 18;
+  string updated_at = 19;
+}
+
+message CreateVolumeRequest {
+  Volume volume = 1;
+  bool ensure_namespace = 2;
+}
+
+message GetVolumeRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message UpdateVolumeRequest {
+  Volume volume = 1;
+}
+
+message DeleteVolumeRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message ListVolumesRequest {
+  string namespace = 1;
+  map<string, string> label_selector = 2;
+  map<string, string> field_selector = 3;
+  PagingParams paging = 4;
+}
+
+message VolumeResponse {
+  Volume volume = 1;
+  Status status = 2;
+}
+
+message ListVolumesResponse {
+  repeated Volume volumes = 1;
+  Status status = 2;
+}
+
+service VolumeService {
+  rpc CreateVolume(CreateVolumeRequest) returns (VolumeResponse);
+  rpc GetVolume(GetVolumeRequest) returns (VolumeResponse);
+  rpc UpdateVolume(UpdateVolumeRequest) returns (VolumeResponse);
+  rpc DeleteVolume(DeleteVolumeRequest) returns (Status);
+  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
+}
