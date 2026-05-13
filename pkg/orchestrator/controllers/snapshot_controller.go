@@ -242,7 +242,17 @@ func (c *snapshotController) snapshotOpContext(ctx context.Context, snap *types.
 			if err := c.store.Get(ctx, types.ResourceTypeStorageClass, "", src.StorageClassName, &class); err == nil {
 				opctx.StorageClass = &class
 				opctx.Parameters = mergeParameters(class.Parameters, src.Parameters)
+				return opctx
 			}
+		}
+		// StorageClass gone (or never named). Fall back to the
+		// DriverParameters snapshot the controller stamped on the
+		// source volume at Provision time, mirroring the reclaim
+		// fall-back. See RUNE-200 PR 2.
+		if len(src.DriverParameters) > 0 {
+			opctx.Parameters = mergeParameters(src.DriverParameters, src.Parameters)
+		} else {
+			opctx.Parameters = mergeParameters(nil, src.Parameters)
 		}
 	}
 	return opctx

@@ -89,6 +89,20 @@ type Volume struct {
 	// StorageClass.Parameters. Example: hostPath for the local-host driver.
 	Parameters map[string]string `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 
+	// DriverParameters is a controller-owned snapshot of
+	// `mergeParameters(StorageClass.Parameters, Volume.Parameters)`
+	// captured at successful Provision time. The reclaim path
+	// (Delete) and the node agent (Detach, Unmount) consult it when
+	// the live StorageClass has been deleted before its volumes —
+	// drivers like do-volume need region / auth references for those
+	// calls and would otherwise have nothing to work from.
+	//
+	// Always controller-managed; users SHOULD NOT set this in cast
+	// files. Excluded from secret-bearing fields per design — secret
+	// references survive here but their resolved values do not. See
+	// RUNE-200 PR 2.
+	DriverParameters map[string]string `json:"driverParameters,omitempty" yaml:"driverParameters,omitempty"`
+
 	// SnapshotSchedule, when set, instructs the controller to create
 	// scheduled snapshots via the worker pool.
 	SnapshotSchedule *SnapshotSchedule `json:"snapshotSchedule,omitempty" yaml:"snapshotSchedule,omitempty"`

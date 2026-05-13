@@ -503,12 +503,19 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) err
 }
 
 // buildOpContext resolves the Volume's StorageClass + merged
-// Parameters into an OpContext ready for a driver call. Missing class
-// is not fatal — the controller has already provisioned the volume by
-// the time bringUp runs, so a class deleted in the meantime should
-// not block teardown of an in-flight mount. In that orphan-class case
-// Parameters falls back to the volume-local map only; PR 2 of
-// RUNE-200 will fold in a snapshot stored on the volume itself.
+// Parameters into an OpContext ready for a driver call.
+//
+// Resolution order matches the controller's reclaimParameters helper:
+//
+//  1. Live class still around → merge(class.Parameters, vol.Parameters).
+//  2. Class gone but vol.DriverParameters carries a snapshot taken at
+//     Provision time → use that, merged with vol.Parameters. Drivers
+//     like do-volume need region / auth refs for Detach / Unmount and
+//     would otherwise have nothing to work from.
+//  3. Neither → volume-local Parameters only; drivers that strictly
+//     require class context fail with their own error.
+//
+// See RUNE-200 PR 2.
 func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driver.OpContext, error) {
 	opctx := driver.OpContext{
 		Volume:     vol,
@@ -520,15 +527,22 @@ func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driv
 	}
 	var class types.StorageClass
 	if err := s.cfg.Store.Get(ctx, types.ResourceTypeStorageClass, "", vol.StorageClassName, &class); err != nil {
-		// Treat a missing class as an orphan — log and fall through with
-		// volume-only parameters. Drivers that strictly require class
-		// context for the upcoming call will fail with their own error.
-		s.log.Warn("StorageClass missing during OpContext build; using volume-only parameters",
+		// Treat a missing class as an orphan. Prefer the snapshot when
+		// the controller stamped one at Provision time; otherwise fall
+		// through to volume-only parameters.
+		source := "volume-only"
+		if len(vol.DriverParameters) > 0 {
+			source = "DriverParameters snapshot"
+			opctx.Parameters = mergeParameters(vol.DriverParameters, vol.Parameters)
+		} else {
+			opctx.Parameters = mergeParameters(nil, vol.Parameters)
+		}
+		s.log.Warn("StorageClass missing during OpContext build; falling back",
 			log.Str("namespace", vol.Namespace),
 			log.Str("name", vol.Name),
 			log.Str("storageClass", vol.StorageClassName),
+			log.Str("source", source),
 			log.Err(err))
-		opctx.Parameters = mergeParameters(nil, vol.Parameters)
 		return opctx, nil
 	}
 	opctx.StorageClass = &class

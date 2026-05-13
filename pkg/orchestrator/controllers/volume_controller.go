@@ -344,6 +344,11 @@ func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) err
 	}
 
 	vol.Handle = string(handle)
+	// Snapshot the merged driver parameters onto the Volume so that
+	// reclaim Delete / agent Detach / agent Unmount have something to
+	// consult even if the StorageClass is deleted before its volumes.
+	// Stores a copy so subsequent mutations to `merged` don't leak.
+	vol.DriverParameters = copyStringMap(merged)
 	c.clearRetry(volumeKey(vol.Namespace, vol.Name))
 	return c.updateStatus(ctx, vol, types.VolumeStatusAvailable, "", "")
 }
@@ -960,18 +965,42 @@ func mergeParameters(class, vol map[string]string) map[string]string {
 }
 
 // reclaimParameters builds the Parameters map for OpContext during a
-// reclaim Delete. When the StorageClass is still around we get the
-// usual class+volume merge; when it's been deleted before its volumes
-// (orphan reclaim) we fall back to just the volume-local parameters.
-// PR 2 (RUNE-200) will fold in Volume.Metadata.DriverParameters as a
-// third source of truth so drivers that need class config — region,
-// auth refs — can still reclaim orphans cleanly.
+// reclaim Delete. Resolution order:
+//
+//  1. Live class still around → merge(class.Parameters, vol.Parameters).
+//     User-driven overrides on the volume win over class defaults, same
+//     as the Provision path.
+//  2. Class gone (orphan reclaim) but the volume carries a
+//     DriverParameters snapshot taken at Provision time → use that
+//     merged with the volume's live Parameters so post-provision overrides
+//     still apply. Drivers like do-volume need region / auth refs here.
+//  3. Neither → volume-local Parameters only. Best-effort; drivers
+//     that strictly require class config fail with their own error,
+//     and the operator can break the bind by hand.
+//
+// See RUNE-200 PR 2.
 func reclaimParameters(class *types.StorageClass, vol *types.Volume) map[string]string {
 	if vol == nil {
 		return map[string]string{}
 	}
-	if class == nil {
-		return mergeParameters(nil, vol.Parameters)
+	if class != nil {
+		return mergeParameters(class.Parameters, vol.Parameters)
 	}
-	return mergeParameters(class.Parameters, vol.Parameters)
+	if len(vol.DriverParameters) > 0 {
+		return mergeParameters(vol.DriverParameters, vol.Parameters)
+	}
+	return mergeParameters(nil, vol.Parameters)
+}
+
+// copyStringMap returns an independent copy of m so the caller can stash
+// it without worrying about subsequent mutations to the source.
+func copyStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
