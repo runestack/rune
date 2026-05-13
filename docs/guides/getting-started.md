@@ -25,9 +25,14 @@ sudo mv rune /usr/local/bin/
 # Install from source
 go install github.com/runestack/rune/cmd/rune@latest
 
-# Verify installation
+# Verify installation. After `rune login`, this also reports the
+# connected server's version so you can spot client/server skew.
 rune version
 ```
+
+`rune version` prints both a `Client:` and `Server:` block by
+default. Pass `--client` to skip the server probe, or `-o json|yaml`
+for structured output.
 
 ## Your First Service
 

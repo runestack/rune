@@ -199,7 +199,8 @@ Error: failed to write config file
 
 ## Related Commands
 
-- `rune whoami` - Shows current context information
+- `rune whoami` - Shows current context information, authenticated subject, and the connected server's version (when reachable)
+- `rune version` - Shows client and server build/version info (`--client` to skip the server probe)
 - `rune config view` - Detailed context information
 - `rune config list-contexts` - List all available contexts
 

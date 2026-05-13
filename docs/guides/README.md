@@ -6,11 +6,12 @@ Welcome to the Rune User Guides. These guides will help you get started with Run
 
 1. [Getting Started](getting-started.md)
 2. [Service Definitions](service-definitions.md)
-3. [Deployment](deployment.md)
-4. [Scaling](scaling.md)
-5. [Managing Services](managing-services.md)
-6. [Configuration](configuration.md)
-7. [Advanced Topics](advanced-topics.md)
+3. [Init Steps](init-steps.md)
+4. [Deployment](deployment.md)
+5. [Scaling](scaling.md)
+6. [Managing Services](managing-services.md)
+7. [Configuration](configuration.md)
+8. [Advanced Topics](advanced-topics.md)
 
 ## Getting Started
 
