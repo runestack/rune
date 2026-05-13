@@ -18,28 +18,34 @@ func (s *stubDriver) Name() string { return s.name }
 func (s *stubDriver) Capabilities() driver.Capabilities {
 	return driver.Capabilities{AccessModes: []types.AccessMode{types.AccessModeRWO}}
 }
-func (s *stubDriver) Provision(context.Context, driver.ProvisionRequest) (driver.VolumeHandle, error) {
+func (s *stubDriver) Provision(context.Context, driver.OpContext, driver.ProvisionRequest) (driver.VolumeHandle, error) {
 	return "", nil
 }
-func (s *stubDriver) Delete(context.Context, driver.VolumeHandle) error { return nil }
-func (s *stubDriver) Attach(context.Context, driver.VolumeHandle, driver.NodeID) (driver.DevicePath, error) {
+func (s *stubDriver) Delete(context.Context, driver.OpContext, driver.VolumeHandle) error {
+	return nil
+}
+func (s *stubDriver) Attach(context.Context, driver.OpContext, driver.VolumeHandle, driver.NodeID) (driver.DevicePath, error) {
 	return "", nil
 }
-func (s *stubDriver) Detach(context.Context, driver.VolumeHandle, driver.NodeID) error { return nil }
-func (s *stubDriver) Mount(context.Context, driver.MountOpts) (driver.MountTarget, error) {
+func (s *stubDriver) Detach(context.Context, driver.OpContext, driver.VolumeHandle, driver.NodeID) error {
+	return nil
+}
+func (s *stubDriver) Mount(context.Context, driver.OpContext, driver.MountOpts) (driver.MountTarget, error) {
 	return "", nil
 }
-func (s *stubDriver) Unmount(context.Context, driver.MountTarget) error { return nil }
-func (s *stubDriver) Snapshot(context.Context, driver.SnapshotRequest) (driver.SnapshotHandle, error) {
+func (s *stubDriver) Unmount(context.Context, driver.OpContext, driver.MountTarget) error {
+	return nil
+}
+func (s *stubDriver) Snapshot(context.Context, driver.OpContext, driver.SnapshotRequest) (driver.SnapshotHandle, error) {
 	return "", driver.ErrUnsupported
 }
-func (s *stubDriver) RestoreFromSnapshot(context.Context, driver.RestoreRequest) (driver.VolumeHandle, error) {
+func (s *stubDriver) RestoreFromSnapshot(context.Context, driver.OpContext, driver.RestoreRequest) (driver.VolumeHandle, error) {
 	return "", driver.ErrUnsupported
 }
-func (s *stubDriver) DeleteSnapshot(context.Context, driver.SnapshotHandle) error {
+func (s *stubDriver) DeleteSnapshot(context.Context, driver.OpContext, driver.SnapshotHandle) error {
 	return driver.ErrUnsupported
 }
-func (s *stubDriver) Expand(context.Context, driver.VolumeHandle, string) error {
+func (s *stubDriver) Expand(context.Context, driver.OpContext, driver.VolumeHandle, string) error {
 	return driver.ErrUnsupported
 }
 

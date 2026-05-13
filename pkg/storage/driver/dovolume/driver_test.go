@@ -459,10 +459,9 @@ func TestProvision_HappyPath(t *testing.T) {
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
 	vol := mkVolume("data")
-	handle, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        5 * 1_000_000_000,
+	opctx := nyc3OpCtx(vol)
+	handle, err := d.Provision(context.Background(), opctx, driver.ProvisionRequest{
+		SizeBytes: 5 * 1_000_000_000,
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -490,10 +489,11 @@ func TestProvision_RegionRequired(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:    mkVolume("data"),
-		SizeBytes: 1 << 30,
-	})
+	// Empty Parameters map — region is missing.
+	_, err := d.Provision(context.Background(), driver.OpContext{
+		Volume:     mkVolume("data"),
+		Parameters: map[string]string{},
+	}, driver.ProvisionRequest{SizeBytes: 1 << 30})
 	if err == nil || !strings.Contains(err.Error(), "region") {
 		t.Fatalf("expected region-required error, got %v", err)
 	}
@@ -506,11 +506,7 @@ func TestProvision_AccessModeUnsupported(t *testing.T) {
 	d, _ := newTestDriver(t, fake, ts)
 	vol := mkVolume("data")
 	vol.AccessMode = types.AccessModeRWX
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
+	_, err := d.Provision(context.Background(), nyc3OpCtx(vol), driver.ProvisionRequest{SizeBytes: 1 << 30})
 	if !errors.Is(err, driver.ErrAccessModeUnsupported) {
 		t.Fatalf("expected ErrAccessModeUnsupported, got %v", err)
 	}
@@ -522,10 +518,10 @@ func TestDelete_Idempotent(t *testing.T) {
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
 	// missing handle -> no error
-	if err := d.Delete(context.Background(), "vol-does-not-exist"); err != nil {
+	if err := d.Delete(context.Background(), driver.OpContext{}, "vol-does-not-exist"); err != nil {
 		t.Fatalf("expected idempotent Delete, got %v", err)
 	}
-	if err := d.Delete(context.Background(), ""); err != nil {
+	if err := d.Delete(context.Background(), driver.OpContext{}, ""); err != nil {
 		t.Fatalf("empty handle Delete: %v", err)
 	}
 }
@@ -536,15 +532,13 @@ func TestAttachDetach(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	handle, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("data"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        2 * 1_000_000_000,
-	})
+	vol := mkVolume("data")
+	opctx := nyc3OpCtx(vol)
+	handle, err := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 2 * 1_000_000_000})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	dev, err := d.Attach(context.Background(), handle, "node-a")
+	dev, err := d.Attach(context.Background(), opctx, handle, "node-a")
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -552,20 +546,20 @@ func TestAttachDetach(t *testing.T) {
 		t.Fatalf("unexpected device path %q", dev)
 	}
 	// Idempotent re-attach: same droplet -> no error, no new attach action.
-	if _, err := d.Attach(context.Background(), handle, "node-a"); err != nil {
+	if _, err := d.Attach(context.Background(), opctx, handle, "node-a"); err != nil {
 		t.Fatalf("re-Attach: %v", err)
 	}
 	// Attach to a different droplet -> error
 	fake.addDroplet("node-b", 9002)
-	if _, err := d.Attach(context.Background(), handle, "node-b"); err == nil {
+	if _, err := d.Attach(context.Background(), opctx, handle, "node-b"); err == nil {
 		t.Fatalf("expected attach-to-different-droplet error")
 	}
 	// Detach
-	if err := d.Detach(context.Background(), handle, "node-a"); err != nil {
+	if err := d.Detach(context.Background(), opctx, handle, "node-a"); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
 	// Detach idempotent
-	if err := d.Detach(context.Background(), handle, "node-a"); err != nil {
+	if err := d.Detach(context.Background(), opctx, handle, "node-a"); err != nil {
 		t.Fatalf("re-Detach: %v", err)
 	}
 }
@@ -575,12 +569,10 @@ func TestAttach_UnknownNode(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
-	_, err := d.Attach(context.Background(), handle, "ghost")
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	_, err := d.Attach(context.Background(), opctx, handle, "ghost")
 	if err == nil || !strings.Contains(err.Error(), "no DO droplet") {
 		t.Fatalf("expected no-droplet error, got %v", err)
 	}
@@ -592,14 +584,12 @@ func TestMountUnmount(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, mounter := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
-	dev, _ := d.Attach(context.Background(), handle, "node-a")
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	dev, _ := d.Attach(context.Background(), opctx, handle, "node-a")
 	target := "/var/lib/rune/mounts/" + string(handle)
-	got, err := d.Mount(context.Background(), driver.MountOpts{
+	got, err := d.Mount(context.Background(), opctx, driver.MountOpts{
 		Handle: handle,
 		Device: dev,
 		Target: driver.MountTarget(target),
@@ -617,7 +607,7 @@ func TestMountUnmount(t *testing.T) {
 	if mounter.mounts[target] != string(dev) {
 		t.Fatalf("not mounted: %+v", mounter.mounts)
 	}
-	if err := d.Unmount(context.Background(), got); err != nil {
+	if err := d.Unmount(context.Background(), opctx, got); err != nil {
 		t.Fatalf("Unmount: %v", err)
 	}
 	if _, ok := mounter.mounts[target]; ok {
@@ -630,12 +620,10 @@ func TestMount_ReadOnlySkipsFormat(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, mounter := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
-	_, err := d.Mount(context.Background(), driver.MountOpts{
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	_, err := d.Mount(context.Background(), opctx, driver.MountOpts{
 		Handle:   handle,
 		Device:   "/dev/sda",
 		Target:   "/mnt/x",
@@ -655,14 +643,11 @@ func TestSnapshotAndRestore(t *testing.T) {
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
 	vol := mkVolume("d")
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        2 * 1_000_000_000,
-	})
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 2 * 1_000_000_000})
 	snap := &types.Snapshot{Name: "s1", Namespace: "default"}
-	snapHandle, err := d.Snapshot(context.Background(), driver.SnapshotRequest{
-		Volume: vol, Handle: handle, Snapshot: snap,
+	snapHandle, err := d.Snapshot(context.Background(), opctx, driver.SnapshotRequest{
+		Handle: handle, Snapshot: snap,
 	})
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
@@ -671,12 +656,11 @@ func TestSnapshotAndRestore(t *testing.T) {
 		t.Fatalf("empty snapshot handle")
 	}
 	target := mkVolume("restored")
-	restoredHandle, err := d.RestoreFromSnapshot(context.Background(), driver.RestoreRequest{
-		Source:           snap,
-		SourceHandle:     snapHandle,
-		Target:           target,
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        2 * 1_000_000_000,
+	restoreOpCtx := nyc3OpCtx(target)
+	restoredHandle, err := d.RestoreFromSnapshot(context.Background(), restoreOpCtx, driver.RestoreRequest{
+		Source:       snap,
+		SourceHandle: snapHandle,
+		SizeBytes:    2 * 1_000_000_000,
 	})
 	if err != nil {
 		t.Fatalf("RestoreFromSnapshot: %v", err)
@@ -692,21 +676,31 @@ func TestExpand(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        2 * 1_000_000_000,
-	})
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 2 * 1_000_000_000})
 	// Detached -> expand succeeds.
-	if err := d.Expand(context.Background(), handle, "10G"); err != nil {
+	if err := d.Expand(context.Background(), opctx, handle, "10G"); err != nil {
 		t.Fatalf("Expand detached: %v", err)
 	}
 	// Attached -> ErrOnlineExpandUnsupported.
-	if _, err := d.Attach(context.Background(), handle, "node-a"); err != nil {
+	if _, err := d.Attach(context.Background(), opctx, handle, "node-a"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
-	if err := d.Expand(context.Background(), handle, "20G"); !errors.Is(err, driver.ErrOnlineExpandUnsupported) {
+	if err := d.Expand(context.Background(), opctx, handle, "20G"); !errors.Is(err, driver.ErrOnlineExpandUnsupported) {
 		t.Fatalf("expected ErrOnlineExpandUnsupported when attached, got %v", err)
+	}
+}
+
+// nyc3OpCtx builds an OpContext with the volume + a region=nyc3
+// parameter map that every Provision-shaped test in this file needs.
+// Keeping the construction in a helper means the bulk of each test
+// body stays focused on the behaviour being asserted rather than on
+// the boilerplate of building the request.
+func nyc3OpCtx(vol *types.Volume) driver.OpContext {
+	return driver.OpContext{
+		Volume:     vol,
+		Parameters: map[string]string{"region": "nyc3"},
 	}
 }
 
@@ -780,12 +774,10 @@ func TestActionPolling_Errored(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
-	_, err := d.Attach(context.Background(), handle, "n")
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	_, err := d.Attach(context.Background(), opctx, handle, "n")
 	if err == nil || !strings.Contains(err.Error(), "errored") {
 		t.Fatalf("expected errored action failure, got %v", err)
 	}
@@ -796,11 +788,7 @@ func TestBearerTokenSent(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	if _, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	}); err != nil {
+	if _, err := d.Provision(context.Background(), nyc3OpCtx(mkVolume("d")), driver.ProvisionRequest{SizeBytes: 1 << 30}); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
 	fake.mu.Lock()
@@ -824,11 +812,7 @@ func TestProvision_ServerError(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
+	_, err := d.Provision(context.Background(), nyc3OpCtx(mkVolume("d")), driver.ProvisionRequest{SizeBytes: 1 << 30})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("expected HTTP 500 error, got %v", err)
 	}

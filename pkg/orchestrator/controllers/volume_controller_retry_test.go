@@ -48,7 +48,7 @@ func (d *retryTestDriver) Name() string { return d.name }
 func (d *retryTestDriver) Capabilities() driver.Capabilities {
 	return driver.Capabilities{AccessModes: []types.AccessMode{types.AccessModeRWO}}
 }
-func (d *retryTestDriver) Provision(_ context.Context, _ driver.ProvisionRequest) (driver.VolumeHandle, error) {
+func (d *retryTestDriver) Provision(_ context.Context, _ driver.OpContext, _ driver.ProvisionRequest) (driver.VolumeHandle, error) {
 	d.mu.Lock()
 	d.calls++
 	n := d.calls
@@ -58,27 +58,31 @@ func (d *retryTestDriver) Provision(_ context.Context, _ driver.ProvisionRequest
 	}
 	return driver.VolumeHandle(d.successHandle), nil
 }
-func (d *retryTestDriver) Delete(context.Context, driver.VolumeHandle) error { return nil }
-func (d *retryTestDriver) Attach(context.Context, driver.VolumeHandle, driver.NodeID) (driver.DevicePath, error) {
-	return "", nil
-}
-func (d *retryTestDriver) Detach(context.Context, driver.VolumeHandle, driver.NodeID) error {
+func (d *retryTestDriver) Delete(context.Context, driver.OpContext, driver.VolumeHandle) error {
 	return nil
 }
-func (d *retryTestDriver) Mount(context.Context, driver.MountOpts) (driver.MountTarget, error) {
+func (d *retryTestDriver) Attach(context.Context, driver.OpContext, driver.VolumeHandle, driver.NodeID) (driver.DevicePath, error) {
 	return "", nil
 }
-func (d *retryTestDriver) Unmount(context.Context, driver.MountTarget) error { return nil }
-func (d *retryTestDriver) Snapshot(context.Context, driver.SnapshotRequest) (driver.SnapshotHandle, error) {
+func (d *retryTestDriver) Detach(context.Context, driver.OpContext, driver.VolumeHandle, driver.NodeID) error {
+	return nil
+}
+func (d *retryTestDriver) Mount(context.Context, driver.OpContext, driver.MountOpts) (driver.MountTarget, error) {
+	return "", nil
+}
+func (d *retryTestDriver) Unmount(context.Context, driver.OpContext, driver.MountTarget) error {
+	return nil
+}
+func (d *retryTestDriver) Snapshot(context.Context, driver.OpContext, driver.SnapshotRequest) (driver.SnapshotHandle, error) {
 	return "", driver.ErrUnsupported
 }
-func (d *retryTestDriver) RestoreFromSnapshot(context.Context, driver.RestoreRequest) (driver.VolumeHandle, error) {
+func (d *retryTestDriver) RestoreFromSnapshot(context.Context, driver.OpContext, driver.RestoreRequest) (driver.VolumeHandle, error) {
 	return "", driver.ErrUnsupported
 }
-func (d *retryTestDriver) DeleteSnapshot(context.Context, driver.SnapshotHandle) error {
+func (d *retryTestDriver) DeleteSnapshot(context.Context, driver.OpContext, driver.SnapshotHandle) error {
 	return driver.ErrUnsupported
 }
-func (d *retryTestDriver) Expand(context.Context, driver.VolumeHandle, string) error {
+func (d *retryTestDriver) Expand(context.Context, driver.OpContext, driver.VolumeHandle, string) error {
 	return driver.ErrUnsupported
 }
 

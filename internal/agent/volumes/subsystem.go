@@ -118,6 +118,12 @@ type trackedMount struct {
 	// Target is the mount target the driver returned (drivers may
 	// rewrite the proposed target).
 	Target driver.MountTarget
+	// OpCtx is the OpContext used to bring this mount up, retained so
+	// the symmetric Unmount/Detach calls during tearDown see the same
+	// per-class parameters (region, auth refs, …) the driver was given
+	// at Attach/Mount time. Snapshotting here is also defence against
+	// the StorageClass being deleted between bringUp and tearDown.
+	OpCtx driver.OpContext
 	// VolumeNS / VolumeName are kept so logs read sensibly.
 	VolumeNS   string
 	VolumeName string
@@ -419,14 +425,17 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	if err != nil {
 		return fmt.Errorf("agent.volumes: lookup driver for %s: %w", vol.String(), err)
 	}
+	opctx, err := s.buildOpContext(ctx, vol)
+	if err != nil {
+		return fmt.Errorf("agent.volumes: build OpContext for %s: %w", vol.String(), err)
+	}
 	handle := driver.VolumeHandle(vol.Handle)
-	dev, err := drv.Attach(ctx, handle, driver.NodeID(s.cfg.NodeID))
+	dev, err := drv.Attach(ctx, opctx, handle, driver.NodeID(s.cfg.NodeID))
 	if err != nil {
 		return fmt.Errorf("agent.volumes: attach %s: %w", vol.String(), err)
 	}
 	target := driver.MountTarget(filepath.Join(s.cfg.MountRoot, id))
-	got, err := drv.Mount(ctx, driver.MountOpts{
-		Volume:   vol,
+	got, err := drv.Mount(ctx, opctx, driver.MountOpts{
 		Handle:   handle,
 		Node:     driver.NodeID(s.cfg.NodeID),
 		Device:   dev,
@@ -436,7 +445,7 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	if err != nil {
 		// Best-effort detach so we don't leave a half-attached
 		// device behind for the next reconcile.
-		if derr := drv.Detach(ctx, handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
+		if derr := drv.Detach(ctx, opctx, handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
 			s.log.Warn("Detach after failed Mount also failed",
 				log.Str("volume_id", id),
 				log.Err(derr))
@@ -448,6 +457,7 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 		Driver:     drv,
 		Handle:     handle,
 		Target:     got,
+		OpCtx:      opctx,
 		VolumeNS:   vol.Namespace,
 		VolumeName: vol.Name,
 	}
@@ -464,15 +474,20 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 // tearDown is the inverse: Unmount then Detach. Both are required to
 // be idempotent by the Driver contract so partial failures on one side
 // still let the other side clean up.
+//
+// The OpContext stashed on trackedMount at bringUp time is reused here:
+// drivers like do-volume need their per-class config (auth refs, region)
+// for Detach as much as for Attach, and the StorageClass may have been
+// deleted between mount and teardown.
 func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) error {
 	var firstErr error
-	if err := m.Driver.Unmount(ctx, m.Target); err != nil {
+	if err := m.Driver.Unmount(ctx, m.OpCtx, m.Target); err != nil {
 		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, err)
 		s.log.Warn("Unmount failed; will still attempt Detach",
 			log.Str("volume_id", id),
 			log.Err(err))
 	}
-	if err := m.Driver.Detach(ctx, m.Handle, driver.NodeID(s.cfg.NodeID)); err != nil {
+	if err := m.Driver.Detach(ctx, m.OpCtx, m.Handle, driver.NodeID(s.cfg.NodeID)); err != nil {
 		if firstErr == nil {
 			firstErr = fmt.Errorf("agent.volumes: detach %s: %w", id, err)
 		}
@@ -485,6 +500,55 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) err
 			log.Str("name", m.VolumeName))
 	}
 	return firstErr
+}
+
+// buildOpContext resolves the Volume's StorageClass + merged
+// Parameters into an OpContext ready for a driver call. Missing class
+// is not fatal — the controller has already provisioned the volume by
+// the time bringUp runs, so a class deleted in the meantime should
+// not block teardown of an in-flight mount. In that orphan-class case
+// Parameters falls back to the volume-local map only; PR 2 of
+// RUNE-200 will fold in a snapshot stored on the volume itself.
+func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driver.OpContext, error) {
+	opctx := driver.OpContext{
+		Volume:     vol,
+		Parameters: map[string]string{},
+	}
+	if vol.StorageClassName == "" {
+		opctx.Parameters = mergeParameters(nil, vol.Parameters)
+		return opctx, nil
+	}
+	var class types.StorageClass
+	if err := s.cfg.Store.Get(ctx, types.ResourceTypeStorageClass, "", vol.StorageClassName, &class); err != nil {
+		// Treat a missing class as an orphan — log and fall through with
+		// volume-only parameters. Drivers that strictly require class
+		// context for the upcoming call will fail with their own error.
+		s.log.Warn("StorageClass missing during OpContext build; using volume-only parameters",
+			log.Str("namespace", vol.Namespace),
+			log.Str("name", vol.Name),
+			log.Str("storageClass", vol.StorageClassName),
+			log.Err(err))
+		opctx.Parameters = mergeParameters(nil, vol.Parameters)
+		return opctx, nil
+	}
+	opctx.StorageClass = &class
+	opctx.Parameters = mergeParameters(class.Parameters, vol.Parameters)
+	return opctx, nil
+}
+
+// mergeParameters layers Volume.Parameters on top of StorageClass.Parameters.
+// Mirrors the helper in the volume controller — kept package-local here
+// so the agent doesn't have to import the orchestrator just for one
+// map-overlay function.
+func mergeParameters(class, vol map[string]string) map[string]string {
+	out := make(map[string]string, len(class)+len(vol))
+	for k, v := range class {
+		out[k] = v
+	}
+	for k, v := range vol {
+		out[k] = v
+	}
+	return out
 }
 
 // lookupTrackedID finds the in-memory tracking key for a (namespace,

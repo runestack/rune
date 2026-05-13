@@ -187,8 +187,12 @@ func (c *snapshotController) create(ctx context.Context, snap *types.Snapshot) e
 	if err := c.updateStatus(ctx, snap, types.SnapshotPhaseCreating, "", ""); err != nil {
 		return err
 	}
-	handle, err := d.Snapshot(ctx, driver.SnapshotRequest{
-		Volume:   &src,
+	opctx := driver.OpContext{
+		StorageClass: &class,
+		Volume:       &src,
+		Parameters:   mergeParameters(class.Parameters, src.Parameters),
+	}
+	handle, err := d.Snapshot(ctx, opctx, driver.SnapshotRequest{
 		Handle:   driver.VolumeHandle(src.Handle),
 		Snapshot: snap,
 	})
@@ -208,10 +212,40 @@ func (c *snapshotController) delete(ctx context.Context, snap *types.Snapshot) e
 	if err != nil {
 		return c.markFailed(ctx, snap, "DriverUnavailable", err.Error())
 	}
-	if err := d.DeleteSnapshot(ctx, driver.SnapshotHandle(snap.Handle)); err != nil {
+	// Best-effort context build: drivers that don't need class config
+	// (local) tolerate the empty Parameters map; cloud drivers may
+	// already have their auth in runefile-level config and don't fail
+	// here even if the source volume/class are gone. PR 2 will snapshot
+	// the driver-relevant params onto the Snapshot row itself so this
+	// remains correct after orphaning.
+	opctx := c.snapshotOpContext(ctx, snap)
+	if err := d.DeleteSnapshot(ctx, opctx, driver.SnapshotHandle(snap.Handle)); err != nil {
 		return c.markFailed(ctx, snap, "DeleteSnapshotFailed", err.Error())
 	}
 	return c.removeRow(ctx, snap)
+}
+
+// snapshotOpContext builds an OpContext for snapshot-scoped operations
+// (today: DeleteSnapshot). It attempts to resolve the source Volume +
+// StorageClass for the best-possible Parameters map; on either lookup
+// failure it returns an OpContext with the nil class / volume so the
+// driver still has a well-formed value to read from. Drivers that
+// require class context for snapshot ops are responsible for failing
+// with a clear error.
+func (c *snapshotController) snapshotOpContext(ctx context.Context, snap *types.Snapshot) driver.OpContext {
+	opctx := driver.OpContext{Parameters: map[string]string{}}
+	var src types.Volume
+	if err := c.store.Get(ctx, types.ResourceTypeVolume, snap.Namespace, snap.SourceVolume, &src); err == nil {
+		opctx.Volume = &src
+		if src.StorageClassName != "" {
+			var class types.StorageClass
+			if err := c.store.Get(ctx, types.ResourceTypeStorageClass, "", src.StorageClassName, &class); err == nil {
+				opctx.StorageClass = &class
+				opctx.Parameters = mergeParameters(class.Parameters, src.Parameters)
+			}
+		}
+	}
+	return opctx
 }
 
 func (c *snapshotController) removeRow(ctx context.Context, snap *types.Snapshot) error {

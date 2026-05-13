@@ -23,8 +23,17 @@ import (
 // RestoreFromSnapshot and Expand. Node-side agents call Attach, Detach,
 // Mount and Unmount. Capabilities and Name are pure metadata.
 //
-// All methods MUST be context-aware and idempotent: the controller and agent
-// retry on transient failures.
+// Every operation method takes an OpContext as the second argument (after
+// ctx). The controller / agent populates it with the resolved StorageClass,
+// the Volume row, and the merged parameter map. Drivers consult OpContext
+// for any per-class / per-volume configuration they need (region, fsType,
+// auth references, …) — the v0.0.1-dev.46 fix routed Volume.Size into
+// the driver layer the same way; this generalises the pattern to all
+// driver methods so per-class config no longer has to live in the
+// runefile only. See RUNE-200.
+//
+// All methods MUST be context-aware and idempotent: the controller and
+// agent retry on transient failures.
 type Driver interface {
 	// Name returns the registered driver name (e.g. "local", "do-volume").
 	// Must match the registry key.
@@ -37,21 +46,21 @@ type Driver interface {
 	// Provision creates a new backing store for the volume and returns an
 	// opaque handle that subsequent calls (Attach, Snapshot, ...) re-parse.
 	// MUST be idempotent on Volume.ID — the controller retries on failure.
-	Provision(ctx context.Context, req ProvisionRequest) (VolumeHandle, error)
+	Provision(ctx context.Context, opctx OpContext, req ProvisionRequest) (VolumeHandle, error)
 
 	// Delete destroys the backing store identified by handle. Implementations
 	// MUST tolerate missing/already-deleted handles (return nil).
-	Delete(ctx context.Context, handle VolumeHandle) error
+	Delete(ctx context.Context, opctx OpContext, handle VolumeHandle) error
 
 	// Attach makes the volume available to the named node (e.g. attaches a
 	// cloud block device, opens an iSCSI session, no-ops for local
 	// directories). Returns the device path the node should Mount.
 	// For drivers that don't have a separate attach step, return an empty
 	// DevicePath and a nil error.
-	Attach(ctx context.Context, handle VolumeHandle, node NodeID) (DevicePath, error)
+	Attach(ctx context.Context, opctx OpContext, handle VolumeHandle, node NodeID) (DevicePath, error)
 
 	// Detach is the inverse of Attach. Idempotent.
-	Detach(ctx context.Context, handle VolumeHandle, node NodeID) error
+	Detach(ctx context.Context, opctx OpContext, handle VolumeHandle, node NodeID) error
 
 	// Mount makes the volume usable at MountTarget. For block-device drivers
 	// this typically formats (if needed) and mounts; for directory-style
@@ -59,26 +68,28 @@ type Driver interface {
 	// bind-mount itself. The returned MountTarget is what the runner uses —
 	// drivers may rewrite it (e.g. local-host returns the host path
 	// directly rather than the proposed Target).
-	Mount(ctx context.Context, opts MountOpts) (MountTarget, error)
+	Mount(ctx context.Context, opctx OpContext, opts MountOpts) (MountTarget, error)
 
 	// Unmount is the inverse of Mount. Idempotent.
-	Unmount(ctx context.Context, target MountTarget) error
+	Unmount(ctx context.Context, opctx OpContext, target MountTarget) error
 
 	// Snapshot creates a point-in-time snapshot of the volume. Drivers
 	// without snapshot support (Capabilities.Snapshots == false) MUST return
 	// ErrUnsupported.
-	Snapshot(ctx context.Context, req SnapshotRequest) (SnapshotHandle, error)
+	Snapshot(ctx context.Context, opctx OpContext, req SnapshotRequest) (SnapshotHandle, error)
 
 	// RestoreFromSnapshot provisions a NEW volume from a snapshot. The
-	// returned handle replaces the volume's existing handle.
+	// returned handle replaces the volume's existing handle. OpContext
+	// here describes the TARGET volume + its class — the source snapshot
+	// is carried on RestoreRequest.
 	// Drivers without snapshot support MUST return ErrUnsupported.
-	RestoreFromSnapshot(ctx context.Context, req RestoreRequest) (VolumeHandle, error)
+	RestoreFromSnapshot(ctx context.Context, opctx OpContext, req RestoreRequest) (VolumeHandle, error)
 
 	// DeleteSnapshot destroys the snapshot identified by handle. MUST be
 	// idempotent — implementations should swallow ErrNotFound and return
 	// nil so the controller can re-drive a Deleting snapshot safely.
 	// Drivers without snapshot support MUST return ErrUnsupported.
-	DeleteSnapshot(ctx context.Context, handle SnapshotHandle) error
+	DeleteSnapshot(ctx context.Context, opctx OpContext, handle SnapshotHandle) error
 
 	// Expand grows the volume to NewSize. Online expansion vs offline is
 	// driver-dependent; drivers that only support offline expand (e.g.
@@ -86,7 +97,38 @@ type Driver interface {
 	// ErrOnlineExpandUnsupported.
 	// Drivers without expand support (Capabilities.Expand == false) MUST
 	// return ErrUnsupported.
-	Expand(ctx context.Context, handle VolumeHandle, newSize string) error
+	Expand(ctx context.Context, opctx OpContext, handle VolumeHandle, newSize string) error
+}
+
+// OpContext is the per-call context every Driver method receives as the
+// second positional argument (after ctx). The controller / agent builds
+// it before each call so drivers can consult per-class / per-volume
+// configuration without holding it as instance state. Drivers MUST treat
+// OpContext fields as read-only.
+//
+// StorageClass MAY be nil — orphan deletes (the class was deleted before
+// its volumes were reclaimed) carry only Volume + Parameters, where
+// Parameters comes from Volume.Metadata.DriverParameters as a snapshot
+// taken at Provision time (see RUNE-200 PR 2).
+//
+// Parameters is always populated (may be empty). Drivers MUST consult
+// Parameters rather than re-merging StorageClass.Parameters with
+// Volume.Parameters themselves.
+type OpContext struct {
+	// StorageClass that this operation is acting on. May be nil for
+	// orphan deletes (class removed before its volumes). Live operations
+	// always carry the resolved class.
+	StorageClass *types.StorageClass
+
+	// Volume is the row this operation pertains to. Always non-nil for
+	// volume-scoped operations (every method on the interface).
+	Volume *types.Volume
+
+	// Parameters is StorageClass.Parameters with Volume.Parameters
+	// overlaid on top, pre-merged by the caller. Drivers consult this
+	// map for per-class configuration (region, fsType, auth refs, etc.)
+	// rather than re-merging themselves.
+	Parameters map[string]string
 }
 
 // Capabilities describes the optional features a driver supports.
@@ -135,24 +177,12 @@ type DevicePath string
 // bind-mounts the volume into a container.
 type MountTarget string
 
-// ProvisionRequest is the input to Driver.Provision. The controller fills
-// every field from the Volume + StorageClass before calling.
+// ProvisionRequest is the input to Driver.Provision. Volume, StorageClass
+// and merged parameters live on the accompanying OpContext; this struct
+// carries only fields specific to the provision operation itself.
 type ProvisionRequest struct {
-	// Volume is the resource being provisioned. Drivers MUST treat it as
-	// read-only; mutations belong on the returned VolumeHandle / on a
-	// controller-driven Update call.
-	Volume *types.Volume
-
-	// StorageClass is the class the Volume references (already resolved by
-	// the controller).
-	StorageClass *types.StorageClass
-
-	// MergedParameters is StorageClass.Parameters with Volume.Parameters
-	// overlaid on top — drivers should consult this rather than re-merging.
-	MergedParameters map[string]string
-
 	// SizeBytes is Volume.Size already parsed into bytes by the controller.
-	// Drivers that need the original string can read Volume.Size.
+	// Drivers that need the original string can read OpContext.Volume.Size.
 	SizeBytes int64
 
 	// Topology is the topology constraint the controller selected for this
@@ -166,9 +196,9 @@ type ProvisionRequest struct {
 	Deadline time.Time
 }
 
-// MountOpts is the input to Driver.Mount.
+// MountOpts is the input to Driver.Mount. The Volume lives on the
+// accompanying OpContext.
 type MountOpts struct {
-	Volume   *types.Volume
 	Handle   VolumeHandle
 	Node     NodeID
 	Device   DevicePath  // device returned by Attach (empty for directory drivers)
@@ -180,23 +210,23 @@ type MountOpts struct {
 	FsType string
 }
 
-// SnapshotRequest is the input to Driver.Snapshot.
+// SnapshotRequest is the input to Driver.Snapshot. The Volume being
+// snapshotted lives on the accompanying OpContext.
 type SnapshotRequest struct {
-	Volume   *types.Volume
 	Handle   VolumeHandle
 	Snapshot *types.Snapshot
 }
 
-// RestoreRequest is the input to Driver.RestoreFromSnapshot.
+// RestoreRequest is the input to Driver.RestoreFromSnapshot. The TARGET
+// volume and its storage class live on the accompanying OpContext; this
+// struct carries only the source snapshot reference.
 type RestoreRequest struct {
 	// Source is the snapshot being restored.
 	Source       *types.Snapshot
 	SourceHandle SnapshotHandle
-	// Target is the new Volume that should receive the restored data.
-	Target           *types.Volume
-	StorageClass     *types.StorageClass
-	MergedParameters map[string]string
-	SizeBytes        int64
+
+	// SizeBytes is the target Volume.Size already parsed into bytes.
+	SizeBytes int64
 }
 
 // Sentinel errors. Drivers SHOULD wrap these with %w when returning richer

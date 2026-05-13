@@ -104,14 +104,16 @@ func testLifecycle(t *testing.T, cfg Config) {
 	defer cancel()
 
 	vol, class, merged := cfg.NewVolume(t)
+	opctx := driver.OpContext{
+		StorageClass: class,
+		Volume:       vol,
+		Parameters:   merged,
+	}
 	req := driver.ProvisionRequest{
-		Volume:           vol,
-		StorageClass:     class,
-		MergedParameters: merged,
-		SizeBytes:        sizeBytesOrDefault(vol.Size, 1<<20),
+		SizeBytes: sizeBytesOrDefault(vol.Size, 1<<20),
 	}
 
-	handle, err := cfg.Driver.Provision(ctx, req)
+	handle, err := cfg.Driver.Provision(ctx, opctx, req)
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -120,17 +122,16 @@ func testLifecycle(t *testing.T, cfg Config) {
 	}
 	t.Cleanup(func() {
 		// Best-effort delete on cleanup — even if the test failed mid-way.
-		_ = cfg.Driver.Delete(context.Background(), handle)
+		_ = cfg.Driver.Delete(context.Background(), opctx, handle)
 	})
 
-	device, err := cfg.Driver.Attach(ctx, handle, cfg.NodeID)
+	device, err := cfg.Driver.Attach(ctx, opctx, handle, cfg.NodeID)
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 
 	target := driver.MountTarget(filepath.Join(cfg.MountTargetRoot, vol.Name))
-	mounted, err := cfg.Driver.Mount(ctx, driver.MountOpts{
-		Volume: vol,
+	mounted, err := cfg.Driver.Mount(ctx, opctx, driver.MountOpts{
 		Handle: handle,
 		Node:   cfg.NodeID,
 		Device: device,
@@ -164,10 +165,10 @@ func testLifecycle(t *testing.T, cfg Config) {
 		_ = os.Remove(probe)
 	}
 
-	if err := cfg.Driver.Unmount(ctx, mounted); err != nil {
+	if err := cfg.Driver.Unmount(ctx, opctx, mounted); err != nil {
 		t.Fatalf("Unmount: %v", err)
 	}
-	if err := cfg.Driver.Detach(ctx, handle, cfg.NodeID); err != nil {
+	if err := cfg.Driver.Detach(ctx, opctx, handle, cfg.NodeID); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
 
@@ -180,8 +181,8 @@ func testLifecycle(t *testing.T, cfg Config) {
 			SourceVolume: vol.Name,
 			Driver:       cfg.Driver.Name(),
 		}
-		snapHandle, err := cfg.Driver.Snapshot(ctx, driver.SnapshotRequest{
-			Volume: vol, Handle: handle, Snapshot: snap,
+		snapHandle, err := cfg.Driver.Snapshot(ctx, opctx, driver.SnapshotRequest{
+			Handle: handle, Snapshot: snap,
 		})
 		if err != nil {
 			t.Fatalf("Snapshot: %v", err)
@@ -191,24 +192,26 @@ func testLifecycle(t *testing.T, cfg Config) {
 		}
 		// Restore into a fresh volume.
 		restoredVol, restoredClass, restoredMerged := cfg.NewVolume(t)
-		restoredHandle, err := cfg.Driver.RestoreFromSnapshot(ctx, driver.RestoreRequest{
-			Source:           snap,
-			SourceHandle:     snapHandle,
-			Target:           restoredVol,
-			StorageClass:     restoredClass,
-			MergedParameters: restoredMerged,
-			SizeBytes:        sizeBytesOrDefault(restoredVol.Size, 1<<20),
+		restoreOpCtx := driver.OpContext{
+			StorageClass: restoredClass,
+			Volume:       restoredVol,
+			Parameters:   restoredMerged,
+		}
+		restoredHandle, err := cfg.Driver.RestoreFromSnapshot(ctx, restoreOpCtx, driver.RestoreRequest{
+			Source:       snap,
+			SourceHandle: snapHandle,
+			SizeBytes:    sizeBytesOrDefault(restoredVol.Size, 1<<20),
 		})
 		if err != nil {
 			t.Fatalf("RestoreFromSnapshot: %v", err)
 		}
-		t.Cleanup(func() { _ = cfg.Driver.Delete(context.Background(), restoredHandle) })
+		t.Cleanup(func() { _ = cfg.Driver.Delete(context.Background(), restoreOpCtx, restoredHandle) })
 
 		// DeleteSnapshot must be idempotent — calling twice is OK.
-		if err := cfg.Driver.DeleteSnapshot(ctx, snapHandle); err != nil {
+		if err := cfg.Driver.DeleteSnapshot(ctx, opctx, snapHandle); err != nil {
 			t.Fatalf("DeleteSnapshot: %v", err)
 		}
-		if err := cfg.Driver.DeleteSnapshot(ctx, snapHandle); err != nil {
+		if err := cfg.Driver.DeleteSnapshot(ctx, opctx, snapHandle); err != nil {
 			t.Fatalf("DeleteSnapshot (second call must be idempotent): %v", err)
 		}
 	}
@@ -217,12 +220,12 @@ func testLifecycle(t *testing.T, cfg Config) {
 		// Expand to original size + 1MiB. Drivers that need offline expand
 		// must accept this (volume is already detached).
 		newSize := fmt.Sprintf("%d", req.SizeBytes+(1<<20))
-		if err := cfg.Driver.Expand(ctx, handle, newSize); err != nil {
+		if err := cfg.Driver.Expand(ctx, opctx, handle, newSize); err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
 	}
 
-	if err := cfg.Driver.Delete(ctx, handle); err != nil {
+	if err := cfg.Driver.Delete(ctx, opctx, handle); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 }
@@ -233,20 +236,22 @@ func testIdempotency(t *testing.T, cfg Config) {
 	defer cancel()
 
 	vol, class, merged := cfg.NewVolume(t)
-	req := driver.ProvisionRequest{
-		Volume:           vol,
-		StorageClass:     class,
-		MergedParameters: merged,
-		SizeBytes:        sizeBytesOrDefault(vol.Size, 1<<20),
+	opctx := driver.OpContext{
+		StorageClass: class,
+		Volume:       vol,
+		Parameters:   merged,
 	}
-	handle, err := cfg.Driver.Provision(ctx, req)
+	req := driver.ProvisionRequest{
+		SizeBytes: sizeBytesOrDefault(vol.Size, 1<<20),
+	}
+	handle, err := cfg.Driver.Provision(ctx, opctx, req)
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
 
 	// Provision again with the same Volume — must succeed (idempotent) and
 	// return either the same handle or a logically-equivalent one.
-	handle2, err := cfg.Driver.Provision(ctx, req)
+	handle2, err := cfg.Driver.Provision(ctx, opctx, req)
 	if err != nil {
 		t.Fatalf("Provision (second call): %v", err)
 	}
@@ -255,20 +260,20 @@ func testIdempotency(t *testing.T, cfg Config) {
 	}
 
 	// Detach when never attached — must not error.
-	if err := cfg.Driver.Detach(ctx, handle, cfg.NodeID); err != nil {
+	if err := cfg.Driver.Detach(ctx, opctx, handle, cfg.NodeID); err != nil {
 		t.Fatalf("Detach (never attached): %v", err)
 	}
 
 	// Delete twice — second call must succeed.
-	if err := cfg.Driver.Delete(ctx, handle); err != nil {
+	if err := cfg.Driver.Delete(ctx, opctx, handle); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if err := cfg.Driver.Delete(ctx, handle); err != nil {
+	if err := cfg.Driver.Delete(ctx, opctx, handle); err != nil {
 		t.Fatalf("Delete (second call): %v", err)
 	}
 	// And clean up the duplicate handle from Provision #2 if it differs.
 	if handle2 != handle {
-		_ = cfg.Driver.Delete(ctx, handle2)
+		_ = cfg.Driver.Delete(ctx, opctx, handle2)
 	}
 }
 
@@ -279,8 +284,11 @@ func testUnsupportedSnapshot(t *testing.T, cfg Config) {
 		t.Skip("driver advertises snapshot support; nothing to assert here")
 	}
 	ctx := context.Background()
-	_, err := cfg.Driver.Snapshot(ctx, driver.SnapshotRequest{
-		Volume:   &types.Volume{Name: "doesnt-matter"},
+	opctx := driver.OpContext{
+		Volume:     &types.Volume{Name: "doesnt-matter"},
+		Parameters: map[string]string{},
+	}
+	_, err := cfg.Driver.Snapshot(ctx, opctx, driver.SnapshotRequest{
 		Snapshot: &types.Snapshot{Name: "doesnt-matter"},
 	})
 	if !errors.Is(err, driver.ErrUnsupported) {

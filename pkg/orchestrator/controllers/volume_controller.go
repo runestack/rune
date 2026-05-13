@@ -331,11 +331,13 @@ func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) err
 		return c.markFailed(ctx, vol, "InvalidSize", err.Error())
 	}
 
-	handle, err := d.Provision(ctx, driver.ProvisionRequest{
-		Volume:           vol,
-		StorageClass:     class,
-		MergedParameters: merged,
-		SizeBytes:        sizeBytes,
+	opctx := driver.OpContext{
+		StorageClass: class,
+		Volume:       vol,
+		Parameters:   merged,
+	}
+	handle, err := d.Provision(ctx, opctx, driver.ProvisionRequest{
+		SizeBytes: sizeBytes,
 	})
 	if err != nil {
 		return c.handleProvisionFail(ctx, vol, err)
@@ -489,8 +491,10 @@ func (c *volumeController) handleDeleted(ctx context.Context, vol *types.Volume)
 	// it may already be gone if the operator deleted both at once. Fall
 	// back to the volume's parameters / cached driver.
 	driverName := ""
-	if class, err := c.resolveStorageClass(ctx, vol); err == nil {
-		driverName = class.Driver
+	var class *types.StorageClass
+	if c, err := c.resolveStorageClass(ctx, vol); err == nil {
+		class = c
+		driverName = c.Driver
 	}
 	if driverName == "" {
 		c.logger.Warn("Cannot resolve driver for reclaim; leaving handle in place",
@@ -514,7 +518,16 @@ func (c *volumeController) handleDeleted(ctx context.Context, vol *types.Volume)
 	if err != nil {
 		return fmt.Errorf("reclaim: driver %q: %w", driverName, err)
 	}
-	if err := d.Delete(ctx, driver.VolumeHandle(vol.Handle)); err != nil {
+	// Build the OpContext for Delete. When the class is gone (orphan
+	// reclaim), StorageClass is nil and Parameters is the volume-local
+	// snapshot only. PR 2 will fold in Volume.Metadata.DriverParameters
+	// for the orphan case.
+	opctx := driver.OpContext{
+		StorageClass: class,
+		Volume:       vol,
+		Parameters:   reclaimParameters(class, vol),
+	}
+	if err := d.Delete(ctx, opctx, driver.VolumeHandle(vol.Handle)); err != nil {
 		return fmt.Errorf("reclaim: driver Delete: %w", err)
 	}
 	c.logger.Info("Reclaimed volume",
@@ -886,13 +899,15 @@ func (c *volumeController) restoreFromSnapshot(
 	if err != nil {
 		return "", err
 	}
-	return d.RestoreFromSnapshot(ctx, driver.RestoreRequest{
-		Source:           &snap,
-		SourceHandle:     driver.SnapshotHandle(snap.Handle),
-		Target:           target,
-		StorageClass:     class,
-		MergedParameters: merged,
-		SizeBytes:        sizeBytes,
+	opctx := driver.OpContext{
+		StorageClass: class,
+		Volume:       target,
+		Parameters:   merged,
+	}
+	return d.RestoreFromSnapshot(ctx, opctx, driver.RestoreRequest{
+		Source:       &snap,
+		SourceHandle: driver.SnapshotHandle(snap.Handle),
+		SizeBytes:    sizeBytes,
 	})
 }
 
@@ -942,4 +957,21 @@ func mergeParameters(class, vol map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// reclaimParameters builds the Parameters map for OpContext during a
+// reclaim Delete. When the StorageClass is still around we get the
+// usual class+volume merge; when it's been deleted before its volumes
+// (orphan reclaim) we fall back to just the volume-local parameters.
+// PR 2 (RUNE-200) will fold in Volume.Metadata.DriverParameters as a
+// third source of truth so drivers that need class config — region,
+// auth refs — can still reclaim orphans cleanly.
+func reclaimParameters(class *types.StorageClass, vol *types.Volume) map[string]string {
+	if vol == nil {
+		return map[string]string{}
+	}
+	if class == nil {
+		return mergeParameters(nil, vol.Parameters)
+	}
+	return mergeParameters(class.Parameters, vol.Parameters)
 }

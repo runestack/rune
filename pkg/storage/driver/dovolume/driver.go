@@ -61,29 +61,29 @@ func (d *doVolumeDriver) Capabilities() driver.Capabilities {
 	}
 }
 
-func (d *doVolumeDriver) Provision(ctx context.Context, req driver.ProvisionRequest) (driver.VolumeHandle, error) {
-	if req.Volume == nil {
-		return "", fmt.Errorf("dovolume: Provision: nil Volume")
+func (d *doVolumeDriver) Provision(ctx context.Context, opctx driver.OpContext, req driver.ProvisionRequest) (driver.VolumeHandle, error) {
+	if opctx.Volume == nil {
+		return "", fmt.Errorf("dovolume: Provision: OpContext.Volume is required")
 	}
-	region := mergedParam(req.MergedParameters, "region")
+	region := mergedParam(opctx.Parameters, "region")
 	if region == "" {
 		return "", fmt.Errorf("dovolume: Provision: parameters.region is required")
 	}
-	if !accessModeSupported(req.Volume.AccessMode) {
-		return "", fmt.Errorf("dovolume: %w: %s", driver.ErrAccessModeUnsupported, req.Volume.AccessMode)
+	if !accessModeSupported(opctx.Volume.AccessMode) {
+		return "", fmt.Errorf("dovolume: %w: %s", driver.ErrAccessModeUnsupported, opctx.Volume.AccessMode)
 	}
 	gigabytes, err := bytesToGigabytes(req.SizeBytes)
 	if err != nil {
 		return "", err
 	}
-	doName := d.doVolumeName(req.Volume)
-	fsType := mergedParam(req.MergedParameters, "fsType")
+	doName := d.doVolumeName(opctx.Volume)
+	fsType := mergedParam(opctx.Parameters, "fsType")
 	in := createVolumeIn{
 		Name:           doName,
 		Region:         region,
 		SizeGigabytes:  gigabytes,
 		FilesystemType: fsType, // empty -> DO leaves it unformatted; we format on first Mount
-		Description:    fmt.Sprintf("rune volume %s", req.Volume.String()),
+		Description:    fmt.Sprintf("rune volume %s", opctx.Volume.String()),
 	}
 	vol, err := d.client.createVolume(ctx, in)
 	if err != nil {
@@ -92,7 +92,7 @@ func (d *doVolumeDriver) Provision(ctx context.Context, req driver.ProvisionRequ
 	return driver.VolumeHandle(vol.ID), nil
 }
 
-func (d *doVolumeDriver) Delete(ctx context.Context, handle driver.VolumeHandle) error {
+func (d *doVolumeDriver) Delete(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle) error {
 	if handle == "" {
 		return nil
 	}
@@ -105,7 +105,7 @@ func (d *doVolumeDriver) Delete(ctx context.Context, handle driver.VolumeHandle)
 	return nil
 }
 
-func (d *doVolumeDriver) Attach(ctx context.Context, handle driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
+func (d *doVolumeDriver) Attach(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
 	if handle == "" {
 		return "", fmt.Errorf("dovolume: Attach: empty handle")
 	}
@@ -146,7 +146,7 @@ func (d *doVolumeDriver) Attach(ctx context.Context, handle driver.VolumeHandle,
 	return doDevicePath(vol.Name), nil
 }
 
-func (d *doVolumeDriver) Detach(ctx context.Context, handle driver.VolumeHandle, node driver.NodeID) error {
+func (d *doVolumeDriver) Detach(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, node driver.NodeID) error {
 	if handle == "" {
 		return nil
 	}
@@ -187,7 +187,7 @@ func (d *doVolumeDriver) Detach(ctx context.Context, handle driver.VolumeHandle,
 	return nil
 }
 
-func (d *doVolumeDriver) Mount(ctx context.Context, opts driver.MountOpts) (driver.MountTarget, error) {
+func (d *doVolumeDriver) Mount(ctx context.Context, opctx driver.OpContext, opts driver.MountOpts) (driver.MountTarget, error) {
 	dev := string(opts.Device)
 	if dev == "" {
 		// Caller (the agent) may not have populated Device — derive
@@ -220,21 +220,24 @@ func (d *doVolumeDriver) Mount(ctx context.Context, opts driver.MountOpts) (driv
 	return driver.MountTarget(target), nil
 }
 
-func (d *doVolumeDriver) Unmount(ctx context.Context, target driver.MountTarget) error {
+func (d *doVolumeDriver) Unmount(ctx context.Context, opctx driver.OpContext, target driver.MountTarget) error {
 	if target == "" {
 		return nil
 	}
 	return d.mounts.Unmount(ctx, string(target))
 }
 
-func (d *doVolumeDriver) Snapshot(ctx context.Context, req driver.SnapshotRequest) (driver.SnapshotHandle, error) {
-	if req.Snapshot == nil || req.Volume == nil {
-		return "", fmt.Errorf("dovolume: Snapshot: nil request fields")
+func (d *doVolumeDriver) Snapshot(ctx context.Context, opctx driver.OpContext, req driver.SnapshotRequest) (driver.SnapshotHandle, error) {
+	if opctx.Volume == nil {
+		return "", fmt.Errorf("dovolume: Snapshot: OpContext.Volume is required")
+	}
+	if req.Snapshot == nil {
+		return "", fmt.Errorf("dovolume: Snapshot: nil Snapshot")
 	}
 	if req.Handle == "" {
 		return "", fmt.Errorf("dovolume: Snapshot: empty volume handle")
 	}
-	doSnapName := d.doSnapshotName(req.Volume, req.Snapshot)
+	doSnapName := d.doSnapshotName(opctx.Volume, req.Snapshot)
 	snap, err := d.client.createSnapshot(ctx, string(req.Handle), doSnapName)
 	if err != nil {
 		return "", fmt.Errorf("dovolume: createSnapshot: %w", err)
@@ -242,14 +245,17 @@ func (d *doVolumeDriver) Snapshot(ctx context.Context, req driver.SnapshotReques
 	return driver.SnapshotHandle(snap.ID), nil
 }
 
-func (d *doVolumeDriver) RestoreFromSnapshot(ctx context.Context, req driver.RestoreRequest) (driver.VolumeHandle, error) {
-	if req.Source == nil || req.Target == nil {
-		return "", fmt.Errorf("dovolume: RestoreFromSnapshot: nil request fields")
+func (d *doVolumeDriver) RestoreFromSnapshot(ctx context.Context, opctx driver.OpContext, req driver.RestoreRequest) (driver.VolumeHandle, error) {
+	if req.Source == nil {
+		return "", fmt.Errorf("dovolume: RestoreFromSnapshot: nil Source")
+	}
+	if opctx.Volume == nil {
+		return "", fmt.Errorf("dovolume: RestoreFromSnapshot: OpContext.Volume (target) is required")
 	}
 	if req.SourceHandle == "" {
 		return "", fmt.Errorf("dovolume: RestoreFromSnapshot: empty source handle")
 	}
-	region := mergedParam(req.MergedParameters, "region")
+	region := mergedParam(opctx.Parameters, "region")
 	if region == "" {
 		return "", fmt.Errorf("dovolume: RestoreFromSnapshot: parameters.region is required")
 	}
@@ -257,7 +263,7 @@ func (d *doVolumeDriver) RestoreFromSnapshot(ctx context.Context, req driver.Res
 	if err != nil {
 		return "", err
 	}
-	doName := d.doVolumeName(req.Target)
+	doName := d.doVolumeName(opctx.Volume)
 	vol, err := d.client.createVolumeFromSnapshot(ctx, restoreVolumeIn{
 		Name:          doName,
 		Region:        region,
@@ -270,7 +276,7 @@ func (d *doVolumeDriver) RestoreFromSnapshot(ctx context.Context, req driver.Res
 	return driver.VolumeHandle(vol.ID), nil
 }
 
-func (d *doVolumeDriver) DeleteSnapshot(ctx context.Context, handle driver.SnapshotHandle) error {
+func (d *doVolumeDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpContext, handle driver.SnapshotHandle) error {
 	if handle == "" {
 		return nil
 	}
@@ -280,7 +286,7 @@ func (d *doVolumeDriver) DeleteSnapshot(ctx context.Context, handle driver.Snaps
 	return nil
 }
 
-func (d *doVolumeDriver) Expand(ctx context.Context, handle driver.VolumeHandle, newSize string) error {
+func (d *doVolumeDriver) Expand(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, newSize string) error {
 	if handle == "" {
 		return fmt.Errorf("dovolume: Expand: empty handle")
 	}
