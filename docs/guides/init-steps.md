@@ -161,6 +161,27 @@ initSteps:
 You can also use `securityContext` at the **service** level for the
 main container.
 
+**Inheritance:** if a step omits `securityContext`, it inherits the
+parent service's `securityContext` (matching the inheritance model
+already used for volumes, env and mounts). Setting `securityContext`
+on the step **replaces** the parent block wholesale — there is no
+field-level merge. So a step that needs to *narrow* the parent's
+context (e.g. drop capabilities the parent grants) must re-state
+every field it wants applied.
+
+```yaml
+service:
+  name: tigerbeetle
+  securityContext:
+    seccompProfile: { type: unconfined }   # applies to main + all init steps
+  initSteps:
+    - name: format
+      image: ghcr.io/tigerbeetle/tigerbeetle:0.16.30
+      command: /tigerbeetle
+      args: ["format", "--cluster=0", "/data/0_0.tigerbeetle"]
+      # securityContext omitted → inherits seccompProfile: unconfined
+```
+
 Supported fields:
 
 | Field | Effect |

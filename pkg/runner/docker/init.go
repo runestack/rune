@@ -262,9 +262,17 @@ func (r *DockerRunner) initStepToContainerConfig(instance *runetypes.Instance, s
 	// design §13).
 
 	// Apply optional security context (seccomp / capabilities /
-	// privileged). Privileged and seccomp=unconfined are gated
-	// server-side; the runner only enforces structural correctness.
-	applySecurityContext(hostConfig, step.SecurityContext)
+	// privileged). Init steps inherit the parent service's
+	// SecurityContext when they don't set their own — matching how
+	// volumes / env / mounts inherit by default. Setting it on the
+	// step overrides the parent block entirely (no deep merge).
+	// Privileged and seccomp=unconfined are gated server-side; the
+	// runner only enforces structural correctness.
+	sc := step.SecurityContext
+	if sc == nil {
+		sc = instance.SecurityContext
+	}
+	applySecurityContext(hostConfig, sc)
 
 	return containerConfig, hostConfig, nil
 }

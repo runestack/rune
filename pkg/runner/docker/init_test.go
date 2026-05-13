@@ -107,6 +107,65 @@ func TestInitStepToContainerConfig_CommandReplacesImageEntrypoint(t *testing.T) 
 	assert.Equal(t, []string{"format", "--cluster=0", "/data/0_0.tigerbeetle"}, []string(cfg.Cmd))
 }
 
+// Regression for Bug D: when the parent service declares a
+// SecurityContext (typically for the main container), init steps
+// must inherit it by default — matching how volumes, env and
+// secret/configmap mounts inherit. Pre-fix the init step ran with
+// Docker's default seccomp profile and TigerBeetle's `format` failed
+// with `io_uring is not available`.
+func TestInitStepToContainerConfig_InheritsParentSecurityContext(t *testing.T) {
+	r := makeInitTestRunner()
+	inst := makeInstanceWithMounts()
+	inst.SecurityContext = &runetypes.SecurityContext{
+		SeccompProfile: &runetypes.SeccompProfile{Type: runetypes.SeccompProfileUnconfined},
+		CapAdd:         []string{"SYS_NICE"},
+	}
+	step := runetypes.InitStep{
+		Name:    "format",
+		Image:   "ghcr.io/tigerbeetle/tigerbeetle:latest",
+		Command: "/tigerbeetle",
+		Args:    []string{"format", "/data/0_0.tigerbeetle"},
+		// No step.SecurityContext — must fall through to parent.
+	}
+
+	_, host, err := r.initStepToContainerConfig(inst, step)
+	require.NoError(t, err)
+
+	assert.Contains(t, host.SecurityOpt, "seccomp=unconfined",
+		"step must inherit parent service's seccomp=unconfined")
+	assert.Equal(t, []string{"SYS_NICE"}, []string(host.CapAdd),
+		"step must inherit parent service's capAdd")
+}
+
+// An explicit SecurityContext on the step replaces the parent
+// SecurityContext wholesale (no deep merge). Keeps semantics simple
+// and predictable for operators.
+func TestInitStepToContainerConfig_StepSecurityContextOverridesParent(t *testing.T) {
+	r := makeInitTestRunner()
+	inst := makeInstanceWithMounts()
+	inst.SecurityContext = &runetypes.SecurityContext{
+		Privileged: true,
+		CapAdd:     []string{"SYS_ADMIN"},
+	}
+	step := runetypes.InitStep{
+		Name:    "lockdown",
+		Image:   "busybox",
+		Command: "/bin/true",
+		SecurityContext: &runetypes.SecurityContext{
+			CapDrop: []string{"ALL"},
+		},
+	}
+
+	_, host, err := r.initStepToContainerConfig(inst, step)
+	require.NoError(t, err)
+
+	assert.False(t, host.Privileged,
+		"step's explicit SecurityContext must replace the parent's, not merge")
+	assert.Empty(t, host.CapAdd,
+		"parent CapAdd must not bleed through when step sets its own SecurityContext")
+	assert.Equal(t, []string{"ALL"}, []string(host.CapDrop))
+}
+
 // A step with no args should still produce a valid Entrypoint and an
 // empty (not nil-vs-empty-sensitive) Cmd. Locks the corner case where
 // Args is nil.
