@@ -191,7 +191,7 @@ Enable verbose output by setting environment variables:
 ## Support
 
 For more information about using Rune CLI:
-- [Rune CLI Commands](../../docs/guides/cli-commands.md)
-- [Service Definitions](../../docs/guides/service-definitions.md)
-- [Installation Guide](../../docs/guides/install-ec2.md)
-- [CI/CD Guide](../../docs/guides/ci-cd-github-actions.md)
+- [Rune CLI overview](https://docs.runestack.io/cli/overview/)
+- [Service spec reference](https://docs.runestack.io/reference/service-spec/)
+- [Installation](https://docs.runestack.io/start/installation/)
+- [CI deployments](https://docs.runestack.io/guides/ci-deployments/)

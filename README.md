@@ -450,7 +450,7 @@ jobs:
           rune cast runeset/ --values=production
 ```
 
-See [CI/CD Guide](docs/guides/ci-cd-github-actions.md) for complete setup instructions.
+See the [CI/CD guide on docs.runestack.io](https://docs.runestack.io/guides/ci-deployments/) for complete setup instructions.
 
 ## Development
 
@@ -519,7 +519,6 @@ rune/
 │   ├── log/            # Structured logging
 │   └── worker/         # Task execution framework
 ├── examples/            # Example services and runesets
-├── docs/                # Documentation
 └── test/                # Integration tests
 ```
 
@@ -540,10 +539,16 @@ CLI → Client → API → Orchestrator → Store + Runner
 
 ## Documentation
 
-For more detailed documentation:
+User-facing documentation lives at **[docs.runestack.io](https://docs.runestack.io)** (source: [runestack/docs](https://github.com/runestack/docs)).
 
-- [User Guide](docs/guides/README.md)
-- [API Documentation](docs/api/README.md)
+- [Quick start](https://docs.runestack.io/start/quick-start/)
+- [Service spec reference](https://docs.runestack.io/reference/service-spec/)
+- [Init steps](https://docs.runestack.io/guides/init-steps/)
+- [Identity & RBAC](https://docs.runestack.io/concepts/identity-rbac/)
+- [CLI reference](https://docs.runestack.io/cli/overview/)
+
+Repo-local references:
+
 - [Examples](examples/README.md)
 - [Development Guide](.cursor/rules/development-guide.mdc)
 - [Architecture Guide](.cursor/rules/architecture-guide.mdc)

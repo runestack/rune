@@ -41,7 +41,7 @@ We use GitHub to host code, to track issues and feature requests, as well as acc
 - Use the standard Go project layout
 - Place executables in `cmd/`
 - Place libraries in `pkg/` (public) or `internal/` (private)
-- Place documentation in `docs/`
+- User-facing documentation lives in the separate [runestack/docs](https://github.com/runestack/docs) repo (published at https://docs.runestack.io). Open PRs there for guides, references, and concepts
 - Place tests beside the code they test
 
 ### Error Handling
