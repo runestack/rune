@@ -158,12 +158,16 @@ func (r *DockerRunner) initStepToContainerConfig(instance *runetypes.Instance, s
 		env[k] = v
 	}
 
-	// Build the command: command + args (no entrypoint inheritance).
-	cmd := append([]string{step.Command}, step.Args...)
-
+	// Kubernetes semantics: step.Command → Entrypoint (replacing the
+	// image's ENTRYPOINT), step.Args → Cmd. Without the explicit
+	// Entrypoint override, Docker preserves the image's ENTRYPOINT and
+	// appends our Cmd as its arguments — so e.g. images that wrap their
+	// real binary in tini would run `tini -- /bin /bin <args...>` and
+	// the binary would see itself as its first arg (RUNE-121 Bug C).
 	containerConfig := &container.Config{
-		Image: step.Image,
-		Cmd:   cmd,
+		Image:      step.Image,
+		Entrypoint: []string{step.Command},
+		Cmd:        append([]string(nil), step.Args...),
 		Env:   formatEnvVars(env),
 		Labels: map[string]string{
 			"rune.managed":      "true",

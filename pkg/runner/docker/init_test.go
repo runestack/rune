@@ -69,10 +69,61 @@ func TestInitStepToContainerConfig_InheritsAllVolumesByDefault(t *testing.T) {
 	cfg, host, err := r.initStepToContainerConfig(inst, step)
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{"/tigerbeetle", "format", "/data/0_0.tigerbeetle"}, []string(cfg.Cmd))
+	// Kubernetes semantics: command → Entrypoint, args → Cmd. This
+	// replaces (not appends to) the image's baked-in ENTRYPOINT.
+	assert.Equal(t, []string{"/tigerbeetle"}, []string(cfg.Entrypoint))
+	assert.Equal(t, []string{"format", "/data/0_0.tigerbeetle"}, []string(cfg.Cmd))
 	assert.Equal(t, "init-step", cfg.Labels["rune.kind"])
 	assert.Equal(t, "format", cfg.Labels["rune.init.step"])
 	assert.Equal(t, []string{"/data", "/logs"}, sortedMountTargets(host.Mounts))
+}
+
+// Regression for Bug C: when the parent image declares an ENTRYPOINT
+// (e.g. `tini -- /tigerbeetle`), the init step's command must override
+// it rather than be appended to it. Pre-fix the runner only set Cmd,
+// so Docker prepended the image entrypoint and the binary saw its own
+// path as its first argument ("unknown subcommand: '/tigerbeetle'").
+func TestInitStepToContainerConfig_CommandReplacesImageEntrypoint(t *testing.T) {
+	r := makeInitTestRunner()
+	inst := makeInstanceWithMounts()
+	step := runetypes.InitStep{
+		Name:    "format",
+		Image:   "ghcr.io/tigerbeetle/tigerbeetle:latest",
+		Command: "/tigerbeetle",
+		Args:    []string{"format", "--cluster=0", "/data/0_0.tigerbeetle"},
+	}
+
+	cfg, _, err := r.initStepToContainerConfig(inst, step)
+	require.NoError(t, err)
+
+	// Entrypoint carries exactly the command; nothing else.
+	require.Equal(t, []string{"/tigerbeetle"}, []string(cfg.Entrypoint))
+	// And command must NOT appear inside Cmd — that's how the original
+	// duplication manifested.
+	for _, a := range cfg.Cmd {
+		assert.NotEqual(t, "/tigerbeetle", a,
+			"command must not be repeated inside args; this is the Bug C duplication")
+	}
+	assert.Equal(t, []string{"format", "--cluster=0", "/data/0_0.tigerbeetle"}, []string(cfg.Cmd))
+}
+
+// A step with no args should still produce a valid Entrypoint and an
+// empty (not nil-vs-empty-sensitive) Cmd. Locks the corner case where
+// Args is nil.
+func TestInitStepToContainerConfig_CommandWithoutArgs(t *testing.T) {
+	r := makeInitTestRunner()
+	inst := makeInstanceWithMounts()
+	step := runetypes.InitStep{
+		Name:    "noop",
+		Image:   "busybox",
+		Command: "/bin/true",
+	}
+
+	cfg, _, err := r.initStepToContainerConfig(inst, step)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"/bin/true"}, []string(cfg.Entrypoint))
+	assert.Empty(t, cfg.Cmd)
 }
 
 func TestInitStepToContainerConfig_FilterMountsByName(t *testing.T) {

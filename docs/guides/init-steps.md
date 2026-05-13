@@ -33,6 +33,31 @@ the parent service's volumes, secret mounts, configmap mounts and
 environment by default. The main `api` container starts only after
 `migrate` exits 0.
 
+### `command` vs `args` — Kubernetes semantics
+
+`command` and `args` follow Kubernetes conventions, **not** Docker's
+shell form:
+
+- `command` is a single string. It **replaces** the image's
+  `ENTRYPOINT`.
+- `args` is a list of strings. It **replaces** the image's `CMD`
+  and becomes the arguments passed to `command`.
+
+This matters for images that wrap their real binary in something
+like `tini --` or a custom entrypoint script. The step's `command`
+will be used verbatim, so you do not need to re-state the
+entrypoint chain:
+
+```yaml
+# Image: ghcr.io/tigerbeetle/tigerbeetle (ENTRYPOINT: tini -- /tigerbeetle)
+# Container will run exactly: /tigerbeetle format --cluster=0 /data/0_0.tigerbeetle
+initSteps:
+  - name: format
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.30
+    command: /tigerbeetle
+    args: ["format", "--cluster=0", "/data/0_0.tigerbeetle"]
+```
+
 ## When does a step run? — `runIf`
 
 Init steps don't need to run on every start. `runIf` selects the
@@ -217,3 +242,10 @@ the verb.
 Docker's default seccomp profile is blocking io_uring. Set
 `securityContext.seccompProfile.type: unconfined` on the init step
 (and ensure your token has `services.privileged`).
+
+**Init step fails with `unknown subcommand: '<path>'` or sees its own
+binary as the first argument** — your CLI/server pre-dates
+v0.0.1-dev.39. Before the fix, `command` was appended to the
+image's `ENTRYPOINT` instead of replacing it, so e.g.
+`ENTRYPOINT ["tini", "--", "/foo"]` + `command: /foo` produced
+`tini -- /foo /foo <args>`. Upgrade both client and server.
