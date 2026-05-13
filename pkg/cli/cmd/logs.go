@@ -39,6 +39,14 @@ type logsOptions struct {
 	showPrefix     bool
 	noColor        bool
 	outputFormat   string
+
+	// initStep, when non-empty, switches `rune logs` into init-step
+	// mode (RUNE-121 S6): instead of streaming container/process logs
+	// we walk all instances of the service and print their
+	// InitStepState rows for the named step. Real log streaming for
+	// init steps will land in a follow-up once the log subsystem can
+	// resolve InitStepState.LogRef.
+	initStep string
 }
 
 func newLogsCmd() *cobra.Command {
@@ -102,6 +110,7 @@ Examples:
 	cmd.Flags().BoolVar(&opts.showPrefix, "prefix", false, "Show resource type, service and instance prefixes in log output")
 	cmd.Flags().BoolVar(&opts.noColor, "no-color", false, "Disable colorized output")
 	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", OutputFormatText, "Output format: text, json, or raw")
+	cmd.Flags().StringVar(&opts.initStep, "init-step", "", "Show init step state for the named step on the service (RUNE-121)")
 
 	// API client flags
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "Address of the API server")
@@ -128,6 +137,12 @@ func runLogs(cmd *cobra.Command, args []string, opts *logsOptions) error {
 		return fmt.Errorf("failed to connect to API server: %w", err)
 	}
 	defer apiClient.Close()
+
+	// RUNE-121 S6: --init-step shortcuts the streaming path and prints
+	// per-instance InitStepState rows for the named step instead.
+	if opts.initStep != "" {
+		return printInitStepLogs(apiClient, opts, resourceArg)
+	}
 
 	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())

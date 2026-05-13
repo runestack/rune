@@ -1104,5 +1104,3 @@ func (r *ProcessRunner) Exec(ctx context.Context, instance *types.Instance, opti
 
 	return execStream, nil
 }
-
-// RunInit lives in init.go (RUNE-121 S5).

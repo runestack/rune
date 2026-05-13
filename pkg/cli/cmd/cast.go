@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -856,6 +858,11 @@ func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name st
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	// initStepProgress tracks the most recent printed (instance, step,
+	// status) tuple per instance so we only emit a transition line
+	// once per state change. Keyed by "<instance>/<step>" -> status.
+	initStepProgress := map[string]types.InitStepStatus{}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -869,6 +876,12 @@ func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name st
 				log.Debug("Error getting service status", log.Err(err))
 				continue
 			}
+
+			// RUNE-121 S6: surface init step transitions while any
+			// instance is in Initializing. Done before the failure /
+			// ready checks so the developer always sees "▶ format..."
+			// before they see the success or failure of the service.
+			printInitStepProgress(os.Stderr, service, initStepProgress)
 
 			// Fail fast: the reconciler has rolled the worst instance's
 			// reason/message up to the service. Surface it now instead
@@ -940,4 +953,48 @@ func printCastFailure(svc *types.Service) {
 	fmt.Printf("      service: %s/%s\n", svc.Namespace, svc.Name)
 	fmt.Println()
 	fmt.Printf("      rune get service %s -n %s\n", svc.Name, svc.Namespace)
+}
+
+// printInitStepProgress emits one line per init-step transition
+// observed across the service's instances since the last poll. Used by
+// `rune cast` to show the user "▶ format..." then "✓ format succeeded"
+// while the service sits in Initializing (RUNE-121).
+//
+// The seen map is mutated in place: callers create one fresh map per
+// `waitForServiceReady` invocation and pass it on every tick. Output
+// goes to w (stderr in production, a buffer under test).
+func printInitStepProgress(w io.Writer, svc *types.Service, seen map[string]types.InitStepStatus) {
+	if svc == nil {
+		return
+	}
+	for _, inst := range svc.Instances {
+		for _, st := range inst.InitStates {
+			key := inst.Name + "/" + st.Name
+			if seen[key] == st.Status {
+				continue
+			}
+			seen[key] = st.Status
+			switch st.Status {
+			case types.InitStepStatusRunning:
+				fmt.Fprintf(w, "    ▶ init step %q on %s\n", st.Name, inst.Name)
+			case types.InitStepStatusSucceeded:
+				fmt.Fprintf(w, "    ✓ init step %q on %s succeeded\n", st.Name, inst.Name)
+			case types.InitStepStatusSkipped:
+				msg := st.Message
+				if msg == "" {
+					msg = "skipped"
+				}
+				fmt.Fprintf(w, "    ↷ init step %q on %s: %s\n", st.Name, inst.Name, msg)
+			case types.InitStepStatusFailed:
+				reason := st.Reason
+				if reason == "" {
+					reason = "Failed"
+				}
+				fmt.Fprintf(w, "    ✗ init step %q on %s failed: %s\n", st.Name, inst.Name, reason)
+				if st.Message != "" {
+					fmt.Fprintf(w, "        %s\n", st.Message)
+				}
+			}
+		}
+	}
 }
