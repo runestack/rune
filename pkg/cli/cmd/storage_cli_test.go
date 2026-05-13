@@ -65,13 +65,15 @@ func TestNewStorageCommands(t *testing.T) {
 		cmd := newStorageClassCmd()
 		assert.Contains(t, cmd.Aliases, "sc")
 		names := subcommandNames(cmd)
-		// `create` was removed in v0.0.1-dev.46 — StorageClass cast
-		// files are deployed via `rune cast`, matching every other
-		// resource. Assert it's gone so it doesn't reappear by accident.
-		for _, want := range []string{"list", "get", "delete", "set-default"} {
+		// StorageClass is cluster-scoped, so it has a dedicated
+		// `create -f` rather than going through `rune cast` like
+		// namespaced resources do. (Removed in v0.0.1-dev.46;
+		// reinstated immediately afterwards once the asymmetry was
+		// recognised — cluster-scoped resources don't fit cast's
+		// namespace-context model.)
+		for _, want := range []string{"list", "get", "create", "delete", "set-default"} {
 			assert.Contains(t, names, want, "storageclass missing %q", want)
 		}
-		assert.NotContains(t, names, "create", "storageclass create was removed; use `rune cast` instead")
 		assertHasAlias(t, cmd, "list", "ls")
 		assertHasAlias(t, cmd, "delete", "remove")
 		assertHasAlias(t, cmd, "delete", "rm")
