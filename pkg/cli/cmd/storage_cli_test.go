@@ -65,9 +65,13 @@ func TestNewStorageCommands(t *testing.T) {
 		cmd := newStorageClassCmd()
 		assert.Contains(t, cmd.Aliases, "sc")
 		names := subcommandNames(cmd)
-		for _, want := range []string{"list", "get", "create", "delete", "set-default"} {
+		// `create` was removed in v0.0.1-dev.46 — StorageClass cast
+		// files are deployed via `rune cast`, matching every other
+		// resource. Assert it's gone so it doesn't reappear by accident.
+		for _, want := range []string{"list", "get", "delete", "set-default"} {
 			assert.Contains(t, names, want, "storageclass missing %q", want)
 		}
+		assert.NotContains(t, names, "create", "storageclass create was removed; use `rune cast` instead")
 		assertHasAlias(t, cmd, "list", "ls")
 		assertHasAlias(t, cmd, "delete", "remove")
 		assertHasAlias(t, cmd, "delete", "rm")
@@ -77,9 +81,12 @@ func TestNewStorageCommands(t *testing.T) {
 		cmd := newVolumeCmd()
 		assert.Contains(t, cmd.Aliases, "vol")
 		names := subcommandNames(cmd)
-		for _, want := range []string{"list", "get", "create", "delete", "detach", "retry-provision", "restore"} {
+		// `create` was removed in v0.0.1-dev.46 — Volume cast files are
+		// deployed via `rune cast`. Assert it's gone.
+		for _, want := range []string{"list", "get", "delete", "detach", "retry-provision", "restore"} {
 			assert.Contains(t, names, want, "volume missing %q", want)
 		}
+		assert.NotContains(t, names, "create", "volume create was removed; use `rune cast` instead")
 		assertHasAlias(t, cmd, "list", "ls")
 		assertHasAlias(t, cmd, "delete", "remove")
 		assertHasAlias(t, cmd, "delete", "rm")

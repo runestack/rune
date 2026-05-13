@@ -324,11 +324,18 @@ func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) err
 		return c.updateStatus(ctx, vol, types.VolumeStatusAvailable, "", "")
 	}
 
+	sizeBytes, err := volumeSizeBytes(vol)
+	if err != nil {
+		// An unparseable Size is a spec error, not a transient driver
+		// failure — fail terminally rather than burn retry budget.
+		return c.markFailed(ctx, vol, "InvalidSize", err.Error())
+	}
+
 	handle, err := d.Provision(ctx, driver.ProvisionRequest{
 		Volume:           vol,
 		StorageClass:     class,
 		MergedParameters: merged,
-		SizeBytes:        0, // size parsing lives in the binder; drivers fall back to a sane default for now
+		SizeBytes:        sizeBytes,
 	})
 	if err != nil {
 		return c.handleProvisionFail(ctx, vol, err)
@@ -875,14 +882,42 @@ func (c *volumeController) restoreFromSnapshot(
 		return "", fmt.Errorf("snapshot %s/%s belongs to driver %q but target storage class uses %q",
 			ns, name, snap.Driver, class.Driver)
 	}
+	sizeBytes, err := volumeSizeBytes(target)
+	if err != nil {
+		return "", err
+	}
 	return d.RestoreFromSnapshot(ctx, driver.RestoreRequest{
 		Source:           &snap,
 		SourceHandle:     driver.SnapshotHandle(snap.Handle),
 		Target:           target,
 		StorageClass:     class,
 		MergedParameters: merged,
-		SizeBytes:        0,
+		SizeBytes:        sizeBytes,
 	})
+}
+
+// volumeSizeBytes parses Volume.Size into an int64 byte count for the
+// driver layer. The empty string is allowed (returns 0) so drivers that
+// don't care about size — host-path bind mounts, the `local` driver —
+// keep working without a controller-side requirement to declare one.
+// Drivers that need a non-zero size, like `do-volume`, validate
+// internally and surface a clear error to the operator.
+//
+// Accepts the same string forms ParseMemory does: Kubernetes-quantity
+// PascalCase units (Ki/Mi/Gi/Ti/Pi/Ei), decimal SI (K/M/G/T/P/E), and
+// unitless integers (interpreted as bytes, matching the Quantity spec).
+func volumeSizeBytes(vol *types.Volume) (int64, error) {
+	if vol == nil || vol.Size == "" {
+		return 0, nil
+	}
+	n, err := types.ParseMemory(vol.Size)
+	if err != nil {
+		return 0, fmt.Errorf("volume %s/%s: invalid size %q: %w", vol.Namespace, vol.Name, vol.Size, err)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("volume %s/%s: size %q parses to a negative byte count", vol.Namespace, vol.Name, vol.Size)
+	}
+	return n, nil
 }
 
 // splitNamespacedRef parses "<namespace>/<name>" into its parts. Returns

@@ -16,7 +16,6 @@ import (
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // newStorageClassCmd builds the `rune storageclass` command group.
@@ -24,11 +23,18 @@ func newStorageClassCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "storageclass",
 		Aliases: []string{"sc", "storageclasses"},
-		Short:   "Manage storage classes (list, get, create, delete, set-default)",
+		Short:   "Manage storage classes (list, get, delete, set-default)",
+		Long: `Inspect and manage StorageClass resources. To create a
+StorageClass from a YAML spec, use ` + "`rune cast`" + ` — the same path used
+for every other resource. Example:
+
+    rune cast my-storageclass.yaml
+
+A StorageClass cast file is a top-level ` + "`storageClass:`" + ` mapping; see
+https://docs.runestack.io/reference/storage-resources/#storageclass.`,
 	}
 	cmd.AddCommand(newStorageClassListCmd())
 	cmd.AddCommand(newStorageClassGetCmd())
-	cmd.AddCommand(newStorageClassCreateCmd())
 	cmd.AddCommand(newStorageClassDeleteCmd())
 	cmd.AddCommand(newStorageClassSetDefaultCmd())
 	return cmd
@@ -85,41 +91,6 @@ func newStorageClassGetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&format, "output", "o", "table", "Output format: table|json|yaml")
-	return cmd
-}
-
-// --- create ---
-
-func newStorageClassCreateCmd() *cobra.Command {
-	var fromFile string
-	cmd := &cobra.Command{
-		Use:   "create -f <file>",
-		Short: "Create a storage class from a YAML or JSON spec file",
-		Long: `Reads a StorageClass spec from --file (YAML or JSON) and creates it on the
-server. The file should contain a single StorageClass; the cluster-default
-flag (default: true) is honoured by the API server which will atomically
-demote any prior Default class.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if fromFile == "" {
-				return fmt.Errorf("--file is required")
-			}
-			sc, err := readStorageClassFile(fromFile)
-			if err != nil {
-				return err
-			}
-			api, err := newAPIClient("", "")
-			if err != nil {
-				return err
-			}
-			defer api.Close()
-			if err := client.NewStorageClassClient(api).CreateStorageClass(sc); err != nil {
-				return err
-			}
-			fmt.Printf("StorageClass %s created\n", sc.Name)
-			return nil
-		},
-	}
-	cmd.Flags().StringVarP(&fromFile, "file", "f", "", "Path to YAML or JSON spec file")
 	return cmd
 }
 
@@ -190,28 +161,6 @@ flag on any other class, so the cluster always has at most one default.`,
 		},
 	}
 	return cmd
-}
-
-// --- file loading ---
-
-// readStorageClassFile loads a single StorageClass spec from a YAML or JSON
-// file. JSON is a subset of YAML, so a single yaml.Unmarshal handles both.
-func readStorageClassFile(path string) (*types.StorageClass, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	var sc types.StorageClass
-	if err := yaml.Unmarshal(data, &sc); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if sc.Name == "" {
-		return nil, fmt.Errorf("%s: storage class name is required", path)
-	}
-	if sc.Driver == "" {
-		return nil, fmt.Errorf("%s: storage class driver is required", path)
-	}
-	return &sc, nil
 }
 
 // --- rendering helpers ---
