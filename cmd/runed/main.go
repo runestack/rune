@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/runestack/rune/internal/agent/dataplane"
 	dnssub "github.com/runestack/rune/internal/agent/dns"
 	"github.com/runestack/rune/internal/agent/ingressctl"
+	volsub "github.com/runestack/rune/internal/agent/volumes"
 	"github.com/runestack/rune/internal/config"
 	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
@@ -27,12 +29,21 @@ import (
 	acmesvc "github.com/runestack/rune/pkg/networking/acme"
 	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/networking/vip"
+	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/version"
 	watchsvc "github.com/runestack/rune/pkg/watch"
 	"github.com/spf13/viper"
+
+	// Storage drivers — each blank-import registers one or more driver
+	// names with pkg/storage/driver.Registry at init() time. Adding a new
+	// driver (Hetzner, AWS EBS, ...) is one more line here.
+	_ "github.com/runestack/rune/pkg/storage/driver/local"
+
+	"github.com/runestack/rune/pkg/storage/driver/dovolume"
+	"github.com/runestack/rune/pkg/store/repos"
 	"google.golang.org/grpc"
 )
 
@@ -473,11 +484,30 @@ func main() {
 	}
 	defer stateStore.Close()
 
+	// Dev-mode storage overlay: when --dev-mode is on, force the
+	// local/local-host drivers into a laptop-friendly layout —
+	// allowCreateMissing=true and a default ~/.rune/volumes root
+	// that's mkdir'able under the developer's home (the production
+	// /var/lib/rune/volumes default usually requires root). Operator
+	// config wins; we never overwrite explicit values.
+	if *devMode && appCfg != nil {
+		applyDevModeStorageOverlay(&appCfg.Storage, logger)
+	}
+
 	// Bootstrap and resolve registry secrets into viper before runner init
 	if err := bootstrapAndResolveRegistryAuth(appCfg, stateStore, logger); err != nil {
 		logger.Error("Failed to bootstrap/resolve registry auth", log.Err(err))
 		os.Exit(1)
 	}
+
+	// Inject a SecretLookup into the do-volume driver config so it can
+	// resolve apiTokenSecretRef at call time. The lookup is plumbed via
+	// the reserved key dovolume.configKeySecretLookup (a leading
+	// underscore signals "not a runefile field"). We mutate the same
+	// appCfg.Storage.Drivers map that's threaded into both the agent's
+	// driver lookup and the volume controller, so the closure is shared.
+	// No-op when the operator has not declared the do-volume driver.
+	injectDOVolumeSecretLookup(appCfg, stateStore)
 
 	// Token-based auth is always enabled in MVP
 	logger.Info("Authentication enabled (token-based)")
@@ -524,7 +554,7 @@ func main() {
 	}
 
 	// Create and start API server (with WatchService registered).
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, logger, vipAllocator, vipAllocator, watchRegistrar)...)
+	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)
@@ -567,6 +597,38 @@ func main() {
 			return err
 		}
 		dpRef = dp
+
+		// Per-node storage subsystem (RUNE-069). Watches Volume rows
+		// and, for each volume the orchestrator has bound to this
+		// node, calls the registered driver's Attach + Mount under
+		// /var/lib/rune/mounts/<volume.ID>/. Symmetrically Unmount +
+		// Detach on unbind/delete and on agent Stop. The instance
+		// controller's resolveVolumeMount consults the subsystem's
+		// MountTargetFor() and falls back to Volume.Handle when no
+		// mount is recorded yet (correct for the in-tree local /
+		// local-host drivers, since their Mount returns the host
+		// path verbatim). The resolver-first path is what makes
+		// future block-device drivers (do-volume, ...) usable.
+		var driverConfigs map[string]map[string]any
+		if appCfg != nil {
+			driverConfigs = appCfg.Storage.Drivers
+		}
+		volSub, vsErr := volsub.New(volsub.Config{
+			Store:  stateStore,
+			NodeID: a.Identity().NodeID,
+			Lookup: makeAgentDriverLookup(stateStore, driverConfigs),
+			Logger: logger.WithComponent("agent.volumes"),
+		})
+		if vsErr != nil {
+			return fmt.Errorf("agent volumes: %w", vsErr)
+		}
+		if err := a.Register(volSub); err != nil {
+			return err
+		}
+		// Wire the subsystem into the orchestrator so the instance
+		// controller's resolveVolumeMount asks it for a mount target
+		// before falling back to Volume.Handle.
+		apiServer.GetOrchestrator().SetMountResolver(volSub)
 
 		// Embedded DNS subsystem (RUNE-063). Registers itself with
 		// the agent so it inherits supervised lifecycle. Bind list
@@ -815,7 +877,85 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 	return st, appCfg, storeDir, nil
 }
 
-func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
+// injectDOVolumeSecretLookup wires a SecretRepo-backed SecretLookup
+// into the do-volume driver's runefile config under the reserved key
+// dovolume.configKeySecretLookup. The closure resolves apiTokenSecretRef
+// at every API call so DO token rotation takes effect on the next
+// reconcile without restarting runed.
+//
+// The same Drivers map is threaded into both the agent driver lookup
+// (Attach/Mount/Unmount/Detach) and the API-server's volume controller
+// (Provision/Delete/Snapshot/Restore/Expand), so injecting once here
+// covers both paths. No-op when the operator hasn't declared the
+// driver — we don't want to allocate an empty stanza for clusters
+// that aren't on DO.
+func injectDOVolumeSecretLookup(appCfg *config.Config, st store.Store) {
+	if appCfg == nil {
+		return
+	}
+	if _, present := appCfg.Storage.Drivers[dovolume.DriverName]; !present {
+		// Operator has not configured do-volume; nothing to wire.
+		return
+	}
+	if appCfg.Storage.Drivers == nil {
+		appCfg.Storage.Drivers = map[string]map[string]any{}
+	}
+	if appCfg.Storage.Drivers[dovolume.DriverName] == nil {
+		appCfg.Storage.Drivers[dovolume.DriverName] = map[string]any{}
+	}
+	repo := repos.NewSecretRepo(st)
+	lookup := dovolume.SecretLookup(func(ctx context.Context, ns, name, key string) (string, error) {
+		sec, err := repo.Get(ctx, ns, name)
+		if err != nil {
+			return "", err
+		}
+		v, ok := sec.Data[key]
+		if !ok {
+			return "", fmt.Errorf("secret %s/%s has no key %q", ns, name, key)
+		}
+		return v, nil
+	})
+	// configKeySecretLookup is unexported; use the public string by
+	// agreement with the dovolume package.
+	appCfg.Storage.Drivers[dovolume.DriverName][dovolume.ConfigKeySecretLookup] = lookup
+}
+
+// makeAgentDriverLookup returns a volsub.DriverLookup closure that
+// resolves a Volume to its driver by reading the Volume's StorageClass
+// from the store and instantiating the driver from the registry, with
+// per-driver config drawn from the runefile [storage.drivers] section.
+// Driver instances are cached so repeated lookups don't allocate.
+func makeAgentDriverLookup(st store.Store, driverConfigs map[string]map[string]any) volsub.DriverLookup {
+	var (
+		mu      sync.Mutex
+		drivers = make(map[string]driver.Driver)
+	)
+	return func(ctx context.Context, vol *types.Volume) (driver.Driver, error) {
+		if vol.StorageClassName == "" {
+			return nil, fmt.Errorf("volume %s has no storageClassName", vol.String())
+		}
+		var sc types.StorageClass
+		if err := st.Get(ctx, types.ResourceTypeStorageClass, "", vol.StorageClassName, &sc); err != nil {
+			return nil, fmt.Errorf("get storage class %q: %w", vol.StorageClassName, err)
+		}
+		if sc.Driver == "" {
+			return nil, fmt.Errorf("storage class %q has empty driver", sc.Name)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if d, ok := drivers[sc.Driver]; ok {
+			return d, nil
+		}
+		d, err := driver.New(sc.Driver, driverConfigs[sc.Driver])
+		if err != nil {
+			return nil, fmt.Errorf("instantiate driver %q: %w", sc.Driver, err)
+		}
+		drivers[sc.Driver] = d
+		return d, nil
+	}
+}
+
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
 	opts := []server.Option{
 		server.WithGRPCAddr(grpcAddress),
 		server.WithHTTPAddr(httpAddress),
@@ -829,6 +969,22 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, logger 
 	}
 	if vipAlloc != nil {
 		opts = append(opts, server.WithVIPAllocator(vipAlloc))
+	}
+	// Thread per-driver storage config from the runefile
+	// through to the orchestrator (e.g. local.localVolumeRoot,
+	// local-host.hostPathAllowlist).
+	if appCfg != nil && len(appCfg.Storage.Drivers) > 0 {
+		opts = append(opts, server.WithStorageDriverConfigs(appCfg.Storage.Drivers))
+	}
+	// Thread typed [storage] knobs (defaultStorageClass,
+	// preserveOnDelete) through to the volume controller. Each is
+	// only set when the operator explicitly supplied it; nil/false
+	// preserve the built-in defaults.
+	if appCfg != nil && appCfg.Storage.DefaultStorageClass != nil {
+		opts = append(opts, server.WithStorageDefaultStorageClass(appCfg.Storage.DefaultStorageClass))
+	}
+	if appCfg != nil && appCfg.Storage.PreserveOnDelete {
+		opts = append(opts, server.WithStoragePreserveOnDelete(true))
 	}
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
@@ -893,4 +1049,86 @@ func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedL
 		}
 	}
 	return a, stop, nil
+}
+
+// applyDevModeStorageOverlay mutates the operator-provided Storage
+// config so the local storage drivers run cleanly on a developer
+// laptop under --dev-mode:
+//
+//   - allowCreateMissing is forced to true on the local-host driver
+//     (so MyService.volumes hostPath: ~/proj/data auto-mkdirs instead
+//     of failing with ErrInvalidConfig).
+//   - ~/.rune/volumes is appended to local-host.hostPathAllowlist if
+//     not already present, giving services a default writable area.
+//   - local.localVolumeRoot defaults to ~/.rune/volumes when unset
+//     (production default is /var/lib/rune/volumes which usually
+//     requires root on Linux and never exists on macOS).
+//
+// Operator-provided values always win — every key is only filled in
+// when the operator left it unset. Callers should only invoke this
+// when *devMode is true.
+func applyDevModeStorageOverlay(s *config.Storage, logger log.Logger) {
+	if s == nil {
+		return
+	}
+	if s.Drivers == nil {
+		s.Drivers = make(map[string]map[string]any, 2)
+	}
+
+	home, _ := os.UserHomeDir()
+	devVolRoot := ""
+	if home != "" {
+		devVolRoot = filepath.Join(home, ".rune", "volumes")
+	}
+
+	// local-host driver overlay.
+	hostCfg := s.Drivers["local-host"]
+	if hostCfg == nil {
+		hostCfg = make(map[string]any, 2)
+	}
+	if _, set := hostCfg["allowCreateMissing"]; !set {
+		hostCfg["allowCreateMissing"] = true
+	}
+	if devVolRoot != "" {
+		raw, ok := hostCfg["hostPathAllowlist"]
+		var allow []any
+		if ok {
+			if existing, ok2 := raw.([]any); ok2 {
+				allow = existing
+			} else if existing, ok2 := raw.([]string); ok2 {
+				allow = make([]any, 0, len(existing))
+				for _, v := range existing {
+					allow = append(allow, v)
+				}
+			}
+		}
+		present := false
+		for _, v := range allow {
+			if s, ok := v.(string); ok && s == devVolRoot {
+				present = true
+				break
+			}
+		}
+		if !present {
+			allow = append(allow, devVolRoot)
+		}
+		hostCfg["hostPathAllowlist"] = allow
+	}
+	s.Drivers["local-host"] = hostCfg
+
+	// local (managed) driver overlay.
+	if devVolRoot != "" {
+		mgr := s.Drivers["local"]
+		if mgr == nil {
+			mgr = make(map[string]any, 1)
+		}
+		if _, set := mgr["localVolumeRoot"]; !set {
+			mgr["localVolumeRoot"] = devVolRoot
+		}
+		s.Drivers["local"] = mgr
+	}
+
+	logger.Info("Dev-mode storage overlay applied",
+		log.Str("dev_volume_root", devVolRoot),
+		log.Bool("allow_create_missing", true))
 }

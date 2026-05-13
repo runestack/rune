@@ -55,6 +55,24 @@ type Options struct {
 	// CreateService call assigns a stable VIP from the pool.
 	// Supplied by runed at startup.
 	VIPAllocator service.VIPAllocator
+
+	// StorageDriverConfigs is the per-driver opaque configuration
+	// map (driver name → key/value) passed to the orchestrator when
+	// the server constructs one itself (i.e. when WithOrchestrator
+	// was not used). Sourced from the runefile [storage.drivers]
+	// table by runed. Nil-safe — drivers fall back to their own
+	// defaults.
+	StorageDriverConfigs map[string]map[string]any
+
+	// StorageDefaultStorageClass mirrors the runefile [storage].
+	// defaultStorageClass knob. *string so empty-string ("no cluster
+	// default") is distinguishable from unset.
+	StorageDefaultStorageClass *string
+
+	// StoragePreserveOnDelete mirrors the runefile [storage].
+	// preserveOnDelete knob. When true the local driver treats
+	// ReclaimPolicy:delete as retain.
+	StoragePreserveOnDelete bool
 }
 
 // Option is a function that configures options.
@@ -159,5 +177,33 @@ func WithNetworkStatusProvider(p service.NetworkStatusProvider) Option {
 func WithVIPAllocator(a service.VIPAllocator) Option {
 	return func(opts *Options) {
 		opts.VIPAllocator = a
+	}
+}
+
+// WithStorageDriverConfigs threads per-driver opaque configuration
+// from the runefile through to the orchestrator that the API server
+// constructs internally. No-op when the caller also supplies an
+// already-built orchestrator via WithOrchestrator.
+func WithStorageDriverConfigs(cfg map[string]map[string]any) Option {
+	return func(opts *Options) {
+		opts.StorageDriverConfigs = cfg
+	}
+}
+
+// WithStorageDefaultStorageClass threads the runefile
+// [storage].defaultStorageClass knob through to the orchestrator. Nil
+// means "keep built-in default"; pointer-to-empty-string means "no
+// cluster default — error on missing storageClassName".
+func WithStorageDefaultStorageClass(name *string) Option {
+	return func(opts *Options) {
+		opts.StorageDefaultStorageClass = name
+	}
+}
+
+// WithStoragePreserveOnDelete threads the runefile
+// [storage].preserveOnDelete knob through to the orchestrator.
+func WithStoragePreserveOnDelete(preserve bool) Option {
+	return func(opts *Options) {
+		opts.StoragePreserveOnDelete = preserve
 	}
 }

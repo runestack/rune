@@ -145,6 +145,47 @@ type ACME struct {
 	Email     string `yaml:"email"`
 }
 
+// Storage holds operator-facing configuration for the storage
+// subsystem. The runefile schema is:
+//
+//	storage:
+//	  defaultStorageClass: local       # name of the cluster-default class
+//	                                    # ("" disables the cluster default;
+//	                                    # missing storageClassName then errors)
+//	  preserveOnDelete: false          # when true, the local driver demotes
+//	                                    # reclaimPolicy:delete to retain
+//	  allowCreateMissing: false        # plumbing only; enforced by drivers
+//	  drivers:
+//	    local:
+//	      localVolumeRoot: /var/lib/rune/volumes
+//	    local-host:
+//	      hostPathAllowlist: ["/srv/rune"]
+//
+// Keys under `drivers` are driver names registered with the storage
+// driver registry. Values are passed verbatim to Driver constructors
+// via OrchestratorOptions.StorageDriverConfigs; missing entries fall
+// back to the driver's own defaults.
+type Storage struct {
+	// DefaultStorageClass selects which StorageClass is marked
+	// Default:true at orchestrator boot. *string so the empty-string
+	// case ("no cluster default — error on missing storageClassName")
+	// is distinguishable from "unset → keep built-in default".
+	DefaultStorageClass *string `yaml:"defaultStorageClass,omitempty"`
+
+	// PreserveOnDelete, when true, converts ReclaimPolicy:delete to
+	// retain for volumes provisioned by the in-tree "local" driver.
+	// Useful for single-node dev clusters where accidental rm -rf is
+	// unrecoverable.
+	PreserveOnDelete bool `yaml:"preserveOnDelete,omitempty"`
+
+	// AllowCreateMissing, when true, lets drivers auto-create missing
+	// host paths instead of failing validation. Plumbed through to the
+	// driver layer; per-driver enforcement is a separate slice.
+	AllowCreateMissing bool `yaml:"allowCreateMissing,omitempty"`
+
+	Drivers map[string]map[string]any `yaml:"drivers,omitempty"`
+}
+
 type Config struct {
 	Server    Server    `yaml:"server"`
 	DataDir   string    `yaml:"data_dir"`
@@ -167,6 +208,7 @@ type Config struct {
 	Node       Node       `yaml:"node"`
 	Ingress    Ingress    `yaml:"ingress"`
 	ACME       ACME       `yaml:"acme"`
+	Storage    Storage    `yaml:"storage"`
 }
 
 func Default() *Config {

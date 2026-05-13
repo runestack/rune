@@ -848,6 +848,29 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 			}
 			hostConfig.Mounts = append(hostConfig.Mounts, configMounts...)
 		}
+
+		// Process volume mounts. Source is the host-side path
+		// produced by the storage driver (a managed directory, an
+		// operator host path, or a block-device mount target). We only
+		// emit bind mounts here; agent-side Attach/Mount/Unmount/Detach
+		// for block-device drivers lives in the agent.
+		if len(instance.Metadata.VolumeMounts) > 0 {
+			for _, vm := range instance.Metadata.VolumeMounts {
+				if vm.Source == "" || vm.MountPath == "" {
+					return nil, nil, fmt.Errorf("invalid volume mount %q: source or mountPath empty", vm.Name)
+				}
+				source := vm.Source
+				if vm.SubPath != "" {
+					source = filepath.Join(source, vm.SubPath)
+				}
+				hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
+					Type:     mount.TypeBind,
+					Source:   source,
+					Target:   vm.MountPath,
+					ReadOnly: vm.ReadOnly,
+				})
+			}
+		}
 	}
 
 	// Inject the agent's embedded DNS (RUNE-063) when it has been

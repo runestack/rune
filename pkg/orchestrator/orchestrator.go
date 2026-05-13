@@ -63,6 +63,11 @@ type Orchestrator interface {
 	// SetEndpointPublisher wires the networking data plane (RUNE-063).
 	// Optional; nil-safe. Call once at startup before Start().
 	SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string)
+
+	// SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
+	// into the instance controller. Optional; nil-safe. Call once at
+	// startup before Start().
+	SetMountResolver(resolver controllers.MountResolver)
 }
 
 // orchestrator implements the Orchestrator interface
@@ -76,6 +81,8 @@ type orchestrator struct {
 	instanceController controllers.InstanceController
 	healthController   controllers.HealthController
 	scalingController  controllers.ScalingController
+	volumeController   controllers.VolumeController
+	snapshotController controllers.SnapshotController
 
 	// Runner manager for executing commands
 	runnerManager manager.IRunnerManager
@@ -99,6 +106,22 @@ type OrchestratorOptions struct {
 	RunnerManager manager.IRunnerManager
 	WorkerCount   int
 	EnableMetrics bool
+
+	// StorageDriverConfigs is the per-driver configuration block parsed from
+	// the runefile [storage] table. Key is the driver name as registered in
+	// pkg/storage/driver (e.g. "local", "local-host"); value is the opaque
+	// configuration map handed to the driver factory. Optional; nil-safe.
+	StorageDriverConfigs map[string]map[string]any
+
+	// DefaultStorageClass mirrors the runefile [storage].defaultStorageClass
+	// knob. *string so the empty-string case ("no cluster default") is
+	// distinguishable from "unset — keep built-in default".
+	DefaultStorageClass *string
+
+	// StoragePreserveOnDelete mirrors the runefile [storage].preserveOnDelete
+	// knob. When true, the volume controller demotes ReclaimPolicy:delete
+	// to retain for volumes provisioned by the in-tree "local" driver.
+	StoragePreserveOnDelete bool
 }
 
 // NewDefaultOrchestrator creates a new orchestrator with default options
@@ -159,6 +182,29 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		return nil, fmt.Errorf("failed to create service controller: %w", err)
 	}
 
+	// VolumeController owns the Volume CRUD reconciliation loop
+	// (provision/reclaim via the storage driver registry).
+	volumeController, err := controllers.NewVolumeController(controllers.VolumeControllerOptions{
+		Store:               options.Store,
+		Logger:              options.Logger,
+		DriverConfigs:       options.StorageDriverConfigs,
+		DefaultStorageClass: options.DefaultStorageClass,
+		PreserveOnDelete:    options.StoragePreserveOnDelete,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create volume controller: %w", err)
+	}
+
+	// SnapshotController owns the Snapshot CRUD reconciliation loop.
+	snapshotController, err := controllers.NewSnapshotController(controllers.SnapshotControllerOptions{
+		Store:         options.Store,
+		Logger:        options.Logger,
+		DriverConfigs: options.StorageDriverConfigs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create snapshot controller: %w", err)
+	}
+
 	return &orchestrator{
 		store:              options.Store,
 		logger:             options.Logger.WithComponent("orchestrator"),
@@ -166,6 +212,8 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		instanceController: instanceController,
 		healthController:   healthController,
 		scalingController:  scalingController,
+		volumeController:   volumeController,
+		snapshotController: snapshotController,
 		runnerManager:      options.RunnerManager,
 	}, nil
 }
@@ -197,6 +245,16 @@ func (o *orchestrator) Start(ctx context.Context) error {
 	// Start scaling controller
 	if err := o.scalingController.Start(o.ctx); err != nil {
 		return fmt.Errorf("failed to start scaling controller: %w", err)
+	}
+
+	// Start volume controller
+	if err := o.volumeController.Start(o.ctx); err != nil {
+		return fmt.Errorf("failed to start volume controller: %w", err)
+	}
+
+	// Start snapshot controller
+	if err := o.snapshotController.Start(o.ctx); err != nil {
+		return fmt.Errorf("failed to start snapshot controller: %w", err)
 	}
 
 	o.started = true
@@ -232,6 +290,16 @@ func (o *orchestrator) Stop() error {
 
 	// Stop scaling controller
 	o.scalingController.Stop()
+
+	// Stop volume controller
+	if err := o.volumeController.Stop(); err != nil {
+		o.logger.Error("Failed to stop volume controller", log.Err(err))
+	}
+
+	// Stop snapshot controller
+	if err := o.snapshotController.Stop(); err != nil {
+		o.logger.Error("Failed to stop snapshot controller", log.Err(err))
+	}
 
 	// Wait for all goroutines to finish
 	o.wg.Wait()
@@ -446,4 +514,10 @@ func (o *orchestrator) GetActiveScalingOperation(ctx context.Context, namespace,
 // to the underlying instance controller.
 func (o *orchestrator) SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string) {
 	o.instanceController.SetEndpointPublisher(publisher, nodeID)
+}
+
+// SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
+// to the underlying instance controller.
+func (o *orchestrator) SetMountResolver(resolver controllers.MountResolver) {
+	o.instanceController.SetMountResolver(resolver)
 }

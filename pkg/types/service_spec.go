@@ -68,6 +68,11 @@ type ServiceSpec struct {
 	// Configmap mounts
 	ConfigmapMounts []ConfigmapMount `json:"configmapMounts,omitempty" yaml:"configmapMounts,omitempty"`
 
+	// Volume mounts. Each entry references either a pre-existing Volume by
+	// name (Claim) or an inline ClaimTemplate the controller materializes
+	// into a per-instance Volume.
+	Volumes []VolumeMount `json:"volumes,omitempty" yaml:"volumes,omitempty"`
+
 	// Service discovery configuration
 	Discovery *ServiceDiscovery `json:"discovery,omitempty" yaml:"discovery,omitempty"`
 
@@ -465,6 +470,22 @@ func (s *ServiceSpec) Validate() error {
 		}
 	}
 
+	// Validate volume mounts (RUNE-070).
+	if err := ValidateVolumeMounts(s.Volumes); err != nil {
+		return err
+	}
+
+	// Cross-mount lint (RUNE-070/072): shared paths, system blocklist, RWO+scale>1.
+	owner := fmt.Sprintf("service %q", s.Name)
+	if err := ValidateMountPathConflicts(owner, s.Scale, s.Volumes, s.SecretMounts, s.ConfigmapMounts); err != nil {
+		return err
+	}
+
+	// Note: ValidateProcessRuntimeVolumes lives on Service.Validate, not
+	// here — ServiceSpec is the user-facing castfile shape and does not
+	// carry a Runtime field; runtime is resolved later when the spec is
+	// converted to a Service.
+
 	return nil
 }
 
@@ -495,6 +516,7 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 		"autoscale":     true,
 		"secretMounts":  true,
 		"configMounts":  true,
+		"volumes":       true,
 		"discovery":     true,
 		"imageRegistry": true,
 		"registry":      true,
@@ -625,6 +647,7 @@ func (s *ServiceSpec) ToService() (*Service, error) {
 		Autoscale:       s.Autoscale,
 		SecretMounts:    s.SecretMounts,
 		ConfigmapMounts: s.ConfigmapMounts,
+		Volumes:         s.Volumes,
 		Discovery:       s.Discovery,
 		Dependencies:    deps,
 		Status:          ServiceStatusPending,

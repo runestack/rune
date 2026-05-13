@@ -44,6 +44,15 @@ const (
 
 	// ResourceTypeAuditEvent represents append-only audit events.
 	ResourceTypeAuditEvent ResourceType = "audit_event"
+
+	// ResourceTypeVolume represents persistent volumes (RUNE-069).
+	ResourceTypeVolume ResourceType = "volume"
+
+	// ResourceTypeStorageClass represents cluster-scoped storage classes (RUNE-073).
+	ResourceTypeStorageClass ResourceType = "storage_class"
+
+	// ResourceTypeSnapshot represents volume snapshots (RUNE-071).
+	ResourceTypeSnapshot ResourceType = "snapshot"
 )
 
 // RunnerType is the type of runner for an instance.

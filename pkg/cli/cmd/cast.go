@@ -37,12 +37,14 @@ type castOptions struct {
 
 // ResourceInfo holds information about resources to be deployed
 type ResourceInfo struct {
-	FilesByType      map[string][]string
-	ServicesByFile   map[string][]*types.Service
-	SecretsByFile    map[string][]*types.Secret
-	ConfigmapsByFile map[string][]*types.Configmap
-	TotalResources   int
-	SourceArguments  []string
+	FilesByType          map[string][]string
+	ServicesByFile       map[string][]*types.Service
+	SecretsByFile        map[string][]*types.Secret
+	ConfigmapsByFile     map[string][]*types.Configmap
+	StorageClassesByFile map[string][]*types.StorageClass
+	VolumesByFile        map[string][]*types.Volume
+	TotalResources       int
+	SourceArguments      []string
 }
 
 // DeploymentResult holds results of a deployment
@@ -190,12 +192,14 @@ func runCastNonRuneset(args []string, timeout time.Duration, opts *castOptions) 
 // It collects errors across files and reports them in a consolidated form.
 func parseCastFilesResources(filePaths []string, sourceArgs []string, opts *castOptions) (*ResourceInfo, error) {
 	info := &ResourceInfo{
-		FilesByType:      make(map[string][]string),
-		ServicesByFile:   make(map[string][]*types.Service),
-		SecretsByFile:    make(map[string][]*types.Secret),
-		ConfigmapsByFile: make(map[string][]*types.Configmap),
-		TotalResources:   0,
-		SourceArguments:  sourceArgs,
+		FilesByType:          make(map[string][]string),
+		ServicesByFile:       make(map[string][]*types.Service),
+		SecretsByFile:        make(map[string][]*types.Secret),
+		ConfigmapsByFile:     make(map[string][]*types.Configmap),
+		StorageClassesByFile: make(map[string][]*types.StorageClass),
+		VolumesByFile:        make(map[string][]*types.Volume),
+		TotalResources:       0,
+		SourceArguments:      sourceArgs,
 	}
 
 	// Print detected resources header
@@ -300,6 +304,36 @@ func parseCastFilesResources(filePaths []string, sourceArgs []string, opts *cast
 			}
 		}
 
+		// Extract storage classes from the cast file (RUNE-072)
+		storageClasses, err := castFile.GetStorageClasses()
+		if err != nil {
+			fileErrors = append(fileErrors, fmt.Sprintf("failed to extract storage classes: %v", err))
+		} else if len(storageClasses) > 0 {
+			info.StorageClassesByFile[filePath] = storageClasses
+			info.TotalResources += len(storageClasses)
+			if _, exists := info.FilesByType["StorageClass"]; !exists {
+				info.FilesByType["StorageClass"] = []string{}
+			}
+			if !stringSliceContains(info.FilesByType["StorageClass"], fileName) {
+				info.FilesByType["StorageClass"] = append(info.FilesByType["StorageClass"], fileName)
+			}
+		}
+
+		// Extract volumes from the cast file (RUNE-072)
+		volumes, err := castFile.GetVolumes()
+		if err != nil {
+			fileErrors = append(fileErrors, fmt.Sprintf("failed to extract volumes: %v", err))
+		} else if len(volumes) > 0 {
+			info.VolumesByFile[filePath] = volumes
+			info.TotalResources += len(volumes)
+			if _, exists := info.FilesByType["Volume"]; !exists {
+				info.FilesByType["Volume"] = []string{}
+			}
+			if !stringSliceContains(info.FilesByType["Volume"], fileName) {
+				info.FilesByType["Volume"] = append(info.FilesByType["Volume"], fileName)
+			}
+		}
+
 		// If we have extraction errors, collect them
 		if len(fileErrors) > 0 {
 			for _, fe := range fileErrors {
@@ -334,13 +368,22 @@ func deployResources(apiClient *client.Client, info *ResourceInfo, timeout time.
 	results.SuccessfulResources["Service"] = []string{}
 	results.SuccessfulResources["Secret"] = []string{}
 	results.SuccessfulResources["Configmap"] = []string{}
+	results.SuccessfulResources["StorageClass"] = []string{}
+	results.SuccessfulResources["Volume"] = []string{}
 
 	// Safety check: ensure we have resources to deploy
 	if info.TotalResources == 0 {
 		return results, fmt.Errorf("no resources found to deploy")
 	}
 
-	// Deploy Configmaps and Secrets first, then Services
+	// Deploy storage prerequisites first (cluster-scoped StorageClasses,
+	// then namespaced Volumes), then Configmaps and Secrets, then Services.
+	if err := deployStorageClasses(apiClient, info, results, opts); err != nil {
+		return results, err
+	}
+	if err := deployVolumes(apiClient, info, results, opts); err != nil {
+		return results, err
+	}
 	if err := deployConfigmaps(apiClient, info, results, opts); err != nil {
 		return results, err
 	}
@@ -493,6 +536,78 @@ func deployConfigmaps(apiClient *client.Client, info *ResourceInfo, results *Dep
 			}
 			fmt.Println(" ✓")
 			results.SuccessfulResources["Configmap"] = append(results.SuccessfulResources["Configmap"], configmap.Name)
+		}
+	}
+	return nil
+}
+
+// deployStorageClasses creates or updates StorageClass definitions discovered
+// in the cast file (RUNE-072). StorageClasses are cluster-scoped: an existing
+// class with the same name is updated in place.
+func deployStorageClasses(apiClient *client.Client, info *ResourceInfo, results *DeploymentResult, opts *castOptions) error {
+	scClient := client.NewStorageClassClient(apiClient)
+	resourceCount := 0
+	for _, classes := range info.StorageClassesByFile {
+		resourceCount += len(classes)
+	}
+	if resourceCount == 0 {
+		return nil
+	}
+	resourceIndex := 0
+	for _, classes := range info.StorageClassesByFile {
+		for _, sc := range classes {
+			resourceIndex++
+			fmt.Printf("  [%d/%d] Creating StorageClass \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", sc.Name))
+			pad := 25 - len(sc.Name)
+			if pad < 1 {
+				pad = 1
+			}
+			fmt.Print(strings.Repeat(".", pad))
+			if err := scClient.CreateStorageClass(sc); err != nil {
+				if uerr := scClient.UpdateStorageClass(sc); uerr != nil {
+					fmt.Println(" ❌")
+					results.FailedResources[sc.Name] = uerr.Error()
+					return fmt.Errorf("failed to apply storageclass %s: %w", sc.Name, uerr)
+				}
+			}
+			fmt.Println(" ✓")
+			results.SuccessfulResources["StorageClass"] = append(results.SuccessfulResources["StorageClass"], sc.Name)
+		}
+	}
+	return nil
+}
+
+// deployVolumes creates or updates Volume definitions discovered in the
+// cast file (RUNE-072). Volumes are namespace-scoped; the namespace must
+// already exist (or --create-namespace must have been passed).
+func deployVolumes(apiClient *client.Client, info *ResourceInfo, results *DeploymentResult, opts *castOptions) error {
+	vClient := client.NewVolumeClient(apiClient)
+	resourceCount := 0
+	for _, vols := range info.VolumesByFile {
+		resourceCount += len(vols)
+	}
+	if resourceCount == 0 {
+		return nil
+	}
+	resourceIndex := 0
+	for _, vols := range info.VolumesByFile {
+		for _, v := range vols {
+			resourceIndex++
+			fmt.Printf("  [%d/%d] Creating Volume \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", v.Name))
+			pad := 25 - len(v.Name)
+			if pad < 1 {
+				pad = 1
+			}
+			fmt.Print(strings.Repeat(".", pad))
+			if err := vClient.CreateVolume(v, opts.createNamespace); err != nil {
+				if uerr := vClient.UpdateVolume(v); uerr != nil {
+					fmt.Println(" ❌")
+					results.FailedResources[v.Name] = uerr.Error()
+					return fmt.Errorf("failed to apply volume %s: %w", v.Name, uerr)
+				}
+			}
+			fmt.Println(" ✓")
+			results.SuccessfulResources["Volume"] = append(results.SuccessfulResources["Volume"], v.Name)
 		}
 	}
 	return nil

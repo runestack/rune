@@ -769,12 +769,32 @@ func (sc *serviceController) getServiceForDeletion(ctx context.Context, request 
 
 // determineFinalizerTypes determines which finalizers are needed for this service
 func (sc *serviceController) determineFinalizerTypes(service *types.Service) []types.FinalizerType {
-	// For now, always include instance cleanup and service deregister
-	// This could be made configurable based on service annotations or configuration
-	return []types.FinalizerType{
+	finalizers := []types.FinalizerType{
 		types.FinalizerTypeInstanceCleanup,
-		types.FinalizerTypeServiceDeregister,
 	}
+	// Volume cleanup is only relevant when the service auto-provisioned
+	// per-replica volumes via a claimTemplate. Bare Claim references are
+	// to operator-owned volumes and are intentionally not reclaimed on
+	// service deletion.
+	if serviceHasClaimTemplate(service) {
+		finalizers = append(finalizers, types.FinalizerTypeVolumeCleanup)
+	}
+	finalizers = append(finalizers, types.FinalizerTypeServiceDeregister)
+	return finalizers
+}
+
+// serviceHasClaimTemplate reports whether the service declares any
+// volume mount that uses a claimTemplate (per-replica auto-provisioning).
+func serviceHasClaimTemplate(service *types.Service) bool {
+	if service == nil {
+		return false
+	}
+	for _, v := range service.Volumes {
+		if v.ClaimTemplate != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // handleDryRunDeletion handles dry run deletion requests

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +75,12 @@ type InstanceController interface {
 	// May be called once at startup; nil-publisher disables publishing.
 	SetEndpointPublisher(publisher EndpointPublisher, nodeID string)
 
+	// SetMountResolver wires the agent-side volumes Subsystem
+	// (RUNE-069). May be called once at startup; nil disables
+	// resolver-first mount-target lookup and falls back to
+	// Volume.Handle.
+	SetMountResolver(resolver MountResolver)
+
 	// collectRunningInstances gathers all running instances from all runners
 	collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error)
 
@@ -98,6 +105,28 @@ type instanceController struct {
 	// mode the controller leaves networking to the runner.
 	endpointPublisher EndpointPublisher
 	nodeID            string
+
+	// mountResolver, when non-nil, lets resolveVolumeMount consult
+	// the agent-side volumes Subsystem (RUNE-069 Slice 4) for the
+	// per-node mount target before falling back to Volume.Handle.
+	// The fallback preserves correctness for the in-tree local /
+	// local-host drivers (their Mount returns the host path verbatim,
+	// so target == handle); the resolver-first path is what makes
+	// future block-device drivers (do-volume, ...) usable, since for
+	// those Volume.Handle is a cloud-side identifier rather than a
+	// host filesystem path. Nil-safe.
+	mountResolver MountResolver
+}
+
+// MountResolver is the orchestrator-side surface of the agent's
+// volumes Subsystem. The runed agent supplies an implementation
+// backed by internal/agent/volumes.Subsystem.
+type MountResolver interface {
+	// MountTargetFor returns the host-side mount target for the named
+	// volume on this node, plus a presence flag. A false return means
+	// the subsystem has not (yet) mounted the volume locally; callers
+	// should treat this as a transient "not ready" condition.
+	MountTargetFor(volumeID string) (string, bool)
 }
 
 // EndpointPublisher is the orchestrator-side surface of the
@@ -133,6 +162,16 @@ func NewInstanceController(store store.Store, runnerManager manager.IRunnerManag
 func (c *instanceController) SetEndpointPublisher(publisher EndpointPublisher, nodeID string) {
 	c.endpointPublisher = publisher
 	c.nodeID = nodeID
+}
+
+// SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
+// into the controller. Call once at startup from runed before any
+// reconciles are processed. Passing nil disables the resolver-first
+// path; resolveVolumeMount then uses Volume.Handle exclusively
+// (the previous behaviour, correct only for in-tree local /
+// local-host drivers).
+func (c *instanceController) SetMountResolver(resolver MountResolver) {
+	c.mountResolver = resolver
 }
 
 // republishService recomputes the endpoint set for a service from
@@ -1311,5 +1350,155 @@ func (c *instanceController) resolveMounts(ctx context.Context, service *types.S
 		}
 	}
 
+	// Resolve volume mounts.
+	//
+	// - Claim: looks up an existing Volume by name (cross-namespace via
+	//   "ns/name"); fails if not yet Available.
+	// - ClaimTemplate: idempotently creates a per-instance Volume named
+	//   "<mount.Name>-<service.Name>-<ordinal>" with OwnerService set,
+	//   then waits for the VolumeController to provision it.
+	//
+	// Mounts that resolve to a not-yet-Available volume surface as a
+	// reconcile error so the instance status reports the cause; the
+	// service reconciler retries on the next tick.
+	if len(service.Volumes) > 0 {
+		instance.Metadata.VolumeMounts = make([]types.ResolvedVolumeMount, 0, len(service.Volumes))
+		for _, m := range service.Volumes {
+			resolved, err := c.resolveVolumeMount(ctx, service, instance, m)
+			if err != nil {
+				return fmt.Errorf("failed to resolve volume mount %q: %w", m.Name, err)
+			}
+			instance.Metadata.VolumeMounts = append(instance.Metadata.VolumeMounts, resolved)
+		}
+	}
+
+	return nil
+}
+
+// resolveVolumeMount converts a Service.VolumeMount into the runner-facing
+// ResolvedVolumeMount by looking up (or auto-provisioning, for the
+// ClaimTemplate form) the bound Volume and using its Handle as the
+// host-side bind source.
+func (c *instanceController) resolveVolumeMount(ctx context.Context, service *types.Service, instance *types.Instance, m types.VolumeMount) (types.ResolvedVolumeMount, error) {
+	switch {
+	case m.Claim != nil && m.ClaimTemplate != nil:
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume mount %q sets both claim and claimTemplate; pick one", m.Name)
+	case m.Claim == nil && m.ClaimTemplate == nil:
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume mount %q sets neither claim nor claimTemplate", m.Name)
+	}
+
+	// Resolve the Volume reference: ClaimTemplate drives idempotent
+	// auto-creation, Claim is a straight lookup.
+	var ns, name string
+	if m.ClaimTemplate != nil {
+		ns = service.Namespace
+		ordinal, ok := instanceOrdinal(service.Name, instance.Name)
+		if !ok {
+			return types.ResolvedVolumeMount{}, fmt.Errorf("cannot derive ordinal from instance name %q for service %q", instance.Name, service.Name)
+		}
+		name = fmt.Sprintf("%s-%s-%d", m.Name, service.Name, ordinal)
+		if err := c.ensureClaimTemplateVolume(ctx, service, m, name, ordinal); err != nil {
+			return types.ResolvedVolumeMount{}, fmt.Errorf("ensure claim-template volume %s/%s: %w", ns, name, err)
+		}
+	} else {
+		ns = service.Namespace
+		name = m.Claim.Name
+		if idx := strings.Index(name, "/"); idx > 0 {
+			ns, name = name[:idx], name[idx+1:]
+		}
+	}
+
+	var vol types.Volume
+	if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &vol); err != nil {
+		return types.ResolvedVolumeMount{}, fmt.Errorf("get volume %s/%s: %w", ns, name, err)
+	}
+
+	if vol.Status != types.VolumeStatusAvailable && vol.Status != types.VolumeStatusBound {
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.Reason)
+	}
+
+	// Resolver-first: when the agent-side volumes Subsystem has
+	// reported a mount target for this volume on this node, use it
+	// verbatim. Otherwise fall back to Volume.Handle, which is the
+	// historical bind source and is correct for the in-tree local /
+	// local-host drivers (their Mount returns the host path verbatim).
+	source := vol.Handle
+	if c.mountResolver != nil {
+		if target, ok := c.mountResolver.MountTargetFor(vol.ID); ok {
+			source = target
+		}
+	}
+	if source == "" {
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s has no handle", ns, name)
+	}
+
+	return types.ResolvedVolumeMount{
+		Name:            m.Name,
+		MountPath:       m.MountPath,
+		Source:          source,
+		VolumeName:      name,
+		VolumeNamespace: ns,
+		ReadOnly:        m.ReadOnly,
+		SubPath:         m.SubPath,
+	}, nil
+}
+
+// instanceOrdinal extracts the trailing integer ordinal from an
+// instance name produced by generateInstanceName ("<service>-<n>").
+// Returns false when the instance name does not match the expected
+// shape (e.g. ad-hoc names from tests or RecreateInstance with a
+// reused name).
+func instanceOrdinal(serviceName, instanceName string) (int, bool) {
+	prefix := serviceName + "-"
+	if !strings.HasPrefix(instanceName, prefix) {
+		return 0, false
+	}
+	suffix := instanceName[len(prefix):]
+	if suffix == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(suffix)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// ensureClaimTemplateVolume creates the per-replica Volume row from a
+// ClaimTemplate the first time it is observed. It is idempotent: a
+// pre-existing volume with the same namespace+name is left alone (the
+// VolumeController owns subsequent mutations).
+func (c *instanceController) ensureClaimTemplateVolume(ctx context.Context, service *types.Service, m types.VolumeMount, name string, ordinal int) error {
+	ns := service.Namespace
+	var existing types.Volume
+	if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &existing); err == nil {
+		return nil
+	}
+
+	tpl := m.ClaimTemplate
+	now := time.Now().UTC()
+	vol := &types.Volume{
+		ID:               name,
+		Name:             name,
+		Namespace:        ns,
+		StorageClassName: tpl.StorageClassName,
+		Size:             tpl.Size,
+		AccessMode:       tpl.AccessMode,
+		Parameters:       tpl.Parameters,
+		ReclaimPolicy:    tpl.ReclaimPolicy,
+		OwnerService:     fmt.Sprintf("%s/%s", ns, service.Name),
+		BoundClaim:       fmt.Sprintf("%s/%s/%d", service.Name, m.Name, ordinal),
+		Status:           types.VolumeStatusPending,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if err := c.store.Create(ctx, types.ResourceTypeVolume, ns, name, vol); err != nil {
+		// A racing reconcile may have created it; tolerate that.
+		var exists types.Volume
+		if getErr := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &exists); getErr == nil {
+			return nil
+		}
+		return err
+	}
 	return nil
 }

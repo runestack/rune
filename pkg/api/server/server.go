@@ -37,17 +37,20 @@ type APIServer struct {
 	logger  log.Logger
 
 	// Core services
-	namespaceService *service.NamespaceService
-	serviceService   *service.ServiceService
-	instanceService  *service.InstanceService
-	logService       *service.LogService
-	execService      *service.ExecService
-	healthService    *service.HealthService
-	secretService    *service.SecretService
-	configService    *service.ConfigmapService
-	authService      *service.AuthService
-	adminService     *service.AdminService
-	auditService     *service.AuditService
+	namespaceService    *service.NamespaceService
+	serviceService      *service.ServiceService
+	instanceService     *service.InstanceService
+	logService          *service.LogService
+	execService         *service.ExecService
+	healthService       *service.HealthService
+	secretService       *service.SecretService
+	configService       *service.ConfigmapService
+	authService         *service.AuthService
+	adminService        *service.AdminService
+	auditService        *service.AuditService
+	storageClassService *service.StorageClassService
+	volumeService       *service.VolumeService
+	snapshotService     *service.SnapshotService
 
 	// gRPC server
 	grpcServer *grpc.Server
@@ -131,10 +134,26 @@ func (s *APIServer) Start() error {
 	if s.orchestrator == nil {
 		var err error
 
-		// Use the default orchestrator creation which handles all component setup internally
-		s.orchestrator, err = orchestrator.NewDefaultOrchestrator(s.store, s.logger, s.runnerManager)
+		// Honour runefile-supplied storage driver configs when we
+		// build the orchestrator internally; fall back to the
+		// default constructor when none were supplied so existing
+		// callers keep their previous behaviour.
+		if len(s.options.StorageDriverConfigs) > 0 ||
+			s.options.StorageDefaultStorageClass != nil ||
+			s.options.StoragePreserveOnDelete {
+			s.orchestrator, err = orchestrator.NewOrchestrator(orchestrator.OrchestratorOptions{
+				Store:                   s.store,
+				Logger:                  s.logger,
+				RunnerManager:           s.runnerManager,
+				StorageDriverConfigs:    s.options.StorageDriverConfigs,
+				DefaultStorageClass:     s.options.StorageDefaultStorageClass,
+				StoragePreserveOnDelete: s.options.StoragePreserveOnDelete,
+			})
+		} else {
+			s.orchestrator, err = orchestrator.NewDefaultOrchestrator(s.store, s.logger, s.runnerManager)
+		}
 		if err != nil {
-			return fmt.Errorf("failed to create default orchestrator: %w", err)
+			return fmt.Errorf("failed to create orchestrator: %w", err)
 		}
 	}
 
@@ -155,6 +174,11 @@ func (s *APIServer) Start() error {
 	s.authService = service.NewAuthService(s.store, s.logger)
 	s.adminService = service.NewAdminService(s.store, s.logger)
 	s.auditService = service.NewAuditService(s.store, s.logger)
+	s.storageClassService = service.NewStorageClassService(s.store, s.logger)
+	s.volumeService = service.NewVolumeService(s.store, s.logger,
+		service.WithDriverConfigs(s.options.StorageDriverConfigs))
+	s.snapshotService = service.NewSnapshotService(s.store, s.logger,
+		service.WithSnapshotDriverConfigs(s.options.StorageDriverConfigs))
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
@@ -227,6 +251,9 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterAdminServiceServer(s.grpcServer, s.adminService)
 	generated.RegisterNamespaceServiceServer(s.grpcServer, s.namespaceService)
 	generated.RegisterAuditServiceServer(s.grpcServer, s.auditService)
+	generated.RegisterStorageClassServiceServer(s.grpcServer, s.storageClassService)
+	generated.RegisterVolumeServiceServer(s.grpcServer, s.volumeService)
+	generated.RegisterSnapshotServiceServer(s.grpcServer, s.snapshotService)
 
 	// Extra registrars (e.g. WatchService wired by runed for RUNE-028).
 	for _, reg := range s.options.ExtraGRPCRegistrars {
@@ -302,8 +329,45 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if !allowed {
 			return nil, statusPermissionDenied("access denied for resource: " + resource + " verb: " + verb)
 		}
+		// Per-request additional RBAC requirements (RUNE-073): some writes
+		// carry a privileged side-effect (e.g. flipping a StorageClass to
+		// Default:true) that we gate behind a separate verb so operators
+		// can grant a `readwrite` token without also granting the
+		// privileged action.
+		for _, extra := range extraRBACRequirements(info.FullMethod, req) {
+			ok, err := s.evaluatePolicies(ctx, subjectID, extra.resource, extra.verb, ns)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "authorization error: %v", err)
+			}
+			if !ok {
+				return nil, statusPermissionDenied("access denied for resource: " + extra.resource + " verb: " + extra.verb)
+			}
+		}
 		return handler(ctx, req)
 	}
+}
+
+// rbacRequirement is a (resource, verb) tuple representing an additional
+// RBAC check the request must pass. See extraRBACRequirements.
+type rbacRequirement struct{ resource, verb string }
+
+// extraRBACRequirements returns extra (resource, verb) pairs that the
+// authenticated subject must also be authorised for, on top of the
+// default verb derived from the method name. Used to gate privileged
+// payload-shaped operations (e.g. setting a StorageClass Default:true)
+// without inventing a separate gRPC method.
+func extraRBACRequirements(fullMethod string, req interface{}) []rbacRequirement {
+	switch fullMethod {
+	case "/rune.api.StorageClassService/CreateStorageClass":
+		if r, ok := req.(*generated.CreateStorageClassRequest); ok && r.GetStorageClass().GetDefault() {
+			return []rbacRequirement{{resource: "storageclasses", verb: "set-default"}}
+		}
+	case "/rune.api.StorageClassService/UpdateStorageClass":
+		if r, ok := req.(*generated.UpdateStorageClassRequest); ok && r.GetStorageClass().GetDefault() {
+			return []rbacRequirement{{resource: "storageclasses", verb: "set-default"}}
+		}
+	}
+	return nil
 }
 
 // admin interceptors (local-only)

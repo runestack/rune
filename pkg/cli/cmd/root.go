@@ -74,6 +74,10 @@ func init() {
 	rootCmd.AddCommand(newAuditCmd())
 	// Secret management (get, list, reveal, update, versions, rollback)
 	rootCmd.AddCommand(newSecretCmd())
+	// Storage management noun-trees (RUNE-072)
+	rootCmd.AddCommand(newStorageClassCmd())
+	rootCmd.AddCommand(newVolumeCmd())
+	rootCmd.AddCommand(newSnapshotCmd())
 	// Context management commands (server, token, default namespace)
 	rootCmd.AddCommand(newContextCmd())
 	// Convenient top-level alias for `rune context use`

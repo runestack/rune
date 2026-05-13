@@ -350,6 +350,9 @@ func (fo *FakeOrchestrator) GetActiveScalingOperation(ctx context.Context, names
 // SetEndpointPublisher implements Orchestrator interface; no-op for the fake.
 func (fo *FakeOrchestrator) SetEndpointPublisher(_ controllers.EndpointPublisher, _ string) {}
 
+// SetMountResolver implements Orchestrator interface; no-op for the fake.
+func (fo *FakeOrchestrator) SetMountResolver(_ controllers.MountResolver) {}
+
 // fakeExecStream implements types.ExecStream for testing
 type fakeExecStream struct {
 	stdout   []byte

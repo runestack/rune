@@ -60,6 +60,16 @@ var resourceAliases = map[string]string{
 	"configmaps": "configmap",
 	"ing":        "ingress",
 	"netpol":     "netpolicy",
+	// Storage resources
+	"volume":         "volume",
+	"volumes":        "volume",
+	"vol":            "volume",
+	"storageclass":   "storageclass",
+	"storageclasses": "storageclass",
+	"sc":             "storageclass",
+	"snapshot":       "snapshot",
+	"snapshots":      "snapshot",
+	"snap":           "snapshot",
 }
 
 // getCmd represents the get command
@@ -162,6 +172,12 @@ func runGet(cmd *cobra.Command, args []string, opts *getOptions) error {
 		return handleNetworkGet(cmd, opts, resourceName)
 	case "netpolicy":
 		return handleNetpolicyGet(cmd, opts, resourceName)
+	case "volume":
+		return handleVolumeGet(cmd, opts, resourceName)
+	case "storageclass":
+		return handleStorageClassGet(cmd, opts, resourceName)
+	case "snapshot":
+		return handleSnapshotGet(cmd, opts, resourceName)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", args[0])
 	}

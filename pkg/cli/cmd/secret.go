@@ -81,8 +81,9 @@ formatting. Use whichever fits your muscle memory.`,
 func newSecretListCmd() *cobra.Command {
 	opts := &getOptions{outputFormat: "table"}
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List secrets in a namespace",
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List secrets in a namespace",
 		Long: `Alias for 'rune get secrets' — both share the same handler, label/field
 selectors, and output formatting.`,
 		RunE: func(cmd *cobra.Command, args []string) error {

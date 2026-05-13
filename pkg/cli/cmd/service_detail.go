@@ -82,6 +82,12 @@ func renderServiceDetail(w io.Writer, svc *types.Service, instClient *client.Ins
 		}
 	}
 
+	// Volumes block. Show declared mounts so a developer
+	// can immediately see which Volumes back the service. Binding/Node
+	// state lives on the Volume itself (`rune get volume`); we keep this
+	// section short — name, mountPath, and how the volume is sourced.
+	renderServiceVolumes(w, svc)
+
 	// Instance list. Skip the API call if the caller didn't pass a
 	// client (tests).
 	if instClient == nil {
@@ -164,6 +170,56 @@ func renderInstanceLine(w io.Writer, inst *types.Instance) {
 			inst.Status == types.InstanceStatusExited ||
 			inst.Status == types.InstanceStatusUnknown) {
 		fmt.Fprintf(w, "        %s\n", inst.StatusMessage)
+	}
+}
+
+// renderServiceVolumes prints a one-line-per-mount block summarising
+// the volumes wired into the service. We deliberately do NOT fetch the
+// underlying Volume objects here — keeping this view a pure spec
+// summary means it always renders even when the API server is wedged
+// or the volumes have been GC'd. For binding state, point users at
+// `rune get volume`.
+func renderServiceVolumes(w io.Writer, svc *types.Service) {
+	if len(svc.Volumes) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  Volumes (%d):\n", len(svc.Volumes))
+
+	mounts := make([]types.VolumeMount, len(svc.Volumes))
+	copy(mounts, svc.Volumes)
+	sort.SliceStable(mounts, func(i, j int) bool {
+		return mounts[i].MountPath < mounts[j].MountPath
+	})
+	for _, m := range mounts {
+		source := "?"
+		switch {
+		case m.Claim != nil:
+			source = "claim:" + m.Claim.Name
+		case m.ClaimTemplate != nil:
+			ct := m.ClaimTemplate
+			parts := []string{"claimTemplate"}
+			if ct.StorageClassName != "" {
+				parts = append(parts, "class="+ct.StorageClassName)
+			}
+			if ct.Size != "" {
+				parts = append(parts, "size="+ct.Size)
+			}
+			if ct.AccessMode != "" {
+				parts = append(parts, "mode="+string(ct.AccessMode))
+			}
+			source = strings.Join(parts, " ")
+		}
+		ro := ""
+		if m.ReadOnly {
+			ro = " (ro)"
+		}
+		sub := ""
+		if m.SubPath != "" {
+			sub = " subPath=" + m.SubPath
+		}
+		fmt.Fprintf(w, "    %-16s %s%s%s  %s\n",
+			m.Name, m.MountPath, ro, sub, dim(source))
 	}
 }
 
