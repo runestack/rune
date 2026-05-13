@@ -39,6 +39,44 @@ type Runner interface {
 	// Exec creates an interactive exec session with a running instance.
 	// Returns an ExecStream for bidirectional communication.
 	Exec(ctx context.Context, instance *types.Instance, options ExecOptions) (ExecStream, error)
+
+	// RunInit executes one InitStep (RUNE-121) synchronously against
+	// the given instance and returns the step's exit code (0 on
+	// success). The runner is responsible for:
+	//
+	//   - filtering the instance's resolved volume / secret / config
+	//     mounts according to step.Volumes / step.SecretMounts /
+	//     step.ConfigmapMounts (a nil filter inherits all; a non-nil
+	//     empty filter mounts none),
+	//   - merging step.Env over the instance environment (step keys
+	//     win),
+	//   - applying step.Resources when set (otherwise inherit the
+	//     instance's resources),
+	//   - honouring the instance's image-pull policy for step.Image,
+	//   - waiting for the step to terminate (or be cancelled via
+	//     ctx) and capturing logs,
+	//   - cleaning up the underlying container/process before
+	//     returning.
+	//
+	// The instance controller, not the runner, owns iteration order,
+	// runIf evaluation, restart-policy retries, and persistence of
+	// InitStepState.
+	//
+	// Runners that do not support init steps must return
+	// ErrInitNotSupported.
+	RunInit(ctx context.Context, instance *types.Instance, step types.InitStep) (exitCode int, err error)
+}
+
+// ErrInitNotSupported is returned by Runner.RunInit implementations
+// that do not (yet) support init steps. The instance controller
+// surfaces this as a fatal scheduling error so operators get a clear
+// message rather than a silent skip.
+var ErrInitNotSupported = errInitNotSupported{}
+
+type errInitNotSupported struct{}
+
+func (errInitNotSupported) Error() string {
+	return "runner does not support init steps"
 }
 
 // RunnerProvider defines a simplified interface for getting runners

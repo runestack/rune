@@ -18,7 +18,6 @@ import (
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // newVolumeCmd builds the `rune volume` command group.
@@ -26,11 +25,18 @@ func newVolumeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "volume",
 		Aliases: []string{"vol", "volumes"},
-		Short:   "Manage persistent volumes (list, get, create, delete)",
+		Short:   "Manage persistent volumes (list, get, delete, detach, retry-provision, restore)",
+		Long: `Inspect and manage Volume resources. To create a Volume from a YAML
+spec, use ` + "`rune cast`" + ` — the same path used for every other resource
+(services, secrets, configmaps, storageclasses). Example:
+
+    rune cast my-volume.yaml
+
+A Volume cast file is a top-level ` + "`volume:`" + ` mapping; see
+https://docs.runestack.io/reference/storage-resources/#volume.`,
 	}
 	cmd.AddCommand(newVolumeListCmd())
 	cmd.AddCommand(newVolumeGetCmd())
-	cmd.AddCommand(newVolumeCreateCmd())
 	cmd.AddCommand(newVolumeDeleteCmd())
 	cmd.AddCommand(newVolumeDetachCmd())
 	cmd.AddCommand(newVolumeRetryProvisionCmd())
@@ -105,53 +111,6 @@ func newVolumeGetCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
 	cmd.Flags().StringVarP(&format, "output", "o", "table", "Output format: table|json|yaml")
-	return cmd
-}
-
-// --- create ---
-
-func newVolumeCreateCmd() *cobra.Command {
-	var fromFile, ns string
-	var ensureNamespace bool
-	cmd := &cobra.Command{
-		Use:   "create -f <file>",
-		Short: "Create a volume from a YAML or JSON spec file",
-		Long: `Reads a Volume spec from --file (YAML or JSON) and creates it on the
-server. The volume is created with status=Pending; the volume controller
-then drives it through Provisioning -> Available.
-
-If --namespace is set on the command line and the spec file does not
-declare a namespace, the flag value is used. If both are set the spec
-file wins (mirrors kubectl semantics).`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if fromFile == "" {
-				return fmt.Errorf("--file is required")
-			}
-			v, err := readVolumeFile(fromFile)
-			if err != nil {
-				return err
-			}
-			if v.Namespace == "" {
-				v.Namespace = effectiveCmdNS(ns)
-			}
-			if v.Namespace == "" {
-				v.Namespace = "default"
-			}
-			api, err := newAPIClient("", "")
-			if err != nil {
-				return err
-			}
-			defer api.Close()
-			if err := client.NewVolumeClient(api).CreateVolume(v, ensureNamespace); err != nil {
-				return err
-			}
-			fmt.Printf("Volume %s/%s created\n", v.Namespace, v.Name)
-			return nil
-		},
-	}
-	cmd.Flags().StringVarP(&fromFile, "file", "f", "", "Path to YAML or JSON spec file")
-	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace (used when spec omits one)")
-	cmd.Flags().BoolVar(&ensureNamespace, "ensure-namespace", false, "Auto-create the target namespace if missing")
 	return cmd
 }
 
@@ -291,27 +250,6 @@ is given.`,
 	cmd.Flags().StringVar(&snapshotNS, "snapshot-namespace", "", "Source snapshot namespace (default: --namespace)")
 	cmd.Flags().StringVar(&scName, "storage-class", "", "Override storage class for the new volume (default: source volume's class)")
 	return cmd
-}
-
-// --- file loading ---
-
-// readVolumeFile loads a single Volume spec from a YAML or JSON file.
-func readVolumeFile(path string) (*types.Volume, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	var v types.Volume
-	if err := yaml.Unmarshal(data, &v); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if v.Name == "" {
-		return nil, fmt.Errorf("%s: volume name is required", path)
-	}
-	if v.StorageClassName == "" {
-		return nil, fmt.Errorf("%s: storageClassName is required", path)
-	}
-	return &v, nil
 }
 
 // --- rendering helpers ---

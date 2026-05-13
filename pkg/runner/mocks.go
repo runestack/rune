@@ -54,6 +54,11 @@ func (m *MockRunner) Exec(ctx context.Context, instance *types.Instance, options
 	return args.Get(0).(ExecStream), args.Error(1)
 }
 
+func (m *MockRunner) RunInit(ctx context.Context, instance *types.Instance, step types.InitStep) (int, error) {
+	args := m.Called(ctx, instance, step)
+	return args.Int(0), args.Error(1)
+}
+
 // MockExecStream is a mock implementation of the runner.ExecStream interface
 type MockExecStream struct {
 	mock.Mock

@@ -95,8 +95,37 @@ message GetHealthResponse {
   Status status = 2;
 }
 
+// GetServerVersionRequest requests server build/version information.
+message GetServerVersionRequest {}
+
+// GetServerVersionResponse returns server build/version information.
+message GetServerVersionResponse {
+  // Semantic (or dev) version string of the running server binary.
+  string version = 1;
+
+  // Git commit SHA the binary was built from.
+  string commit = 2;
+
+  // Build timestamp recorded at link time.
+  string build_time = 3;
+
+  // Go toolchain version used to build the server.
+  string go_version = 4;
+
+  // Operating system the server is running on (GOOS).
+  string os = 5;
+
+  // Architecture the server is running on (GOARCH).
+  string arch = 6;
+}
+
 // HealthService provides health status information about platform components.
 service HealthService {
   // GetHealth retrieves health status of platform components.
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
-} 
+
+  // GetServerVersion returns build/version information for the running
+  // server binary. Intentionally unauthenticated so `rune version` can
+  // report it before the user has logged in.
+  rpc GetServerVersion(GetServerVersionRequest) returns (GetServerVersionResponse);
+}

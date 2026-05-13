@@ -32,7 +32,22 @@ type TestRunner struct {
 	ExecOptions      []ExecOptions
 	LogCalls         []string
 	StatusCalls      []string
-	mu               sync.RWMutex // protects the tracking fields
+
+	// Init step tracking (RUNE-121)
+	InitCalls    []InitCall
+	InitExitCode int
+	// InitFunc, if non-nil, overrides the default behaviour. It is
+	// invoked under r.mu and receives the current 1-based attempt count
+	// for this step (so tests can simulate "fail twice then succeed"
+	// scenarios). Returning a nil error and exit==0 means success.
+	InitFunc func(call int, step types.InitStep) (int, error)
+	mu       sync.RWMutex // protects the tracking fields
+}
+
+// InitCall captures one Runner.RunInit invocation for assertions in tests.
+type InitCall struct {
+	InstanceID string
+	Step       types.InitStep
 }
 
 // GetStartedInstances returns a copy of StartedInstances (thread-safe)
@@ -223,6 +238,22 @@ func (r *TestRunner) Exec(ctx context.Context, instance *types.Instance, options
 		StderrContent: r.ExecErrOutput,
 		ExitCodeVal:   r.ExitCodeVal,
 	}, nil
+}
+
+// RunInit records the call and returns the configured init exit code.
+// Errors are surfaced via ErrorToReturn for parity with other methods.
+// For per-attempt control (e.g. retry tests), set InitFunc.
+func (r *TestRunner) RunInit(ctx context.Context, instance *types.Instance, step types.InitStep) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.InitCalls = append(r.InitCalls, InitCall{InstanceID: instance.ID, Step: step})
+	if r.InitFunc != nil {
+		return r.InitFunc(len(r.InitCalls), step)
+	}
+	if r.ErrorToReturn != nil {
+		return r.InitExitCode, r.ErrorToReturn
+	}
+	return r.InitExitCode, nil
 }
 
 // TestExecStream is a predictable implementation of ExecStream for testing

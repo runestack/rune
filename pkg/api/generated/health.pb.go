@@ -458,6 +458,134 @@ func (x *GetHealthResponse) GetStatus() *Status {
 	return nil
 }
 
+// GetServerVersionRequest requests server build/version information.
+type GetServerVersionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetServerVersionRequest) Reset() {
+	*x = GetServerVersionRequest{}
+	mi := &file_pkg_api_proto_health_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerVersionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerVersionRequest) ProtoMessage() {}
+
+func (x *GetServerVersionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_health_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerVersionRequest.ProtoReflect.Descriptor instead.
+func (*GetServerVersionRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{4}
+}
+
+// GetServerVersionResponse returns server build/version information.
+type GetServerVersionResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Semantic (or dev) version string of the running server binary.
+	Version string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	// Git commit SHA the binary was built from.
+	Commit string `protobuf:"bytes,2,opt,name=commit,proto3" json:"commit,omitempty"`
+	// Build timestamp recorded at link time.
+	BuildTime string `protobuf:"bytes,3,opt,name=build_time,json=buildTime,proto3" json:"build_time,omitempty"`
+	// Go toolchain version used to build the server.
+	GoVersion string `protobuf:"bytes,4,opt,name=go_version,json=goVersion,proto3" json:"go_version,omitempty"`
+	// Operating system the server is running on (GOOS).
+	Os string `protobuf:"bytes,5,opt,name=os,proto3" json:"os,omitempty"`
+	// Architecture the server is running on (GOARCH).
+	Arch          string `protobuf:"bytes,6,opt,name=arch,proto3" json:"arch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetServerVersionResponse) Reset() {
+	*x = GetServerVersionResponse{}
+	mi := &file_pkg_api_proto_health_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetServerVersionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetServerVersionResponse) ProtoMessage() {}
+
+func (x *GetServerVersionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_health_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetServerVersionResponse.ProtoReflect.Descriptor instead.
+func (*GetServerVersionResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GetServerVersionResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetServerVersionResponse) GetCommit() string {
+	if x != nil {
+		return x.Commit
+	}
+	return ""
+}
+
+func (x *GetServerVersionResponse) GetBuildTime() string {
+	if x != nil {
+		return x.BuildTime
+	}
+	return ""
+}
+
+func (x *GetServerVersionResponse) GetGoVersion() string {
+	if x != nil {
+		return x.GoVersion
+	}
+	return ""
+}
+
+func (x *GetServerVersionResponse) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *GetServerVersionResponse) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
 var File_pkg_api_proto_health_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_health_proto_rawDesc = "" +
@@ -488,7 +616,17 @@ const file_pkg_api_proto_health_proto_rawDesc = "" +
 	"\n" +
 	"components\x18\x01 \x03(\v2\x19.rune.api.ComponentHealthR\n" +
 	"components\x12(\n" +
-	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status*\x9c\x01\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"\x19\n" +
+	"\x17GetServerVersionRequest\"\xae\x01\n" +
+	"\x18GetServerVersionResponse\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\x12\x16\n" +
+	"\x06commit\x18\x02 \x01(\tR\x06commit\x12\x1d\n" +
+	"\n" +
+	"build_time\x18\x03 \x01(\tR\tbuildTime\x12\x1d\n" +
+	"\n" +
+	"go_version\x18\x04 \x01(\tR\tgoVersion\x12\x0e\n" +
+	"\x02os\x18\x05 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x06 \x01(\tR\x04arch*\x9c\x01\n" +
 	"\fHealthStatus\x12\x1d\n" +
 	"\x19HEALTH_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15HEALTH_STATUS_UNKNOWN\x10\x01\x12\x19\n" +
@@ -499,9 +637,10 @@ const file_pkg_api_proto_health_proto_rawDesc = "" +
 	"\x1dHEALTH_CHECK_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aHEALTH_CHECK_TYPE_LIVENESS\x10\x01\x12\x1f\n" +
 	"\x1bHEALTH_CHECK_TYPE_READINESS\x10\x02\x12\x1d\n" +
-	"\x19HEALTH_CHECK_TYPE_STARTUP\x10\x032U\n" +
+	"\x19HEALTH_CHECK_TYPE_STARTUP\x10\x032\xb0\x01\n" +
 	"\rHealthService\x12D\n" +
-	"\tGetHealth\x12\x1a.rune.api.GetHealthRequest\x1a\x1b.rune.api.GetHealthResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\tGetHealth\x12\x1a.rune.api.GetHealthRequest\x1a\x1b.rune.api.GetHealthResponse\x12Y\n" +
+	"\x10GetServerVersion\x12!.rune.api.GetServerVersionRequest\x1a\".rune.api.GetServerVersionResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_health_proto_rawDescOnce sync.Once
@@ -516,15 +655,17 @@ func file_pkg_api_proto_health_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_health_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_pkg_api_proto_health_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_pkg_api_proto_health_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_pkg_api_proto_health_proto_goTypes = []any{
-	(HealthStatus)(0),         // 0: rune.api.HealthStatus
-	(HealthCheckType)(0),      // 1: rune.api.HealthCheckType
-	(*HealthCheckResult)(nil), // 2: rune.api.HealthCheckResult
-	(*ComponentHealth)(nil),   // 3: rune.api.ComponentHealth
-	(*GetHealthRequest)(nil),  // 4: rune.api.GetHealthRequest
-	(*GetHealthResponse)(nil), // 5: rune.api.GetHealthResponse
-	(*Status)(nil),            // 6: rune.api.Status
+	(HealthStatus)(0),                // 0: rune.api.HealthStatus
+	(HealthCheckType)(0),             // 1: rune.api.HealthCheckType
+	(*HealthCheckResult)(nil),        // 2: rune.api.HealthCheckResult
+	(*ComponentHealth)(nil),          // 3: rune.api.ComponentHealth
+	(*GetHealthRequest)(nil),         // 4: rune.api.GetHealthRequest
+	(*GetHealthResponse)(nil),        // 5: rune.api.GetHealthResponse
+	(*GetServerVersionRequest)(nil),  // 6: rune.api.GetServerVersionRequest
+	(*GetServerVersionResponse)(nil), // 7: rune.api.GetServerVersionResponse
+	(*Status)(nil),                   // 8: rune.api.Status
 }
 var file_pkg_api_proto_health_proto_depIdxs = []int32{
 	1, // 0: rune.api.HealthCheckResult.type:type_name -> rune.api.HealthCheckType
@@ -532,11 +673,13 @@ var file_pkg_api_proto_health_proto_depIdxs = []int32{
 	0, // 2: rune.api.ComponentHealth.status:type_name -> rune.api.HealthStatus
 	2, // 3: rune.api.ComponentHealth.check_results:type_name -> rune.api.HealthCheckResult
 	3, // 4: rune.api.GetHealthResponse.components:type_name -> rune.api.ComponentHealth
-	6, // 5: rune.api.GetHealthResponse.status:type_name -> rune.api.Status
+	8, // 5: rune.api.GetHealthResponse.status:type_name -> rune.api.Status
 	4, // 6: rune.api.HealthService.GetHealth:input_type -> rune.api.GetHealthRequest
-	5, // 7: rune.api.HealthService.GetHealth:output_type -> rune.api.GetHealthResponse
-	7, // [7:8] is the sub-list for method output_type
-	6, // [6:7] is the sub-list for method input_type
+	6, // 7: rune.api.HealthService.GetServerVersion:input_type -> rune.api.GetServerVersionRequest
+	5, // 8: rune.api.HealthService.GetHealth:output_type -> rune.api.GetHealthResponse
+	7, // 9: rune.api.HealthService.GetServerVersion:output_type -> rune.api.GetServerVersionResponse
+	8, // [8:10] is the sub-list for method output_type
+	6, // [6:8] is the sub-list for method input_type
 	6, // [6:6] is the sub-list for extension type_name
 	6, // [6:6] is the sub-list for extension extendee
 	0, // [0:6] is the sub-list for field type_name
@@ -554,7 +697,7 @@ func file_pkg_api_proto_health_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_health_proto_rawDesc), len(file_pkg_api_proto_health_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -71,9 +71,6 @@ func (c *Config) defaults() {
 	if c.HTTPAddr == "" {
 		c.HTTPAddr = ":80"
 	}
-	if c.HTTPSAddr == "" {
-		c.HTTPSAddr = ":443"
-	}
 	if c.Logger == nil {
 		c.Logger = log.GetDefaultLogger().WithComponent("ingress")
 	}

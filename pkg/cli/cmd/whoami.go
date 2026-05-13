@@ -21,6 +21,7 @@ type whoamiOutput struct {
 	Name             string   `json:"name,omitempty" yaml:"name,omitempty"`
 	Email            string   `json:"email,omitempty" yaml:"email,omitempty"`
 	Policies         []string `json:"policies,omitempty" yaml:"policies,omitempty"`
+	ServerVersion    string   `json:"serverVersion,omitempty" yaml:"serverVersion,omitempty"`
 	Note             string   `json:"note,omitempty" yaml:"note,omitempty"`
 }
 
@@ -103,6 +104,17 @@ func newWhoAmICmd() *cobra.Command {
 			output.Status = "Authenticated"
 			output.SubjectID = resp.SubjectId
 
+			// Best-effort server version probe (unauthenticated RPC).
+			hc := generated.NewHealthServiceClient(api.Conn())
+			vctx, vcancel := api.Context()
+			if vresp, verr := hc.GetServerVersion(vctx, &generated.GetServerVersionRequest{}); verr == nil && vresp != nil {
+				output.ServerVersion = vresp.Version
+				if c := vresp.Commit; len(c) >= 8 {
+					output.ServerVersion = fmt.Sprintf("%s (%s)", vresp.Version, c[:8])
+				}
+			}
+			vcancel()
+
 			if resp.SubjectName != "" {
 				output.Name = resp.SubjectName
 			}
@@ -125,6 +137,9 @@ func newWhoAmICmd() *cobra.Command {
 			// Default table output
 			fmt.Printf("Current Context: %s\n", output.CurrentContext)
 			fmt.Printf("Server: %s\n", output.Server)
+			if output.ServerVersion != "" {
+				fmt.Printf("Server Version: %s\n", output.ServerVersion)
+			}
 			fmt.Printf("Default Namespace: %s\n", output.DefaultNamespace)
 			fmt.Printf("Token: %s\n", output.Token)
 			fmt.Printf("Status: %s\n", output.Status)

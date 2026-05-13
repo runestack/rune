@@ -14,6 +14,7 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/version"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -205,6 +206,20 @@ func (s *HealthService) GetHealth(ctx context.Context, req *generated.GetHealthR
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown component type: %s", req.ComponentType)
 	}
+}
+
+// GetServerVersion returns build/version metadata for the running server
+// binary. Intentionally cheap and unauthenticated so `rune version` can
+// report it before the user has logged in.
+func (s *HealthService) GetServerVersion(_ context.Context, _ *generated.GetServerVersionRequest) (*generated.GetServerVersionResponse, error) {
+	return &generated.GetServerVersionResponse{
+		Version:   version.Version,
+		Commit:    version.Commit,
+		BuildTime: version.BuildTime,
+		GoVersion: runtime.Version(),
+		Os:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+	}, nil
 }
 
 // getServiceHealth retrieves health for a service or services.

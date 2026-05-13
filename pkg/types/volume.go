@@ -119,6 +119,15 @@ type Volume struct {
 	// Message is a human-readable description of the status.
 	Message string `json:"message,omitempty" yaml:"message,omitempty"`
 
+	// InitializedFor records the wall-clock timestamp at which an init
+	// step (RUNE-121) belonging to a given service ran to Succeeded
+	// against this volume. Keys are service IDs ("<namespace>/<name>"
+	// for namespaced services). Used as the freshness anchor for
+	// runIf=freshVolume so that subsequent restarts and crash-recovery
+	// skip the step on volumes that already carry initialised data.
+	// Cleared by the volume controller on reclaim.
+	InitializedFor map[string]time.Time `json:"initializedFor,omitempty" yaml:"initializedFor,omitempty"`
+
 	// Creation timestamp.
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt"`
 

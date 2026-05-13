@@ -610,6 +610,17 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		}
 	}
 
+	// InitSteps (RUNE-121) and main-container SecurityContext.
+	if len(service.InitSteps) > 0 {
+		protoService.InitSteps = make([]*generated.InitStep, 0, len(service.InitSteps))
+		for i := range service.InitSteps {
+			protoService.InitSteps = append(protoService.InitSteps, initStepToProto(&service.InitSteps[i]))
+		}
+	}
+	if service.SecurityContext != nil {
+		protoService.SecurityContext = securityContextToProto(service.SecurityContext)
+	}
+
 	return protoService
 }
 
@@ -859,7 +870,177 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		}
 	}
 
+	// InitSteps (RUNE-121) and main-container SecurityContext.
+	if len(proto.InitSteps) > 0 {
+		service.InitSteps = make([]types.InitStep, 0, len(proto.InitSteps))
+		for _, p := range proto.InitSteps {
+			service.InitSteps = append(service.InitSteps, initStepFromProto(p))
+		}
+	}
+	if proto.SecurityContext != nil {
+		service.SecurityContext = securityContextFromProto(proto.SecurityContext)
+	}
+
 	return service, nil
+}
+
+// initStepToProto converts a types.InitStep to its proto form.
+func initStepToProto(s *types.InitStep) *generated.InitStep {
+	if s == nil {
+		return nil
+	}
+	p := &generated.InitStep{
+		Name:          s.Name,
+		Image:         s.Image,
+		Command:       s.Command,
+		Args:          append([]string(nil), s.Args...),
+		Env:           cloneStringMap(s.Env),
+		TimeoutNanos:  int64(s.Timeout),
+		RestartPolicy: string(s.RestartPolicy),
+	}
+	for _, src := range s.EnvFrom {
+		p.EnvFrom = append(p.EnvFrom, &generated.EnvFromSource{
+			SecretName:    src.SecretName,
+			ConfigmapName: src.ConfigmapName,
+			Namespace:     src.Namespace,
+			Prefix:        src.Prefix,
+		})
+	}
+	// Preserve nil vs empty-slice distinction (see types.InitStep docs).
+	if s.Volumes != nil {
+		p.VolumesSet = true
+		p.Volumes = append([]string(nil), s.Volumes...)
+	}
+	if s.SecretMounts != nil {
+		p.SecretMountsSet = true
+		p.SecretMounts = append([]string(nil), s.SecretMounts...)
+	}
+	if s.ConfigmapMounts != nil {
+		p.ConfigmapMountsSet = true
+		p.ConfigmapMounts = append([]string(nil), s.ConfigmapMounts...)
+	}
+	if s.Resources != nil {
+		p.Resources = &generated.Resources{
+			Cpu: &generated.ResourceLimit{
+				Request: s.Resources.CPU.Request,
+				Limit:   s.Resources.CPU.Limit,
+			},
+			Memory: &generated.ResourceLimit{
+				Request: s.Resources.Memory.Request,
+				Limit:   s.Resources.Memory.Limit,
+			},
+		}
+	}
+	if s.RunIf.Type != "" || s.RunIf.Path != "" || s.RunIf.Volume != "" {
+		p.RunIf = &generated.RunIfSpec{
+			Type:   string(s.RunIf.Type),
+			Path:   s.RunIf.Path,
+			Volume: s.RunIf.Volume,
+		}
+	}
+	if s.SecurityContext != nil {
+		p.SecurityContext = securityContextToProto(s.SecurityContext)
+	}
+	return p
+}
+
+func initStepFromProto(p *generated.InitStep) types.InitStep {
+	s := types.InitStep{
+		Name:          p.Name,
+		Image:         p.Image,
+		Command:       p.Command,
+		Args:          append([]string(nil), p.Args...),
+		Env:           cloneStringMap(p.Env),
+		Timeout:       time.Duration(p.TimeoutNanos),
+		RestartPolicy: types.InitStepRestartPolicy(p.RestartPolicy),
+	}
+	for _, src := range p.EnvFrom {
+		s.EnvFrom = append(s.EnvFrom, types.EnvFromSource{
+			SecretName:    src.SecretName,
+			ConfigmapName: src.ConfigmapName,
+			Namespace:     src.Namespace,
+			Prefix:        src.Prefix,
+		})
+	}
+	if p.VolumesSet {
+		s.Volumes = append([]string{}, p.Volumes...)
+	}
+	if p.SecretMountsSet {
+		s.SecretMounts = append([]string{}, p.SecretMounts...)
+	}
+	if p.ConfigmapMountsSet {
+		s.ConfigmapMounts = append([]string{}, p.ConfigmapMounts...)
+	}
+	if p.Resources != nil {
+		r := &types.Resources{}
+		if p.Resources.Cpu != nil {
+			r.CPU.Request = p.Resources.Cpu.Request
+			r.CPU.Limit = p.Resources.Cpu.Limit
+		}
+		if p.Resources.Memory != nil {
+			r.Memory.Request = p.Resources.Memory.Request
+			r.Memory.Limit = p.Resources.Memory.Limit
+		}
+		s.Resources = r
+	}
+	if p.RunIf != nil {
+		s.RunIf = types.RunIf{
+			Type:   types.RunIfType(p.RunIf.Type),
+			Path:   p.RunIf.Path,
+			Volume: p.RunIf.Volume,
+		}
+	}
+	if p.SecurityContext != nil {
+		s.SecurityContext = securityContextFromProto(p.SecurityContext)
+	}
+	return s
+}
+
+func securityContextToProto(sc *types.SecurityContext) *generated.SecurityContext {
+	if sc == nil {
+		return nil
+	}
+	out := &generated.SecurityContext{
+		CapAdd:     append([]string(nil), sc.CapAdd...),
+		CapDrop:    append([]string(nil), sc.CapDrop...),
+		Privileged: sc.Privileged,
+	}
+	if sc.SeccompProfile != nil {
+		out.SeccompProfile = &generated.SeccompProfile{
+			Type:             string(sc.SeccompProfile.Type),
+			LocalhostProfile: sc.SeccompProfile.LocalhostProfile,
+		}
+	}
+	return out
+}
+
+func securityContextFromProto(p *generated.SecurityContext) *types.SecurityContext {
+	if p == nil {
+		return nil
+	}
+	sc := &types.SecurityContext{
+		CapAdd:     append([]string(nil), p.CapAdd...),
+		CapDrop:    append([]string(nil), p.CapDrop...),
+		Privileged: p.Privileged,
+	}
+	if p.SeccompProfile != nil {
+		sc.SeccompProfile = &types.SeccompProfile{
+			Type:             types.SeccompProfileType(p.SeccompProfile.Type),
+			LocalhostProfile: p.SeccompProfile.LocalhostProfile,
+		}
+	}
+	return sc
+}
+
+func cloneStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // convertGRPCError converts a gRPC error to a more user-friendly error message.

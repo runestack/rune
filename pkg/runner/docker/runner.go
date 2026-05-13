@@ -785,8 +785,25 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 		Env: formatEnvVars(instance.Environment),
 	}
 
-	// Set the command if specified in the instance
+	// Apply the service's command/args to the container.
+	// Service.Command → Entrypoint (replaces the image's ENTRYPOINT);
+	// Service.Args → Cmd (replaces the image's CMD).
+	// Empty fields leave the image's baked-in defaults untouched.
+	//
+	// instance.Exec.Command, when set, is a `rune exec` ad-hoc
+	// override and takes precedence over the spec — it replaces both
+	// Entrypoint and Cmd with the literal command line the user
+	// passed to `rune exec`.
+	if instance.Metadata != nil {
+		if instance.Metadata.Command != "" {
+			containerConfig.Entrypoint = []string{instance.Metadata.Command}
+		}
+		if len(instance.Metadata.Args) > 0 {
+			containerConfig.Cmd = append([]string(nil), instance.Metadata.Args...)
+		}
+	}
 	if instance.Exec != nil && len(instance.Exec.Command) > 0 {
+		containerConfig.Entrypoint = nil
 		containerConfig.Cmd = instance.Exec.Command
 	}
 
@@ -935,6 +952,11 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 			}
 		}
 	}
+
+	// Apply optional security context (seccomp / capabilities /
+	// privileged). Privileged and seccomp=unconfined are gated
+	// server-side; the runner only enforces structural correctness.
+	applySecurityContext(hostConfig, instance.SecurityContext)
 
 	return containerConfig, hostConfig, nil
 }

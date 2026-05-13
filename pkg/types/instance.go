@@ -69,6 +69,17 @@ type Instance struct {
 	// Metadata contains additional information about the instance
 	// Use for storing system properties that aren't part of the core spec
 	Metadata *InstanceMetadata `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+
+	// InitStates records the per-instance execution state for each
+	// of the parent service's InitSteps (RUNE-121). One entry per
+	// declared step, in declaration order. Empty for instances of
+	// services with no init steps.
+	InitStates []InitStepState `json:"initStates,omitempty" yaml:"initStates,omitempty"`
+
+	// SecurityContext is inherited from the parent service's
+	// SecurityContext and applied to the main container by the runner.
+	// nil means runtime defaults.
+	SecurityContext *SecurityContext `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
 }
 
 func (i *Instance) GetResourceType() ResourceType {
@@ -79,6 +90,17 @@ func (i *Instance) GetResourceType() ResourceType {
 type InstanceMetadata struct {
 	// Image is the image that the instance is running
 	Image string `json:"image,omitempty" yaml:"image,omitempty"`
+
+	// Command is the executable to run inside the container,
+	// propagated from Service.Command. Maps to Docker's Entrypoint:
+	// it replaces the image's baked-in ENTRYPOINT. Empty leaves the
+	// image's ENTRYPOINT untouched.
+	Command string `json:"command,omitempty" yaml:"command,omitempty"`
+
+	// Args are positional arguments to Command, propagated from
+	// Service.Args. Maps to Docker's Cmd: it replaces the image's
+	// baked-in CMD. nil leaves the image's CMD untouched.
+	Args []string `json:"args,omitempty" yaml:"args,omitempty"`
 
 	// ImagePull controls when the runner pulls the container image
 	// ("always", "missing", "never"). Propagated from the parent

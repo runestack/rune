@@ -16,7 +16,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.25.x'
           check-latest: true
           cache: true
       - name: Install tools
@@ -32,7 +32,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.25.x'
           check-latest: true
           cache: true
       - name: Run unit tests with race detection
@@ -40,7 +40,7 @@ jobs:
       - name: Check Coverage
         env:
           COVERAGE_THRESHOLD: ${{ secrets.COVERAGE_THRESHOLD }}
-        run: make check-coverage-unit
+        run: make check-coverage
 
   build:
     name: Build
@@ -51,7 +51,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
+          go-version: '1.25.x'
           check-latest: true
           cache: true
       - name: Build

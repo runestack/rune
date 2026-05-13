@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,6 +92,7 @@ type BaseTask struct {
 	Progress  float64                `json:"progress"`
 	Metadata  map[string]interface{} `json:"metadata"`
 
+	mu      sync.RWMutex                `json:"-"`
 	handler func(context.Context) error `json:"-"` // Don't serialize the handler function
 }
 
@@ -103,25 +105,73 @@ func (t *BaseTask) GetTimeout() time.Duration   { return t.Timeout }
 func (t *BaseTask) GetRetryPolicy() RetryPolicy { return t.RetryPolicy }
 
 // Execution state
-func (t *BaseTask) GetStatus() TaskStatus       { return t.Status }
-func (t *BaseTask) SetStatus(status TaskStatus) { t.Status = status }
-func (t *BaseTask) GetStartTime() time.Time     { return t.StartTime }
-func (t *BaseTask) SetStartTime(time time.Time) { t.StartTime = time }
-func (t *BaseTask) GetEndTime() time.Time       { return t.EndTime }
-func (t *BaseTask) SetEndTime(time time.Time)   { t.EndTime = time }
+func (t *BaseTask) GetStatus() TaskStatus {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.Status
+}
+func (t *BaseTask) SetStatus(status TaskStatus) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Status = status
+}
+func (t *BaseTask) GetStartTime() time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.StartTime
+}
+func (t *BaseTask) SetStartTime(time time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.StartTime = time
+}
+func (t *BaseTask) GetEndTime() time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.EndTime
+}
+func (t *BaseTask) SetEndTime(time time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.EndTime = time
+}
 
 // Execution results
-func (t *BaseTask) GetError() error                             { return t.Error }
-func (t *BaseTask) SetError(error error)                        { t.Error = error }
-func (t *BaseTask) GetProgress() float64                        { return t.Progress }
-func (t *BaseTask) SetProgress(progress float64)                { t.Progress = progress }
-func (t *BaseTask) GetMetadata() map[string]interface{}         { return t.Metadata }
-func (t *BaseTask) SetMetadata(metadata map[string]interface{}) { t.Metadata = metadata }
+func (t *BaseTask) GetError() error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.Error
+}
+func (t *BaseTask) SetError(error error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Error = error
+}
+func (t *BaseTask) GetProgress() float64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.Progress
+}
+func (t *BaseTask) SetProgress(progress float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Progress = progress
+}
+func (t *BaseTask) GetMetadata() map[string]interface{} {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.Metadata
+}
+func (t *BaseTask) SetMetadata(metadata map[string]interface{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Metadata = metadata
+}
 
 // Convenience methods
-func (t *BaseTask) IsCompleted() bool { return t.Status == TaskStatusCompleted }
-func (t *BaseTask) IsFailed() bool    { return t.Status == TaskStatusFailed }
-func (t *BaseTask) IsRunning() bool   { return t.Status == TaskStatusRunning }
+func (t *BaseTask) IsCompleted() bool { return t.GetStatus() == TaskStatusCompleted }
+func (t *BaseTask) IsFailed() bool    { return t.GetStatus() == TaskStatusFailed }
+func (t *BaseTask) IsRunning() bool   { return t.GetStatus() == TaskStatusRunning }
 
 func (t *BaseTask) Execute(ctx context.Context) error {
 	if t.handler == nil {

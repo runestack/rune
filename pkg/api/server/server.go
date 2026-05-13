@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -286,6 +287,11 @@ func (s *APIServer) authUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if info.FullMethod == "/rune.api.AdminService/AdminBootstrap" {
 			return handler(ctx, req)
 		}
+		// Allow unauthenticated server version probe so `rune version`
+		// can report server build info before the user has logged in.
+		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
+			return handler(ctx, req)
+		}
 		// Otherwise, run normal auth
 		ctx2, err := s.authFunc(ctx)
 		if err != nil {
@@ -309,6 +315,10 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 
 		// Require authenticated subject, except bootstrap which is already allowed above
 		if info.FullMethod == "/rune.api.AdminService/AdminBootstrap" {
+			return handler(ctx, req)
+		}
+		// Server version probe is read-only and intentionally public.
+		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
 			return handler(ctx, req)
 		}
 		var subjectID string
@@ -366,8 +376,49 @@ func extraRBACRequirements(fullMethod string, req interface{}) []rbacRequirement
 		if r, ok := req.(*generated.UpdateStorageClassRequest); ok && r.GetStorageClass().GetDefault() {
 			return []rbacRequirement{{resource: "storageclasses", verb: "set-default"}}
 		}
+	case "/rune.api.ServiceService/CreateService":
+		if r, ok := req.(*generated.CreateServiceRequest); ok && servicePrivilegedRequired(r.GetService()) {
+			return []rbacRequirement{{resource: "services", verb: "privileged"}}
+		}
+	case "/rune.api.ServiceService/UpdateService":
+		if r, ok := req.(*generated.UpdateServiceRequest); ok && servicePrivilegedRequired(r.GetService()) {
+			return []rbacRequirement{{resource: "services", verb: "privileged"}}
+		}
 	}
 	return nil
+}
+
+// servicePrivilegedRequired reports whether the service payload uses
+// security knobs that must be gated behind the services.privileged
+// policy verb. Mirrors types.SecurityContext.RequiresPrivilegedGate.
+func servicePrivilegedRequired(svc *generated.Service) bool {
+	if svc == nil {
+		return false
+	}
+	if securityContextNeedsGate(svc.SecurityContext) {
+		return true
+	}
+	for _, step := range svc.InitSteps {
+		if step != nil && securityContextNeedsGate(step.SecurityContext) {
+			return true
+		}
+	}
+	return false
+}
+
+func securityContextNeedsGate(sc *generated.SecurityContext) bool {
+	if sc == nil {
+		return false
+	}
+	if sc.Privileged {
+		return true
+	}
+	// Normalize so e.g. k8s-style "Unconfined" gates the same as
+	// our lowercase "unconfined". Mirrors types.SeccompProfileType.Canonical().
+	if sp := sc.SeccompProfile; sp != nil && strings.EqualFold(sp.Type, "unconfined") {
+		return true
+	}
+	return false
 }
 
 // admin interceptors (local-only)

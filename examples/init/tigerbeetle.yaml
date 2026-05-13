@@ -1,0 +1,51 @@
+# RUNE-121 — Init steps demo: TigerBeetle-style scratch volume formatting.
+#
+# Shows the canonical "format an empty volume before the main process
+# starts" pattern. The format step runs only on a fresh volume thanks to
+# the implicit runIf.type=freshVolume; once it succeeds, the controller
+# stamps Volume.InitializedFor[<service>] and never re-runs format on
+# subsequent restarts of the same instance.
+#
+# Cast it with:
+#   rune cast examples/init/tigerbeetle.yaml
+#
+# Watch progress:
+#   rune get service tb -n default
+#   rune logs tb --init-step format
+apiVersion: v1
+kind: Service
+metadata:
+  name: tb
+  namespace: default
+spec:
+  image: ghcr.io/tigerbeetle/tigerbeetle:0.16.11
+  command: ["tigerbeetle"]
+  args:
+    - "start"
+    - "--addresses=0.0.0.0:3000"
+    - "/data/0_0.tigerbeetle"
+  replicas: 1
+  ports:
+    - name: tb
+      containerPort: 3000
+  volumes:
+    - name: data
+      mountPath: /data
+      claimTemplate:
+        spec:
+          storageClassName: local
+          capacity: "1Gi"
+  initSteps:
+    # Format a fresh data volume into a TigerBeetle ledger file.
+    # Runs only on the first start of an instance whose data volume
+    # has never been initialised for this service.
+    - name: format
+      image: ghcr.io/tigerbeetle/tigerbeetle:0.16.11
+      command: tigerbeetle
+      args:
+        - "format"
+        - "--cluster=0"
+        - "--replica=0"
+        - "--replica-count=1"
+        - "/data/0_0.tigerbeetle"
+      # runIf is implicit: freshVolume on the inherited /data mount.
