@@ -96,6 +96,9 @@ type ServiceSpec struct {
 	// These will be normalized to []DependencyRef in internal Service
 	Dependencies []ServiceDependency `json:"dependencies,omitempty" yaml:"dependencies,omitempty"`
 
+	// InitSteps run sequentially before each instance's main container (RUNE-121).
+	InitSteps []InitStep `json:"initSteps,omitempty" yaml:"initSteps,omitempty"`
+
 	// rawNode holds the original YAML mapping node for structural validation
 	rawNode *yaml.Node `json:"-" yaml:"-"`
 }
@@ -523,6 +526,7 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 		"imagePull":     true,
 		"skip":          true,
 		"dependencies":  true,
+		"initSteps":     true,
 	}
 
 	validHealthFields := map[string]bool{
@@ -650,6 +654,7 @@ func (s *ServiceSpec) ToService() (*Service, error) {
 		Volumes:         s.Volumes,
 		Discovery:       s.Discovery,
 		Dependencies:    deps,
+		InitSteps:       s.InitSteps,
 		Status:          ServiceStatusPending,
 		Metadata:        &ServiceMetadata{CreatedAt: now, UpdatedAt: now},
 	}, nil

@@ -181,3 +181,60 @@ service:
 		t.Errorf("expected env APP_MODE=production, got %+v", svc.Env)
 	}
 }
+
+// Regression for RUNE-121: initSteps must be in the structural-validation
+// allowlist so cast files using it don't get rejected with
+// "unknown field 'initSteps' in service specification".
+func TestServiceSpec_InitSteps_StructuralValidation(t *testing.T) {
+	yamlData := `
+service:
+  name: tigerbeetle
+  namespace: shared
+  image: ghcr.io/tigerbeetle/tigerbeetle:0.16.30
+  command: "/tigerbeetle start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle"
+  initSteps:
+    - name: format
+      image: ghcr.io/tigerbeetle/tigerbeetle:0.16.30
+      command: "/tigerbeetle format --cluster=0 --replica=0 --replica-count=1 /data/0_0.tigerbeetle"
+      runIf:
+        type: fileMissing
+        path: /data/0_0.tigerbeetle
+`
+	cf, err := ParseCastFileFromBytes([]byte(yamlData), "")
+	if err != nil {
+		t.Fatalf("parse cast file error: %v", err)
+	}
+	if perrs := cf.GetParseErrors(); len(perrs) > 0 {
+		t.Fatalf("parse errors: %v", perrs)
+	}
+	if _, err := cf.GetServices(); err != nil {
+		t.Fatalf("get services error: %v", err)
+	}
+	if len(cf.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(cf.Services))
+	}
+	if err := cf.Services[0].Validate(); err != nil {
+		t.Fatalf("Validate() rejected initSteps: %v", err)
+	}
+
+	svcs, err := cf.GetServices()
+	if err != nil {
+		t.Fatalf("GetServices: %v", err)
+	}
+	if len(svcs) != 1 || len(svcs[0].InitSteps) != 1 {
+		t.Fatalf("expected 1 service with 1 init step, got %d services / %d steps",
+			len(svcs), func() int {
+				if len(svcs) == 0 {
+					return 0
+				}
+				return len(svcs[0].InitSteps)
+			}())
+	}
+	step := svcs[0].InitSteps[0]
+	if step.Name != "format" || step.Image == "" || step.Command == "" {
+		t.Fatalf("init step not plumbed through ToService: %+v", step)
+	}
+	if step.RunIf.Type != RunIfFileMissing || step.RunIf.Path != "/data/0_0.tigerbeetle" {
+		t.Fatalf("init step runIf not preserved: %+v", step.RunIf)
+	}
+}
