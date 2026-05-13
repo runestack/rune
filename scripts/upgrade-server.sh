@@ -4,19 +4,21 @@ set -euo pipefail
 # Rune Server Upgrade
 # - Replaces /usr/local/bin/{rune,runed} with a specific release version.
 # - Re-applies cap_net_bind_service to runed if the existing install had it.
-# - Backs up the old binaries so rollback on verification failure is automatic.
+# - Optionally refreshes the systemd unit from `runed print-unit`
+#   (--refresh-unit), so a host whose on-disk unit pre-dates current can
+#   pick up new directives like AmbientCapabilities=CAP_NET_BIND_SERVICE.
+# - Backs up the old binaries (and old unit, when refreshed) so rollback
+#   on verification failure is automatic.
 # - Restarts the runed systemd unit and verifies it comes up healthy.
 #
 # What this script DOES NOT do:
-# - It does NOT rewrite the systemd unit. If your unit pre-dates current
-#   install-server.sh (e.g. it's missing `AmbientCapabilities=CAP_NET_BIND_SERVICE`),
-#   re-run install-server.sh instead — or, more durably, bump rune_version in
-#   your Terraform module and re-apply.
+# - Without --refresh-unit, it does not touch the systemd unit. The
+#   warning printed when AmbientCapabilities= is missing tells you when
+#   to opt in.
 # - It does NOT touch the runefile, data dir, KEK, or any Docker state.
 # - It does NOT install Docker or Go.
 #
-# Use install-server.sh for greenfield installs and for any change that
-# touches the systemd unit shape.
+# Use install-server.sh for greenfield installs.
 
 RUNE_VERSION=""
 BIN_DIR="/usr/local/bin"
@@ -24,19 +26,24 @@ SERVICE_NAME="runed"
 SKIP_RESTART=false
 SKIP_CAPS=false
 KEEP_BACKUP=true
+REFRESH_UNIT=false
+UNIT_PATH="/etc/systemd/system/runed.service"
 
 # Populated at runtime so the cleanup trap can find them.
 TMP_DIR=""
 BACKUP_RUNE=""
 BACKUP_RUNED=""
+BACKUP_UNIT=""
 HAD_CAPS=false
+UNIT_REFRESHED=false
 
 log() { echo "[upgrade-server] $*"; }
 die() { echo "[upgrade-server] ERROR: $*" >&2; exit 1; }
 
 usage() {
   cat <<USAGE
-Usage: $0 --version vX.Y.Z [--bin-dir DIR] [--skip-restart] [--skip-caps] [--no-keep-backup]
+Usage: $0 --version vX.Y.Z [--bin-dir DIR] [--skip-restart] [--skip-caps]
+           [--no-keep-backup] [--refresh-unit [--unit-path PATH]]
 
 Required:
   --version vX.Y.Z      GitHub release tag to upgrade to (e.g. v0.0.1-dev.43)
@@ -51,6 +58,16 @@ Options:
   --no-keep-backup      Remove the backup binaries after a successful
                         upgrade. Default keeps them at \$BIN_DIR/.{rune,runed}.bak
                         so you can rollback by hand.
+  --refresh-unit        Refresh /etc/systemd/system/runed.service from
+                        \`runed print-systemd\` of the new binary, before
+                        the restart. The previous unit is backed up to
+                        \$UNIT_PATH.bak and restored on verification
+                        failure. Use this when an older install is
+                        missing directives shipped in newer versions
+                        (e.g. AmbientCapabilities=CAP_NET_BIND_SERVICE).
+                        The script warns when it detects that drift.
+  --unit-path PATH      Override the unit file path (default: $UNIT_PATH).
+                        Only relevant with --refresh-unit.
   -h, --help            Show help
 
 Behaviour:
@@ -59,8 +76,12 @@ Behaviour:
      (so we know to re-apply it after replacement; setcap doesn't
      survive 'cp' / 'mv' on the binary).
   3. Stops $SERVICE_NAME, swaps the binaries, re-applies caps if needed.
-  4. Starts $SERVICE_NAME and waits up to 15s for it to report active.
-  5. On verification failure: restores the backup binaries and restarts.
+  4. With --refresh-unit: writes \`runed print-unit\` from the NEW
+     binary to $UNIT_PATH (backing up the previous unit) and runs
+     \`systemctl daemon-reload\` before restart.
+  5. Starts $SERVICE_NAME and waits up to 15s for it to report active.
+  6. On verification failure: restores the backup binaries and (if
+     refreshed) the previous unit, then restarts.
 
 Example:
   curl -fsSL https://rune.sh/upgrade-server.sh | bash -s -- --version v0.0.1-dev.43
@@ -98,10 +119,18 @@ cleanup() {
     if [ "$HAD_CAPS" = true ] && command -v setcap >/dev/null 2>&1; then
       setcap 'cap_net_bind_service=+ep' "$BIN_DIR/runed" || true
     fi
+    # Restore the previous unit if --refresh-unit had already swapped
+    # it. Skip if we never got that far. daemon-reload is cheap to call
+    # again even when the unit didn't actually change.
+    if [ "$UNIT_REFRESHED" = true ] && [ -n "$BACKUP_UNIT" ] && [ -f "$BACKUP_UNIT" ]; then
+      cp -p "$BACKUP_UNIT" "$UNIT_PATH" || true
+      systemctl daemon-reload || true
+      log "Restored previous systemd unit from $BACKUP_UNIT"
+    fi
     if [ "$SKIP_RESTART" != true ]; then
       systemctl restart "$SERVICE_NAME" || true
     fi
-    log "Rolled back to previous binaries; service restart attempted."
+    log "Rolled back to previous state; service restart attempted."
   fi
   exit "$rc"
 }
@@ -191,17 +220,61 @@ reapply_caps() {
 }
 
 warn_if_unit_missing_ambient() {
+  if [ "$REFRESH_UNIT" = true ]; then
+    # Caller is opting into the unit refresh already; no need to nag.
+    return
+  fi
   local unit
   for unit in /etc/systemd/system/runed.service /lib/systemd/system/runed.service; do
     if [ -f "$unit" ]; then
       if ! grep -q '^AmbientCapabilities=.*CAP_NET_BIND_SERVICE' "$unit"; then
         log "⚠️  $unit is missing 'AmbientCapabilities=CAP_NET_BIND_SERVICE'."
-        log "    File caps cover this install today, but consider re-running install-server.sh"
-        log "    (or bumping rune_version in your Terraform module) to refresh the unit."
+        log "    File caps cover this install today. To pick up newer unit"
+        log "    directives, re-run with --refresh-unit (writes a fresh unit"
+        log "    via 'runed print-systemd' from the upgraded binary)."
       fi
       return
     fi
   done
+}
+
+refresh_unit() {
+  if [ "$REFRESH_UNIT" != true ]; then
+    return
+  fi
+  if [ ! -x "$BIN_DIR/runed" ]; then
+    die "--refresh-unit: $BIN_DIR/runed is not executable; cannot generate unit"
+  fi
+  if ! "$BIN_DIR/runed" print-systemd --help >/dev/null 2>&1; then
+    # Older runed without the subcommand. Skip rather than break the
+    # upgrade — operators upgrading TO a print-systemd-capable build
+    # for the first time will hit this once; the next upgrade refreshes
+    # cleanly.
+    log "⚠️  --refresh-unit: this runed build does not support 'print-systemd'."
+    log "    The binary swap has already completed; the on-disk unit is unchanged."
+    log "    Next upgrade with --refresh-unit will pick up the new unit shape."
+    return
+  fi
+
+  local new_unit
+  new_unit="$TMP_DIR/runed.service.new"
+  # Render with the NEW binary so the unit matches what the new runed
+  # expects (ExecStart points at it, any new directives ship cleanly).
+  if ! "$BIN_DIR/runed" print-systemd > "$new_unit"; then
+    die "--refresh-unit: 'runed print-systemd' failed"
+  fi
+
+  if [ -f "$UNIT_PATH" ]; then
+    BACKUP_UNIT="${UNIT_PATH}.bak"
+    cp -p "$UNIT_PATH" "$BACKUP_UNIT"
+    log "Backed up current unit to $BACKUP_UNIT"
+  fi
+
+  install -m 0644 "$new_unit" "$UNIT_PATH"
+  UNIT_REFRESHED=true
+  log "Installed refreshed unit at $UNIT_PATH"
+
+  systemctl daemon-reload
 }
 
 start_service() {
@@ -245,10 +318,16 @@ verify() {
 cleanup_backups() {
   if [ "$KEEP_BACKUP" = true ]; then
     log "Keeping rollback backups at $BACKUP_RUNE / $BACKUP_RUNED"
-    log "Remove them when you're satisfied:  rm $BACKUP_RUNE $BACKUP_RUNED"
+    if [ "$UNIT_REFRESHED" = true ] && [ -n "$BACKUP_UNIT" ]; then
+      log "  (previous unit at $BACKUP_UNIT)"
+    fi
+    log "Remove them when you're satisfied:  rm $BACKUP_RUNE $BACKUP_RUNED${BACKUP_UNIT:+ $BACKUP_UNIT}"
     return
   fi
   rm -f "$BACKUP_RUNE" "$BACKUP_RUNED"
+  if [ "$UNIT_REFRESHED" = true ] && [ -n "$BACKUP_UNIT" ]; then
+    rm -f "$BACKUP_UNIT"
+  fi
   log "Removed backup binaries (--no-keep-backup)"
 }
 
@@ -260,6 +339,8 @@ main() {
       --skip-restart) SKIP_RESTART=true; shift ;;
       --skip-caps) SKIP_CAPS=true; shift ;;
       --no-keep-backup) KEEP_BACKUP=false; shift ;;
+      --refresh-unit) REFRESH_UNIT=true; shift ;;
+      --unit-path) UNIT_PATH="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown argument: $1" ;;
     esac
@@ -276,6 +357,7 @@ main() {
   stop_service
   swap_binaries
   reapply_caps
+  refresh_unit
   warn_if_unit_missing_ambient
   start_service
   verify

@@ -435,6 +435,13 @@ func initRuntimeConfig() {
 }
 
 func main() {
+	// Helper subcommands (e.g. `runed print-unit`) short-circuit the
+	// daemon flag parser so they can own their own flag set without
+	// polluting the daemon's `var (...)` block. See print_unit.go.
+	if handled, code := dispatchSubcommand(); handled {
+		os.Exit(code)
+	}
+
 	// Parse flags
 	flag.Parse()
 
