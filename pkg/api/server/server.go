@@ -286,6 +286,11 @@ func (s *APIServer) authUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if info.FullMethod == "/rune.api.AdminService/AdminBootstrap" {
 			return handler(ctx, req)
 		}
+		// Allow unauthenticated server version probe so `rune version`
+		// can report server build info before the user has logged in.
+		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
+			return handler(ctx, req)
+		}
 		// Otherwise, run normal auth
 		ctx2, err := s.authFunc(ctx)
 		if err != nil {
@@ -309,6 +314,10 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 
 		// Require authenticated subject, except bootstrap which is already allowed above
 		if info.FullMethod == "/rune.api.AdminService/AdminBootstrap" {
+			return handler(ctx, req)
+		}
+		// Server version probe is read-only and intentionally public.
+		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
 			return handler(ctx, req)
 		}
 		var subjectID string

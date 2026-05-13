@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	HealthService_GetHealth_FullMethodName = "/rune.api.HealthService/GetHealth"
+	HealthService_GetHealth_FullMethodName        = "/rune.api.HealthService/GetHealth"
+	HealthService_GetServerVersion_FullMethodName = "/rune.api.HealthService/GetServerVersion"
 )
 
 // HealthServiceClient is the client API for HealthService service.
@@ -30,6 +31,10 @@ const (
 type HealthServiceClient interface {
 	// GetHealth retrieves health status of platform components.
 	GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*GetHealthResponse, error)
+	// GetServerVersion returns build/version information for the running
+	// server binary. Intentionally unauthenticated so `rune version` can
+	// report it before the user has logged in.
+	GetServerVersion(ctx context.Context, in *GetServerVersionRequest, opts ...grpc.CallOption) (*GetServerVersionResponse, error)
 }
 
 type healthServiceClient struct {
@@ -50,6 +55,16 @@ func (c *healthServiceClient) GetHealth(ctx context.Context, in *GetHealthReques
 	return out, nil
 }
 
+func (c *healthServiceClient) GetServerVersion(ctx context.Context, in *GetServerVersionRequest, opts ...grpc.CallOption) (*GetServerVersionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetServerVersionResponse)
+	err := c.cc.Invoke(ctx, HealthService_GetServerVersion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HealthServiceServer is the server API for HealthService service.
 // All implementations must embed UnimplementedHealthServiceServer
 // for forward compatibility.
@@ -58,6 +73,10 @@ func (c *healthServiceClient) GetHealth(ctx context.Context, in *GetHealthReques
 type HealthServiceServer interface {
 	// GetHealth retrieves health status of platform components.
 	GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error)
+	// GetServerVersion returns build/version information for the running
+	// server binary. Intentionally unauthenticated so `rune version` can
+	// report it before the user has logged in.
+	GetServerVersion(context.Context, *GetServerVersionRequest) (*GetServerVersionResponse, error)
 	mustEmbedUnimplementedHealthServiceServer()
 }
 
@@ -70,6 +89,9 @@ type UnimplementedHealthServiceServer struct{}
 
 func (UnimplementedHealthServiceServer) GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetHealth not implemented")
+}
+func (UnimplementedHealthServiceServer) GetServerVersion(context.Context, *GetServerVersionRequest) (*GetServerVersionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetServerVersion not implemented")
 }
 func (UnimplementedHealthServiceServer) mustEmbedUnimplementedHealthServiceServer() {}
 func (UnimplementedHealthServiceServer) testEmbeddedByValue()                       {}
@@ -110,6 +132,24 @@ func _HealthService_GetHealth_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HealthService_GetServerVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetServerVersionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HealthServiceServer).GetServerVersion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HealthService_GetServerVersion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HealthServiceServer).GetServerVersion(ctx, req.(*GetServerVersionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HealthService_ServiceDesc is the grpc.ServiceDesc for HealthService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -120,6 +160,10 @@ var HealthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetHealth",
 			Handler:    _HealthService_GetHealth_Handler,
+		},
+		{
+			MethodName: "GetServerVersion",
+			Handler:    _HealthService_GetServerVersion_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
