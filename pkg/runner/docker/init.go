@@ -168,7 +168,7 @@ func (r *DockerRunner) initStepToContainerConfig(instance *runetypes.Instance, s
 		Image:      step.Image,
 		Entrypoint: []string{step.Command},
 		Cmd:        append([]string(nil), step.Args...),
-		Env:   formatEnvVars(env),
+		Env:        formatEnvVars(env),
 		Labels: map[string]string{
 			"rune.managed":      "true",
 			"rune.kind":         "init-step",

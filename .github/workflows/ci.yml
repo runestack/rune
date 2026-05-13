@@ -40,7 +40,7 @@ jobs:
       - name: Check Coverage
         env:
           COVERAGE_THRESHOLD: ${{ secrets.COVERAGE_THRESHOLD }}
-        run: make check-coverage-unit
+        run: make check-coverage
 
   build:
     name: Build

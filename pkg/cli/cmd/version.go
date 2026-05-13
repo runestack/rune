@@ -13,9 +13,9 @@ import (
 
 // versionInfo is the structured form printed by `rune version -o json|yaml`.
 type versionInfo struct {
-	Client versionPart    `json:"client" yaml:"client"`
-	Server *versionPart   `json:"server,omitempty" yaml:"server,omitempty"`
-	Note   string         `json:"note,omitempty" yaml:"note,omitempty"`
+	Client versionPart  `json:"client" yaml:"client"`
+	Server *versionPart `json:"server,omitempty" yaml:"server,omitempty"`
+	Note   string       `json:"note,omitempty" yaml:"note,omitempty"`
 }
 
 type versionPart struct {

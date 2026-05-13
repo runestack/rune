@@ -185,10 +185,10 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (t *tailBuffer) Len() int        { return t.buf.Len() }
-func (t *tailBuffer) String() string  { return t.buf.String() }
-func (t *tailBuffer) Bytes() []byte   { return t.buf.Bytes() }
-func (t *tailBuffer) Reset()          { t.buf.Reset() }
+func (t *tailBuffer) Len() int       { return t.buf.Len() }
+func (t *tailBuffer) String() string { return t.buf.String() }
+func (t *tailBuffer) Bytes() []byte  { return t.buf.Bytes() }
+func (t *tailBuffer) Reset()         { t.buf.Reset() }
 
 // timeOf returns the start time of the underlying os.Process if
 // available, else now (so the duration field is at worst ~0s).
