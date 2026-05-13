@@ -1,6 +1,7 @@
 package types
 
 import (
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -236,5 +237,123 @@ service:
 	}
 	if step.RunIf.Type != RunIfFileMissing || step.RunIf.Path != "/data/0_0.tigerbeetle" {
 		t.Fatalf("init step runIf not preserved: %+v", step.RunIf)
+	}
+}
+
+// Regression for the Propeller "Bug D" report: a securityContext
+// block with a misspelled field name (`seccomp: unconfined` instead
+// of `seccompProfile: { type: unconfined }`) used to unmarshal into
+// an empty struct silently. The init step then ran with Docker's
+// default seccomp profile and TigerBeetle's `format` failed with
+// "io_uring is not available". Now `rune cast` rejects the YAML up
+// front with a precise error and a "did you mean" hint.
+func TestServiceSpec_SecurityContext_RejectsUnknownField(t *testing.T) {
+	yamlData := `
+service:
+  name: tigerbeetle
+  image: ghcr.io/tigerbeetle/tigerbeetle:latest
+  command: /tigerbeetle
+  securityContext:
+    seccomp: unconfined
+`
+	cf, err := ParseCastFileFromBytes([]byte(yamlData), "")
+	if err != nil {
+		t.Fatalf("parse cast file: %v", err)
+	}
+	if len(cf.Specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(cf.Specs))
+	}
+	err = cf.Specs[0].Validate()
+	if err == nil {
+		t.Fatal("Validate() accepted unknown field 'seccomp'; expected an error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "unknown field 'seccomp'") {
+		t.Errorf("error should name the offending field; got: %v", err)
+	}
+	if !strings.Contains(msg, "service.securityContext") {
+		t.Errorf("error should locate the block; got: %v", err)
+	}
+	if !strings.Contains(msg, "did you mean 'seccompProfile.type'?") {
+		t.Errorf("error should hint at the correct schema; got: %v", err)
+	}
+}
+
+// The correct schema must still validate cleanly.
+func TestServiceSpec_SecurityContext_AcceptsValidSchema(t *testing.T) {
+	yamlData := `
+service:
+  name: tigerbeetle
+  image: ghcr.io/tigerbeetle/tigerbeetle:latest
+  command: /tigerbeetle
+  securityContext:
+    seccompProfile:
+      type: unconfined
+    capAdd: [SYS_NICE]
+`
+	cf, err := ParseCastFileFromBytes([]byte(yamlData), "")
+	if err != nil {
+		t.Fatalf("parse cast file: %v", err)
+	}
+	if err := cf.Specs[0].Validate(); err != nil {
+		t.Fatalf("Validate() rejected valid securityContext: %v", err)
+	}
+}
+
+// Wrong field inside seccompProfile is also caught (one nesting
+// level deeper).
+func TestServiceSpec_SeccompProfile_RejectsUnknownField(t *testing.T) {
+	yamlData := `
+service:
+  name: api
+  image: nginx
+  securityContext:
+    seccompProfile:
+      kind: unconfined
+`
+	cf, err := ParseCastFileFromBytes([]byte(yamlData), "")
+	if err != nil {
+		t.Fatalf("parse cast file: %v", err)
+	}
+	err = cf.Specs[0].Validate()
+	if err == nil {
+		t.Fatal("expected error for unknown seccompProfile field")
+	}
+	if !strings.Contains(err.Error(), "unknown field 'kind' in service.securityContext.seccompProfile") {
+		t.Errorf("error should pinpoint the nested block; got: %v", err)
+	}
+}
+
+// A misspelled field inside an init step's securityContext is also
+// caught — the inheritance fix in v0.0.1-dev.40 doesn't help if
+// the per-step block is itself empty due to a typo.
+func TestServiceSpec_InitStep_SecurityContext_RejectsUnknownField(t *testing.T) {
+	yamlData := `
+service:
+  name: tb
+  image: tb
+  command: /tigerbeetle
+  volumes:
+    - name: data
+      mountPath: /data
+      claimTemplate: { storageClassName: local, size: "1Gi" }
+  initSteps:
+    - name: format
+      image: tb
+      command: /tigerbeetle
+      args: [format, /data/0_0.tigerbeetle]
+      securityContext:
+        seccomp: unconfined
+`
+	cf, err := ParseCastFileFromBytes([]byte(yamlData), "")
+	if err != nil {
+		t.Fatalf("parse cast file: %v", err)
+	}
+	err = cf.Specs[0].Validate()
+	if err == nil {
+		t.Fatal("expected error for unknown field in init step's securityContext")
+	}
+	if !strings.Contains(err.Error(), "initSteps[0].securityContext") {
+		t.Errorf("error should locate the init step's securityContext block; got: %v", err)
 	}
 }

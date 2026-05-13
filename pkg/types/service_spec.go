@@ -572,6 +572,12 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 			if fieldKey.Value == "ports" && fieldVal.Kind == yaml.SequenceNode {
 				collectServicePortsErrors(fieldVal, validPortFields, &errors)
 			}
+			if fieldKey.Value == "securityContext" && fieldVal.Kind == yaml.MappingNode {
+				collectSecurityContextErrors("service.securityContext", fieldVal, &errors)
+			}
+			if fieldKey.Value == "initSteps" && fieldVal.Kind == yaml.SequenceNode {
+				collectInitStepsErrors(fieldVal, &errors)
+			}
 		}
 	}
 
@@ -850,6 +856,118 @@ func collectServicePortsErrors(portsNode *yaml.Node, validPortFields map[string]
 				key := portNode.Content[i]
 				if !validPortFields[key.Value] {
 					*errors = append(*errors, fmt.Sprintf("unknown field '%s' in port specification at line %d", key.Value, key.Line))
+				}
+			}
+		}
+	}
+}
+
+// validSecurityContextFields lists the recognised keys inside a
+// `securityContext` block. Mirrors types.SecurityContext.
+var validSecurityContextFields = map[string]bool{
+	"seccompProfile": true,
+	"capAdd":         true,
+	"capDrop":        true,
+	"privileged":     true,
+}
+
+// validSeccompProfileFields lists the recognised keys inside a
+// `seccompProfile` block. Mirrors types.SeccompProfile.
+var validSeccompProfileFields = map[string]bool{
+	"type":             true,
+	"localhostProfile": true,
+}
+
+// securityContextFieldHints maps common wrong field names to the
+// correct schema so the validator can append "did you mean" hints.
+// Keep these focused on the mistakes we've actually seen in the wild
+// — over-eager fuzzy matching produces confusing suggestions.
+var securityContextFieldHints = map[string]string{
+	"seccomp":            "seccompProfile.type",
+	"seccompProfileType": "seccompProfile.type",
+	"capabilities":       "capAdd / capDrop",
+	"caps":               "capAdd / capDrop",
+}
+
+// collectSecurityContextErrors walks a securityContext mapping node
+// and reports unknown fields. The block is parsed as a strict
+// allowlist because silent yaml.Unmarshal drops would otherwise mask
+// schema typos until runtime (Propeller hit this on `seccomp:
+// unconfined` vs `seccompProfile: { type: unconfined }`).
+func collectSecurityContextErrors(ctx string, node *yaml.Node, errors *[]string) {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i]
+		val := node.Content[i+1]
+		if !validSecurityContextFields[key.Value] {
+			msg := fmt.Sprintf("unknown field '%s' in %s at line %d", key.Value, ctx, key.Line)
+			if hint, ok := securityContextFieldHints[key.Value]; ok {
+				msg += fmt.Sprintf(" (did you mean '%s'?)", hint)
+			}
+			*errors = append(*errors, msg)
+			continue
+		}
+		if key.Value == "seccompProfile" && val.Kind == yaml.MappingNode {
+			for j := 0; j+1 < len(val.Content); j += 2 {
+				k := val.Content[j]
+				if !validSeccompProfileFields[k.Value] {
+					*errors = append(*errors, fmt.Sprintf("unknown field '%s' in %s.seccompProfile at line %d", k.Value, ctx, k.Line))
+				}
+			}
+		}
+	}
+}
+
+// validInitStepFields lists the recognised keys for an init step
+// entry. Mirrors types.InitStep YAML tags.
+var validInitStepFields = map[string]bool{
+	"name":            true,
+	"image":           true,
+	"command":         true,
+	"args":            true,
+	"env":             true,
+	"envFrom":         true,
+	"volumes":         true,
+	"secretMounts":    true,
+	"configmapMounts": true,
+	"resources":       true,
+	"runIf":           true,
+	"timeout":         true,
+	"restartPolicy":   true,
+	"securityContext": true,
+}
+
+// validRunIfFields lists the recognised keys for an init step's
+// runIf predicate. Mirrors types.RunIf.
+var validRunIfFields = map[string]bool{
+	"type":   true,
+	"path":   true,
+	"volume": true,
+}
+
+// collectInitStepsErrors validates each init step's top-level fields
+// and recurses into its securityContext and runIf blocks.
+func collectInitStepsErrors(stepsNode *yaml.Node, errors *[]string) {
+	for idx, step := range stepsNode.Content {
+		if step.Kind != yaml.MappingNode {
+			continue
+		}
+		ctx := fmt.Sprintf("initSteps[%d]", idx)
+		for i := 0; i+1 < len(step.Content); i += 2 {
+			key := step.Content[i]
+			val := step.Content[i+1]
+			if !validInitStepFields[key.Value] {
+				*errors = append(*errors, fmt.Sprintf("unknown field '%s' in %s at line %d", key.Value, ctx, key.Line))
+				continue
+			}
+			if key.Value == "securityContext" && val.Kind == yaml.MappingNode {
+				collectSecurityContextErrors(ctx+".securityContext", val, errors)
+			}
+			if key.Value == "runIf" && val.Kind == yaml.MappingNode {
+				for j := 0; j+1 < len(val.Content); j += 2 {
+					k := val.Content[j]
+					if !validRunIfFields[k.Value] {
+						*errors = append(*errors, fmt.Sprintf("unknown field '%s' in %s.runIf at line %d", k.Value, ctx, k.Line))
+					}
 				}
 			}
 		}
