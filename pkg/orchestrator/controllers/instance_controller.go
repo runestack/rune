@@ -414,6 +414,18 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 		instance.Metadata.ImagePull = service.ImagePull
 	}
 
+	// Propagate the main container's command/args so the runner can
+	// override the image's ENTRYPOINT/CMD (Kubernetes semantics:
+	// command → Entrypoint, args → Cmd). Empty values leave the
+	// image's baked-in defaults in place. See pkg/runner/docker/runner.go.
+	if instance.Metadata == nil {
+		instance.Metadata = &types.InstanceMetadata{}
+	}
+	instance.Metadata.Command = service.Command
+	if len(service.Args) > 0 {
+		instance.Metadata.Args = append([]string(nil), service.Args...)
+	}
+
 	// Run init steps before the main container is created (RUNE-121).
 	// On failure this sets instance.Status=Failed and returns an error.
 	if err := c.runInitSteps(ctx, serviceRunner, service, instance); err != nil {

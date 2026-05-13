@@ -91,6 +91,17 @@ type InstanceMetadata struct {
 	// Image is the image that the instance is running
 	Image string `json:"image,omitempty" yaml:"image,omitempty"`
 
+	// Command is the executable to run inside the container,
+	// propagated from Service.Command. Maps to Docker's Entrypoint:
+	// it replaces the image's baked-in ENTRYPOINT. Empty leaves the
+	// image's ENTRYPOINT untouched.
+	Command string `json:"command,omitempty" yaml:"command,omitempty"`
+
+	// Args are positional arguments to Command, propagated from
+	// Service.Args. Maps to Docker's Cmd: it replaces the image's
+	// baked-in CMD. nil leaves the image's CMD untouched.
+	Args []string `json:"args,omitempty" yaml:"args,omitempty"`
+
 	// ImagePull controls when the runner pulls the container image
 	// ("always", "missing", "never"). Propagated from the parent
 	// Service spec; empty defaults to "always".
