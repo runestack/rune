@@ -375,8 +375,47 @@ func extraRBACRequirements(fullMethod string, req interface{}) []rbacRequirement
 		if r, ok := req.(*generated.UpdateStorageClassRequest); ok && r.GetStorageClass().GetDefault() {
 			return []rbacRequirement{{resource: "storageclasses", verb: "set-default"}}
 		}
+	case "/rune.api.ServiceService/CreateService":
+		if r, ok := req.(*generated.CreateServiceRequest); ok && servicePrivilegedRequired(r.GetService()) {
+			return []rbacRequirement{{resource: "services", verb: "privileged"}}
+		}
+	case "/rune.api.ServiceService/UpdateService":
+		if r, ok := req.(*generated.UpdateServiceRequest); ok && servicePrivilegedRequired(r.GetService()) {
+			return []rbacRequirement{{resource: "services", verb: "privileged"}}
+		}
 	}
 	return nil
+}
+
+// servicePrivilegedRequired reports whether the service payload uses
+// security knobs that must be gated behind the services.privileged
+// policy verb. Mirrors types.SecurityContext.RequiresPrivilegedGate.
+func servicePrivilegedRequired(svc *generated.Service) bool {
+	if svc == nil {
+		return false
+	}
+	if securityContextNeedsGate(svc.SecurityContext) {
+		return true
+	}
+	for _, step := range svc.InitSteps {
+		if step != nil && securityContextNeedsGate(step.SecurityContext) {
+			return true
+		}
+	}
+	return false
+}
+
+func securityContextNeedsGate(sc *generated.SecurityContext) bool {
+	if sc == nil {
+		return false
+	}
+	if sc.Privileged {
+		return true
+	}
+	if sp := sc.SeccompProfile; sp != nil && sp.Type == "unconfined" {
+		return true
+	}
+	return false
 }
 
 // admin interceptors (local-only)

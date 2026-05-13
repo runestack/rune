@@ -100,6 +100,11 @@ type Service struct {
 	// config / env by default. See RUNE-121.
 	InitSteps []InitStep `json:"initSteps,omitempty" yaml:"initSteps,omitempty"`
 
+	// SecurityContext applied to the main container. Privileged=true
+	// and seccompProfile.type=unconfined are gated server-side behind
+	// the services.privileged policy verb.
+	SecurityContext *SecurityContext `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
+
 	// Service discovery configuration
 	Discovery *ServiceDiscovery `json:"discovery,omitempty" yaml:"discovery,omitempty"`
 
@@ -602,6 +607,11 @@ func (s *Service) Validate() error {
 
 	// Init steps (RUNE-121).
 	if err := s.validateInitSteps(); err != nil {
+		return err
+	}
+
+	// SecurityContext (main container).
+	if err := s.SecurityContext.Validate(); err != nil {
 		return err
 	}
 

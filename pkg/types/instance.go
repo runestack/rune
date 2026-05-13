@@ -75,6 +75,11 @@ type Instance struct {
 	// declared step, in declaration order. Empty for instances of
 	// services with no init steps.
 	InitStates []InitStepState `json:"initStates,omitempty" yaml:"initStates,omitempty"`
+
+	// SecurityContext is inherited from the parent service's
+	// SecurityContext and applied to the main container by the runner.
+	// nil means runtime defaults.
+	SecurityContext *SecurityContext `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
 }
 
 func (i *Instance) GetResourceType() ResourceType {

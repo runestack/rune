@@ -103,6 +103,105 @@ message Service {
   // Volume mounts. Exactly one of claim / claim_template
   // is set per mount; binding state lives on the Volume resource itself.
   repeated VolumeMount volumes = 26;
+
+  // Init steps run sequentially before each instance's main container
+  // (RUNE-121).
+  repeated InitStep init_steps = 27;
+
+  // SecurityContext applied to the main container. Privileged=true and
+  // seccomp=unconfined require the services.privileged policy verb.
+  SecurityContext security_context = 28;
+}
+
+// RunIfSpec encodes the predicate that decides whether an InitStep
+// runs on a given instance start. Mirrors types.RunIf.
+message RunIfSpec {
+  // Predicate type. Empty defaults to "freshVolume". Valid values:
+  // "freshVolume" | "fileMissing" | "always".
+  string type = 1;
+
+  // Absolute in-container path tested when type=fileMissing.
+  string path = 2;
+
+  // Optional named parent volume that restricts the fileMissing check.
+  string volume = 3;
+}
+
+// SeccompProfile selects the seccomp policy applied to a container.
+// Empty / unset means the platform default profile is used.
+message SeccompProfile {
+  // Type selects the profile family. Valid values:
+  //   ""             — runtime default
+  //   "default"      — explicit runtime default
+  //   "unconfined"   — disable seccomp filtering (admin-gated)
+  //   "localhost"    — load the profile at LocalhostProfile on the host
+  string type = 1;
+
+  // LocalhostProfile is the absolute path to a JSON seccomp profile
+  // on the runtime host. Required iff type="localhost".
+  string localhost_profile = 2;
+}
+
+// SecurityContext bundles container-level security knobs. Privileged
+// and SeccompProfile=unconfined are gated behind the
+// services.privileged policy verb.
+message SecurityContext {
+  SeccompProfile seccomp_profile = 1;
+  repeated string cap_add = 2;
+  repeated string cap_drop = 3;
+  bool privileged = 4;
+}
+
+// InitStep is a one-shot container/process executed before the main
+// container of a Service starts. Mirrors types.InitStep (RUNE-121).
+message InitStep {
+  // DNS-1123 identifier, unique within the service's init_steps.
+  string name = 1;
+
+  // Container image. Required when the parent service runtime is
+  // "container". Empty for runtime="process".
+  string image = 2;
+
+  // Command to run. No entrypoint inheritance from the parent image.
+  string command = 3;
+
+  // Positional arguments to command.
+  repeated string args = 4;
+
+  // Env merged on top of the parent service's env. Step keys win.
+  map<string, string> env = 5;
+
+  // EnvFrom merged with the parent's EnvFrom.
+  repeated EnvFromSource env_from = 6;
+
+  // Volumes filter: unset = inherit all, [] = none, [a,b] = a and b.
+  // volumes_set distinguishes "not set" from "empty" on the wire.
+  repeated string volumes = 7;
+  bool volumes_set = 8;
+
+  // Secret mount filter, same convention as volumes.
+  repeated string secret_mounts = 9;
+  bool secret_mounts_set = 10;
+
+  // Configmap mount filter, same convention as volumes.
+  repeated string configmap_mounts = 11;
+  bool configmap_mounts_set = 12;
+
+  // Optional resource override for this step.
+  Resources resources = 13;
+
+  // Predicate selecting when this step runs.
+  RunIfSpec run_if = 14;
+
+  // Per-step timeout in nanoseconds (matches Go time.Duration).
+  // 0 defers to the cast-level timeout.
+  int64 timeout_nanos = 15;
+
+  // Restart policy: "OnFailure" (default) | "Never".
+  string restart_policy = 16;
+
+  // Optional security context applied to this init container.
+  SecurityContext security_context = 17;
 }
 
 // EnvFromSource represents an environment import source

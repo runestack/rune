@@ -115,6 +115,100 @@ type InitStep struct {
 	// RestartPolicy controls per-step retry behaviour. Default
 	// OnFailure (bounded retries inside the step).
 	RestartPolicy InitStepRestartPolicy `json:"restartPolicy,omitempty" yaml:"restartPolicy,omitempty"`
+
+	// SecurityContext optionally overrides container security knobs for
+	// this step (seccomp profile, Linux capabilities, privileged). When
+	// nil the step inherits the runtime defaults. Setting privileged=true
+	// or seccompProfile.type=unconfined requires the services.privileged
+	// policy verb; the server rejects requests that lack it.
+	SecurityContext *SecurityContext `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
+}
+
+// SecurityContext bundles container-level security knobs surfaced to
+// users. Mirrors generated.SecurityContext on the wire and is also
+// allowed on Service for the main container.
+type SecurityContext struct {
+	// SeccompProfile selects the seccomp policy applied to the
+	// container. Nil means the runtime default profile.
+	SeccompProfile *SeccompProfile `json:"seccompProfile,omitempty" yaml:"seccompProfile,omitempty"`
+
+	// CapAdd are Linux capabilities granted to the container in
+	// addition to the runtime defaults (e.g. "SYS_ADMIN", "NET_ADMIN").
+	CapAdd []string `json:"capAdd,omitempty" yaml:"capAdd,omitempty"`
+
+	// CapDrop are Linux capabilities removed from the container,
+	// applied after CapAdd.
+	CapDrop []string `json:"capDrop,omitempty" yaml:"capDrop,omitempty"`
+
+	// Privileged grants full access to host devices and namespaces.
+	// Admin-gated by the services.privileged policy verb.
+	Privileged bool `json:"privileged,omitempty" yaml:"privileged,omitempty"`
+}
+
+// SeccompProfileType enumerates the supported seccomp profile selectors.
+type SeccompProfileType string
+
+const (
+	// SeccompProfileDefault uses the runtime's default profile.
+	SeccompProfileDefault SeccompProfileType = "default"
+
+	// SeccompProfileUnconfined disables seccomp filtering. Admin-gated.
+	SeccompProfileUnconfined SeccompProfileType = "unconfined"
+
+	// SeccompProfileLocalhost loads a profile from a path on the host.
+	SeccompProfileLocalhost SeccompProfileType = "localhost"
+)
+
+// SeccompProfile selects a seccomp policy.
+type SeccompProfile struct {
+	// Type selects the profile family. Empty is treated as "default".
+	Type SeccompProfileType `json:"type,omitempty" yaml:"type,omitempty"`
+
+	// LocalhostProfile is an absolute path to a JSON seccomp profile
+	// on the runtime host. Required iff Type=localhost.
+	LocalhostProfile string `json:"localhostProfile,omitempty" yaml:"localhostProfile,omitempty"`
+}
+
+// RequiresPrivilegedGate reports whether this SecurityContext contains
+// fields that the server should reject for callers without the
+// services.privileged policy verb.
+func (sc *SecurityContext) RequiresPrivilegedGate() bool {
+	if sc == nil {
+		return false
+	}
+	if sc.Privileged {
+		return true
+	}
+	if sc.SeccompProfile != nil && sc.SeccompProfile.Type == SeccompProfileUnconfined {
+		return true
+	}
+	return false
+}
+
+// Validate checks structural invariants on SecurityContext. It does
+// not enforce policy gates (those are checked server-side via RBAC).
+func (sc *SecurityContext) Validate() error {
+	if sc == nil {
+		return nil
+	}
+	if sp := sc.SeccompProfile; sp != nil {
+		switch sp.Type {
+		case "", SeccompProfileDefault, SeccompProfileUnconfined:
+			if sp.LocalhostProfile != "" {
+				return NewValidationError("securityContext.seccompProfile.localhostProfile only valid with type=localhost")
+			}
+		case SeccompProfileLocalhost:
+			if sp.LocalhostProfile == "" {
+				return NewValidationError("securityContext.seccompProfile.localhostProfile is required when type=localhost")
+			}
+			if !path.IsAbs(sp.LocalhostProfile) {
+				return NewValidationError("securityContext.seccompProfile.localhostProfile must be an absolute path")
+			}
+		default:
+			return NewValidationError("securityContext.seccompProfile.type must be one of: default, unconfined, localhost")
+		}
+	}
+	return nil
 }
 
 // InitStepStatus is the lifecycle state of one InitStep on one Instance.
@@ -264,6 +358,10 @@ func (s *Service) validateInitSteps() error {
 
 		if step.Timeout < 0 {
 			return NewValidationError(ctx + " (" + step.Name + "): timeout cannot be negative")
+		}
+
+		if err := step.SecurityContext.Validate(); err != nil {
+			return NewValidationError(ctx + " (" + step.Name + "): " + err.Error())
 		}
 	}
 

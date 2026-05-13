@@ -355,6 +355,11 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	// Use a pointer so runners can access limits/requests directly
 	instance.Resources = &service.Resources
 
+	// Propagate SecurityContext from service to instance so the runner
+	// can apply seccomp / capabilities / privileged to the main
+	// container. Init steps carry their own SecurityContext.
+	instance.SecurityContext = service.SecurityContext
+
 	// Store the service generation in instance metadata
 	instance.Metadata.ServiceGeneration = service.Metadata.Generation
 

@@ -257,7 +257,40 @@ func (r *DockerRunner) initStepToContainerConfig(instance *runetypes.Instance, s
 	// `network: serviceMesh` field in a future revision (RUNE-121
 	// design §13).
 
+	// Apply optional security context (seccomp / capabilities /
+	// privileged). Privileged and seccomp=unconfined are gated
+	// server-side; the runner only enforces structural correctness.
+	applySecurityContext(hostConfig, step.SecurityContext)
+
 	return containerConfig, hostConfig, nil
+}
+
+// applySecurityContext maps a types.SecurityContext onto a Docker
+// HostConfig. Nil is a no-op so containers without a context retain
+// runtime defaults.
+func applySecurityContext(hostConfig *container.HostConfig, sc *runetypes.SecurityContext) {
+	if sc == nil {
+		return
+	}
+	if sc.Privileged {
+		hostConfig.Privileged = true
+	}
+	if len(sc.CapAdd) > 0 {
+		hostConfig.CapAdd = append(hostConfig.CapAdd, sc.CapAdd...)
+	}
+	if len(sc.CapDrop) > 0 {
+		hostConfig.CapDrop = append(hostConfig.CapDrop, sc.CapDrop...)
+	}
+	if sp := sc.SeccompProfile; sp != nil {
+		switch sp.Type {
+		case runetypes.SeccompProfileUnconfined:
+			hostConfig.SecurityOpt = append(hostConfig.SecurityOpt, "seccomp=unconfined")
+		case runetypes.SeccompProfileLocalhost:
+			if sp.LocalhostProfile != "" {
+				hostConfig.SecurityOpt = append(hostConfig.SecurityOpt, "seccomp="+sp.LocalhostProfile)
+			}
+		}
+	}
 }
 
 // makeNameFilter returns a predicate that matches names per the

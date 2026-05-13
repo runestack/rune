@@ -99,6 +99,10 @@ type ServiceSpec struct {
 	// InitSteps run sequentially before each instance's main container (RUNE-121).
 	InitSteps []InitStep `json:"initSteps,omitempty" yaml:"initSteps,omitempty"`
 
+	// SecurityContext applied to the main container. Privileged and
+	// seccomp=unconfined are admin-gated by the server.
+	SecurityContext *SecurityContext `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
+
 	// rawNode holds the original YAML mapping node for structural validation
 	rawNode *yaml.Node `json:"-" yaml:"-"`
 }
@@ -527,6 +531,7 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 		"skip":          true,
 		"dependencies":  true,
 		"initSteps":     true,
+		"securityContext": true,
 	}
 
 	validHealthFields := map[string]bool{
@@ -655,6 +660,7 @@ func (s *ServiceSpec) ToService() (*Service, error) {
 		Discovery:       s.Discovery,
 		Dependencies:    deps,
 		InitSteps:       s.InitSteps,
+		SecurityContext: s.SecurityContext,
 		Status:          ServiceStatusPending,
 		Metadata:        &ServiceMetadata{CreatedAt: now, UpdatedAt: now},
 	}, nil

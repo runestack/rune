@@ -936,6 +936,11 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 		}
 	}
 
+	// Apply optional security context (seccomp / capabilities /
+	// privileged). Privileged and seccomp=unconfined are gated
+	// server-side; the runner only enforces structural correctness.
+	applySecurityContext(hostConfig, instance.SecurityContext)
+
 	return containerConfig, hostConfig, nil
 }
 
