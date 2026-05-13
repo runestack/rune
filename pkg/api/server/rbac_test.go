@@ -212,6 +212,21 @@ func TestRBACPrivilegedService(t *testing.T) {
 			t.Fatalf("root create (%s) expected allow, got %v", name, err)
 		}
 	}
+
+	// Regression for Bug E (Propeller v0.0.1-dev.41 follow-up): the
+	// gate must trigger on the k8s-style PascalCase "Unconfined", not
+	// just our lowercase form. Pre-v0.0.1-dev.42 the case mismatch
+	// silently let the request through (and the runner silently
+	// dropped the seccomp opt downstream).
+	unconfinedPascal := &generated.Service{
+		Name: "api", Namespace: "app", Image: "nginx",
+		SecurityContext: &generated.SecurityContext{
+			SeccompProfile: &generated.SeccompProfile{Type: "Unconfined"},
+		},
+	}
+	if err := call("rw", unconfinedPascal); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("readwrite create (Unconfined PascalCase main) expected PermissionDenied, got %v", err)
+	}
 }
 
 type fakeServerStream struct{ ctx context.Context }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -412,7 +413,9 @@ func securityContextNeedsGate(sc *generated.SecurityContext) bool {
 	if sc.Privileged {
 		return true
 	}
-	if sp := sc.SeccompProfile; sp != nil && sp.Type == "unconfined" {
+	// Normalize so e.g. k8s-style "Unconfined" gates the same as
+	// our lowercase "unconfined". Mirrors types.SeccompProfileType.Canonical().
+	if sp := sc.SeccompProfile; sp != nil && strings.EqualFold(sp.Type, "unconfined") {
 		return true
 	}
 	return false

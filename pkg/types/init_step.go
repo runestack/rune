@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -146,18 +147,41 @@ type SecurityContext struct {
 }
 
 // SeccompProfileType enumerates the supported seccomp profile selectors.
+// Both Kubernetes PascalCase (Unconfined / RuntimeDefault / Localhost)
+// and lowercase variants are accepted on input — Canonical() normalises
+// them to the lowercase form used by switch statements internally.
 type SeccompProfileType string
 
 const (
 	// SeccompProfileDefault uses the runtime's default profile.
+	// Aliases: "default", "RuntimeDefault" (the k8s name).
 	SeccompProfileDefault SeccompProfileType = "default"
 
 	// SeccompProfileUnconfined disables seccomp filtering. Admin-gated.
+	// Aliases: "unconfined", "Unconfined" (the k8s name).
 	SeccompProfileUnconfined SeccompProfileType = "unconfined"
 
 	// SeccompProfileLocalhost loads a profile from a path on the host.
+	// Aliases: "localhost", "Localhost" (the k8s name).
 	SeccompProfileLocalhost SeccompProfileType = "localhost"
 )
+
+// Canonical returns the lowercase, alias-resolved form of t. Used at
+// every comparison site so a user writing PascalCase (the k8s
+// convention, what they're most likely to copy-paste from k8s docs)
+// gets the same behaviour as the canonical lowercase form.
+func (t SeccompProfileType) Canonical() SeccompProfileType {
+	switch strings.ToLower(string(t)) {
+	case "runtimedefault", "default":
+		return SeccompProfileDefault
+	case "unconfined":
+		return SeccompProfileUnconfined
+	case "localhost":
+		return SeccompProfileLocalhost
+	default:
+		return SeccompProfileType(strings.ToLower(string(t)))
+	}
+}
 
 // SeccompProfile selects a seccomp policy.
 type SeccompProfile struct {
@@ -179,7 +203,7 @@ func (sc *SecurityContext) RequiresPrivilegedGate() bool {
 	if sc.Privileged {
 		return true
 	}
-	if sc.SeccompProfile != nil && sc.SeccompProfile.Type == SeccompProfileUnconfined {
+	if sc.SeccompProfile != nil && sc.SeccompProfile.Type.Canonical() == SeccompProfileUnconfined {
 		return true
 	}
 	return false
@@ -192,7 +216,7 @@ func (sc *SecurityContext) Validate() error {
 		return nil
 	}
 	if sp := sc.SeccompProfile; sp != nil {
-		switch sp.Type {
+		switch sp.Type.Canonical() {
 		case "", SeccompProfileDefault, SeccompProfileUnconfined:
 			if sp.LocalhostProfile != "" {
 				return NewValidationError("securityContext.seccompProfile.localhostProfile only valid with type=localhost")
@@ -205,7 +229,7 @@ func (sc *SecurityContext) Validate() error {
 				return NewValidationError("securityContext.seccompProfile.localhostProfile must be an absolute path")
 			}
 		default:
-			return NewValidationError("securityContext.seccompProfile.type must be one of: default, unconfined, localhost")
+			return NewValidationError("securityContext.seccompProfile.type must be one of: Unconfined / RuntimeDefault / Localhost (or the lowercase aliases unconfined / default / localhost); got " + strconv.Quote(string(sp.Type)))
 		}
 	}
 	return nil

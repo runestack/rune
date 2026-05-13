@@ -294,7 +294,7 @@ func applySecurityContext(hostConfig *container.HostConfig, sc *runetypes.Securi
 		hostConfig.CapDrop = append(hostConfig.CapDrop, sc.CapDrop...)
 	}
 	if sp := sc.SeccompProfile; sp != nil {
-		switch sp.Type {
+		switch sp.Type.Canonical() {
 		case runetypes.SeccompProfileUnconfined:
 			hostConfig.SecurityOpt = append(hostConfig.SecurityOpt, "seccomp=unconfined")
 		case runetypes.SeccompProfileLocalhost:

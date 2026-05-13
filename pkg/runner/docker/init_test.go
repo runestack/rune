@@ -137,6 +137,44 @@ func TestInitStepToContainerConfig_InheritsParentSecurityContext(t *testing.T) {
 		"step must inherit parent service's capAdd")
 }
 
+// Regression for Bug E (Propeller v0.0.1-dev.41 follow-up): the
+// SeccompProfile.Type comparison must be case-insensitive and accept
+// the Kubernetes-style aliases ("Unconfined", "RuntimeDefault",
+// "Localhost"). Pre-v0.0.1-dev.42 the runner did an exact-match
+// switch against lowercase "unconfined", so `type: Unconfined`
+// silently fell through and the init step ran with the default
+// seccomp profile — TigerBeetle's `format` then failed with
+// "io_uring is not available".
+func TestInitStepToContainerConfig_SeccompProfileTypeIsCaseInsensitive(t *testing.T) {
+	r := makeInitTestRunner()
+	inst := makeInstanceWithMounts()
+	cases := []struct {
+		name string
+		typ  runetypes.SeccompProfileType
+	}{
+		{"k8s PascalCase Unconfined", "Unconfined"},
+		{"lowercase unconfined", "unconfined"},
+		{"mixed-case UnConFiNeD", "UnConFiNeD"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inst.SecurityContext = &runetypes.SecurityContext{
+				SeccompProfile: &runetypes.SeccompProfile{Type: tc.typ},
+			}
+			step := runetypes.InitStep{
+				Name:    "format",
+				Image:   "ghcr.io/tigerbeetle/tigerbeetle:latest",
+				Command: "/tigerbeetle",
+				Args:    []string{"format", "/data/0_0.tigerbeetle"},
+			}
+			_, host, err := r.initStepToContainerConfig(inst, step)
+			require.NoError(t, err)
+			assert.Contains(t, host.SecurityOpt, "seccomp=unconfined",
+				"type %q should map to seccomp=unconfined regardless of case", tc.typ)
+		})
+	}
+}
+
 // An explicit SecurityContext on the step replaces the parent
 // SecurityContext wholesale (no deep merge). Keeps semantics simple
 // and predictable for operators.
