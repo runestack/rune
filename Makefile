@@ -79,7 +79,12 @@ install: build
 	@echo "Installing $(BINARY_NAME)..."
 	@GOPATH_BIN="$$(go env GOPATH)/bin"; \
 	  cp $(BIN_DIR)/$(BINARY_NAME) "$$GOPATH_BIN/" && chmod 755 "$$GOPATH_BIN/$(BINARY_NAME)"; \
-	  cp $(BIN_DIR)/$(BINARY_NAME)d "$$GOPATH_BIN/" && chmod 755 "$$GOPATH_BIN/$(BINARY_NAME)d"
+	  cp $(BIN_DIR)/$(BINARY_NAME)d "$$GOPATH_BIN/" && chmod 755 "$$GOPATH_BIN/$(BINARY_NAME)d"; \
+	  if [ "$$(uname)" = "Darwin" ]; then \
+	    echo "Re-signing binaries for macOS Gatekeeper..."; \
+	    codesign --force --sign - "$$GOPATH_BIN/$(BINARY_NAME)" >/dev/null 2>&1 || true; \
+	    codesign --force --sign - "$$GOPATH_BIN/$(BINARY_NAME)d" >/dev/null 2>&1 || true; \
+	  fi
 	@echo "Installation completed!"
 
 ## Run all tests
