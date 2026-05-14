@@ -92,11 +92,11 @@ After installing the Rune server (`runed`), you need to bootstrap the system and
 ### 1. Start the Server
 
 ```bash
-# Start the server (will auto-create runefile.yaml if none exists)
+# Start the server; auto-discovers runefile.{toml,yaml,yml} in cwd or /etc/rune
 runed
 
-# Or with custom config
-runed --config=/path/to/runefile.yaml
+# Or with an explicit config path
+runed --config=/path/to/runefile.toml
 ```
 
 ### 2. Bootstrap the System
@@ -353,22 +353,24 @@ rune get services
 
 ## Configuration
 
-### Server Configuration (`runefile.yaml`)
+### Server Configuration (`runefile.{toml,yaml}`)
 
-The server configuration file contains registry authentication, Docker settings, and server options:
+The server configuration file contains registry authentication, Docker settings, and server options. Both TOML and YAML are supported; TOML is the canonical format for production deployments.
 
 ```bash
-# Run with built-in defaults (auto-creates runefile.yaml)
+# Auto-discover the runefile from cwd or /etc/rune
 runed
 
-# Use custom server configuration
-runed --config=/path/to/runefile.yaml
+# Use an explicit config path
+runed --config=/path/to/runefile.toml
 ```
 
 **Configuration locations (in order of precedence):**
 1. **`--config` flag** - Explicitly specified file
-2. **`./runefile.yaml`** - Local development override
-3. **`/etc/rune/runefile.yaml`** - System-wide production config
+2. **`./runefile.{toml,yaml,yml}`** - Local development override
+3. **`/etc/rune/runefile.{toml,yaml,yml}`** - System-wide production config
+
+If none of these is found, `runed` exits with an error; production deployments must ship a runefile.
 
 **Example server configuration:**
 ```yaml
