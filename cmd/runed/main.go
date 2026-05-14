@@ -145,78 +145,6 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// createDefaultRunefile creates a default runefile.yaml in the data dir if none exists.
-// If a runefile.toml or runefile.yml already exists alongside, it is left untouched —
-// runefile auto-discovery searches for any of {toml,yaml,yml}.
-func createDefaultRunefile(dataDir string) error {
-	defaultConfig := fmt.Sprintf(`# Default Rune server configuration
-# This file was auto-generated on first run.
-#
-# Rune supports YAML and TOML runefiles. Auto-discovery looks for
-# runefile.{toml,yaml,yml} in the working directory, /etc/rune/, and
-# the data directory. Use --config <path> to point at a specific file.
-
-docker:
-  registries: []
-  fallback_api_version: "1.43"
-  negotiation_timeout_seconds: 3
-
-server:
-  grpc_address: ":7863"
-  http_address: ":7861"
-
-log:
-  level: "info"
-  format: "text"
-
-secret:
-  encryption:
-    enabled: true
-    kek:
-      source: "file"
-      file: "kek.b64"
-
-# Networking layer. All keys are optional; the values
-# below are the built-in defaults shown for documentation.
-#
-# networking:
-#   cluster_cidr: "10.96.0.0/16"   # service VIP allocation range
-#   dev_mode: false                # skip nftables, bind ingress on user ports,
-#                                  # resolve .rune to 127.0.0.1
-#
-# telemetry:
-#   metrics_addr: "127.0.0.1:9100" # Prometheus /metrics endpoint, "" disables
-#                                  # (covers all subsystems, not just networking)
-#
-# node:
-#   role: ""                       # comma-separated; "edge" enables ingress + ACME
-#
-# ingress:
-#   http_addr: ""                  # default :80 (or :8080 in dev mode)
-#   https_addr: ""                 # default :443 (or :8443 in dev mode), "" disables TLS
-#
-# acme:
-#   directory: ""                  # default Let's Encrypt production
-#   email: ""                      # contact email for ACME registration
-
-data_dir: "%s"
-`, dataDir)
-
-	// Ensure data directory exists and write config there
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
-	}
-
-	// If any runefile already exists in the data dir (any supported
-	// extension), leave it alone.
-	for _, ext := range []string{"yaml", "yml", "toml"} {
-		if _, err := os.Stat(filepath.Join(dataDir, "runefile."+ext)); err == nil {
-			return nil
-		}
-	}
-	return os.WriteFile(filepath.Join(dataDir, "runefile.yaml"), []byte(defaultConfig), 0600)
-}
-
 // findRunefile returns the first runefile.{toml,yaml,yml} found in
 // the supplied search paths. The returned path is suitable for
 // viper.SetConfigFile (extension drives parser selection). Returns
@@ -231,6 +159,17 @@ func findRunefile(searchPaths []string) string {
 		}
 	}
 	return ""
+}
+
+// resolveRunefilePath returns the runefile path runed should load.
+// Precedence: --config flag → auto-discovery in cwd then /etc/rune.
+// Returns an empty string if neither produced a match; callers can
+// proceed with built-in defaults (e.g. for unit tests).
+func resolveRunefilePath() string {
+	if *configFile != "" {
+		return *configFile
+	}
+	return findRunefile([]string{".", "/etc/rune"})
 }
 
 // initRuntimeConfig initializes runtime settings (viper defaults + config file + env + flags)
@@ -263,45 +202,17 @@ func initRuntimeConfig() {
 	v.SetDefault("acme.directory", "")
 	v.SetDefault("acme.email", "")
 
-	// 2. Try to load config file if specified or look in standard locations.
-	// Both YAML and TOML are supported; viper picks the parser from the
-	// file extension when SetConfigFile is used.
-	configFileSpecified := *configFile != ""
-	if configFileSpecified {
-		v.SetConfigFile(*configFile)
-	} else {
-		// Search for runefile.{toml,yaml,yml} in priority order:
-		//   1. Current working directory   (developer override)
-		//   2. /etc/rune/                   (system-wide production config)
-		//   3. <data_dir>                   (auto-generated default)
-		dataDirSearch := defaultDataDir
-		if envDD := os.Getenv("RUNE_DATA_DIR"); envDD != "" {
-			dataDirSearch = envDD
-		}
-		if found := findRunefile([]string{".", "/etc/rune", dataDirSearch}); found != "" {
-			v.SetConfigFile(found)
+	// 2. Load the runefile. Both YAML and TOML are supported; viper picks
+	// the parser from the file extension when SetConfigFile is used.
+	// Search order: --config flag → cwd → /etc/rune (see resolveRunefilePath).
+	resolvedRunefile := resolveRunefilePath()
+	if resolvedRunefile != "" {
+		v.SetConfigFile(resolvedRunefile)
+		if err := v.ReadInConfig(); err != nil {
+			fmt.Printf("Error reading config file %s: %s\n", resolvedRunefile, err)
 		} else {
-			// No file present yet (will be auto-created later);
-			// keep the legacy yaml lookup to avoid breaking the
-			// "first run" code path.
-			v.SetConfigName("runefile")
-			v.SetConfigType("yaml")
-			v.AddConfigPath(".")
-			v.AddConfigPath("/etc/rune/")
+			fmt.Printf("Using config file: %s\n", v.ConfigFileUsed())
 		}
-	}
-
-	// Read config file if available
-	if err := v.ReadInConfig(); err != nil {
-		if configFileSpecified {
-			// Only show an error if user explicitly specified a config file
-			fmt.Printf("Error reading config file %s: %s\n", *configFile, err)
-		} else if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			// Show non-"not found" errors even for auto-discovered config
-			fmt.Printf("Error reading config file: %s\n", err)
-		}
-	} else {
-		fmt.Printf("Using config file: %s\n", v.ConfigFileUsed())
 	}
 
 	// 3. Override with environment variables
@@ -470,22 +381,23 @@ func main() {
 	ctx, cancel := setupSignalContext(logger)
 	defer cancel()
 
-	// Create default runefile if none exists
-	if err := createDefaultRunefile(*dataDir); err != nil {
-		logger.Warn("Failed to create default runefile", log.Err(err))
-		// Don't fail startup, just warn
+	// Bind the global viper to the same runefile initRuntimeConfig
+	// resolved. Without a runefile we fail fast — production deployments
+	// must ship one (see docs); the dev-loop just needs `runefile.toml`
+	// in the cwd. Tests use the override hook in initRuntimeConfig.
+	resolvedRunefile := resolveRunefilePath()
+	if resolvedRunefile == "" {
+		logger.Error("No runefile found; pass --config or place runefile.{toml,yaml,yml} in cwd or /etc/rune/")
+		os.Exit(1)
 	}
-
-	// Ensure global viper is bound to the same config file so runtime writes persist
-	configPath := *configFile
-	if configPath == "" {
-		configPath = filepath.Join(*dataDir, "runefile.yaml")
+	viper.SetConfigFile(resolvedRunefile)
+	if err := viper.ReadInConfig(); err != nil {
+		logger.Error("Failed to read runefile", log.Str("path", resolvedRunefile), log.Err(err))
+		os.Exit(1)
 	}
-	viper.SetConfigFile(configPath)
-	_ = viper.ReadInConfig()
 
 	// Open state store via helper
-	stateStore, appCfg, _, err := openStateStore(logger, *configFile, *dataDir)
+	stateStore, appCfg, _, err := openStateStore(logger, resolvedRunefile, *dataDir)
 	if err != nil {
 		logger.Error("Failed to open state store", log.Err(err))
 		os.Exit(1)
