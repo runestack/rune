@@ -199,8 +199,14 @@ type Service struct {
 	// SecurityContext applied to the main container. Privileged=true and
 	// seccomp=unconfined require the services.privileged policy verb.
 	SecurityContext *SecurityContext `protobuf:"bytes,28,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Instances currently associated with this service. Populated by
+	// GetService and ListServices server-side so callers don't need a
+	// second round-trip to ListInstances to know whether a service has
+	// healthy backing instances. Always read-only on the wire — values
+	// here are ignored by Create/Update.
+	Instances     []*Instance `protobuf:"bytes,29,rep,name=instances,proto3" json:"instances,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Service) Reset() {
@@ -425,6 +431,13 @@ func (x *Service) GetInitSteps() []*InitStep {
 func (x *Service) GetSecurityContext() *SecurityContext {
 	if x != nil {
 		return x.SecurityContext
+	}
+	return nil
+}
+
+func (x *Service) GetInstances() []*Instance {
+	if x != nil {
+		return x.Instances
 	}
 	return nil
 }
@@ -2883,7 +2896,7 @@ var File_pkg_api_proto_service_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\xb7\n" +
+	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\xe9\n" +
 	"\n" +
 	"\aService\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -2916,7 +2929,8 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\avolumes\x18\x1a \x03(\v2\x15.rune.api.VolumeMountR\avolumes\x121\n" +
 	"\n" +
 	"init_steps\x18\x1b \x03(\v2\x12.rune.api.InitStepR\tinitSteps\x12D\n" +
-	"\x10security_context\x18\x1c \x01(\v2\x19.rune.api.SecurityContextR\x0fsecurityContext\x1a9\n" +
+	"\x10security_context\x18\x1c \x01(\v2\x19.rune.api.SecurityContextR\x0fsecurityContext\x120\n" +
+	"\tinstances\x18\x1d \x03(\v2\x12.rune.api.InstanceR\tinstances\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a6\n" +
@@ -3239,12 +3253,13 @@ var file_pkg_api_proto_service_proto_goTypes = []any{
 	(*ProcessSpec)(nil),                    // 46: rune.api.ProcessSpec
 	(RestartPolicy)(0),                     // 47: rune.api.RestartPolicy
 	(*ServiceExpose)(nil),                  // 48: rune.api.ServiceExpose
-	(*KeyToPath)(nil),                      // 49: rune.api.KeyToPath
-	(*Status)(nil),                         // 50: rune.api.Status
-	(*PagingParams)(nil),                   // 51: rune.api.PagingParams
-	(EventType)(0),                         // 52: rune.api.EventType
-	(*ListInstancesRequest)(nil),           // 53: rune.api.ListInstancesRequest
-	(*ListInstancesResponse)(nil),          // 54: rune.api.ListInstancesResponse
+	(*Instance)(nil),                       // 49: rune.api.Instance
+	(*KeyToPath)(nil),                      // 50: rune.api.KeyToPath
+	(*Status)(nil),                         // 51: rune.api.Status
+	(*PagingParams)(nil),                   // 52: rune.api.PagingParams
+	(EventType)(0),                         // 53: rune.api.EventType
+	(*ListInstancesRequest)(nil),           // 54: rune.api.ListInstancesRequest
+	(*ListInstancesResponse)(nil),          // 55: rune.api.ListInstancesResponse
 }
 var file_pkg_api_proto_service_proto_depIdxs = []int32{
 	35, // 0: rune.api.Service.labels:type_name -> rune.api.Service.LabelsEntry
@@ -3264,67 +3279,68 @@ var file_pkg_api_proto_service_proto_depIdxs = []int32{
 	14, // 14: rune.api.Service.volumes:type_name -> rune.api.VolumeMount
 	6,  // 15: rune.api.Service.init_steps:type_name -> rune.api.InitStep
 	5,  // 16: rune.api.Service.security_context:type_name -> rune.api.SecurityContext
-	4,  // 17: rune.api.SecurityContext.seccomp_profile:type_name -> rune.api.SeccompProfile
-	37, // 18: rune.api.InitStep.env:type_name -> rune.api.InitStep.EnvEntry
-	7,  // 19: rune.api.InitStep.env_from:type_name -> rune.api.EnvFromSource
-	44, // 20: rune.api.InitStep.resources:type_name -> rune.api.Resources
-	3,  // 21: rune.api.InitStep.run_if:type_name -> rune.api.RunIfSpec
-	5,  // 22: rune.api.InitStep.security_context:type_name -> rune.api.SecurityContext
-	49, // 23: rune.api.SecretMount.items:type_name -> rune.api.KeyToPath
-	49, // 24: rune.api.ConfigmapMount.items:type_name -> rune.api.KeyToPath
-	38, // 25: rune.api.VolumeClaimTemplate.parameters:type_name -> rune.api.VolumeClaimTemplate.ParametersEntry
-	12, // 26: rune.api.VolumeMount.claim:type_name -> rune.api.VolumeClaim
-	13, // 27: rune.api.VolumeMount.claim_template:type_name -> rune.api.VolumeClaimTemplate
-	2,  // 28: rune.api.CreateServiceRequest.service:type_name -> rune.api.Service
-	2,  // 29: rune.api.ServiceResponse.service:type_name -> rune.api.Service
-	50, // 30: rune.api.ServiceResponse.status:type_name -> rune.api.Status
-	39, // 31: rune.api.ListServicesRequest.label_selector:type_name -> rune.api.ListServicesRequest.LabelSelectorEntry
-	40, // 32: rune.api.ListServicesRequest.field_selector:type_name -> rune.api.ListServicesRequest.FieldSelectorEntry
-	51, // 33: rune.api.ListServicesRequest.paging:type_name -> rune.api.PagingParams
-	2,  // 34: rune.api.ListServicesResponse.services:type_name -> rune.api.Service
-	50, // 35: rune.api.ListServicesResponse.status:type_name -> rune.api.Status
-	51, // 36: rune.api.ListServicesResponse.paging:type_name -> rune.api.PagingParams
-	41, // 37: rune.api.WatchServicesRequest.label_selector:type_name -> rune.api.WatchServicesRequest.LabelSelectorEntry
-	42, // 38: rune.api.WatchServicesRequest.field_selector:type_name -> rune.api.WatchServicesRequest.FieldSelectorEntry
-	2,  // 39: rune.api.WatchServicesResponse.service:type_name -> rune.api.Service
-	52, // 40: rune.api.WatchServicesResponse.event_type:type_name -> rune.api.EventType
-	50, // 41: rune.api.WatchServicesResponse.status:type_name -> rune.api.Status
-	2,  // 42: rune.api.UpdateServiceRequest.service:type_name -> rune.api.Service
-	50, // 43: rune.api.DeleteServiceResponse.status:type_name -> rune.api.Status
-	30, // 44: rune.api.DeleteServiceResponse.finalizers:type_name -> rune.api.Finalizer
-	29, // 45: rune.api.GetDeletionStatusResponse.operation:type_name -> rune.api.DeletionOperation
-	29, // 46: rune.api.ListDeletionOperationsResponse.operations:type_name -> rune.api.DeletionOperation
-	30, // 47: rune.api.DeletionOperation.finalizers:type_name -> rune.api.Finalizer
-	31, // 48: rune.api.Finalizer.dependencies:type_name -> rune.api.FinalizerDependency
-	1,  // 49: rune.api.ScaleServiceRequest.mode:type_name -> rune.api.ScalingMode
-	50, // 50: rune.api.ScalingStatusResponse.status:type_name -> rune.api.Status
-	15, // 51: rune.api.ServiceService.CreateService:input_type -> rune.api.CreateServiceRequest
-	17, // 52: rune.api.ServiceService.GetService:input_type -> rune.api.GetServiceRequest
-	18, // 53: rune.api.ServiceService.ListServices:input_type -> rune.api.ListServicesRequest
-	20, // 54: rune.api.ServiceService.WatchServices:input_type -> rune.api.WatchServicesRequest
-	22, // 55: rune.api.ServiceService.UpdateService:input_type -> rune.api.UpdateServiceRequest
-	23, // 56: rune.api.ServiceService.DeleteService:input_type -> rune.api.DeleteServiceRequest
-	25, // 57: rune.api.ServiceService.GetDeletionStatus:input_type -> rune.api.GetDeletionStatusRequest
-	27, // 58: rune.api.ServiceService.ListDeletionOperations:input_type -> rune.api.ListDeletionOperationsRequest
-	32, // 59: rune.api.ServiceService.ScaleService:input_type -> rune.api.ScaleServiceRequest
-	33, // 60: rune.api.ServiceService.WatchScaling:input_type -> rune.api.WatchScalingRequest
-	53, // 61: rune.api.ServiceService.ListInstances:input_type -> rune.api.ListInstancesRequest
-	16, // 62: rune.api.ServiceService.CreateService:output_type -> rune.api.ServiceResponse
-	16, // 63: rune.api.ServiceService.GetService:output_type -> rune.api.ServiceResponse
-	19, // 64: rune.api.ServiceService.ListServices:output_type -> rune.api.ListServicesResponse
-	21, // 65: rune.api.ServiceService.WatchServices:output_type -> rune.api.WatchServicesResponse
-	16, // 66: rune.api.ServiceService.UpdateService:output_type -> rune.api.ServiceResponse
-	24, // 67: rune.api.ServiceService.DeleteService:output_type -> rune.api.DeleteServiceResponse
-	26, // 68: rune.api.ServiceService.GetDeletionStatus:output_type -> rune.api.GetDeletionStatusResponse
-	28, // 69: rune.api.ServiceService.ListDeletionOperations:output_type -> rune.api.ListDeletionOperationsResponse
-	16, // 70: rune.api.ServiceService.ScaleService:output_type -> rune.api.ServiceResponse
-	34, // 71: rune.api.ServiceService.WatchScaling:output_type -> rune.api.ScalingStatusResponse
-	54, // 72: rune.api.ServiceService.ListInstances:output_type -> rune.api.ListInstancesResponse
-	62, // [62:73] is the sub-list for method output_type
-	51, // [51:62] is the sub-list for method input_type
-	51, // [51:51] is the sub-list for extension type_name
-	51, // [51:51] is the sub-list for extension extendee
-	0,  // [0:51] is the sub-list for field type_name
+	49, // 17: rune.api.Service.instances:type_name -> rune.api.Instance
+	4,  // 18: rune.api.SecurityContext.seccomp_profile:type_name -> rune.api.SeccompProfile
+	37, // 19: rune.api.InitStep.env:type_name -> rune.api.InitStep.EnvEntry
+	7,  // 20: rune.api.InitStep.env_from:type_name -> rune.api.EnvFromSource
+	44, // 21: rune.api.InitStep.resources:type_name -> rune.api.Resources
+	3,  // 22: rune.api.InitStep.run_if:type_name -> rune.api.RunIfSpec
+	5,  // 23: rune.api.InitStep.security_context:type_name -> rune.api.SecurityContext
+	50, // 24: rune.api.SecretMount.items:type_name -> rune.api.KeyToPath
+	50, // 25: rune.api.ConfigmapMount.items:type_name -> rune.api.KeyToPath
+	38, // 26: rune.api.VolumeClaimTemplate.parameters:type_name -> rune.api.VolumeClaimTemplate.ParametersEntry
+	12, // 27: rune.api.VolumeMount.claim:type_name -> rune.api.VolumeClaim
+	13, // 28: rune.api.VolumeMount.claim_template:type_name -> rune.api.VolumeClaimTemplate
+	2,  // 29: rune.api.CreateServiceRequest.service:type_name -> rune.api.Service
+	2,  // 30: rune.api.ServiceResponse.service:type_name -> rune.api.Service
+	51, // 31: rune.api.ServiceResponse.status:type_name -> rune.api.Status
+	39, // 32: rune.api.ListServicesRequest.label_selector:type_name -> rune.api.ListServicesRequest.LabelSelectorEntry
+	40, // 33: rune.api.ListServicesRequest.field_selector:type_name -> rune.api.ListServicesRequest.FieldSelectorEntry
+	52, // 34: rune.api.ListServicesRequest.paging:type_name -> rune.api.PagingParams
+	2,  // 35: rune.api.ListServicesResponse.services:type_name -> rune.api.Service
+	51, // 36: rune.api.ListServicesResponse.status:type_name -> rune.api.Status
+	52, // 37: rune.api.ListServicesResponse.paging:type_name -> rune.api.PagingParams
+	41, // 38: rune.api.WatchServicesRequest.label_selector:type_name -> rune.api.WatchServicesRequest.LabelSelectorEntry
+	42, // 39: rune.api.WatchServicesRequest.field_selector:type_name -> rune.api.WatchServicesRequest.FieldSelectorEntry
+	2,  // 40: rune.api.WatchServicesResponse.service:type_name -> rune.api.Service
+	53, // 41: rune.api.WatchServicesResponse.event_type:type_name -> rune.api.EventType
+	51, // 42: rune.api.WatchServicesResponse.status:type_name -> rune.api.Status
+	2,  // 43: rune.api.UpdateServiceRequest.service:type_name -> rune.api.Service
+	51, // 44: rune.api.DeleteServiceResponse.status:type_name -> rune.api.Status
+	30, // 45: rune.api.DeleteServiceResponse.finalizers:type_name -> rune.api.Finalizer
+	29, // 46: rune.api.GetDeletionStatusResponse.operation:type_name -> rune.api.DeletionOperation
+	29, // 47: rune.api.ListDeletionOperationsResponse.operations:type_name -> rune.api.DeletionOperation
+	30, // 48: rune.api.DeletionOperation.finalizers:type_name -> rune.api.Finalizer
+	31, // 49: rune.api.Finalizer.dependencies:type_name -> rune.api.FinalizerDependency
+	1,  // 50: rune.api.ScaleServiceRequest.mode:type_name -> rune.api.ScalingMode
+	51, // 51: rune.api.ScalingStatusResponse.status:type_name -> rune.api.Status
+	15, // 52: rune.api.ServiceService.CreateService:input_type -> rune.api.CreateServiceRequest
+	17, // 53: rune.api.ServiceService.GetService:input_type -> rune.api.GetServiceRequest
+	18, // 54: rune.api.ServiceService.ListServices:input_type -> rune.api.ListServicesRequest
+	20, // 55: rune.api.ServiceService.WatchServices:input_type -> rune.api.WatchServicesRequest
+	22, // 56: rune.api.ServiceService.UpdateService:input_type -> rune.api.UpdateServiceRequest
+	23, // 57: rune.api.ServiceService.DeleteService:input_type -> rune.api.DeleteServiceRequest
+	25, // 58: rune.api.ServiceService.GetDeletionStatus:input_type -> rune.api.GetDeletionStatusRequest
+	27, // 59: rune.api.ServiceService.ListDeletionOperations:input_type -> rune.api.ListDeletionOperationsRequest
+	32, // 60: rune.api.ServiceService.ScaleService:input_type -> rune.api.ScaleServiceRequest
+	33, // 61: rune.api.ServiceService.WatchScaling:input_type -> rune.api.WatchScalingRequest
+	54, // 62: rune.api.ServiceService.ListInstances:input_type -> rune.api.ListInstancesRequest
+	16, // 63: rune.api.ServiceService.CreateService:output_type -> rune.api.ServiceResponse
+	16, // 64: rune.api.ServiceService.GetService:output_type -> rune.api.ServiceResponse
+	19, // 65: rune.api.ServiceService.ListServices:output_type -> rune.api.ListServicesResponse
+	21, // 66: rune.api.ServiceService.WatchServices:output_type -> rune.api.WatchServicesResponse
+	16, // 67: rune.api.ServiceService.UpdateService:output_type -> rune.api.ServiceResponse
+	24, // 68: rune.api.ServiceService.DeleteService:output_type -> rune.api.DeleteServiceResponse
+	26, // 69: rune.api.ServiceService.GetDeletionStatus:output_type -> rune.api.GetDeletionStatusResponse
+	28, // 70: rune.api.ServiceService.ListDeletionOperations:output_type -> rune.api.ListDeletionOperationsResponse
+	16, // 71: rune.api.ServiceService.ScaleService:output_type -> rune.api.ServiceResponse
+	34, // 72: rune.api.ServiceService.WatchScaling:output_type -> rune.api.ScalingStatusResponse
+	55, // 73: rune.api.ServiceService.ListInstances:output_type -> rune.api.ListInstancesResponse
+	63, // [63:74] is the sub-list for method output_type
+	52, // [52:63] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_service_proto_init() }

@@ -111,6 +111,13 @@ message Service {
   // SecurityContext applied to the main container. Privileged=true and
   // seccomp=unconfined require the services.privileged policy verb.
   SecurityContext security_context = 28;
+
+  // Instances currently associated with this service. Populated by
+  // GetService and ListServices server-side so callers don't need a
+  // second round-trip to ListInstances to know whether a service has
+  // healthy backing instances. Always read-only on the wire — values
+  // here are ignored by Create/Update.
+  repeated Instance instances = 29;
 }
 
 // RunIfSpec encodes the predicate that decides whether an InitStep

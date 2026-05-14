@@ -187,6 +187,23 @@ func (s *ServiceService) GetService(ctx context.Context, req *generated.GetServi
 		return nil, status.Errorf(codes.Internal, "failed to get service: %v", err)
 	}
 
+	// Inline the service's instances so callers don't need a separate
+	// ListInstances RPC just to know whether the service has healthy
+	// backing instances. The CLI's `rune cast` readiness wait depends
+	// on this; without it, service.Instances is always empty and the
+	// wait never satisfies its scale check.
+	if instances, ierr := s.getServiceInstances(ctx, namespace, service.ID); ierr != nil {
+		s.logger.Warn("Failed to list instances for service",
+			log.Str("namespace", namespace), log.Str("service", service.Name), log.Err(ierr))
+	} else {
+		service.Instances = make([]types.Instance, 0, len(instances))
+		for _, inst := range instances {
+			if inst != nil {
+				service.Instances = append(service.Instances, *inst)
+			}
+		}
+	}
+
 	// Convert to protobuf message
 	return &generated.ServiceResponse{
 		Service: client.ServiceToProto(service),
