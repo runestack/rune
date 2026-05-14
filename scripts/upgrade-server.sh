@@ -252,6 +252,11 @@ warn_if_unit_missing_ambient() {
         log "    Cloud block-device volumes (do-volume + future) will fail"
         log "    to mount with 'must be superuser to use mount'. Re-run"
         log "    with --refresh-unit to pick up the newer unit directives."
+      elif ! grep -q '^AmbientCapabilities=.*CAP_CHOWN' "$unit"; then
+        log "⚠️  $unit is missing 'CAP_CHOWN' on AmbientCapabilities."
+        log "    VolumeMount.fsUser / fsGroup / fsMode will fail with EPERM"
+        log "    on the first chown. Re-run with --refresh-unit to pick up"
+        log "    the newer unit directives."
       fi
       return
     fi

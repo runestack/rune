@@ -493,19 +493,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Pre-register a "not-yet-ready" MountResolver so the instance
-	// controller's first reconcile ticks (which start the moment
-	// apiServer.Start returns) don't fall back to using Volume.Handle
-	// as the bind source in the window before the agent volumes
-	// subsystem has registered its real resolver. For local-driver
-	// volumes the fallback is harmless; for do-volume / future cloud
-	// drivers the Handle is a cloud-side UUID and the bind fails with
-	// "invalid mount path". The stub returns ("", false) for every
-	// volume, which the controller treats as the documented transient
-	// "not yet mounted" condition and retries on the next tick — by
-	// which point the real resolver has replaced this stub. See
-	// internal/agent/volumes for the real implementation.
-	apiServer.GetOrchestrator().SetMountResolver(notReadyMountResolver{})
+	// (notReadyMountResolver is pre-seeded via WithInitialMountResolver
+	// in buildServerOptions, before apiServer.Start runs the
+	// orchestrator's first reconcile.)
 
 	// Start the per-node agent. On single-node, the agent runs in-process
 	// and shares the control plane's Badger DB via the in-process
@@ -916,6 +906,12 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 	// See RUNE-200 PR 3 — drivers receive plaintext via OpContext.Parameters
 	// regardless of where the ref lives in the parameter chain.
 	opts = append(opts, server.WithStorageSecretLookup(newStoreSecretLookup(st)))
+	// Pre-seed a never-ready MountResolver so the orchestrator's first
+	// reconcile tick (inside apiServer.Start) treats every volume as
+	// "not yet mounted — retry" rather than falling back to using
+	// Volume.Handle as the bind source. The agent's volumes Subsystem
+	// will replace this with its real resolver once it's up.
+	opts = append(opts, server.WithInitialMountResolver(notReadyMountResolver{}))
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
 	}

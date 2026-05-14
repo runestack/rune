@@ -361,8 +361,8 @@ LimitNOFILE=65536
 #     /var/lib/rune/mounts/. Without it, /bin/mount fails with
 #     "must be superuser to use mount" and every cloud volume gets
 #     stuck post-Attach.
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
 
 [Install]
 WantedBy=multi-user.target

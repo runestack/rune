@@ -107,13 +107,17 @@ LimitNOFILE=65536
 #   - CAP_NET_BIND_SERVICE — bind :80 / :443 for the ingress.
 #   - CAP_SYS_ADMIN        — mount(2) for cloud block-device drivers
 #     (do-volume + future) which attach a device and mount it under
-#     /var/lib/rune/mounts/. Without it, /bin/mount exits with
-#     "must be superuser to use mount" and every volume gets stuck
-#     post-Attach.
+#     /var/lib/rune/mounts/. Without it, mount(2) returns EPERM and
+#     every cloud volume gets stuck post-Attach.
+#   - CAP_CHOWN, CAP_FOWNER — applyFSOwnership chown(2) + chmod(2) on
+#     the mount root when VolumeMount.fsUser/fsGroup/fsMode is set.
+#     Cheap, inert when the operator hasn't opted in, and the
+#     alternative is "every operator who flips on fsUser hits an
+#     EPERM the first time".
 # Installed via the systemd unit (not file caps) so the caps travel
 # with the unit and survive upgrade-server.sh binary swaps.
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
 
 [Install]
 WantedBy=multi-user.target

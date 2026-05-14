@@ -131,6 +131,18 @@ type OrchestratorOptions struct {
 	// containing operation with a clear error. See RUNE-200 PR 3 and
 	// pkg/storage/driverparams.
 	StorageSecretLookup driverparams.SecretLookup
+
+	// InitialMountResolver, if set, is installed on the InstanceController
+	// before the orchestrator's first reconcile tick. cmd/runed passes a
+	// never-ready stub here so the period between orchestrator start and
+	// the agent-side volumes Subsystem registering its real resolver is
+	// treated as "transient — retry" rather than falling back to using
+	// Volume.Handle as the bind source (which would be a UUID for cloud
+	// drivers). Without this option set, the controller starts with no
+	// resolver and uses the dev/test Handle-fallback path — correct for
+	// in-process tests, wrong for production where the agent is racing
+	// to come up.
+	InitialMountResolver controllers.MountResolver
 }
 
 // NewDefaultOrchestrator creates a new orchestrator with default options
@@ -167,6 +179,9 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		options.RunnerManager,
 		options.Logger,
 	)
+	if options.InitialMountResolver != nil {
+		instanceController.SetMountResolver(options.InitialMountResolver)
+	}
 
 	healthController := controllers.NewHealthController(
 		options.Logger,
