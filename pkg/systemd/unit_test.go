@@ -26,6 +26,7 @@ func TestRenderString_Defaults(t *testing.T) {
 		"Restart=on-failure",
 		"AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER",
 		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER",
+		"SupplementaryGroups=docker",
 		"[Install]",
 		"WantedBy=multi-user.target",
 	}

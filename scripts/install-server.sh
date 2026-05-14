@@ -343,6 +343,9 @@ Wants=network-online.target
 Type=simple
 User=${RUNE_USER}
 Group=${RUNE_GROUP}
+# Grants access to /var/run/docker.sock without putting docker as
+# the primary group of the rune user. Required for the Docker runner.
+SupplementaryGroups=docker
 # Ensure non-interactive stdin under systemd
 StandardInput=null
 # --config makes the resolved runefile path explicit and survives
@@ -369,15 +372,10 @@ WantedBy=multi-user.target
 UNIT
   fi
 
-  # Ensure Docker group access
-  if getent group docker >/dev/null 2>&1; then
-    mkdir -p /etc/systemd/system/runed.service.d
-    cat >/etc/systemd/system/runed.service.d/override.conf <<EOF
-[Service]
-SupplementaryGroups=docker
-EOF
-  fi
-  
+  # SupplementaryGroups=docker is baked into the canonical unit
+  # above; no drop-in override is needed.
+
+
   systemctl daemon-reload
   systemctl enable --now runed
   log "Systemd service installed and enabled"

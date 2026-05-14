@@ -92,6 +92,12 @@ Wants=network-online.target
 Type=simple
 User={{.User}}
 Group={{.Group}}
+# Grants access to /var/run/docker.sock without putting docker as
+# the primary group of the rune user. Required for the Docker runner;
+# baked in here so it survives upgrade-server.sh --refresh-unit (the
+# previous workaround was a /etc/systemd/system/runed.service.d
+# drop-in that operators kept losing on upgrades).
+SupplementaryGroups=docker
 # Ensure non-interactive stdin under systemd
 StandardInput=null
 # --config makes the resolved runefile path explicit and survives
