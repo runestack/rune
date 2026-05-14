@@ -292,6 +292,45 @@ func TestResolveVolumeMount_StampsBoundNode(t *testing.T) {
 	assert.Equal(t, "default/api-0", v.BoundClaim, "BoundClaim records which instance bound the volume")
 }
 
+// On `rune restart` the service cycles 1→0→1; the new instance keeps
+// the same instance name but is a fresh row. BoundClaim must be
+// refreshed so the volume row doesn't keep pointing at the previous
+// (Deleted) instance, otherwise rune volume get and any future
+// detach/delete logic that keys on BoundClaim sees stale state.
+// BoundNode stays unchanged (still this node) — restart deliberately
+// keeps the mount alive across the 1→0→1 to make the second leg fast.
+func TestResolveVolumeMount_RefreshesBoundClaimOnRestart(t *testing.T) {
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	putVolume(t, ts, "default", "data", "do-vol-abc123", types.VolumeStatusAvailable)
+
+	// Seed the volume as already bound to a previous instance on this
+	// node — the post-restart-first-reconcile state.
+	var v types.Volume
+	require.NoError(t, ts.Get(context.Background(), types.ResourceTypeVolume, "default", "data", &v))
+	v.BoundNode = "node-a"
+	v.BoundClaim = "default/api-0" // stale: that instance was Deleted
+	require.NoError(t, ts.Update(context.Background(), types.ResourceTypeVolume, "default", "data", &v))
+
+	ic.nodeID = "node-a"
+	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{
+		"vol-data": "/var/lib/rune/mounts/vol-data",
+	}})
+
+	// New instance with the same name (api-0 again, but a different
+	// row in practice — only the name is shared).
+	svc := &types.Service{Name: "api", Namespace: "default"}
+	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+		Name:      "data",
+		MountPath: "/data",
+		Claim:     &types.VolumeClaim{Name: "data"},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, ts.Get(context.Background(), types.ResourceTypeVolume, "default", "data", &v))
+	assert.Equal(t, "node-a", v.BoundNode, "BoundNode stays on the same node across restart")
+	assert.Equal(t, "default/api-0", v.BoundClaim, "BoundClaim refreshed to the new consuming instance")
+}
+
 // When a MountResolver is wired but has no entry for this volume yet
 // (typical race: bind happened, mount has not), resolveVolumeMount
 // returns a transient error so the service reconciler retries. Falling

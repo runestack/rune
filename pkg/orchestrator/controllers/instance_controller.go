@@ -1440,17 +1440,22 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.Reason)
 	}
 
-	// Bind the volume to this node so the agent-side volumes Subsystem
-	// will Attach + Mount it. The Subsystem gates on BoundNode == nodeID
-	// (see internal/agent/volumes/subsystem.go shouldMount). Persisting
-	// this is the trigger that turns a freshly-provisioned cloud Volume
-	// into a real on-host mount target.
-	if c.nodeID != "" && vol.BoundNode != c.nodeID {
-		vol.BoundNode = c.nodeID
-		vol.BoundClaim = service.Namespace + "/" + instance.Name
-		vol.UpdatedAt = time.Now().UTC()
-		if err := c.store.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &vol); err != nil {
-			return types.ResolvedVolumeMount{}, fmt.Errorf("bind volume %s/%s to node %s: %w", ns, name, c.nodeID, err)
+	// Bind the volume to this node + consuming instance so the agent-
+	// side volumes Subsystem will Attach + Mount it. The Subsystem
+	// gates on BoundNode == nodeID (see internal/agent/volumes/
+	// subsystem.go shouldMount). BoundClaim records which instance
+	// currently owns the binding — refreshed on every instance change
+	// (e.g. `rune restart` cycling 1→0→1) so the row doesn't keep
+	// pointing at a Deleted instance after a restart.
+	if c.nodeID != "" {
+		newClaim := service.Namespace + "/" + instance.Name
+		if vol.BoundNode != c.nodeID || vol.BoundClaim != newClaim {
+			vol.BoundNode = c.nodeID
+			vol.BoundClaim = newClaim
+			vol.UpdatedAt = time.Now().UTC()
+			if err := c.store.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &vol); err != nil {
+				return types.ResolvedVolumeMount{}, fmt.Errorf("bind volume %s/%s to node %s: %w", ns, name, c.nodeID, err)
+			}
 		}
 	}
 
