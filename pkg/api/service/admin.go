@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -529,13 +528,12 @@ func (s *AdminService) BootstrapAuth(ctx context.Context, req *generated.Bootstr
 						}
 					}
 				}
-				ns := "system"
-				nameOnly := fromSecret
-				// basic parsing for ns/name if provided as ns/name
-				if i := strings.IndexByte(fromSecret, '/'); i > 0 {
-					ns = fromSecret[:i]
-					nameOnly = fromSecret[i+1:]
+				rr, rerr := types.ParseResourceRefWithDefaults(fromSecret, types.ResourceTypeSecret, "system")
+				if rerr != nil {
+					return nil, rerr
 				}
+				ns := rr.Namespace
+				nameOnly := rr.Name
 				if bootstrap && len(data) > 0 {
 					_ = s.bootstrapRegistrySecret(ctx, secRepo, ns, nameOnly, data, immutable, manage)
 				}
