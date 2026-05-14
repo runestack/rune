@@ -341,7 +341,6 @@ func (f *fakeMounter) Unmount(_ context.Context, target string) error {
 func newTestDriver(t *testing.T, fake *fakeDO, ts *httptest.Server) (*doVolumeDriver, *fakeMounter) {
 	t.Helper()
 	cfg, err := parseConfig(map[string]any{
-		"apiToken":   "test-token",
 		"apiBaseURL": ts.URL,
 	})
 	if err != nil {
@@ -367,7 +366,7 @@ func mkVolume(name string) *types.Volume {
 // ============================================================================
 
 func TestFactoryRegistration(t *testing.T) {
-	d, err := driver.New(DriverName, map[string]any{"apiToken": "x"})
+	d, err := driver.New(DriverName, map[string]any{})
 	if err != nil {
 		t.Fatalf("driver.New(do-volume): %v", err)
 	}
@@ -388,68 +387,31 @@ func TestParseConfigErrors(t *testing.T) {
 		name string
 		raw  map[string]any
 	}{
-		{"both tokens", map[string]any{"apiToken": "x", "apiTokenSecretRef": "ns/n#k"}},
-		{"bad type", map[string]any{"apiToken": 42}},
-		{"bad secretRef no hash", map[string]any{"apiTokenSecretRef": "ns/name"}},
-		{"bad secretRef no slash", map[string]any{"apiTokenSecretRef": "name#k"}},
+		{"apiBaseURL bad type", map[string]any{"apiBaseURL": 42}},
+		{"volumeNamePrefix bad type", map[string]any{"volumeNamePrefix": 42}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := parseConfig(tc.raw)
-			if tc.name == "bad secretRef no hash" || tc.name == "bad secretRef no slash" {
-				// parseConfig itself accepts the string; resolveToken is what fails
-				if err != nil {
-					return
-				}
-				if _, rerr := cfg.resolveToken(context.Background()); rerr == nil {
-					t.Fatalf("expected resolveToken error for %s", tc.name)
-				}
-				return
-			}
-			if err == nil {
+			if _, err := parseConfig(tc.raw); err == nil {
 				t.Fatalf("expected parseConfig error for %s", tc.name)
 			}
 		})
 	}
 }
 
-func TestSecretLookupResolvesToken(t *testing.T) {
-	called := 0
-	lookup := SecretLookup(func(_ context.Context, ns, name, key string) (string, error) {
-		called++
-		if ns != "infra" || name != "do-creds" || key != "token" {
-			t.Fatalf("unexpected lookup args: %s/%s#%s", ns, name, key)
-		}
-		return "rotated-token-" + fmt.Sprint(called), nil
-	})
-	cfg, err := parseConfig(map[string]any{
-		"apiTokenSecretRef":   "infra/do-creds#token",
-		configKeySecretLookup: lookup,
-	})
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
-	tok1, err := cfg.resolveToken(context.Background())
-	if err != nil {
-		t.Fatalf("resolveToken: %v", err)
-	}
-	tok2, _ := cfg.resolveToken(context.Background())
-	if tok1 == tok2 {
-		t.Fatalf("expected fresh resolution per call (got %q twice)", tok1)
-	}
-	if called != 2 {
-		t.Fatalf("expected 2 lookups, got %d", called)
-	}
-}
-
-func TestResolveToken_MissingLookup(t *testing.T) {
-	cfg, err := parseConfig(map[string]any{"apiTokenSecretRef": "ns/n#k"})
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
-	if _, err := cfg.resolveToken(context.Background()); err == nil ||
-		!strings.Contains(err.Error(), "no SecretLookup") {
-		t.Fatalf("expected SecretLookup-missing error, got %v", err)
+func TestTokenRequired(t *testing.T) {
+	fake := newFakeDO(t)
+	ts := fake.server()
+	defer ts.Close()
+	d, _ := newTestDriver(t, fake, ts)
+	// Omit apiToken — driver must surface a clear error rather than
+	// hitting DO with no bearer token.
+	_, err := d.Provision(context.Background(), driver.OpContext{
+		Volume:     mkVolume("data"),
+		Parameters: map[string]string{"region": "nyc3"},
+	}, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	if err == nil || !strings.Contains(err.Error(), "parameters.apiToken is required") {
+		t.Fatalf("expected apiToken-required error, got %v", err)
 	}
 }
 
@@ -518,7 +480,8 @@ func TestDelete_Idempotent(t *testing.T) {
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
 	// missing handle -> no error
-	if err := d.Delete(context.Background(), driver.OpContext{}, "vol-does-not-exist"); err != nil {
+	opctx := driver.OpContext{Parameters: map[string]string{"apiToken": "test-token"}}
+	if err := d.Delete(context.Background(), opctx, "vol-does-not-exist"); err != nil {
 		t.Fatalf("expected idempotent Delete, got %v", err)
 	}
 	if err := d.Delete(context.Background(), driver.OpContext{}, ""); err != nil {
@@ -699,8 +662,11 @@ func TestExpand(t *testing.T) {
 // the boilerplate of building the request.
 func nyc3OpCtx(vol *types.Volume) driver.OpContext {
 	return driver.OpContext{
-		Volume:     vol,
-		Parameters: map[string]string{"region": "nyc3"},
+		Volume: vol,
+		Parameters: map[string]string{
+			"region":   "nyc3",
+			"apiToken": "test-token",
+		},
 	}
 }
 

@@ -12,30 +12,22 @@
 //	  parameters:
 //	    region: nyc3
 //	    fsType: ext4
+//	    apiToken: "secret:do-api-token.shared.rune/token"
 //	  reclaimPolicy: retain
 //	  allowedTopologies:
 //	    - matchLabels:
 //	        rune.io/region: nyc3
 //
-// Auth uses a DigitalOcean Personal Access Token. The token may be
-// supplied two ways via the runefile [storage.drivers.do-volume]
-// section:
-//
-//   - `apiToken: "dop_v1_..."` — literal token (typically operator
-//     environment substitution, e.g. ${env:DO_API_TOKEN}). Use for
-//     dev / single-tenant clusters.
-//   - `apiTokenSecretRef: "<ns>/<name>#<key>"` — reference to a Rune
-//     Secret. Resolved at every API call so token rotation works
-//     without restarting runed. Requires a SecretLookup to be
-//     injected into the factory config under the reserved key
-//     "_secretLookup" (cmd/runed does this from a SecretRepo).
+// Auth uses a DigitalOcean Personal Access Token sourced from the
+// StorageClass `parameters.apiToken` value. The controller resolves any
+// `secret:...` reference into plaintext before the driver sees it
+// (RUNE-200 PR 3 / pkg/storage/driverparams), so token rotation flows
+// through the secrets store with no driver-level wiring.
 //
 // Introduced in RUNE-069. See _docs/designs/RUNE-069-Storage-Management.md §5.1.
 package dovolume
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -43,38 +35,11 @@ import (
 // DriverName is the registry key.
 const DriverName = "do-volume"
 
-// ConfigKeySecretLookup is the reserved key the factory map[string]any
-// carries the SecretLookup callable under. Wired by cmd/runed; tests
-// supply their own. Using a leading underscore signals "not a runefile
-// field" — viper would never produce a key beginning with one.
-const ConfigKeySecretLookup = "_secretLookup"
-
-// configKeySecretLookup is kept as a private alias for in-package use.
-const configKeySecretLookup = ConfigKeySecretLookup
-
-// SecretLookup resolves a single field from a Rune Secret. namespace +
-// name identify the Secret; key selects a field of Secret.Data. Returns
-// the plaintext value or an error.
-//
-// Drivers call this synchronously on every Provision / Attach / etc. so
-// secret rotation takes effect on the next reconcile without requiring
-// a runed restart.
-type SecretLookup func(ctx context.Context, namespace, name, key string) (string, error)
-
 // Config is the runefile [storage.drivers.do-volume] section after
-// parsing. Every field is optional at parse time; required-fields
-// validation happens at first use so a misconfigured do-volume stanza
-// doesn't crash runed for clusters that don't use DO.
+// parsing. Only knobs that don't belong on per-StorageClass parameters
+// live here — auth is sourced from StorageClass `parameters.apiToken`
+// (resolved by the controller-side secret resolver).
 type Config struct {
-	// APIToken is a literal DO Personal Access Token. Mutually
-	// exclusive with APITokenSecretRef.
-	APIToken string
-
-	// APITokenSecretRef references a Rune Secret. Format:
-	// "<namespace>/<name>#<key>". Resolved via SecretLookup at call
-	// time. Mutually exclusive with APIToken.
-	APITokenSecretRef string
-
 	// APIBaseURL overrides the DO API endpoint. Defaults to
 	// "https://api.digitalocean.com" — only set in tests against a
 	// httptest.Server.
@@ -84,11 +49,6 @@ type Config struct {
 	// this driver, so multiple Rune clusters can share one DO
 	// account without colliding. Default "rune-".
 	VolumeNamePrefix string
-
-	// SecretLookup is injected by cmd/runed (or tests). nil is
-	// allowed at parse time; resolveToken() returns a clear error if
-	// APITokenSecretRef is set without it.
-	SecretLookup SecretLookup
 }
 
 // parseConfig converts a raw map[string]any (viper output, or a test
@@ -112,20 +72,6 @@ func parseConfig(raw map[string]any) (*Config, error) {
 		v, ok := lc[strings.ToLower(camel)]
 		return v, ok
 	}
-	if v, ok := get("apiToken"); ok {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("dovolume: apiToken must be a string, got %T", v)
-		}
-		cfg.APIToken = strings.TrimSpace(s)
-	}
-	if v, ok := get("apiTokenSecretRef"); ok {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("dovolume: apiTokenSecretRef must be a string, got %T", v)
-		}
-		cfg.APITokenSecretRef = strings.TrimSpace(s)
-	}
 	if v, ok := get("apiBaseURL"); ok {
 		s, ok := v.(string)
 		if !ok {
@@ -142,74 +88,5 @@ func parseConfig(raw map[string]any) (*Config, error) {
 		}
 		cfg.VolumeNamePrefix = s
 	}
-	// Reserved key — never operator-supplied via the runefile, only
-	// injected programmatically by cmd/runed (or tests).
-	if v, ok := raw[configKeySecretLookup]; ok && v != nil {
-		fn, ok := v.(SecretLookup)
-		if !ok {
-			return nil, fmt.Errorf("dovolume: %s must be a dovolume.SecretLookup, got %T", configKeySecretLookup, v)
-		}
-		cfg.SecretLookup = fn
-	}
-	if cfg.APIToken != "" && cfg.APITokenSecretRef != "" {
-		return nil, fmt.Errorf("dovolume: apiToken and apiTokenSecretRef are mutually exclusive")
-	}
-	// If neither apiToken nor apiTokenSecretRef is set we defer the
-	// error to first use — if no DO StorageClass is declared, we should
-	// not block runed startup. resolveToken surfaces the missing-config
-	// error on the first request.
 	return cfg, nil
-}
-
-// resolveToken returns the API token to use for a single DO API call.
-// Called on every request so rotated secrets take effect on the next
-// reconcile. Returns a sentinel-wrapped error when the configuration
-// is incomplete — the caller surfaces it through the driver's error
-// path (Provision → controller → Volume.Reason).
-func (c *Config) resolveToken(ctx context.Context) (string, error) {
-	if c.APIToken != "" {
-		return c.APIToken, nil
-	}
-	if c.APITokenSecretRef == "" {
-		return "", errors.New("dovolume: no apiToken or apiTokenSecretRef configured")
-	}
-	if c.SecretLookup == nil {
-		return "", errors.New("dovolume: apiTokenSecretRef set but no SecretLookup wired (runed bug)")
-	}
-	ns, name, key, err := parseSecretRef(c.APITokenSecretRef)
-	if err != nil {
-		return "", err
-	}
-	tok, err := c.SecretLookup(ctx, ns, name, key)
-	if err != nil {
-		return "", fmt.Errorf("dovolume: resolve apiTokenSecretRef %q: %w", c.APITokenSecretRef, err)
-	}
-	if strings.TrimSpace(tok) == "" {
-		return "", fmt.Errorf("dovolume: secret %q field %q is empty", ns+"/"+name, key)
-	}
-	return tok, nil
-}
-
-// parseSecretRef splits "<ns>/<name>#<key>" into its three parts.
-// Whitespace inside any segment is rejected.
-func parseSecretRef(ref string) (ns, name, key string, err error) {
-	hashIdx := strings.IndexByte(ref, '#')
-	if hashIdx < 0 {
-		return "", "", "", fmt.Errorf("dovolume: apiTokenSecretRef %q missing '#<key>' suffix", ref)
-	}
-	left := ref[:hashIdx]
-	key = ref[hashIdx+1:]
-	slashIdx := strings.IndexByte(left, '/')
-	if slashIdx < 0 {
-		return "", "", "", fmt.Errorf("dovolume: apiTokenSecretRef %q missing '<namespace>/' prefix", ref)
-	}
-	ns = left[:slashIdx]
-	name = left[slashIdx+1:]
-	if ns == "" || name == "" || key == "" {
-		return "", "", "", fmt.Errorf("dovolume: apiTokenSecretRef %q has empty namespace/name/key segment", ref)
-	}
-	if strings.ContainsAny(ref, " \t\n") {
-		return "", "", "", fmt.Errorf("dovolume: apiTokenSecretRef %q contains whitespace", ref)
-	}
-	return ns, name, key, nil
 }

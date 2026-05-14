@@ -16,8 +16,9 @@ func init() {
 }
 
 // factory is the registry entry point. cmd/runed (or tests) supplies
-// the runefile [storage.drivers.do-volume] section; a SecretLookup
-// may be injected via the reserved key (see config.go).
+// the runefile [storage.drivers.do-volume] section. Auth is sourced
+// per-call from the StorageClass `parameters.apiToken` value, not from
+// driver-level config.
 func factory(raw map[string]any) (driver.Driver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
@@ -65,6 +66,7 @@ func (d *doVolumeDriver) Provision(ctx context.Context, opctx driver.OpContext, 
 	if opctx.Volume == nil {
 		return "", fmt.Errorf("dovolume: Provision: OpContext.Volume is required")
 	}
+	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	region := mergedParam(opctx.Parameters, "region")
 	if region == "" {
 		return "", fmt.Errorf("dovolume: Provision: parameters.region is required")
@@ -96,6 +98,7 @@ func (d *doVolumeDriver) Delete(ctx context.Context, opctx driver.OpContext, han
 	if handle == "" {
 		return nil
 	}
+	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	if err := d.client.deleteVolume(ctx, string(handle)); err != nil {
 		if errors.Is(err, errDONotFound) {
 			return nil
@@ -112,6 +115,7 @@ func (d *doVolumeDriver) Attach(ctx context.Context, opctx driver.OpContext, han
 	if node == "" {
 		return "", fmt.Errorf("dovolume: Attach: empty node id")
 	}
+	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	vol, err := d.client.getVolume(ctx, string(handle))
 	if err != nil {
 		return "", fmt.Errorf("dovolume: getVolume %s: %w", handle, err)
@@ -150,6 +154,7 @@ func (d *doVolumeDriver) Detach(ctx context.Context, opctx driver.OpContext, han
 	if handle == "" {
 		return nil
 	}
+	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	vol, err := d.client.getVolume(ctx, string(handle))
 	if err != nil {
 		if errors.Is(err, errDONotFound) {
@@ -192,6 +197,7 @@ func (d *doVolumeDriver) Mount(ctx context.Context, opctx driver.OpContext, opts
 	if dev == "" {
 		// Caller (the agent) may not have populated Device — derive
 		// it from the volume name (which we set during Provision).
+		ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 		vol, err := d.client.getVolume(ctx, string(opts.Handle))
 		if err != nil {
 			return "", fmt.Errorf("dovolume: Mount: lookup volume %s: %w", opts.Handle, err)
@@ -237,6 +243,7 @@ func (d *doVolumeDriver) Snapshot(ctx context.Context, opctx driver.OpContext, r
 	if req.Handle == "" {
 		return "", fmt.Errorf("dovolume: Snapshot: empty volume handle")
 	}
+	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	doSnapName := d.doSnapshotName(opctx.Volume, req.Snapshot)
 	snap, err := d.client.createSnapshot(ctx, string(req.Handle), doSnapName)
 	if err != nil {
@@ -255,6 +262,7 @@ func (d *doVolumeDriver) RestoreFromSnapshot(ctx context.Context, opctx driver.O
 	if req.SourceHandle == "" {
 		return "", fmt.Errorf("dovolume: RestoreFromSnapshot: empty source handle")
 	}
+	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	region := mergedParam(opctx.Parameters, "region")
 	if region == "" {
 		return "", fmt.Errorf("dovolume: RestoreFromSnapshot: parameters.region is required")
@@ -280,6 +288,7 @@ func (d *doVolumeDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpCont
 	if handle == "" {
 		return nil
 	}
+	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	if err := d.client.deleteSnapshot(ctx, string(handle)); err != nil {
 		return fmt.Errorf("dovolume: deleteSnapshot %s: %w", handle, err)
 	}
@@ -290,6 +299,7 @@ func (d *doVolumeDriver) Expand(ctx context.Context, opctx driver.OpContext, han
 	if handle == "" {
 		return fmt.Errorf("dovolume: Expand: empty handle")
 	}
+	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	bytes, err := parseQuantity(newSize)
 	if err != nil {
 		return fmt.Errorf("dovolume: Expand: parse size %q: %w", newSize, err)

@@ -41,9 +41,9 @@ import (
 	// Storage drivers — each blank-import registers one or more driver
 	// names with pkg/storage/driver.Registry at init() time. Adding a new
 	// driver (Hetzner, AWS EBS, ...) is one more line here.
+	_ "github.com/runestack/rune/pkg/storage/driver/dovolume"
 	_ "github.com/runestack/rune/pkg/storage/driver/local"
 
-	"github.com/runestack/rune/pkg/storage/driver/dovolume"
 	"github.com/runestack/rune/pkg/store/repos"
 	"google.golang.org/grpc"
 )
@@ -508,15 +508,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Inject a SecretLookup into the do-volume driver config so it can
-	// resolve apiTokenSecretRef at call time. The lookup is plumbed via
-	// the reserved key dovolume.configKeySecretLookup (a leading
-	// underscore signals "not a runefile field"). We mutate the same
-	// appCfg.Storage.Drivers map that's threaded into both the agent's
-	// driver lookup and the volume controller, so the closure is shared.
-	// No-op when the operator has not declared the do-volume driver.
-	injectDOVolumeSecretLookup(appCfg, stateStore)
-
 	// Token-based auth is always enabled in MVP
 	logger.Info("Authentication enabled (token-based)")
 
@@ -908,38 +899,6 @@ func newStoreSecretLookup(st store.Store) driverparams.SecretLookup {
 		}
 		return v, nil
 	}
-}
-
-// injectDOVolumeSecretLookup wires a SecretRepo-backed SecretLookup
-// into the do-volume driver's runefile config under the reserved key
-// dovolume.configKeySecretLookup, for the legacy
-// `[storage.drivers.do-volume] apiTokenSecretRef` path. Operators on
-// the new path (apiTokenSecretRef on StorageClass.parameters) don't
-// need this; the controller-side resolver wired via
-// OrchestratorOptions.StorageSecretLookup covers them. Retained for
-// backwards compatibility with pre-RUNE-200 runefiles. No-op when the
-// operator has not declared the do-volume driver.
-func injectDOVolumeSecretLookup(appCfg *config.Config, st store.Store) {
-	if appCfg == nil {
-		return
-	}
-	if _, present := appCfg.Storage.Drivers[dovolume.DriverName]; !present {
-		return
-	}
-	if appCfg.Storage.Drivers == nil {
-		appCfg.Storage.Drivers = map[string]map[string]any{}
-	}
-	if appCfg.Storage.Drivers[dovolume.DriverName] == nil {
-		appCfg.Storage.Drivers[dovolume.DriverName] = map[string]any{}
-	}
-	storeLookup := newStoreSecretLookup(st)
-	// Adapt the driverparams.SecretLookup back to the
-	// dovolume.SecretLookup nominal type — same signature, different
-	// declared type.
-	lookup := dovolume.SecretLookup(func(ctx context.Context, ns, name, key string) (string, error) {
-		return storeLookup(ctx, ns, name, key)
-	})
-	appCfg.Storage.Drivers[dovolume.DriverName][dovolume.ConfigKeySecretLookup] = lookup
 }
 
 // makeAgentDriverLookup returns a volsub.DriverLookup closure that
