@@ -27,12 +27,12 @@ func TestVolumeController_SnapshotsDriverParametersAtProvision(t *testing.T) {
 
 	// StorageClass with two parameters (one of which the volume will override).
 	class := &types.StorageClass{
-		ID:        "sc-snap",
-		Name:      "sc-snap",
-		Driver:    local.DriverNameLocal,
+		ID:     "sc-snap",
+		Name:   "sc-snap",
+		Driver: local.DriverNameLocal,
 		Parameters: map[string]string{
-			"region":  "eu-west-1",
-			"fsType":  "ext4",
+			"region": "eu-west-1",
+			"fsType": "ext4",
 		},
 		CreatedAt: time.Now().UTC(),
 	}
