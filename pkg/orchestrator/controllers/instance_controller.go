@@ -1440,19 +1440,44 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.Reason)
 	}
 
-	// Resolver-first: when the agent-side volumes Subsystem has
-	// reported a mount target for this volume on this node, use it
-	// verbatim. Otherwise fall back to Volume.Handle, which is the
-	// historical bind source and is correct for the in-tree local /
-	// local-host drivers (their Mount returns the host path verbatim).
-	source := vol.Handle
-	if c.mountResolver != nil {
-		if target, ok := c.mountResolver.MountTargetFor(vol.ID); ok {
-			source = target
+	// Bind the volume to this node so the agent-side volumes Subsystem
+	// will Attach + Mount it. The Subsystem gates on BoundNode == nodeID
+	// (see internal/agent/volumes/subsystem.go shouldMount). Persisting
+	// this is the trigger that turns a freshly-provisioned cloud Volume
+	// into a real on-host mount target.
+	if c.nodeID != "" && vol.BoundNode != c.nodeID {
+		vol.BoundNode = c.nodeID
+		vol.BoundClaim = service.Namespace + "/" + instance.Name
+		vol.UpdatedAt = time.Now().UTC()
+		if err := c.store.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &vol); err != nil {
+			return types.ResolvedVolumeMount{}, fmt.Errorf("bind volume %s/%s to node %s: %w", ns, name, c.nodeID, err)
 		}
 	}
+
+	// Resolve the bind source. When a MountResolver is wired (production
+	// runed), the agent-side Subsystem owns the host-path mapping; we
+	// require it to have reported a target before launching, because for
+	// any driver where Handle is not a host path (do-volume, future cloud
+	// drivers) a bare Handle is not a valid Docker bind source. The error
+	// is transient — the service reconciler retries until the Subsystem
+	// has finished Attach + Mount.
+	//
+	// When no MountResolver is wired (dev/standalone, tests), fall back
+	// to Volume.Handle. That's the historical behaviour and is correct
+	// for the in-tree local / local-host drivers where Handle == host
+	// path.
+	var source string
+	if c.mountResolver != nil {
+		target, ok := c.mountResolver.MountTargetFor(vol.ID)
+		if !ok {
+			return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s not yet mounted on node %s (will retry)", ns, name, c.nodeID)
+		}
+		source = target
+	} else {
+		source = vol.Handle
+	}
 	if source == "" {
-		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s has no handle", ns, name)
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s has no mount source", ns, name)
 	}
 
 	return types.ResolvedVolumeMount{
