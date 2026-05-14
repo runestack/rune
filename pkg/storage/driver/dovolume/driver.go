@@ -120,12 +120,13 @@ func (d *doVolumeDriver) Attach(ctx context.Context, opctx driver.OpContext, han
 	if err != nil {
 		return "", fmt.Errorf("dovolume: getVolume %s: %w", handle, err)
 	}
-	dropletID, err := d.client.dropletByName(ctx, string(node))
+	lookupName := dropletLookupName(opctx, node)
+	dropletID, err := d.client.dropletByName(ctx, lookupName)
 	if err != nil {
 		if errors.Is(err, errDONotFound) {
-			return "", fmt.Errorf("dovolume: no DO droplet matches node %q", node)
+			return "", fmt.Errorf("dovolume: no DO droplet matches hostname %q (set the node's hostname to match the droplet name)", lookupName)
 		}
-		return "", fmt.Errorf("dovolume: dropletByName %s: %w", node, err)
+		return "", fmt.Errorf("dovolume: dropletByName %s: %w", lookupName, err)
 	}
 	// Already attached to this droplet? Nothing to do.
 	if hasDroplet(vol, dropletID) {
@@ -167,7 +168,7 @@ func (d *doVolumeDriver) Detach(ctx context.Context, opctx driver.OpContext, han
 	}
 	var dropletID int64
 	if node != "" {
-		id, err := d.client.dropletByName(ctx, string(node))
+		id, err := d.client.dropletByName(ctx, dropletLookupName(opctx, node))
 		if err == nil {
 			dropletID = id
 		}
@@ -390,6 +391,18 @@ func sanitizeDOName(s string, maxLen int) string {
 // to attached volumes.
 func doDevicePath(volumeName string) driver.DevicePath {
 	return driver.DevicePath("/dev/disk/by-id/scsi-0DO_Volume_" + volumeName)
+}
+
+// dropletLookupName returns the name to feed to /v2/droplets?name=... for
+// the agent's node. Prefer OpContext.NodeHostname (the OS hostname, which
+// matches the DO droplet name by default), falling back to the Rune
+// NodeID. The fallback exists for tests and for non-agent callers that
+// don't populate NodeHostname; in production the agent always sets it.
+func dropletLookupName(opctx driver.OpContext, node driver.NodeID) string {
+	if opctx.NodeHostname != "" {
+		return opctx.NodeHostname
+	}
+	return string(node)
 }
 
 func mergedParam(p map[string]string, key string) string {

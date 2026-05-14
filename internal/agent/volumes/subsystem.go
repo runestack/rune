@@ -67,6 +67,14 @@ type Config struct {
 	// acts on Volumes whose BoundNode matches. Required.
 	NodeID string
 
+	// NodeHostname is the OS hostname of the node (os.Hostname()).
+	// Threaded into every driver.OpContext so cloud-backed drivers can
+	// map the Rune node onto the cloud provider's instance identity —
+	// e.g. dovolume looks up the DO droplet by hostname-derived name.
+	// Empty disables that mapping; the affected driver surfaces its
+	// own error.
+	NodeHostname string
+
 	// Lookup resolves a Volume to a concrete Driver instance.
 	// Required.
 	Lookup DriverLookup
@@ -529,8 +537,9 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) err
 // See RUNE-200 PR 2 + PR 3.
 func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driver.OpContext, error) {
 	opctx := driver.OpContext{
-		Volume:     vol,
-		Parameters: map[string]string{},
+		Volume:       vol,
+		Parameters:   map[string]string{},
+		NodeHostname: s.cfg.NodeHostname,
 	}
 	if vol.StorageClassName == "" {
 		opctx.Parameters = mergeParameters(nil, vol.Parameters)

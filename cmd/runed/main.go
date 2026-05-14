@@ -524,9 +524,11 @@ func main() {
 		if appCfg != nil {
 			driverConfigs = appCfg.Storage.Drivers
 		}
+		nodeHostname, _ := os.Hostname()
 		volSub, vsErr := volsub.New(volsub.Config{
 			Store:        stateStore,
 			NodeID:       a.Identity().NodeID,
+			NodeHostname: nodeHostname,
 			Lookup:       makeAgentDriverLookup(stateStore, driverConfigs),
 			SecretLookup: newStoreSecretLookup(stateStore),
 			Logger:       logger.WithComponent("agent.volumes"),

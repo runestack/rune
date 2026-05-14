@@ -129,6 +129,16 @@ type OpContext struct {
 	// map for per-class configuration (region, fsType, auth refs, etc.)
 	// rather than re-merging themselves.
 	Parameters map[string]string
+
+	// NodeHostname is the OS hostname (os.Hostname()) of the agent
+	// running this call, populated by the controller / agent at
+	// build time. Cloud-backed drivers use it to map Rune's node
+	// identity onto the cloud provider's instance identity — DO
+	// droplets, for example, are addressable by their hostname-derived
+	// name via /v2/droplets?name=... Empty when the caller has no
+	// hostname to report (controller-only operations like Provision /
+	// Delete that don't run on a specific node, or tests).
+	NodeHostname string
 }
 
 // Capabilities describes the optional features a driver supports.

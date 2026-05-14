@@ -12,7 +12,8 @@ import (
 // FQDN form:    <type>:<name>.<namespace>.rune[/key]
 // Minimal form: <type>:<name>[/key]
 // Bare form:    <name> — Type and Namespace come from caller context;
-//               accepted via ParseResourceRefWithDefaults only.
+//
+//	accepted via ParseResourceRefWithDefaults only.
 type ResourceRef struct {
 	Type      ResourceType
 	Namespace string

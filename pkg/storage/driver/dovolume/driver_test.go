@@ -527,6 +527,30 @@ func TestAttachDetach(t *testing.T) {
 	}
 }
 
+// When the agent threads OpContext.NodeHostname through, the driver
+// must use it for the /v2/droplets?name=... lookup instead of the
+// Rune node ID — DO has no droplet named "node-<rand>" but it does
+// have one named after the host's hostname.
+func TestAttach_UsesNodeHostnameOverNodeID(t *testing.T) {
+	fake := newFakeDO(t)
+	fake.addDroplet("rune-edge-lon1", 570378027)
+	ts := fake.server()
+	defer ts.Close()
+	d, _ := newTestDriver(t, fake, ts)
+	vol := mkVolume("data")
+	opctx := nyc3OpCtx(vol)
+	opctx.NodeHostname = "rune-edge-lon1"
+	handle, err := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	// Pass a Rune-style NodeID that does NOT match any droplet name;
+	// the lookup must succeed via NodeHostname.
+	if _, err := d.Attach(context.Background(), opctx, handle, "node-5d7a0ab4bfe76078"); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+}
+
 func TestAttach_UnknownNode(t *testing.T) {
 	fake := newFakeDO(t)
 	ts := fake.server()
