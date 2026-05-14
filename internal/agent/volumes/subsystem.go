@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
@@ -49,6 +50,12 @@ import (
 // nests one subdirectory per Volume.ID. It mirrors the layout called out
 // in the RUNE-069 design.
 const DefaultMountRoot = "/var/lib/rune/mounts"
+
+// DefaultRetryInterval is the period at which the subsystem re-walks
+// every Volume and re-attempts bringUp for any that should be mounted
+// but aren't. Picked so a stuck mount recovers within one operator
+// attention span without hammering cloud-provider APIs.
+const DefaultRetryInterval = 30 * time.Second
 
 // DriverLookup resolves the storage Driver responsible for a given
 // Volume. The implementation typically reads the Volume's StorageClass
@@ -89,6 +96,12 @@ type Config struct {
 	// MountRoot is the per-node directory under which mount targets
 	// live. Defaults to DefaultMountRoot.
 	MountRoot string
+
+	// RetryInterval is how often the run loop re-walks every Volume
+	// and re-attempts bringUp for any that should be mounted but
+	// aren't. Required so transient Attach / Mount failures recover
+	// without a runed restart. Defaults to DefaultRetryInterval.
+	RetryInterval time.Duration
 
 	// Logger; defaults to the global logger with component
 	// "agent.volumes".
@@ -159,6 +172,9 @@ func New(cfg Config) (*Subsystem, error) {
 	}
 	if cfg.MountRoot == "" {
 		cfg.MountRoot = DefaultMountRoot
+	}
+	if cfg.RetryInterval <= 0 {
+		cfg.RetryInterval = DefaultRetryInterval
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.GetDefaultLogger().WithComponent("agent.volumes")
@@ -279,6 +295,15 @@ func (s *Subsystem) MountTargetFor(volumeID string) (string, bool) {
 func (s *Subsystem) run(ctx context.Context, initial <-chan store.WatchEvent) {
 	defer s.wg.Done()
 	watchCh := initial
+	// Periodic retry tick. When Attach or Mount fails (e.g. transient
+	// DO API hiccup, missing capability, cloud-provider rate limit),
+	// the failing volume is not added to s.mounts and never receives
+	// another watch event until something else updates the row.
+	// Without this tick the only recovery was a runed restart; with
+	// it, we re-walk every volume on RetryInterval and naturally
+	// re-attempt bringUp for any that should be mounted but aren't.
+	retry := time.NewTicker(s.cfg.RetryInterval)
+	defer retry.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -301,6 +326,11 @@ func (s *Subsystem) run(ctx context.Context, initial <-chan store.WatchEvent) {
 					log.Str("namespace", ev.Namespace),
 					log.Str("name", ev.Name),
 					log.Str("type", string(ev.Type)),
+					log.Err(err))
+			}
+		case <-retry.C:
+			if err := s.initialReconcile(ctx); err != nil {
+				s.log.Debug("Periodic volume re-reconcile had errors",
 					log.Err(err))
 			}
 		}

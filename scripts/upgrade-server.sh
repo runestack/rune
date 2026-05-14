@@ -232,6 +232,11 @@ warn_if_unit_missing_ambient() {
         log "    File caps cover this install today. To pick up newer unit"
         log "    directives, re-run with --refresh-unit (writes a fresh unit"
         log "    via 'runed print-systemd' from the upgraded binary)."
+      elif ! grep -q '^AmbientCapabilities=.*CAP_SYS_ADMIN' "$unit"; then
+        log "⚠️  $unit is missing 'CAP_SYS_ADMIN' on AmbientCapabilities."
+        log "    Cloud block-device volumes (do-volume + future) will fail"
+        log "    to mount with 'must be superuser to use mount'. Re-run"
+        log "    with --refresh-unit to pick up the newer unit directives."
       fi
       return
     fi

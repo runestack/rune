@@ -24,8 +24,8 @@ func TestRenderString_Defaults(t *testing.T) {
 		"Group=rune",
 		"ExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml",
 		"Restart=on-failure",
-		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
-		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
+		"AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN",
+		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN",
 		"[Install]",
 		"WantedBy=multi-user.target",
 	}
@@ -146,10 +146,10 @@ func TestRenderString_AmbientCapabilitiesAlwaysSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderString: %v", err)
 	}
-	if !strings.Contains(out, "AmbientCapabilities=CAP_NET_BIND_SERVICE") {
-		t.Errorf("AmbientCapabilities=CAP_NET_BIND_SERVICE must be in the rendered unit; got:\n%s", out)
+	if !strings.Contains(out, "AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN") {
+		t.Errorf("AmbientCapabilities must include CAP_NET_BIND_SERVICE + CAP_SYS_ADMIN; got:\n%s", out)
 	}
-	if !strings.Contains(out, "CapabilityBoundingSet=CAP_NET_BIND_SERVICE") {
-		t.Errorf("CapabilityBoundingSet=CAP_NET_BIND_SERVICE must be in the rendered unit; got:\n%s", out)
+	if !strings.Contains(out, "CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN") {
+		t.Errorf("CapabilityBoundingSet must include CAP_NET_BIND_SERVICE + CAP_SYS_ADMIN; got:\n%s", out)
 	}
 }

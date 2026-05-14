@@ -73,6 +73,23 @@ func (w acmeCertStoreWithReload) Delete(ctx context.Context, host string) error 
 	return w.store.Delete(ctx, host)
 }
 
+// notReadyMountResolver is the pre-agent MountResolver the orchestrator
+// is seeded with at startup. Every lookup returns ("", false) so the
+// instance controller treats every volume as "not yet mounted" and
+// retries on the next reconcile tick — the documented transient
+// condition. When the agent volumes subsystem comes up it calls
+// SetMountResolver again with its real implementation, replacing this
+// stub. Without it, the few seconds between apiServer.Start and the
+// agent's Subsystem registration race: the controller sees a nil
+// resolver, falls through to using Volume.Handle as the bind source,
+// and cloud-driver volumes (where Handle is a UUID, not a path) fail
+// with "invalid mount path". RUNE-BUG-DOVOLUME-ATTACH-NOOP-AND-MOUNT-PERMS.
+type notReadyMountResolver struct{}
+
+func (notReadyMountResolver) MountTargetFor(string) (string, bool) {
+	return "", false
+}
+
 // acmeNoopStatus discards status updates. Until the service-watch
 // wiring lands, there is no Service object to mutate; the orchestrator
 // still records state in its in-memory tracker which is enough for
@@ -475,6 +492,20 @@ func main() {
 		logger.Error("Failed to start API server", log.Err(err))
 		os.Exit(1)
 	}
+
+	// Pre-register a "not-yet-ready" MountResolver so the instance
+	// controller's first reconcile ticks (which start the moment
+	// apiServer.Start returns) don't fall back to using Volume.Handle
+	// as the bind source in the window before the agent volumes
+	// subsystem has registered its real resolver. For local-driver
+	// volumes the fallback is harmless; for do-volume / future cloud
+	// drivers the Handle is a cloud-side UUID and the bind fails with
+	// "invalid mount path". The stub returns ("", false) for every
+	// volume, which the controller treats as the documented transient
+	// "not yet mounted" condition and retries on the next tick — by
+	// which point the real resolver has replaced this stub. See
+	// internal/agent/volumes for the real implementation.
+	apiServer.GetOrchestrator().SetMountResolver(notReadyMountResolver{})
 
 	// Start the per-node agent. On single-node, the agent runs in-process
 	// and shares the control plane's Badger DB via the in-process
