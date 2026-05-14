@@ -1485,6 +1485,15 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s has no mount source", ns, name)
 	}
 
+	// Apply fsUser / fsGroup / fsMode to the mount root, idempotently.
+	// Solves the "fresh ext4 owned by root, container runs as uid N,
+	// EACCES on first write" pattern without an init-step chown. Only
+	// runs when the operator opted in — absent fields are a no-op so
+	// local-host mounts (operator-managed paths) aren't stomped on.
+	if err := applyFSOwnership(source, m.FSUser, m.FSGroup, m.FSMode); err != nil {
+		return types.ResolvedVolumeMount{}, fmt.Errorf("apply fs ownership on %s (volume %s/%s): %w", source, ns, name, err)
+	}
+
 	return types.ResolvedVolumeMount{
 		Name:            m.Name,
 		MountPath:       m.MountPath,

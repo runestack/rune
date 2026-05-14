@@ -1316,6 +1316,17 @@ type VolumeMount struct {
 	SubPath       string                 `protobuf:"bytes,4,opt,name=sub_path,json=subPath,proto3" json:"sub_path,omitempty"`
 	Claim         *VolumeClaim           `protobuf:"bytes,5,opt,name=claim,proto3" json:"claim,omitempty"`
 	ClaimTemplate *VolumeClaimTemplate   `protobuf:"bytes,6,opt,name=claim_template,json=claimTemplate,proto3" json:"claim_template,omitempty"`
+	// fs_user / fs_group / fs_mode are applied to the mount root after
+	// the volume is attached, idempotently. Optional — set to take
+	// ownership / permissions away from the default root:root 700 of a
+	// fresh ext4. Optional google.protobuf.Int32Value-style pointer
+	// semantics via the *_set sentinel: fs_user_set=false means "absent",
+	// matching the Go *int field on types.VolumeMount.
+	FsUser        int32  `protobuf:"varint,7,opt,name=fs_user,json=fsUser,proto3" json:"fs_user,omitempty"`
+	FsUserSet     bool   `protobuf:"varint,8,opt,name=fs_user_set,json=fsUserSet,proto3" json:"fs_user_set,omitempty"`
+	FsGroup       int32  `protobuf:"varint,9,opt,name=fs_group,json=fsGroup,proto3" json:"fs_group,omitempty"`
+	FsGroupSet    bool   `protobuf:"varint,10,opt,name=fs_group_set,json=fsGroupSet,proto3" json:"fs_group_set,omitempty"`
+	FsMode        string `protobuf:"bytes,11,opt,name=fs_mode,json=fsMode,proto3" json:"fs_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1390,6 +1401,41 @@ func (x *VolumeMount) GetClaimTemplate() *VolumeClaimTemplate {
 		return x.ClaimTemplate
 	}
 	return nil
+}
+
+func (x *VolumeMount) GetFsUser() int32 {
+	if x != nil {
+		return x.FsUser
+	}
+	return 0
+}
+
+func (x *VolumeMount) GetFsUserSet() bool {
+	if x != nil {
+		return x.FsUserSet
+	}
+	return false
+}
+
+func (x *VolumeMount) GetFsGroup() int32 {
+	if x != nil {
+		return x.FsGroup
+	}
+	return 0
+}
+
+func (x *VolumeMount) GetFsGroupSet() bool {
+	if x != nil {
+		return x.FsGroupSet
+	}
+	return false
+}
+
+func (x *VolumeMount) GetFsMode() string {
+	if x != nil {
+		return x.FsMode
+	}
+	return ""
 }
 
 // CreateServiceRequest represents a request to create a new service.
@@ -3020,7 +3066,7 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\x0ereclaim_policy\x18\x05 \x01(\tR\rreclaimPolicy\x1a=\n" +
 	"\x0fParametersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xeb\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfa\x02\n" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
@@ -3028,7 +3074,14 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\tread_only\x18\x03 \x01(\bR\breadOnly\x12\x19\n" +
 	"\bsub_path\x18\x04 \x01(\tR\asubPath\x12+\n" +
 	"\x05claim\x18\x05 \x01(\v2\x15.rune.api.VolumeClaimR\x05claim\x12D\n" +
-	"\x0eclaim_template\x18\x06 \x01(\v2\x1d.rune.api.VolumeClaimTemplateR\rclaimTemplate\"\x95\x01\n" +
+	"\x0eclaim_template\x18\x06 \x01(\v2\x1d.rune.api.VolumeClaimTemplateR\rclaimTemplate\x12\x17\n" +
+	"\afs_user\x18\a \x01(\x05R\x06fsUser\x12\x1e\n" +
+	"\vfs_user_set\x18\b \x01(\bR\tfsUserSet\x12\x19\n" +
+	"\bfs_group\x18\t \x01(\x05R\afsGroup\x12 \n" +
+	"\ffs_group_set\x18\n" +
+	" \x01(\bR\n" +
+	"fsGroupSet\x12\x17\n" +
+	"\afs_mode\x18\v \x01(\tR\x06fsMode\"\x95\x01\n" +
 	"\x14CreateServiceRequest\x12+\n" +
 	"\aservice\x18\x01 \x01(\v2\x11.rune.api.ServiceR\aservice\x12%\n" +
 	"\x0edeployment_tag\x18\x02 \x01(\tR\rdeploymentTag\x12)\n" +

@@ -519,6 +519,15 @@ func ServiceToProto(service *types.Service) *generated.Service {
 				MountPath: m.MountPath,
 				ReadOnly:  m.ReadOnly,
 				SubPath:   m.SubPath,
+				FsMode:    m.FSMode,
+			}
+			if m.FSUser != nil {
+				pv.FsUser = utils.ToInt32NonNegative(*m.FSUser)
+				pv.FsUserSet = true
+			}
+			if m.FSGroup != nil {
+				pv.FsGroup = utils.ToInt32NonNegative(*m.FSGroup)
+				pv.FsGroupSet = true
 			}
 			if m.Claim != nil {
 				pv.Claim = &generated.VolumeClaim{Name: m.Claim.Name}
@@ -790,6 +799,15 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 				MountPath: m.MountPath,
 				ReadOnly:  m.ReadOnly,
 				SubPath:   m.SubPath,
+				FSMode:    m.FsMode,
+			}
+			if m.FsUserSet {
+				u := int(m.FsUser)
+				vm.FSUser = &u
+			}
+			if m.FsGroupSet {
+				g := int(m.FsGroup)
+				vm.FSGroup = &g
 			}
 			if m.Claim != nil {
 				vm.Claim = &types.VolumeClaim{Name: m.Claim.Name}

@@ -196,6 +196,23 @@ type VolumeMount struct {
 
 	// ClaimTemplate provisions per-replica volumes, k8s-StatefulSet style.
 	ClaimTemplate *VolumeClaimTemplate `json:"claimTemplate,omitempty" yaml:"claimTemplate,omitempty"`
+
+	// FSUser, if set, owns the mount root after the volume is attached.
+	// Pointer so absent/0 are distinguishable. Solves the "fresh ext4
+	// is owned by root, container runs as uid 1000, EACCES on first
+	// write" pattern without an init step. Applied idempotently once
+	// per reconcile — the chown is skipped when the current uid
+	// already matches.
+	FSUser *int `json:"fsUser,omitempty" yaml:"fsUser,omitempty"`
+
+	// FSGroup, if set, owns the mount root after the volume is
+	// attached. Same idempotent semantics as FSUser.
+	FSGroup *int `json:"fsGroup,omitempty" yaml:"fsGroup,omitempty"`
+
+	// FSMode, if set, is chmod'd onto the mount root. Octal string
+	// ("0775", "0750") so leading zero survives YAML parsing.
+	// Idempotent — applied only when current mode differs.
+	FSMode string `json:"fsMode,omitempty" yaml:"fsMode,omitempty"`
 }
 
 // VolumeClaim is a reference to an existing Volume.

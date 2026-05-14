@@ -286,6 +286,17 @@ message VolumeMount {
   string sub_path = 4;
   VolumeClaim claim = 5;
   VolumeClaimTemplate claim_template = 6;
+  // fs_user / fs_group / fs_mode are applied to the mount root after
+  // the volume is attached, idempotently. Optional — set to take
+  // ownership / permissions away from the default root:root 700 of a
+  // fresh ext4. Optional google.protobuf.Int32Value-style pointer
+  // semantics via the *_set sentinel: fs_user_set=false means "absent",
+  // matching the Go *int field on types.VolumeMount.
+  int32 fs_user = 7;
+  bool fs_user_set = 8;
+  int32 fs_group = 9;
+  bool fs_group_set = 10;
+  string fs_mode = 11;
 }
 
 // CreateServiceRequest represents a request to create a new service.
