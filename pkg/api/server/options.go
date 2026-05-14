@@ -9,6 +9,7 @@ import (
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/runner/manager"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"google.golang.org/grpc"
 )
@@ -68,6 +69,12 @@ type Options struct {
 	// defaultStorageClass knob. *string so empty-string ("no cluster
 	// default") is distinguishable from unset.
 	StorageDefaultStorageClass *string
+
+	// StorageSecretLookup resolves `secret:...` references inside
+	// StorageClass / Volume parameters before they reach the storage
+	// drivers. Wired by cmd/runed against the store-backed SecretRepo.
+	// See RUNE-200 PR 3 / pkg/storage/driverparams.
+	StorageSecretLookup driverparams.SecretLookup
 
 	// StoragePreserveOnDelete mirrors the runefile [storage].
 	// preserveOnDelete knob. When true the local driver treats
@@ -205,5 +212,17 @@ func WithStorageDefaultStorageClass(name *string) Option {
 func WithStoragePreserveOnDelete(preserve bool) Option {
 	return func(opts *Options) {
 		opts.StoragePreserveOnDelete = preserve
+	}
+}
+
+// WithStorageSecretLookup threads a SecretLookup function through to
+// the orchestrator's volume + snapshot controllers, where it resolves
+// `secret:...` references inside StorageClass / Volume parameter maps
+// before drivers see them. cmd/runed wires a store-backed implementation
+// here; tests typically pass nil (literal token paths only). See
+// RUNE-200 PR 3.
+func WithStorageSecretLookup(lookup driverparams.SecretLookup) Option {
+	return func(opts *Options) {
+		opts.StorageSecretLookup = lookup
 	}
 }

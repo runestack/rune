@@ -141,7 +141,8 @@ func (s *APIServer) Start() error {
 		// callers keep their previous behaviour.
 		if len(s.options.StorageDriverConfigs) > 0 ||
 			s.options.StorageDefaultStorageClass != nil ||
-			s.options.StoragePreserveOnDelete {
+			s.options.StoragePreserveOnDelete ||
+			s.options.StorageSecretLookup != nil {
 			s.orchestrator, err = orchestrator.NewOrchestrator(orchestrator.OrchestratorOptions{
 				Store:                   s.store,
 				Logger:                  s.logger,
@@ -149,6 +150,7 @@ func (s *APIServer) Start() error {
 				StorageDriverConfigs:    s.options.StorageDriverConfigs,
 				DefaultStorageClass:     s.options.StorageDefaultStorageClass,
 				StoragePreserveOnDelete: s.options.StoragePreserveOnDelete,
+				StorageSecretLookup:     s.options.StorageSecretLookup,
 			})
 		} else {
 			s.orchestrator, err = orchestrator.NewDefaultOrchestrator(s.store, s.logger, s.runnerManager)

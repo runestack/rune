@@ -40,6 +40,7 @@ import (
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -69,6 +70,13 @@ type Config struct {
 	// Lookup resolves a Volume to a concrete Driver instance.
 	// Required.
 	Lookup DriverLookup
+
+	// SecretLookup resolves `secret:...` references inside the
+	// merged driver parameters before Attach / Mount / Unmount /
+	// Detach calls. nil disables resolution; secret-ref-shaped
+	// values then fail the operation with a clear error. See
+	// RUNE-200 PR 3.
+	SecretLookup driverparams.SecretLookup
 
 	// MountRoot is the per-node directory under which mount targets
 	// live. Defaults to DefaultMountRoot.
@@ -515,7 +523,10 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) err
 //  3. Neither → volume-local Parameters only; drivers that strictly
 //     require class context fail with their own error.
 //
-// See RUNE-200 PR 2.
+// After resolving the parameter chain, any `secret:...` refs in the
+// resulting map are resolved to plaintext via cfg.SecretLookup. The
+// driver therefore never sees a secret reference, only literal values.
+// See RUNE-200 PR 2 + PR 3.
 func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driver.OpContext, error) {
 	opctx := driver.OpContext{
 		Volume:     vol,
@@ -523,7 +534,7 @@ func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driv
 	}
 	if vol.StorageClassName == "" {
 		opctx.Parameters = mergeParameters(nil, vol.Parameters)
-		return opctx, nil
+		return s.resolveSecretsOnOpContext(ctx, vol, opctx)
 	}
 	var class types.StorageClass
 	if err := s.cfg.Store.Get(ctx, types.ResourceTypeStorageClass, "", vol.StorageClassName, &class); err != nil {
@@ -543,10 +554,23 @@ func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driv
 			log.Str("storageClass", vol.StorageClassName),
 			log.Str("source", source),
 			log.Err(err))
-		return opctx, nil
+		return s.resolveSecretsOnOpContext(ctx, vol, opctx)
 	}
 	opctx.StorageClass = &class
 	opctx.Parameters = mergeParameters(class.Parameters, vol.Parameters)
+	return s.resolveSecretsOnOpContext(ctx, vol, opctx)
+}
+
+// resolveSecretsOnOpContext walks opctx.Parameters and replaces any
+// `secret:...` ref with the resolved secret value via cfg.SecretLookup.
+// Returns the opctx unchanged on success or a wrapped error naming the
+// offending volume so the agent log identifies the row.
+func (s *Subsystem) resolveSecretsOnOpContext(ctx context.Context, vol *types.Volume, opctx driver.OpContext) (driver.OpContext, error) {
+	resolved, err := driverparams.Resolve(ctx, opctx.Parameters, vol.Namespace, s.cfg.SecretLookup)
+	if err != nil {
+		return driver.OpContext{}, fmt.Errorf("agent.volumes: resolve secret refs for %s/%s: %w", vol.Namespace, vol.Name, err)
+	}
+	opctx.Parameters = resolved
 	return opctx, nil
 }
 

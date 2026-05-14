@@ -9,6 +9,7 @@ import (
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -29,12 +30,18 @@ type SnapshotControllerOptions struct {
 	Store         store.Store
 	Logger        log.Logger
 	DriverConfigs map[string]map[string]any
+
+	// SecretLookup resolves `secret:...` references inside the
+	// merged driver parameters before Snapshot / DeleteSnapshot
+	// calls. See RUNE-200 PR 3 and pkg/storage/driverparams.
+	SecretLookup driverparams.SecretLookup
 }
 
 type snapshotController struct {
 	store         store.Store
 	logger        log.Logger
 	driverConfigs map[string]map[string]any
+	secretLookup  driverparams.SecretLookup
 
 	driverMu sync.RWMutex
 	drivers  map[string]driver.Driver
@@ -58,6 +65,7 @@ func NewSnapshotController(opts SnapshotControllerOptions) (SnapshotController, 
 		store:         opts.Store,
 		logger:        opts.Logger.WithComponent("snapshot-controller"),
 		driverConfigs: opts.DriverConfigs,
+		secretLookup:  opts.SecretLookup,
 		drivers:       make(map[string]driver.Driver),
 	}, nil
 }
@@ -187,10 +195,14 @@ func (c *snapshotController) create(ctx context.Context, snap *types.Snapshot) e
 	if err := c.updateStatus(ctx, snap, types.SnapshotPhaseCreating, "", ""); err != nil {
 		return err
 	}
+	resolved, err := driverparams.Resolve(ctx, mergeParameters(class.Parameters, src.Parameters), src.Namespace, c.secretLookup)
+	if err != nil {
+		return c.markFailed(ctx, snap, "InvalidParameters", err.Error())
+	}
 	opctx := driver.OpContext{
 		StorageClass: &class,
 		Volume:       &src,
-		Parameters:   mergeParameters(class.Parameters, src.Parameters),
+		Parameters:   resolved,
 	}
 	handle, err := d.Snapshot(ctx, opctx, driver.SnapshotRequest{
 		Handle:   driver.VolumeHandle(src.Handle),
@@ -212,13 +224,16 @@ func (c *snapshotController) delete(ctx context.Context, snap *types.Snapshot) e
 	if err != nil {
 		return c.markFailed(ctx, snap, "DriverUnavailable", err.Error())
 	}
-	// Best-effort context build: drivers that don't need class config
-	// (local) tolerate the empty Parameters map; cloud drivers may
-	// already have their auth in runefile-level config and don't fail
-	// here even if the source volume/class are gone. PR 2 will snapshot
-	// the driver-relevant params onto the Snapshot row itself so this
-	// remains correct after orphaning.
+	// Best-effort context build. snapshotOpContext walks the source
+	// volume + class fallback chain (live class → volume snapshot →
+	// volume-only). The resulting Parameters map carries unresolved
+	// secret refs; resolve them now so the driver sees plaintext.
 	opctx := c.snapshotOpContext(ctx, snap)
+	resolved, err := driverparams.Resolve(ctx, opctx.Parameters, snap.Namespace, c.secretLookup)
+	if err != nil {
+		return c.markFailed(ctx, snap, "InvalidParameters", err.Error())
+	}
+	opctx.Parameters = resolved
 	if err := d.DeleteSnapshot(ctx, opctx, driver.SnapshotHandle(snap.Handle)); err != nil {
 		return c.markFailed(ctx, snap, "DeleteSnapshotFailed", err.Error())
 	}

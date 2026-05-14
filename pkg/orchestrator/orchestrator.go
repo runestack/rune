@@ -9,6 +9,7 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/controllers"
 	"github.com/runestack/rune/pkg/runner/manager"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -122,6 +123,14 @@ type OrchestratorOptions struct {
 	// knob. When true, the volume controller demotes ReclaimPolicy:delete
 	// to retain for volumes provisioned by the in-tree "local" driver.
 	StoragePreserveOnDelete bool
+
+	// StorageSecretLookup resolves `secret:...` references inside
+	// StorageClass / Volume parameter maps before the storage drivers
+	// see them. Wired by cmd/runed against the store-backed SecretRepo.
+	// Nil disables resolution; secret-ref-shaped values then fail the
+	// containing operation with a clear error. See RUNE-200 PR 3 and
+	// pkg/storage/driverparams.
+	StorageSecretLookup driverparams.SecretLookup
 }
 
 // NewDefaultOrchestrator creates a new orchestrator with default options
@@ -188,6 +197,7 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		Store:               options.Store,
 		Logger:              options.Logger,
 		DriverConfigs:       options.StorageDriverConfigs,
+		SecretLookup:        options.StorageSecretLookup,
 		DefaultStorageClass: options.DefaultStorageClass,
 		PreserveOnDelete:    options.StoragePreserveOnDelete,
 	})
@@ -200,6 +210,7 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		Store:         options.Store,
 		Logger:        options.Logger,
 		DriverConfigs: options.StorageDriverConfigs,
+		SecretLookup:  options.StorageSecretLookup,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot controller: %w", err)

@@ -30,6 +30,7 @@ import (
 	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/networking/vip"
 	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/types"
@@ -621,10 +622,11 @@ func main() {
 			driverConfigs = appCfg.Storage.Drivers
 		}
 		volSub, vsErr := volsub.New(volsub.Config{
-			Store:  stateStore,
-			NodeID: a.Identity().NodeID,
-			Lookup: makeAgentDriverLookup(stateStore, driverConfigs),
-			Logger: logger.WithComponent("agent.volumes"),
+			Store:        stateStore,
+			NodeID:       a.Identity().NodeID,
+			Lookup:       makeAgentDriverLookup(stateStore, driverConfigs),
+			SecretLookup: newStoreSecretLookup(stateStore),
+			Logger:       logger.WithComponent("agent.volumes"),
 		})
 		if vsErr != nil {
 			return fmt.Errorf("agent volumes: %w", vsErr)
@@ -884,34 +886,18 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 	return st, appCfg, storeDir, nil
 }
 
-// injectDOVolumeSecretLookup wires a SecretRepo-backed SecretLookup
-// into the do-volume driver's runefile config under the reserved key
-// dovolume.configKeySecretLookup. The closure resolves apiTokenSecretRef
-// at every API call so DO token rotation takes effect on the next
-// reconcile without restarting runed.
+// newStoreSecretLookup returns a SecretRepo-backed SecretLookup that
+// resolves a (namespace, name, key) triple to the plaintext value of a
+// Rune Secret. Shared by the volume / snapshot controllers and the
+// node-side agent volume subsystem so secret-ref-shaped values in
+// StorageClass / Volume parameters resolve identically wherever they
+// land. See RUNE-200 PR 3 / pkg/storage/driverparams.
 //
-// The same Drivers map is threaded into both the agent driver lookup
-// (Attach/Mount/Unmount/Detach) and the API-server's volume controller
-// (Provision/Delete/Snapshot/Restore/Expand), so injecting once here
-// covers both paths. No-op when the operator hasn't declared the
-// driver — we don't want to allocate an empty stanza for clusters
-// that aren't on DO.
-func injectDOVolumeSecretLookup(appCfg *config.Config, st store.Store) {
-	if appCfg == nil {
-		return
-	}
-	if _, present := appCfg.Storage.Drivers[dovolume.DriverName]; !present {
-		// Operator has not configured do-volume; nothing to wire.
-		return
-	}
-	if appCfg.Storage.Drivers == nil {
-		appCfg.Storage.Drivers = map[string]map[string]any{}
-	}
-	if appCfg.Storage.Drivers[dovolume.DriverName] == nil {
-		appCfg.Storage.Drivers[dovolume.DriverName] = map[string]any{}
-	}
+// The closure performs a fresh lookup on every call so secret rotation
+// takes effect on the next reconcile without restarting runed.
+func newStoreSecretLookup(st store.Store) driverparams.SecretLookup {
 	repo := repos.NewSecretRepo(st)
-	lookup := dovolume.SecretLookup(func(ctx context.Context, ns, name, key string) (string, error) {
+	return func(ctx context.Context, ns, name, key string) (string, error) {
 		sec, err := repo.Get(ctx, ns, name)
 		if err != nil {
 			return "", err
@@ -921,9 +907,38 @@ func injectDOVolumeSecretLookup(appCfg *config.Config, st store.Store) {
 			return "", fmt.Errorf("secret %s/%s has no key %q", ns, name, key)
 		}
 		return v, nil
+	}
+}
+
+// injectDOVolumeSecretLookup wires a SecretRepo-backed SecretLookup
+// into the do-volume driver's runefile config under the reserved key
+// dovolume.configKeySecretLookup, for the legacy
+// `[storage.drivers.do-volume] apiTokenSecretRef` path. Operators on
+// the new path (apiTokenSecretRef on StorageClass.parameters) don't
+// need this; the controller-side resolver wired via
+// OrchestratorOptions.StorageSecretLookup covers them. Retained for
+// backwards compatibility with pre-RUNE-200 runefiles. No-op when the
+// operator has not declared the do-volume driver.
+func injectDOVolumeSecretLookup(appCfg *config.Config, st store.Store) {
+	if appCfg == nil {
+		return
+	}
+	if _, present := appCfg.Storage.Drivers[dovolume.DriverName]; !present {
+		return
+	}
+	if appCfg.Storage.Drivers == nil {
+		appCfg.Storage.Drivers = map[string]map[string]any{}
+	}
+	if appCfg.Storage.Drivers[dovolume.DriverName] == nil {
+		appCfg.Storage.Drivers[dovolume.DriverName] = map[string]any{}
+	}
+	storeLookup := newStoreSecretLookup(st)
+	// Adapt the driverparams.SecretLookup back to the
+	// dovolume.SecretLookup nominal type — same signature, different
+	// declared type.
+	lookup := dovolume.SecretLookup(func(ctx context.Context, ns, name, key string) (string, error) {
+		return storeLookup(ctx, ns, name, key)
 	})
-	// configKeySecretLookup is unexported; use the public string by
-	// agreement with the dovolume package.
 	appCfg.Storage.Drivers[dovolume.DriverName][dovolume.ConfigKeySecretLookup] = lookup
 }
 
@@ -993,6 +1008,10 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 	if appCfg != nil && appCfg.Storage.PreserveOnDelete {
 		opts = append(opts, server.WithStoragePreserveOnDelete(true))
 	}
+	// Resolver for `secret:...` refs in StorageClass / Volume parameters.
+	// See RUNE-200 PR 3 — drivers receive plaintext via OpContext.Parameters
+	// regardless of where the ref lives in the parameter chain.
+	opts = append(opts, server.WithStorageSecretLookup(newStoreSecretLookup(st)))
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
 	}

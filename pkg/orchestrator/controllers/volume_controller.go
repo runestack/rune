@@ -9,6 +9,7 @@ import (
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -45,6 +46,14 @@ type VolumeControllerOptions struct {
 	Logger        log.Logger
 	DriverConfigs map[string]map[string]any
 
+	// SecretLookup resolves `secret:<name>[.namespace.rune]/<key>`
+	// references inside StorageClass / Volume parameters before the
+	// controller calls the driver. Wired by cmd/runed against the
+	// store-backed SecretRepo so rotation takes effect on the next
+	// reconcile. nil disables resolution — secret-ref-shaped values
+	// then fail Provision with a clear error (see RUNE-200 PR 3).
+	SecretLookup driverparams.SecretLookup
+
 	// DefaultStorageClass mirrors the runefile [storage].defaultStorageClass
 	// knob. nil keeps the built-in default ("local"); a non-nil pointer
 	// to a non-empty name promotes that class to Default:true at boot
@@ -80,6 +89,7 @@ type volumeController struct {
 	store         store.Store
 	logger        log.Logger
 	driverConfigs map[string]map[string]any
+	secretLookup  driverparams.SecretLookup
 
 	// Operator-supplied [storage] knobs.
 	defaultStorageClass *string
@@ -140,6 +150,7 @@ func NewVolumeController(opts VolumeControllerOptions) (VolumeController, error)
 		store:               opts.Store,
 		logger:              opts.Logger.WithComponent("volume-controller"),
 		driverConfigs:       opts.DriverConfigs,
+		secretLookup:        opts.SecretLookup,
 		defaultStorageClass: opts.DefaultStorageClass,
 		preserveOnDelete:    opts.PreserveOnDelete,
 		drivers:             make(map[string]driver.Driver),
@@ -331,10 +342,16 @@ func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) err
 		return c.markFailed(ctx, vol, "InvalidSize", err.Error())
 	}
 
+	resolved, err := driverparams.Resolve(ctx, merged, vol.Namespace, c.secretLookup)
+	if err != nil {
+		// Failure to resolve a secret ref is a spec error in practice
+		// (typo / missing secret). Mark Failed; retry won't help.
+		return c.markFailed(ctx, vol, "InvalidParameters", err.Error())
+	}
 	opctx := driver.OpContext{
 		StorageClass: class,
 		Volume:       vol,
-		Parameters:   merged,
+		Parameters:   resolved,
 	}
 	handle, err := d.Provision(ctx, opctx, driver.ProvisionRequest{
 		SizeBytes: sizeBytes,
@@ -523,14 +540,20 @@ func (c *volumeController) handleDeleted(ctx context.Context, vol *types.Volume)
 	if err != nil {
 		return fmt.Errorf("reclaim: driver %q: %w", driverName, err)
 	}
-	// Build the OpContext for Delete. When the class is gone (orphan
-	// reclaim), StorageClass is nil and Parameters is the volume-local
-	// snapshot only. PR 2 will fold in Volume.Metadata.DriverParameters
-	// for the orphan case.
+	// Build the OpContext for Delete. When the class is gone, fall
+	// back to vol.DriverParameters (PR 2 snapshot) layered with
+	// vol.Parameters; otherwise merge live class + volume parameters.
+	// Resolve any secret refs in the result before handing to the
+	// driver so it sees plaintext values (PR 3).
+	params := reclaimParameters(class, vol)
+	resolved, err := driverparams.Resolve(ctx, params, vol.Namespace, c.secretLookup)
+	if err != nil {
+		return fmt.Errorf("reclaim: resolve driver parameters: %w", err)
+	}
 	opctx := driver.OpContext{
 		StorageClass: class,
 		Volume:       vol,
-		Parameters:   reclaimParameters(class, vol),
+		Parameters:   resolved,
 	}
 	if err := d.Delete(ctx, opctx, driver.VolumeHandle(vol.Handle)); err != nil {
 		return fmt.Errorf("reclaim: driver Delete: %w", err)
@@ -904,10 +927,14 @@ func (c *volumeController) restoreFromSnapshot(
 	if err != nil {
 		return "", err
 	}
+	resolved, err := driverparams.Resolve(ctx, merged, target.Namespace, c.secretLookup)
+	if err != nil {
+		return "", fmt.Errorf("restoreFromSnapshot: resolve driver parameters: %w", err)
+	}
 	opctx := driver.OpContext{
 		StorageClass: class,
 		Volume:       target,
-		Parameters:   merged,
+		Parameters:   resolved,
 	}
 	return d.RestoreFromSnapshot(ctx, opctx, driver.RestoreRequest{
 		Source:       &snap,
