@@ -343,6 +343,9 @@ Wants=network-online.target
 Type=simple
 User=${RUNE_USER}
 Group=${RUNE_GROUP}
+# Grants access to /var/run/docker.sock without putting docker as
+# the primary group of the rune user. Required for the Docker runner.
+SupplementaryGroups=docker
 # Ensure non-interactive stdin under systemd
 StandardInput=null
 # --config makes the resolved runefile path explicit and survives
@@ -354,27 +357,25 @@ ExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
-# Allow binding to low ports (:80, :443) when running as the rune
-# user. The capability is also granted on the binary via setcap when
-# the installer is invoked with --edge; this directive is a belt-and-
-# braces measure for systemd-managed restarts.
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Capabilities the agent needs while running as the rune user:
+#   - CAP_NET_BIND_SERVICE — bind :80 / :443 for the ingress.
+#   - CAP_SYS_ADMIN        — mount(2) for cloud block-device drivers
+#     (do-volume + future) which attach a device and mount it under
+#     /var/lib/rune/mounts/. Without it, /bin/mount fails with
+#     "must be superuser to use mount" and every cloud volume gets
+#     stuck post-Attach.
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
 
 [Install]
 WantedBy=multi-user.target
 UNIT
   fi
 
-  # Ensure Docker group access
-  if getent group docker >/dev/null 2>&1; then
-    mkdir -p /etc/systemd/system/runed.service.d
-    cat >/etc/systemd/system/runed.service.d/override.conf <<EOF
-[Service]
-SupplementaryGroups=docker
-EOF
-  fi
-  
+  # SupplementaryGroups=docker is baked into the canonical unit
+  # above; no drop-in override is needed.
+
+
   systemctl daemon-reload
   systemctl enable --now runed
   log "Systemd service installed and enabled"

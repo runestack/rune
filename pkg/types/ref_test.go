@@ -66,3 +66,72 @@ func TestParseResourceRef_Table(t *testing.T) {
 		}
 	}
 }
+
+func TestParseResourceRefWithDefaults(t *testing.T) {
+	tests := []struct {
+		name        string
+		in          string
+		defaultType ResourceType
+		defaultNS   string
+		want        ResourceRef
+		wantErr     bool
+	}{
+		{
+			name:        "bare name uses defaults",
+			in:          "ghcr-credentials",
+			defaultType: ResourceTypeSecret,
+			defaultNS:   "system",
+			want:        ResourceRef{Type: ResourceTypeSecret, Namespace: "system", Name: "ghcr-credentials"},
+		},
+		{
+			name:        "minimal shorthand fills namespace default",
+			in:          "secret:ghcr-credentials",
+			defaultType: ResourceTypeSecret,
+			defaultNS:   "system",
+			want:        ResourceRef{Type: ResourceTypeSecret, Namespace: "system", Name: "ghcr-credentials"},
+		},
+		{
+			name:        "fqdn keeps its own namespace",
+			in:          "secret:ghcr-credentials.platform.rune",
+			defaultType: ResourceTypeSecret,
+			defaultNS:   "system",
+			want:        ResourceRef{Type: ResourceTypeSecret, Namespace: "platform", Name: "ghcr-credentials"},
+		},
+		{
+			name:        "full URI ignores defaults",
+			in:          "rune://secret/platform/ghcr-credentials",
+			defaultType: ResourceTypeSecret,
+			defaultNS:   "system",
+			want:        ResourceRef{Type: ResourceTypeSecret, Namespace: "platform", Name: "ghcr-credentials"},
+		},
+		{
+			name:        "bare name with slash is rejected",
+			in:          "system/ghcr-credentials",
+			defaultType: ResourceTypeSecret,
+			defaultNS:   "system",
+			wantErr:     true,
+		},
+		{
+			name:    "empty input rejected",
+			in:      "",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseResourceRefWithDefaults(tt.in, tt.defaultType, tt.defaultNS)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %#v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("\n got:  %#v\n want: %#v", got, tt.want)
+			}
+		})
+	}
+}

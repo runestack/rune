@@ -89,6 +89,20 @@ type Volume struct {
 	// StorageClass.Parameters. Example: hostPath for the local-host driver.
 	Parameters map[string]string `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 
+	// DriverParameters is a controller-owned snapshot of
+	// `mergeParameters(StorageClass.Parameters, Volume.Parameters)`
+	// captured at successful Provision time. The reclaim path
+	// (Delete) and the node agent (Detach, Unmount) consult it when
+	// the live StorageClass has been deleted before its volumes —
+	// drivers like do-volume need region / auth references for those
+	// calls and would otherwise have nothing to work from.
+	//
+	// Always controller-managed; users SHOULD NOT set this in cast
+	// files. Excluded from secret-bearing fields per design — secret
+	// references survive here but their resolved values do not. See
+	// RUNE-200 PR 2.
+	DriverParameters map[string]string `json:"driverParameters,omitempty" yaml:"driverParameters,omitempty"`
+
 	// SnapshotSchedule, when set, instructs the controller to create
 	// scheduled snapshots via the worker pool.
 	SnapshotSchedule *SnapshotSchedule `json:"snapshotSchedule,omitempty" yaml:"snapshotSchedule,omitempty"`
@@ -182,6 +196,23 @@ type VolumeMount struct {
 
 	// ClaimTemplate provisions per-replica volumes, k8s-StatefulSet style.
 	ClaimTemplate *VolumeClaimTemplate `json:"claimTemplate,omitempty" yaml:"claimTemplate,omitempty"`
+
+	// FSUser, if set, owns the mount root after the volume is attached.
+	// Pointer so absent/0 are distinguishable. Solves the "fresh ext4
+	// is owned by root, container runs as uid 1000, EACCES on first
+	// write" pattern without an init step. Applied idempotently once
+	// per reconcile — the chown is skipped when the current uid
+	// already matches.
+	FSUser *int `json:"fsUser,omitempty" yaml:"fsUser,omitempty"`
+
+	// FSGroup, if set, owns the mount root after the volume is
+	// attached. Same idempotent semantics as FSUser.
+	FSGroup *int `json:"fsGroup,omitempty" yaml:"fsGroup,omitempty"`
+
+	// FSMode, if set, is chmod'd onto the mount root. Octal string
+	// ("0775", "0750") so leading zero survives YAML parsing.
+	// Idempotent — applied only when current mode differs.
+	FSMode string `json:"fsMode,omitempty" yaml:"fsMode,omitempty"`
 }
 
 // VolumeClaim is a reference to an existing Volume.

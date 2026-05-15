@@ -7,8 +7,10 @@ import (
 	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
+	"github.com/runestack/rune/pkg/orchestrator/controllers"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/runner/manager"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"google.golang.org/grpc"
 )
@@ -69,10 +71,24 @@ type Options struct {
 	// default") is distinguishable from unset.
 	StorageDefaultStorageClass *string
 
+	// StorageSecretLookup resolves `secret:...` references inside
+	// StorageClass / Volume parameters before they reach the storage
+	// drivers. Wired by cmd/runed against the store-backed SecretRepo.
+	// See RUNE-200 PR 3 / pkg/storage/driverparams.
+	StorageSecretLookup driverparams.SecretLookup
+
 	// StoragePreserveOnDelete mirrors the runefile [storage].
 	// preserveOnDelete knob. When true the local driver treats
 	// ReclaimPolicy:delete as retain.
 	StoragePreserveOnDelete bool
+
+	// InitialMountResolver, if set, is installed on the instance
+	// controller before the orchestrator's first reconcile tick. Lets
+	// cmd/runed pre-seed a never-ready stub so the production window
+	// between orchestrator start and agent.volumes registering the
+	// real resolver returns transient "not yet mounted" errors instead
+	// of falling back to Volume.Handle.
+	InitialMountResolver controllers.MountResolver
 }
 
 // Option is a function that configures options.
@@ -205,5 +221,31 @@ func WithStorageDefaultStorageClass(name *string) Option {
 func WithStoragePreserveOnDelete(preserve bool) Option {
 	return func(opts *Options) {
 		opts.StoragePreserveOnDelete = preserve
+	}
+}
+
+// WithStorageSecretLookup threads a SecretLookup function through to
+// the orchestrator's volume + snapshot controllers, where it resolves
+// `secret:...` references inside StorageClass / Volume parameter maps
+// before drivers see them. cmd/runed wires a store-backed implementation
+// here; tests typically pass nil (literal token paths only). See
+// RUNE-200 PR 3.
+func WithStorageSecretLookup(lookup driverparams.SecretLookup) Option {
+	return func(opts *Options) {
+		opts.StorageSecretLookup = lookup
+	}
+}
+
+// WithInitialMountResolver pre-installs a MountResolver on the
+// instance controller before the orchestrator's first reconcile.
+// cmd/runed passes a never-ready stub so the production startup
+// window between orchestrator start and agent.volumes registering
+// the real resolver returns transient "not yet mounted" errors —
+// rather than falling back to Volume.Handle as the bind source,
+// which is a UUID for cloud drivers and a fast-path that's correct
+// only for local-driver tests.
+func WithInitialMountResolver(resolver controllers.MountResolver) Option {
+	return func(opts *Options) {
+		opts.InitialMountResolver = resolver
 	}
 }

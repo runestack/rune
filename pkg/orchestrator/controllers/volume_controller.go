@@ -9,6 +9,7 @@ import (
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -45,6 +46,14 @@ type VolumeControllerOptions struct {
 	Logger        log.Logger
 	DriverConfigs map[string]map[string]any
 
+	// SecretLookup resolves `secret:<name>[.namespace.rune]/<key>`
+	// references inside StorageClass / Volume parameters before the
+	// controller calls the driver. Wired by cmd/runed against the
+	// store-backed SecretRepo so rotation takes effect on the next
+	// reconcile. nil disables resolution — secret-ref-shaped values
+	// then fail Provision with a clear error (see RUNE-200 PR 3).
+	SecretLookup driverparams.SecretLookup
+
 	// DefaultStorageClass mirrors the runefile [storage].defaultStorageClass
 	// knob. nil keeps the built-in default ("local"); a non-nil pointer
 	// to a non-empty name promotes that class to Default:true at boot
@@ -80,6 +89,7 @@ type volumeController struct {
 	store         store.Store
 	logger        log.Logger
 	driverConfigs map[string]map[string]any
+	secretLookup  driverparams.SecretLookup
 
 	// Operator-supplied [storage] knobs.
 	defaultStorageClass *string
@@ -140,6 +150,7 @@ func NewVolumeController(opts VolumeControllerOptions) (VolumeController, error)
 		store:               opts.Store,
 		logger:              opts.Logger.WithComponent("volume-controller"),
 		driverConfigs:       opts.DriverConfigs,
+		secretLookup:        opts.SecretLookup,
 		defaultStorageClass: opts.DefaultStorageClass,
 		preserveOnDelete:    opts.PreserveOnDelete,
 		drivers:             make(map[string]driver.Driver),
@@ -331,17 +342,30 @@ func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) err
 		return c.markFailed(ctx, vol, "InvalidSize", err.Error())
 	}
 
-	handle, err := d.Provision(ctx, driver.ProvisionRequest{
-		Volume:           vol,
-		StorageClass:     class,
-		MergedParameters: merged,
-		SizeBytes:        sizeBytes,
+	resolved, err := driverparams.Resolve(ctx, merged, vol.Namespace, c.secretLookup)
+	if err != nil {
+		// Failure to resolve a secret ref is a spec error in practice
+		// (typo / missing secret). Mark Failed; retry won't help.
+		return c.markFailed(ctx, vol, "InvalidParameters", err.Error())
+	}
+	opctx := driver.OpContext{
+		StorageClass: class,
+		Volume:       vol,
+		Parameters:   resolved,
+	}
+	handle, err := d.Provision(ctx, opctx, driver.ProvisionRequest{
+		SizeBytes: sizeBytes,
 	})
 	if err != nil {
 		return c.handleProvisionFail(ctx, vol, err)
 	}
 
 	vol.Handle = string(handle)
+	// Snapshot the merged driver parameters onto the Volume so that
+	// reclaim Delete / agent Detach / agent Unmount have something to
+	// consult even if the StorageClass is deleted before its volumes.
+	// Stores a copy so subsequent mutations to `merged` don't leak.
+	vol.DriverParameters = copyStringMap(merged)
 	c.clearRetry(volumeKey(vol.Namespace, vol.Name))
 	return c.updateStatus(ctx, vol, types.VolumeStatusAvailable, "", "")
 }
@@ -489,8 +513,10 @@ func (c *volumeController) handleDeleted(ctx context.Context, vol *types.Volume)
 	// it may already be gone if the operator deleted both at once. Fall
 	// back to the volume's parameters / cached driver.
 	driverName := ""
-	if class, err := c.resolveStorageClass(ctx, vol); err == nil {
-		driverName = class.Driver
+	var class *types.StorageClass
+	if c, err := c.resolveStorageClass(ctx, vol); err == nil {
+		class = c
+		driverName = c.Driver
 	}
 	if driverName == "" {
 		c.logger.Warn("Cannot resolve driver for reclaim; leaving handle in place",
@@ -514,7 +540,22 @@ func (c *volumeController) handleDeleted(ctx context.Context, vol *types.Volume)
 	if err != nil {
 		return fmt.Errorf("reclaim: driver %q: %w", driverName, err)
 	}
-	if err := d.Delete(ctx, driver.VolumeHandle(vol.Handle)); err != nil {
+	// Build the OpContext for Delete. When the class is gone, fall
+	// back to vol.DriverParameters (PR 2 snapshot) layered with
+	// vol.Parameters; otherwise merge live class + volume parameters.
+	// Resolve any secret refs in the result before handing to the
+	// driver so it sees plaintext values (PR 3).
+	params := reclaimParameters(class, vol)
+	resolved, err := driverparams.Resolve(ctx, params, vol.Namespace, c.secretLookup)
+	if err != nil {
+		return fmt.Errorf("reclaim: resolve driver parameters: %w", err)
+	}
+	opctx := driver.OpContext{
+		StorageClass: class,
+		Volume:       vol,
+		Parameters:   resolved,
+	}
+	if err := d.Delete(ctx, opctx, driver.VolumeHandle(vol.Handle)); err != nil {
 		return fmt.Errorf("reclaim: driver Delete: %w", err)
 	}
 	c.logger.Info("Reclaimed volume",
@@ -886,13 +927,19 @@ func (c *volumeController) restoreFromSnapshot(
 	if err != nil {
 		return "", err
 	}
-	return d.RestoreFromSnapshot(ctx, driver.RestoreRequest{
-		Source:           &snap,
-		SourceHandle:     driver.SnapshotHandle(snap.Handle),
-		Target:           target,
-		StorageClass:     class,
-		MergedParameters: merged,
-		SizeBytes:        sizeBytes,
+	resolved, err := driverparams.Resolve(ctx, merged, target.Namespace, c.secretLookup)
+	if err != nil {
+		return "", fmt.Errorf("restoreFromSnapshot: resolve driver parameters: %w", err)
+	}
+	opctx := driver.OpContext{
+		StorageClass: class,
+		Volume:       target,
+		Parameters:   resolved,
+	}
+	return d.RestoreFromSnapshot(ctx, opctx, driver.RestoreRequest{
+		Source:       &snap,
+		SourceHandle: driver.SnapshotHandle(snap.Handle),
+		SizeBytes:    sizeBytes,
 	})
 }
 
@@ -939,6 +986,47 @@ func mergeParameters(class, vol map[string]string) map[string]string {
 		out[k] = v
 	}
 	for k, v := range vol {
+		out[k] = v
+	}
+	return out
+}
+
+// reclaimParameters builds the Parameters map for OpContext during a
+// reclaim Delete. Resolution order:
+//
+//  1. Live class still around → merge(class.Parameters, vol.Parameters).
+//     User-driven overrides on the volume win over class defaults, same
+//     as the Provision path.
+//  2. Class gone (orphan reclaim) but the volume carries a
+//     DriverParameters snapshot taken at Provision time → use that
+//     merged with the volume's live Parameters so post-provision overrides
+//     still apply. Drivers like do-volume need region / auth refs here.
+//  3. Neither → volume-local Parameters only. Best-effort; drivers
+//     that strictly require class config fail with their own error,
+//     and the operator can break the bind by hand.
+//
+// See RUNE-200 PR 2.
+func reclaimParameters(class *types.StorageClass, vol *types.Volume) map[string]string {
+	if vol == nil {
+		return map[string]string{}
+	}
+	if class != nil {
+		return mergeParameters(class.Parameters, vol.Parameters)
+	}
+	if len(vol.DriverParameters) > 0 {
+		return mergeParameters(vol.DriverParameters, vol.Parameters)
+	}
+	return mergeParameters(nil, vol.Parameters)
+}
+
+// copyStringMap returns an independent copy of m so the caller can stash
+// it without worrying about subsequent mutations to the source.
+func copyStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
 		out[k] = v
 	}
 	return out

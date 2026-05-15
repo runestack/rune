@@ -519,6 +519,15 @@ func ServiceToProto(service *types.Service) *generated.Service {
 				MountPath: m.MountPath,
 				ReadOnly:  m.ReadOnly,
 				SubPath:   m.SubPath,
+				FsMode:    m.FSMode,
+			}
+			if m.FSUser != nil {
+				pv.FsUser = utils.ToInt32NonNegative(*m.FSUser)
+				pv.FsUserSet = true
+			}
+			if m.FSGroup != nil {
+				pv.FsGroup = utils.ToInt32NonNegative(*m.FSGroup)
+				pv.FsGroupSet = true
 			}
 			if m.Claim != nil {
 				pv.Claim = &generated.VolumeClaim{Name: m.Claim.Name}
@@ -619,6 +628,17 @@ func ServiceToProto(service *types.Service) *generated.Service {
 	}
 	if service.SecurityContext != nil {
 		protoService.SecurityContext = securityContextToProto(service.SecurityContext)
+	}
+
+	// Instances are populated by GetService / ListServices so callers
+	// (notably `rune cast`'s readiness wait) can see backing-instance
+	// state in a single round-trip. Read-only on the wire — Create/Update
+	// ignore this field server-side.
+	if len(service.Instances) > 0 {
+		protoService.Instances = make([]*generated.Instance, 0, len(service.Instances))
+		for i := range service.Instances {
+			protoService.Instances = append(protoService.Instances, embeddedInstanceToProto(&service.Instances[i]))
+		}
 	}
 
 	return protoService
@@ -779,6 +799,15 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 				MountPath: m.MountPath,
 				ReadOnly:  m.ReadOnly,
 				SubPath:   m.SubPath,
+				FSMode:    m.FsMode,
+			}
+			if m.FsUserSet {
+				u := int(m.FsUser)
+				vm.FSUser = &u
+			}
+			if m.FsGroupSet {
+				g := int(m.FsGroup)
+				vm.FSGroup = &g
 			}
 			if m.Claim != nil {
 				vm.Claim = &types.VolumeClaim{Name: m.Claim.Name}
@@ -881,7 +910,110 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		service.SecurityContext = securityContextFromProto(proto.SecurityContext)
 	}
 
+	if len(proto.Instances) > 0 {
+		service.Instances = make([]types.Instance, 0, len(proto.Instances))
+		for _, pi := range proto.Instances {
+			inst := embeddedInstanceFromProto(pi)
+			if inst != nil {
+				service.Instances = append(service.Instances, *inst)
+			}
+		}
+	}
+
 	return service, nil
+}
+
+// embeddedInstanceToProto / embeddedInstanceFromProto are the minimal
+// converters used when an Instance is carried inside a Service response
+// (GetService, ListServices). They cover the fields the CLI reads off
+// service.Instances — primarily Status/Name/ID/StatusMessage. Callers
+// needing the full instance object should still use ListInstances; this
+// embed avoids a second round-trip for readiness checks but isn't a
+// drop-in replacement for the dedicated instance RPCs.
+func embeddedInstanceToProto(i *types.Instance) *generated.Instance {
+	if i == nil {
+		return nil
+	}
+	return &generated.Instance{
+		Id:            i.ID,
+		Runner:        string(i.Runner),
+		Namespace:     i.Namespace,
+		Name:          i.Name,
+		ServiceId:     i.ServiceID,
+		ServiceName:   i.ServiceName,
+		NodeId:        i.NodeID,
+		Ip:            i.IP,
+		Status:        instanceStatusToProto(i.Status),
+		StatusMessage: i.StatusMessage,
+		ContainerId:   i.ContainerID,
+		Pid:           utils.ToInt32NonNegative(i.PID),
+	}
+}
+
+func embeddedInstanceFromProto(p *generated.Instance) *types.Instance {
+	if p == nil {
+		return nil
+	}
+	return &types.Instance{
+		ID:            p.Id,
+		Runner:        types.RunnerType(p.Runner),
+		Namespace:     p.Namespace,
+		Name:          p.Name,
+		ServiceID:     p.ServiceId,
+		ServiceName:   p.ServiceName,
+		NodeID:        p.NodeId,
+		IP:            p.Ip,
+		Status:        instanceStatusFromProto(p.Status),
+		StatusMessage: p.StatusMessage,
+		ContainerID:   p.ContainerId,
+		PID:           int(p.Pid),
+	}
+}
+
+func instanceStatusToProto(s types.InstanceStatus) generated.InstanceStatus {
+	switch s {
+	case types.InstanceStatusPending:
+		return generated.InstanceStatus_INSTANCE_STATUS_PENDING
+	case types.InstanceStatusCreated:
+		return generated.InstanceStatus_INSTANCE_STATUS_CREATED
+	case types.InstanceStatusStarting:
+		return generated.InstanceStatus_INSTANCE_STATUS_STARTING
+	case types.InstanceStatusRunning:
+		return generated.InstanceStatus_INSTANCE_STATUS_RUNNING
+	case types.InstanceStatusStopped:
+		return generated.InstanceStatus_INSTANCE_STATUS_STOPPED
+	case types.InstanceStatusFailed:
+		return generated.InstanceStatus_INSTANCE_STATUS_FAILED
+	case types.InstanceStatusExited:
+		return generated.InstanceStatus_INSTANCE_STATUS_EXITED
+	case types.InstanceStatusDeleted:
+		return generated.InstanceStatus_INSTANCE_STATUS_DELETED
+	default:
+		return generated.InstanceStatus_INSTANCE_STATUS_PENDING
+	}
+}
+
+func instanceStatusFromProto(s generated.InstanceStatus) types.InstanceStatus {
+	switch s {
+	case generated.InstanceStatus_INSTANCE_STATUS_PENDING:
+		return types.InstanceStatusPending
+	case generated.InstanceStatus_INSTANCE_STATUS_CREATED:
+		return types.InstanceStatusCreated
+	case generated.InstanceStatus_INSTANCE_STATUS_STARTING:
+		return types.InstanceStatusStarting
+	case generated.InstanceStatus_INSTANCE_STATUS_RUNNING:
+		return types.InstanceStatusRunning
+	case generated.InstanceStatus_INSTANCE_STATUS_STOPPED:
+		return types.InstanceStatusStopped
+	case generated.InstanceStatus_INSTANCE_STATUS_FAILED:
+		return types.InstanceStatusFailed
+	case generated.InstanceStatus_INSTANCE_STATUS_EXITED:
+		return types.InstanceStatusExited
+	case generated.InstanceStatus_INSTANCE_STATUS_DELETED:
+		return types.InstanceStatusDeleted
+	default:
+		return types.InstanceStatusPending
+	}
 }
 
 // initStepToProto converts a types.InitStep to its proto form.

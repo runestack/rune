@@ -77,12 +77,12 @@ func (o UnitOptions) Validate() error {
 // directive is there.
 //
 // Any directive that materially changes runed's process environment
-// (capabilities, resource limits, restart policy, security knobs)
-// belongs here, not in a drop-in. Drop-ins are reserved for
-// installer-detected facts that aren't universal — e.g.
-// `SupplementaryGroups=docker` is conditional on the docker group
-// being present, so it's written to runed.service.d/override.conf
-// rather than into the base unit.
+// (capabilities, resource limits, restart policy, security knobs,
+// SupplementaryGroups for runtime sockets) belongs here, not in a
+// drop-in. Drop-ins are reserved for facts the installer must
+// inject at install time — e.g. host-specific environment variables
+// in env.conf — that genuinely don't belong in the binary-versioned
+// canonical unit.
 const unitTemplate = `[Unit]
 Description=Rune Server
 After=network-online.target docker.service
@@ -92,6 +92,12 @@ Wants=network-online.target
 Type=simple
 User={{.User}}
 Group={{.Group}}
+# Grants access to /var/run/docker.sock without putting docker as
+# the primary group of the rune user. Required for the Docker runner;
+# baked in here so it survives upgrade-server.sh --refresh-unit (the
+# previous workaround was a /etc/systemd/system/runed.service.d
+# drop-in that operators kept losing on upgrades).
+SupplementaryGroups=docker
 # Ensure non-interactive stdin under systemd
 StandardInput=null
 # --config makes the resolved runefile path explicit and survives
@@ -103,14 +109,21 @@ ExecStart={{.BinaryPath}}{{if .ConfigPath}} --config {{.ConfigPath}}{{end}}
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
-# Allow binding to low ports (:80, :443) when running as the rune
-# user. The capability is also granted on the binary via setcap when
-# the installer is invoked with --edge; this directive is a belt-and-
-# braces measure for systemd-managed restarts and the primary
-# mechanism for hosts where setcap has been stripped by a binary
-# replacement.
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Capabilities the agent needs while running as the rune user:
+#   - CAP_NET_BIND_SERVICE — bind :80 / :443 for the ingress.
+#   - CAP_SYS_ADMIN        — mount(2) for cloud block-device drivers
+#     (do-volume + future) which attach a device and mount it under
+#     /var/lib/rune/mounts/. Without it, mount(2) returns EPERM and
+#     every cloud volume gets stuck post-Attach.
+#   - CAP_CHOWN, CAP_FOWNER — applyFSOwnership chown(2) + chmod(2) on
+#     the mount root when VolumeMount.fsUser/fsGroup/fsMode is set.
+#     Cheap, inert when the operator hasn't opted in, and the
+#     alternative is "every operator who flips on fsUser hits an
+#     EPERM the first time".
+# Installed via the systemd unit (not file caps) so the caps travel
+# with the unit and survive upgrade-server.sh binary swaps.
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
 
 [Install]
 WantedBy=multi-user.target

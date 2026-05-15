@@ -66,10 +66,10 @@ func TestVolumeSizeBytes_NilVolume(t *testing.T) {
 
 func TestVolumeSizeBytes_RejectsUnparseable(t *testing.T) {
 	cases := []string{
-		"banana",          // not a number
-		"1.5.0",           // not parseable as float
-		"1XB",             // unknown unit
-		"1ZebraBytes",     // gibberish unit
+		"banana",      // not a number
+		"1.5.0",       // not parseable as float
+		"1XB",         // unknown unit
+		"1ZebraBytes", // gibberish unit
 	}
 	for _, s := range cases {
 		t.Run(s, func(t *testing.T) {

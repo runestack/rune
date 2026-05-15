@@ -7,10 +7,13 @@ import (
 )
 
 // ResourceRef is a canonical reference for resources with strongly-typed fields.
-// Name form: rune://<type>/<namespace>/<name>/<key>
-// ID form:   rune://<type>/<namespace>/id/<id>/<key>
-// FQDN form: <type>:<name>.<namespace>.rune[/key]
-// Minimal form: <type>:<name>/<key>
+// Name form:    rune://<type>/<namespace>/<name>/<key>
+// ID form:      rune://<type>/<namespace>/id/<id>/<key>
+// FQDN form:    <type>:<name>.<namespace>.rune[/key]
+// Minimal form: <type>:<name>[/key]
+// Bare form:    <name> — Type and Namespace come from caller context;
+//
+//	accepted via ParseResourceRefWithDefaults only.
 type ResourceRef struct {
 	Type      ResourceType
 	Namespace string
@@ -65,6 +68,10 @@ func FormatIDRef(rt ResourceType, ns, id string) string {
 //     - <key> is optional
 //  3. Minimal shorthand: "<type>:<name>/<key>" or "<type>:<name>"
 //     - Namespace will be empty; caller should supply a default if needed
+//
+// The bare-name form ("<name>" with no scheme and no ':') is not handled
+// here because it requires the caller to supply a default Type — see
+// ParseResourceRefWithDefaults for that entry point.
 //
 // Returns a ResourceRef with Type, Namespace, Name/ID, and optional Key fields.
 func parseResourceRefInternal(s string) (ResourceRef, error) {
@@ -142,6 +149,34 @@ func ParseResourceRefWithDefaultNamespace(s, defaultNamespace string) (ResourceR
 	rr, err := parseResourceRefInternal(s)
 	if err != nil {
 		return ResourceRef{}, err
+	}
+	return rr.WithDefaultNamespace(defaultNamespace), nil
+}
+
+// ParseResourceRefWithDefaults parses s as a ResourceRef and fills in
+// defaultType / defaultNamespace for fields the input does not specify.
+//
+// In addition to the canonical forms, a bare name (no "rune://", no ":",
+// no "/") is accepted and treated as Name. Callers supply the implicit
+// Type via defaultType — e.g., a fromSecret field passes
+// ResourceTypeSecret. An empty defaultType is allowed; the resulting
+// ResourceRef simply has an empty Type for callers that don't care.
+func ParseResourceRefWithDefaults(s string, defaultType ResourceType, defaultNamespace string) (ResourceRef, error) {
+	if s == "" {
+		return ResourceRef{}, fmt.Errorf("empty ref")
+	}
+	if !strings.HasPrefix(s, "rune://") && strings.IndexByte(s, ':') < 0 {
+		if strings.IndexByte(s, '/') >= 0 {
+			return ResourceRef{}, fmt.Errorf("invalid ref %q: bare name must not contain '/'", s)
+		}
+		return ResourceRef{Type: defaultType, Namespace: defaultNamespace, Name: s}, nil
+	}
+	rr, err := parseResourceRefInternal(s)
+	if err != nil {
+		return ResourceRef{}, err
+	}
+	if rr.Type == "" {
+		rr.Type = defaultType
 	}
 	return rr.WithDefaultNamespace(defaultNamespace), nil
 }

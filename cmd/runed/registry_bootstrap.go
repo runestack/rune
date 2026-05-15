@@ -57,13 +57,21 @@ func bootstrapAndResolveRegistryAuth(cfg *config.Config, st store.Store, logger 
 
 // processRegistryAuth handles the authentication logic for a single registry
 func processRegistryAuth(r config.DockerRegistryConfig, secRepo *repos.SecretRepo, logger log.Logger, auth map[string]any) error {
-	// Handle fromSecret cases
+	// Handle fromSecret cases. The string form accepts any canonical
+	// ResourceRef (bare name, "secret:name", FQDN, full URI); the map
+	// form remains for explicit {name, namespace}. Namespace defaults
+	// to "system" when not specified.
 	var fromSecretName string
 	var fromSecretNS string
 	switch v := r.Auth.FromSecret.(type) {
 	case string:
 		if v != "" {
-			fromSecretName = v
+			rr, err := types.ParseResourceRefWithDefaults(v, types.ResourceTypeSecret, "system")
+			if err != nil {
+				return err
+			}
+			fromSecretName = rr.Name
+			fromSecretNS = rr.Namespace
 		}
 	case map[string]any:
 		if n, ok := v["name"].(string); ok {

@@ -211,6 +211,21 @@ reapply_caps() {
   if [ "$HAD_CAPS" != true ]; then
     return
   fi
+  # If the on-disk unit already declares AmbientCapabilities=, those
+  # are the source of truth — file caps on the binary actively HURT in
+  # that case because the kernel's file-caps-precedence path on exec
+  # zeros CapAmb, suppressing the ambient caps the unit asked for.
+  # Strip the file caps instead of re-applying them.
+  local unit
+  for unit in /etc/systemd/system/runed.service /lib/systemd/system/runed.service; do
+    if [ -f "$unit" ] && grep -q '^AmbientCapabilities=' "$unit"; then
+      if command -v setcap >/dev/null 2>&1; then
+        setcap -r "$BIN_DIR/runed" 2>/dev/null || true
+        log "Removed file caps from $BIN_DIR/runed (unit declares AmbientCapabilities — file caps would suppress them)"
+      fi
+      return
+    fi
+  done
   if ! command -v setcap >/dev/null 2>&1; then
     log "⚠️  setcap not found; cannot re-apply cap_net_bind_service. Install libcap2-bin (Debian/Ubuntu) or libcap (RHEL)."
     return
@@ -232,6 +247,16 @@ warn_if_unit_missing_ambient() {
         log "    File caps cover this install today. To pick up newer unit"
         log "    directives, re-run with --refresh-unit (writes a fresh unit"
         log "    via 'runed print-systemd' from the upgraded binary)."
+      elif ! grep -q '^AmbientCapabilities=.*CAP_SYS_ADMIN' "$unit"; then
+        log "⚠️  $unit is missing 'CAP_SYS_ADMIN' on AmbientCapabilities."
+        log "    Cloud block-device volumes (do-volume + future) will fail"
+        log "    to mount with 'must be superuser to use mount'. Re-run"
+        log "    with --refresh-unit to pick up the newer unit directives."
+      elif ! grep -q '^AmbientCapabilities=.*CAP_CHOWN' "$unit"; then
+        log "⚠️  $unit is missing 'CAP_CHOWN' on AmbientCapabilities."
+        log "    VolumeMount.fsUser / fsGroup / fsMode will fail with EPERM"
+        log "    on the first chown. Re-run with --refresh-unit to pick up"
+        log "    the newer unit directives."
       fi
       return
     fi
@@ -245,7 +270,13 @@ refresh_unit() {
   if [ ! -x "$BIN_DIR/runed" ]; then
     die "--refresh-unit: $BIN_DIR/runed is not executable; cannot generate unit"
   fi
-  if ! "$BIN_DIR/runed" print-systemd --help >/dev/null 2>&1; then
+  # Probe by actually rendering the unit to /dev/null. `runed
+  # print-systemd --help` exits non-zero on print-systemd-capable
+  # builds (flag.ErrHelp returns rc=2), so an --help-based check
+  # falsely concluded "not supported" on dev.53. The render-to-null
+  # probe is cheap, side-effect-free, and gives a deterministic
+  # zero/non-zero answer.
+  if ! "$BIN_DIR/runed" print-systemd </dev/null >/dev/null 2>&1; then
     # Older runed without the subcommand. Skip rather than break the
     # upgrade — operators upgrading TO a print-systemd-capable build
     # for the first time will hit this once; the next upgrade refreshes

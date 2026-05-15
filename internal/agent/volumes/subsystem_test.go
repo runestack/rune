@@ -36,11 +36,13 @@ type fakeDriver struct {
 
 func (f *fakeDriver) Name() string                      { return f.name }
 func (f *fakeDriver) Capabilities() driver.Capabilities { return driver.Capabilities{} }
-func (f *fakeDriver) Provision(context.Context, driver.ProvisionRequest) (driver.VolumeHandle, error) {
+func (f *fakeDriver) Provision(context.Context, driver.OpContext, driver.ProvisionRequest) (driver.VolumeHandle, error) {
 	return "", driver.ErrUnsupported
 }
-func (f *fakeDriver) Delete(context.Context, driver.VolumeHandle) error { return nil }
-func (f *fakeDriver) Attach(_ context.Context, _ driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
+func (f *fakeDriver) Delete(context.Context, driver.OpContext, driver.VolumeHandle) error {
+	return nil
+}
+func (f *fakeDriver) Attach(_ context.Context, _ driver.OpContext, _ driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.attachCalls = append(f.attachCalls, node)
@@ -49,13 +51,13 @@ func (f *fakeDriver) Attach(_ context.Context, _ driver.VolumeHandle, node drive
 	}
 	return "/dev/fake", nil
 }
-func (f *fakeDriver) Detach(_ context.Context, _ driver.VolumeHandle, node driver.NodeID) error {
+func (f *fakeDriver) Detach(_ context.Context, _ driver.OpContext, _ driver.VolumeHandle, node driver.NodeID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.detachCalls = append(f.detachCalls, node)
 	return nil
 }
-func (f *fakeDriver) Mount(_ context.Context, opts driver.MountOpts) (driver.MountTarget, error) {
+func (f *fakeDriver) Mount(_ context.Context, _ driver.OpContext, opts driver.MountOpts) (driver.MountTarget, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.mountCalls = append(f.mountCalls, opts)
@@ -67,22 +69,22 @@ func (f *fakeDriver) Mount(_ context.Context, opts driver.MountOpts) (driver.Mou
 	}
 	return opts.Target, nil
 }
-func (f *fakeDriver) Unmount(_ context.Context, target driver.MountTarget) error {
+func (f *fakeDriver) Unmount(_ context.Context, _ driver.OpContext, target driver.MountTarget) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unmountCalls = append(f.unmountCalls, target)
 	return nil
 }
-func (f *fakeDriver) Snapshot(context.Context, driver.SnapshotRequest) (driver.SnapshotHandle, error) {
+func (f *fakeDriver) Snapshot(context.Context, driver.OpContext, driver.SnapshotRequest) (driver.SnapshotHandle, error) {
 	return "", driver.ErrUnsupported
 }
-func (f *fakeDriver) RestoreFromSnapshot(context.Context, driver.RestoreRequest) (driver.VolumeHandle, error) {
+func (f *fakeDriver) RestoreFromSnapshot(context.Context, driver.OpContext, driver.RestoreRequest) (driver.VolumeHandle, error) {
 	return "", driver.ErrUnsupported
 }
-func (f *fakeDriver) Expand(context.Context, driver.VolumeHandle, string) error {
+func (f *fakeDriver) Expand(context.Context, driver.OpContext, driver.VolumeHandle, string) error {
 	return driver.ErrUnsupported
 }
-func (f *fakeDriver) DeleteSnapshot(context.Context, driver.SnapshotHandle) error {
+func (f *fakeDriver) DeleteSnapshot(context.Context, driver.OpContext, driver.SnapshotHandle) error {
 	return driver.ErrUnsupported
 }
 

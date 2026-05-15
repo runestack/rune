@@ -37,9 +37,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -48,6 +50,12 @@ import (
 // nests one subdirectory per Volume.ID. It mirrors the layout called out
 // in the RUNE-069 design.
 const DefaultMountRoot = "/var/lib/rune/mounts"
+
+// DefaultRetryInterval is the period at which the subsystem re-walks
+// every Volume and re-attempts bringUp for any that should be mounted
+// but aren't. Picked so a stuck mount recovers within one operator
+// attention span without hammering cloud-provider APIs.
+const DefaultRetryInterval = 30 * time.Second
 
 // DriverLookup resolves the storage Driver responsible for a given
 // Volume. The implementation typically reads the Volume's StorageClass
@@ -66,13 +74,34 @@ type Config struct {
 	// acts on Volumes whose BoundNode matches. Required.
 	NodeID string
 
+	// NodeHostname is the OS hostname of the node (os.Hostname()).
+	// Threaded into every driver.OpContext so cloud-backed drivers can
+	// map the Rune node onto the cloud provider's instance identity —
+	// e.g. dovolume looks up the DO droplet by hostname-derived name.
+	// Empty disables that mapping; the affected driver surfaces its
+	// own error.
+	NodeHostname string
+
 	// Lookup resolves a Volume to a concrete Driver instance.
 	// Required.
 	Lookup DriverLookup
 
+	// SecretLookup resolves `secret:...` references inside the
+	// merged driver parameters before Attach / Mount / Unmount /
+	// Detach calls. nil disables resolution; secret-ref-shaped
+	// values then fail the operation with a clear error. See
+	// RUNE-200 PR 3.
+	SecretLookup driverparams.SecretLookup
+
 	// MountRoot is the per-node directory under which mount targets
 	// live. Defaults to DefaultMountRoot.
 	MountRoot string
+
+	// RetryInterval is how often the run loop re-walks every Volume
+	// and re-attempts bringUp for any that should be mounted but
+	// aren't. Required so transient Attach / Mount failures recover
+	// without a runed restart. Defaults to DefaultRetryInterval.
+	RetryInterval time.Duration
 
 	// Logger; defaults to the global logger with component
 	// "agent.volumes".
@@ -118,6 +147,12 @@ type trackedMount struct {
 	// Target is the mount target the driver returned (drivers may
 	// rewrite the proposed target).
 	Target driver.MountTarget
+	// OpCtx is the OpContext used to bring this mount up, retained so
+	// the symmetric Unmount/Detach calls during tearDown see the same
+	// per-class parameters (region, auth refs, …) the driver was given
+	// at Attach/Mount time. Snapshotting here is also defence against
+	// the StorageClass being deleted between bringUp and tearDown.
+	OpCtx driver.OpContext
 	// VolumeNS / VolumeName are kept so logs read sensibly.
 	VolumeNS   string
 	VolumeName string
@@ -137,6 +172,9 @@ func New(cfg Config) (*Subsystem, error) {
 	}
 	if cfg.MountRoot == "" {
 		cfg.MountRoot = DefaultMountRoot
+	}
+	if cfg.RetryInterval <= 0 {
+		cfg.RetryInterval = DefaultRetryInterval
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.GetDefaultLogger().WithComponent("agent.volumes")
@@ -257,6 +295,15 @@ func (s *Subsystem) MountTargetFor(volumeID string) (string, bool) {
 func (s *Subsystem) run(ctx context.Context, initial <-chan store.WatchEvent) {
 	defer s.wg.Done()
 	watchCh := initial
+	// Periodic retry tick. When Attach or Mount fails (e.g. transient
+	// DO API hiccup, missing capability, cloud-provider rate limit),
+	// the failing volume is not added to s.mounts and never receives
+	// another watch event until something else updates the row.
+	// Without this tick the only recovery was a runed restart; with
+	// it, we re-walk every volume on RetryInterval and naturally
+	// re-attempt bringUp for any that should be mounted but aren't.
+	retry := time.NewTicker(s.cfg.RetryInterval)
+	defer retry.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -279,6 +326,11 @@ func (s *Subsystem) run(ctx context.Context, initial <-chan store.WatchEvent) {
 					log.Str("namespace", ev.Namespace),
 					log.Str("name", ev.Name),
 					log.Str("type", string(ev.Type)),
+					log.Err(err))
+			}
+		case <-retry.C:
+			if err := s.initialReconcile(ctx); err != nil {
+				s.log.Debug("Periodic volume re-reconcile had errors",
 					log.Err(err))
 			}
 		}
@@ -419,14 +471,17 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	if err != nil {
 		return fmt.Errorf("agent.volumes: lookup driver for %s: %w", vol.String(), err)
 	}
+	opctx, err := s.buildOpContext(ctx, vol)
+	if err != nil {
+		return fmt.Errorf("agent.volumes: build OpContext for %s: %w", vol.String(), err)
+	}
 	handle := driver.VolumeHandle(vol.Handle)
-	dev, err := drv.Attach(ctx, handle, driver.NodeID(s.cfg.NodeID))
+	dev, err := drv.Attach(ctx, opctx, handle, driver.NodeID(s.cfg.NodeID))
 	if err != nil {
 		return fmt.Errorf("agent.volumes: attach %s: %w", vol.String(), err)
 	}
 	target := driver.MountTarget(filepath.Join(s.cfg.MountRoot, id))
-	got, err := drv.Mount(ctx, driver.MountOpts{
-		Volume:   vol,
+	got, err := drv.Mount(ctx, opctx, driver.MountOpts{
 		Handle:   handle,
 		Node:     driver.NodeID(s.cfg.NodeID),
 		Device:   dev,
@@ -436,7 +491,7 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	if err != nil {
 		// Best-effort detach so we don't leave a half-attached
 		// device behind for the next reconcile.
-		if derr := drv.Detach(ctx, handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
+		if derr := drv.Detach(ctx, opctx, handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
 			s.log.Warn("Detach after failed Mount also failed",
 				log.Str("volume_id", id),
 				log.Err(derr))
@@ -448,6 +503,7 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 		Driver:     drv,
 		Handle:     handle,
 		Target:     got,
+		OpCtx:      opctx,
 		VolumeNS:   vol.Namespace,
 		VolumeName: vol.Name,
 	}
@@ -464,15 +520,20 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 // tearDown is the inverse: Unmount then Detach. Both are required to
 // be idempotent by the Driver contract so partial failures on one side
 // still let the other side clean up.
+//
+// The OpContext stashed on trackedMount at bringUp time is reused here:
+// drivers like do-volume need their per-class config (auth refs, region)
+// for Detach as much as for Attach, and the StorageClass may have been
+// deleted between mount and teardown.
 func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) error {
 	var firstErr error
-	if err := m.Driver.Unmount(ctx, m.Target); err != nil {
+	if err := m.Driver.Unmount(ctx, m.OpCtx, m.Target); err != nil {
 		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, err)
 		s.log.Warn("Unmount failed; will still attempt Detach",
 			log.Str("volume_id", id),
 			log.Err(err))
 	}
-	if err := m.Driver.Detach(ctx, m.Handle, driver.NodeID(s.cfg.NodeID)); err != nil {
+	if err := m.Driver.Detach(ctx, m.OpCtx, m.Handle, driver.NodeID(s.cfg.NodeID)); err != nil {
 		if firstErr == nil {
 			firstErr = fmt.Errorf("agent.volumes: detach %s: %w", id, err)
 		}
@@ -485,6 +546,86 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) err
 			log.Str("name", m.VolumeName))
 	}
 	return firstErr
+}
+
+// buildOpContext resolves the Volume's StorageClass + merged
+// Parameters into an OpContext ready for a driver call.
+//
+// Resolution order matches the controller's reclaimParameters helper:
+//
+//  1. Live class still around → merge(class.Parameters, vol.Parameters).
+//  2. Class gone but vol.DriverParameters carries a snapshot taken at
+//     Provision time → use that, merged with vol.Parameters. Drivers
+//     like do-volume need region / auth refs for Detach / Unmount and
+//     would otherwise have nothing to work from.
+//  3. Neither → volume-local Parameters only; drivers that strictly
+//     require class context fail with their own error.
+//
+// After resolving the parameter chain, any `secret:...` refs in the
+// resulting map are resolved to plaintext via cfg.SecretLookup. The
+// driver therefore never sees a secret reference, only literal values.
+// See RUNE-200 PR 2 + PR 3.
+func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driver.OpContext, error) {
+	opctx := driver.OpContext{
+		Volume:       vol,
+		Parameters:   map[string]string{},
+		NodeHostname: s.cfg.NodeHostname,
+	}
+	if vol.StorageClassName == "" {
+		opctx.Parameters = mergeParameters(nil, vol.Parameters)
+		return s.resolveSecretsOnOpContext(ctx, vol, opctx)
+	}
+	var class types.StorageClass
+	if err := s.cfg.Store.Get(ctx, types.ResourceTypeStorageClass, "", vol.StorageClassName, &class); err != nil {
+		// Treat a missing class as an orphan. Prefer the snapshot when
+		// the controller stamped one at Provision time; otherwise fall
+		// through to volume-only parameters.
+		source := "volume-only"
+		if len(vol.DriverParameters) > 0 {
+			source = "DriverParameters snapshot"
+			opctx.Parameters = mergeParameters(vol.DriverParameters, vol.Parameters)
+		} else {
+			opctx.Parameters = mergeParameters(nil, vol.Parameters)
+		}
+		s.log.Warn("StorageClass missing during OpContext build; falling back",
+			log.Str("namespace", vol.Namespace),
+			log.Str("name", vol.Name),
+			log.Str("storageClass", vol.StorageClassName),
+			log.Str("source", source),
+			log.Err(err))
+		return s.resolveSecretsOnOpContext(ctx, vol, opctx)
+	}
+	opctx.StorageClass = &class
+	opctx.Parameters = mergeParameters(class.Parameters, vol.Parameters)
+	return s.resolveSecretsOnOpContext(ctx, vol, opctx)
+}
+
+// resolveSecretsOnOpContext walks opctx.Parameters and replaces any
+// `secret:...` ref with the resolved secret value via cfg.SecretLookup.
+// Returns the opctx unchanged on success or a wrapped error naming the
+// offending volume so the agent log identifies the row.
+func (s *Subsystem) resolveSecretsOnOpContext(ctx context.Context, vol *types.Volume, opctx driver.OpContext) (driver.OpContext, error) {
+	resolved, err := driverparams.Resolve(ctx, opctx.Parameters, vol.Namespace, s.cfg.SecretLookup)
+	if err != nil {
+		return driver.OpContext{}, fmt.Errorf("agent.volumes: resolve secret refs for %s/%s: %w", vol.Namespace, vol.Name, err)
+	}
+	opctx.Parameters = resolved
+	return opctx, nil
+}
+
+// mergeParameters layers Volume.Parameters on top of StorageClass.Parameters.
+// Mirrors the helper in the volume controller — kept package-local here
+// so the agent doesn't have to import the orchestrator just for one
+// map-overlay function.
+func mergeParameters(class, vol map[string]string) map[string]string {
+	out := make(map[string]string, len(class)+len(vol))
+	for k, v := range class {
+		out[k] = v
+	}
+	for k, v := range vol {
+		out[k] = v
+	}
+	return out
 }
 
 // lookupTrackedID finds the in-memory tracking key for a (namespace,

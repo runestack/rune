@@ -16,25 +16,26 @@ import (
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 // newStorageClassCmd builds the `rune storageclass` command group.
+//
+// StorageClass is **cluster-scoped**, so it gets its own dedicated
+// create command rather than routing through `rune cast`. `rune cast`
+// is the declarative path for namespaced resources (services, secrets,
+// configmaps, volumes, snapshots) — cluster-scoped resources don't fit
+// its namespace-context model and get their own `rune <kind> create -f`
+// instead. See the discussion under RUNE-200.
 func newStorageClassCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "storageclass",
 		Aliases: []string{"sc", "storageclasses"},
-		Short:   "Manage storage classes (list, get, delete, set-default)",
-		Long: `Inspect and manage StorageClass resources. To create a
-StorageClass from a YAML spec, use ` + "`rune cast`" + ` — the same path used
-for every other resource. Example:
-
-    rune cast my-storageclass.yaml
-
-A StorageClass cast file is a top-level ` + "`storageClass:`" + ` mapping; see
-https://docs.runestack.io/reference/storage-resources/#storageclass.`,
+		Short:   "Manage storage classes (list, get, create, delete, set-default)",
 	}
 	cmd.AddCommand(newStorageClassListCmd())
 	cmd.AddCommand(newStorageClassGetCmd())
+	cmd.AddCommand(newStorageClassCreateCmd())
 	cmd.AddCommand(newStorageClassDeleteCmd())
 	cmd.AddCommand(newStorageClassSetDefaultCmd())
 	return cmd
@@ -92,6 +93,82 @@ func newStorageClassGetCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&format, "output", "o", "table", "Output format: table|json|yaml")
 	return cmd
+}
+
+// --- create ---
+
+func newStorageClassCreateCmd() *cobra.Command {
+	var fromFile string
+	cmd := &cobra.Command{
+		Use:   "create -f <file>",
+		Short: "Create a storage class from a YAML or JSON spec file",
+		Long: `Reads a StorageClass spec from --file (YAML or JSON) and creates it on
+the server. The file must use the wrapped form that matches ` + "`rune cast`" + `
+files, so a spec written once can be applied via either path:
+
+    storageClass:
+      name: do-lon1
+      driver: do-volume
+      parameters:
+        region: lon1
+      reclaimPolicy: retain
+
+StorageClass is **cluster-scoped**, which is why it has a dedicated
+create command rather than going through ` + "`rune cast`" + `. Cast is the
+declarative path for namespaced resources (services, secrets,
+configmaps, volumes); cluster-scoped resources get their own
+` + "`rune <kind> create -f`" + ` so the namespace-aware machinery in cast
+(--namespace flag, per-resource ` + "`namespace:`" + ` field) doesn't pretend
+to apply where it doesn't.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if fromFile == "" {
+				return fmt.Errorf("--file is required")
+			}
+			sc, err := readStorageClassFile(fromFile)
+			if err != nil {
+				return err
+			}
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			if err := client.NewStorageClassClient(api).CreateStorageClass(sc); err != nil {
+				return err
+			}
+			fmt.Printf("StorageClass %s created\n", sc.Name)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&fromFile, "file", "f", "", "Path to YAML or JSON spec file")
+	return cmd
+}
+
+// readStorageClassFile loads a single StorageClass spec from a YAML
+// or JSON file. The shape mirrors `rune cast` files: a top-level
+// `storageClass:` key with the spec nested below. JSON is a subset
+// of YAML, so a single yaml.Unmarshal handles both encodings.
+func readStorageClassFile(path string) (*types.StorageClass, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var wrapped struct {
+		StorageClass *types.StorageClass `yaml:"storageClass"`
+	}
+	if err := yaml.Unmarshal(data, &wrapped); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if wrapped.StorageClass == nil {
+		return nil, fmt.Errorf("%s: expected a top-level `storageClass:` key with the spec nested below it", path)
+	}
+	if wrapped.StorageClass.Name == "" {
+		return nil, fmt.Errorf("%s: storage class name is required", path)
+	}
+	if wrapped.StorageClass.Driver == "" {
+		return nil, fmt.Errorf("%s: storage class driver is required", path)
+	}
+	return wrapped.StorageClass, nil
 }
 
 // --- delete ---

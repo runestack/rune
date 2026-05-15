@@ -240,17 +240,36 @@ func (c *scalingController) executeImmediateScaling(ctx context.Context, op *typ
 	c.inProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
 	defer c.clearInProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
 
+	// Mark the operation completed BEFORE updating service.Scale. The
+	// service-controller's handleServiceUpdated skips reconciliation
+	// when there's an InProgress scaling operation on the service —
+	// the rationale being "let the ScalingController drive scale
+	// updates". For an immediate op the controller only sets the
+	// final scale value once, so completing first means the service
+	// Update below fires the service watch with the op already
+	// Completed, and the service controller reconciles instead of
+	// skipping. Without this ordering, scale-up (e.g. on `rune
+	// restart`'s 0→1 leg) sets service.Scale=N but the reconciler is
+	// only re-engaged on its 30 s timer — and even then has nothing
+	// to drive a Create event from. (RUNE-BUG-RESTART-STUCK-PENDING.)
+	if err := c.completeOperation(ctx, op); err != nil {
+		return err
+	}
+
 	// Update service scale directly
 	service.Scale = op.TargetScale
 	service.Metadata.UpdatedAt = time.Now()
 
 	if err := c.store.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, &service); err != nil {
+		// completeOperation already wrote Completed; the op row no
+		// longer represents the live state. Mark Failed for visibility
+		// (failOperation is idempotent on the Status field) and
+		// surface the error to the caller.
 		c.failOperation(ctx, op, fmt.Sprintf("failed to update service scale: %v", err))
 		return err
 	}
 
-	// Mark operation as completed
-	return c.completeOperation(ctx, op)
+	return nil
 }
 
 // startGradualScaling starts a goroutine to handle gradual scaling

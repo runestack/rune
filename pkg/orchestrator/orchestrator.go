@@ -9,6 +9,7 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/controllers"
 	"github.com/runestack/rune/pkg/runner/manager"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -122,6 +123,26 @@ type OrchestratorOptions struct {
 	// knob. When true, the volume controller demotes ReclaimPolicy:delete
 	// to retain for volumes provisioned by the in-tree "local" driver.
 	StoragePreserveOnDelete bool
+
+	// StorageSecretLookup resolves `secret:...` references inside
+	// StorageClass / Volume parameter maps before the storage drivers
+	// see them. Wired by cmd/runed against the store-backed SecretRepo.
+	// Nil disables resolution; secret-ref-shaped values then fail the
+	// containing operation with a clear error. See RUNE-200 PR 3 and
+	// pkg/storage/driverparams.
+	StorageSecretLookup driverparams.SecretLookup
+
+	// InitialMountResolver, if set, is installed on the InstanceController
+	// before the orchestrator's first reconcile tick. cmd/runed passes a
+	// never-ready stub here so the period between orchestrator start and
+	// the agent-side volumes Subsystem registering its real resolver is
+	// treated as "transient — retry" rather than falling back to using
+	// Volume.Handle as the bind source (which would be a UUID for cloud
+	// drivers). Without this option set, the controller starts with no
+	// resolver and uses the dev/test Handle-fallback path — correct for
+	// in-process tests, wrong for production where the agent is racing
+	// to come up.
+	InitialMountResolver controllers.MountResolver
 }
 
 // NewDefaultOrchestrator creates a new orchestrator with default options
@@ -158,6 +179,9 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		options.RunnerManager,
 		options.Logger,
 	)
+	if options.InitialMountResolver != nil {
+		instanceController.SetMountResolver(options.InitialMountResolver)
+	}
 
 	healthController := controllers.NewHealthController(
 		options.Logger,
@@ -188,6 +212,7 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		Store:               options.Store,
 		Logger:              options.Logger,
 		DriverConfigs:       options.StorageDriverConfigs,
+		SecretLookup:        options.StorageSecretLookup,
 		DefaultStorageClass: options.DefaultStorageClass,
 		PreserveOnDelete:    options.StoragePreserveOnDelete,
 	})
@@ -200,6 +225,7 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		Store:         options.Store,
 		Logger:        options.Logger,
 		DriverConfigs: options.StorageDriverConfigs,
+		SecretLookup:  options.StorageSecretLookup,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot controller: %w", err)

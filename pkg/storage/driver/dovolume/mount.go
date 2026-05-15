@@ -32,9 +32,13 @@ type mountExec interface {
 	MkdirAll(target string, mode os.FileMode) error
 }
 
-// execMounter is the production mountExec. It shells out to the
-// standard Linux storage utilities. Each method tolerates "already
-// done" outcomes so retries are safe.
+// execMounter is the production mountExec. Mount/Unmount use the
+// mount(2) / umount(2) syscalls directly on Linux (see mount_linux.go) —
+// shelling out to /bin/mount via util-linux 2.39+ fails with
+// "drop permissions failed" when the calling process carries ambient
+// CAP_SYS_ADMIN, even though the cap is sufficient to perform the
+// mount. Formatting (mkfs.<fs>) stays as shell-out: one-shot per
+// volume and not subject to the same paranoia.
 type execMounter struct{}
 
 func (execMounter) MkdirAll(target string, mode os.FileMode) error {
@@ -59,35 +63,6 @@ func (execMounter) EnsureFormatted(ctx context.Context, dev, fsType string) erro
 	cmd := exec.CommandContext(ctx, mkfs, dev)
 	if combined, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("dovolume: %s %s: %w (%s)", mkfs, dev, err, strings.TrimSpace(string(combined)))
-	}
-	return nil
-}
-
-// Mount runs `mount -t <fsType> [-o ro] <dev> <target>`. If target is
-// already a mountpoint (findmnt succeeds) we treat it as success.
-func (execMounter) Mount(ctx context.Context, dev, target, fsType string, readOnly bool) error {
-	if alreadyMounted(ctx, target) {
-		return nil
-	}
-	args := []string{"-t", fsType}
-	if readOnly {
-		args = append(args, "-o", "ro")
-	}
-	args = append(args, dev, target)
-	cmd := exec.CommandContext(ctx, "mount", args...)
-	if combined, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("dovolume: mount %s -> %s: %w (%s)", dev, target, err, strings.TrimSpace(string(combined)))
-	}
-	return nil
-}
-
-func (execMounter) Unmount(ctx context.Context, target string) error {
-	if !alreadyMounted(ctx, target) {
-		return nil
-	}
-	cmd := exec.CommandContext(ctx, "umount", target)
-	if combined, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("dovolume: umount %s: %w (%s)", target, err, strings.TrimSpace(string(combined)))
 	}
 	return nil
 }

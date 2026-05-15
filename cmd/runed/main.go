@@ -30,6 +30,7 @@ import (
 	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/networking/vip"
 	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/types"
@@ -40,9 +41,9 @@ import (
 	// Storage drivers — each blank-import registers one or more driver
 	// names with pkg/storage/driver.Registry at init() time. Adding a new
 	// driver (Hetzner, AWS EBS, ...) is one more line here.
+	_ "github.com/runestack/rune/pkg/storage/driver/dovolume"
 	_ "github.com/runestack/rune/pkg/storage/driver/local"
 
-	"github.com/runestack/rune/pkg/storage/driver/dovolume"
 	"github.com/runestack/rune/pkg/store/repos"
 	"google.golang.org/grpc"
 )
@@ -70,6 +71,23 @@ func (w acmeCertStoreWithReload) Get(ctx context.Context, host string) ([]byte, 
 func (w acmeCertStoreWithReload) Delete(ctx context.Context, host string) error {
 	w.loader.Forget(host)
 	return w.store.Delete(ctx, host)
+}
+
+// notReadyMountResolver is the pre-agent MountResolver the orchestrator
+// is seeded with at startup. Every lookup returns ("", false) so the
+// instance controller treats every volume as "not yet mounted" and
+// retries on the next reconcile tick — the documented transient
+// condition. When the agent volumes subsystem comes up it calls
+// SetMountResolver again with its real implementation, replacing this
+// stub. Without it, the few seconds between apiServer.Start and the
+// agent's Subsystem registration race: the controller sees a nil
+// resolver, falls through to using Volume.Handle as the bind source,
+// and cloud-driver volumes (where Handle is a UUID, not a path) fail
+// with "invalid mount path". RUNE-BUG-DOVOLUME-ATTACH-NOOP-AND-MOUNT-PERMS.
+type notReadyMountResolver struct{}
+
+func (notReadyMountResolver) MountTargetFor(string) (string, bool) {
+	return "", false
 }
 
 // acmeNoopStatus discards status updates. Until the service-watch
@@ -144,78 +162,6 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// createDefaultRunefile creates a default runefile.yaml in the data dir if none exists.
-// If a runefile.toml or runefile.yml already exists alongside, it is left untouched —
-// runefile auto-discovery searches for any of {toml,yaml,yml}.
-func createDefaultRunefile(dataDir string) error {
-	defaultConfig := fmt.Sprintf(`# Default Rune server configuration
-# This file was auto-generated on first run.
-#
-# Rune supports YAML and TOML runefiles. Auto-discovery looks for
-# runefile.{toml,yaml,yml} in the working directory, /etc/rune/, and
-# the data directory. Use --config <path> to point at a specific file.
-
-docker:
-  registries: []
-  fallback_api_version: "1.43"
-  negotiation_timeout_seconds: 3
-
-server:
-  grpc_address: ":7863"
-  http_address: ":7861"
-
-log:
-  level: "info"
-  format: "text"
-
-secret:
-  encryption:
-    enabled: true
-    kek:
-      source: "file"
-      file: "kek.b64"
-
-# Networking layer. All keys are optional; the values
-# below are the built-in defaults shown for documentation.
-#
-# networking:
-#   cluster_cidr: "10.96.0.0/16"   # service VIP allocation range
-#   dev_mode: false                # skip nftables, bind ingress on user ports,
-#                                  # resolve .rune to 127.0.0.1
-#
-# telemetry:
-#   metrics_addr: "127.0.0.1:9100" # Prometheus /metrics endpoint, "" disables
-#                                  # (covers all subsystems, not just networking)
-#
-# node:
-#   role: ""                       # comma-separated; "edge" enables ingress + ACME
-#
-# ingress:
-#   http_addr: ""                  # default :80 (or :8080 in dev mode)
-#   https_addr: ""                 # default :443 (or :8443 in dev mode), "" disables TLS
-#
-# acme:
-#   directory: ""                  # default Let's Encrypt production
-#   email: ""                      # contact email for ACME registration
-
-data_dir: "%s"
-`, dataDir)
-
-	// Ensure data directory exists and write config there
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
-	}
-
-	// If any runefile already exists in the data dir (any supported
-	// extension), leave it alone.
-	for _, ext := range []string{"yaml", "yml", "toml"} {
-		if _, err := os.Stat(filepath.Join(dataDir, "runefile."+ext)); err == nil {
-			return nil
-		}
-	}
-	return os.WriteFile(filepath.Join(dataDir, "runefile.yaml"), []byte(defaultConfig), 0600)
-}
-
 // findRunefile returns the first runefile.{toml,yaml,yml} found in
 // the supplied search paths. The returned path is suitable for
 // viper.SetConfigFile (extension drives parser selection). Returns
@@ -230,6 +176,17 @@ func findRunefile(searchPaths []string) string {
 		}
 	}
 	return ""
+}
+
+// resolveRunefilePath returns the runefile path runed should load.
+// Precedence: --config flag → auto-discovery in cwd then /etc/rune.
+// Returns an empty string if neither produced a match; callers can
+// proceed with built-in defaults (e.g. for unit tests).
+func resolveRunefilePath() string {
+	if *configFile != "" {
+		return *configFile
+	}
+	return findRunefile([]string{".", "/etc/rune"})
 }
 
 // initRuntimeConfig initializes runtime settings (viper defaults + config file + env + flags)
@@ -262,45 +219,17 @@ func initRuntimeConfig() {
 	v.SetDefault("acme.directory", "")
 	v.SetDefault("acme.email", "")
 
-	// 2. Try to load config file if specified or look in standard locations.
-	// Both YAML and TOML are supported; viper picks the parser from the
-	// file extension when SetConfigFile is used.
-	configFileSpecified := *configFile != ""
-	if configFileSpecified {
-		v.SetConfigFile(*configFile)
-	} else {
-		// Search for runefile.{toml,yaml,yml} in priority order:
-		//   1. Current working directory   (developer override)
-		//   2. /etc/rune/                   (system-wide production config)
-		//   3. <data_dir>                   (auto-generated default)
-		dataDirSearch := defaultDataDir
-		if envDD := os.Getenv("RUNE_DATA_DIR"); envDD != "" {
-			dataDirSearch = envDD
-		}
-		if found := findRunefile([]string{".", "/etc/rune", dataDirSearch}); found != "" {
-			v.SetConfigFile(found)
+	// 2. Load the runefile. Both YAML and TOML are supported; viper picks
+	// the parser from the file extension when SetConfigFile is used.
+	// Search order: --config flag → cwd → /etc/rune (see resolveRunefilePath).
+	resolvedRunefile := resolveRunefilePath()
+	if resolvedRunefile != "" {
+		v.SetConfigFile(resolvedRunefile)
+		if err := v.ReadInConfig(); err != nil {
+			fmt.Printf("Error reading config file %s: %s\n", resolvedRunefile, err)
 		} else {
-			// No file present yet (will be auto-created later);
-			// keep the legacy yaml lookup to avoid breaking the
-			// "first run" code path.
-			v.SetConfigName("runefile")
-			v.SetConfigType("yaml")
-			v.AddConfigPath(".")
-			v.AddConfigPath("/etc/rune/")
+			fmt.Printf("Using config file: %s\n", v.ConfigFileUsed())
 		}
-	}
-
-	// Read config file if available
-	if err := v.ReadInConfig(); err != nil {
-		if configFileSpecified {
-			// Only show an error if user explicitly specified a config file
-			fmt.Printf("Error reading config file %s: %s\n", *configFile, err)
-		} else if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			// Show non-"not found" errors even for auto-discovered config
-			fmt.Printf("Error reading config file: %s\n", err)
-		}
-	} else {
-		fmt.Printf("Using config file: %s\n", v.ConfigFileUsed())
 	}
 
 	// 3. Override with environment variables
@@ -469,22 +398,23 @@ func main() {
 	ctx, cancel := setupSignalContext(logger)
 	defer cancel()
 
-	// Create default runefile if none exists
-	if err := createDefaultRunefile(*dataDir); err != nil {
-		logger.Warn("Failed to create default runefile", log.Err(err))
-		// Don't fail startup, just warn
+	// Bind the global viper to the same runefile initRuntimeConfig
+	// resolved. Without a runefile we fail fast — production deployments
+	// must ship one (see docs); the dev-loop just needs `runefile.toml`
+	// in the cwd. Tests use the override hook in initRuntimeConfig.
+	resolvedRunefile := resolveRunefilePath()
+	if resolvedRunefile == "" {
+		logger.Error("No runefile found; pass --config or place runefile.{toml,yaml,yml} in cwd or /etc/rune/")
+		os.Exit(1)
 	}
-
-	// Ensure global viper is bound to the same config file so runtime writes persist
-	configPath := *configFile
-	if configPath == "" {
-		configPath = filepath.Join(*dataDir, "runefile.yaml")
+	viper.SetConfigFile(resolvedRunefile)
+	if err := viper.ReadInConfig(); err != nil {
+		logger.Error("Failed to read runefile", log.Str("path", resolvedRunefile), log.Err(err))
+		os.Exit(1)
 	}
-	viper.SetConfigFile(configPath)
-	_ = viper.ReadInConfig()
 
 	// Open state store via helper
-	stateStore, appCfg, _, err := openStateStore(logger, *configFile, *dataDir)
+	stateStore, appCfg, _, err := openStateStore(logger, resolvedRunefile, *dataDir)
 	if err != nil {
 		logger.Error("Failed to open state store", log.Err(err))
 		os.Exit(1)
@@ -506,15 +436,6 @@ func main() {
 		logger.Error("Failed to bootstrap/resolve registry auth", log.Err(err))
 		os.Exit(1)
 	}
-
-	// Inject a SecretLookup into the do-volume driver config so it can
-	// resolve apiTokenSecretRef at call time. The lookup is plumbed via
-	// the reserved key dovolume.configKeySecretLookup (a leading
-	// underscore signals "not a runefile field"). We mutate the same
-	// appCfg.Storage.Drivers map that's threaded into both the agent's
-	// driver lookup and the volume controller, so the closure is shared.
-	// No-op when the operator has not declared the do-volume driver.
-	injectDOVolumeSecretLookup(appCfg, stateStore)
 
 	// Token-based auth is always enabled in MVP
 	logger.Info("Authentication enabled (token-based)")
@@ -572,6 +493,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// (notReadyMountResolver is pre-seeded via WithInitialMountResolver
+	// in buildServerOptions, before apiServer.Start runs the
+	// orchestrator's first reconcile.)
+
 	// Start the per-node agent. On single-node, the agent runs in-process
 	// and shares the control plane's Badger DB via the in-process
 	// OrderedLog backend opened above. Subsystems (data plane, DNS,
@@ -620,11 +545,14 @@ func main() {
 		if appCfg != nil {
 			driverConfigs = appCfg.Storage.Drivers
 		}
+		nodeHostname, _ := os.Hostname()
 		volSub, vsErr := volsub.New(volsub.Config{
-			Store:  stateStore,
-			NodeID: a.Identity().NodeID,
-			Lookup: makeAgentDriverLookup(stateStore, driverConfigs),
-			Logger: logger.WithComponent("agent.volumes"),
+			Store:        stateStore,
+			NodeID:       a.Identity().NodeID,
+			NodeHostname: nodeHostname,
+			Lookup:       makeAgentDriverLookup(stateStore, driverConfigs),
+			SecretLookup: newStoreSecretLookup(stateStore),
+			Logger:       logger.WithComponent("agent.volumes"),
 		})
 		if vsErr != nil {
 			return fmt.Errorf("agent volumes: %w", vsErr)
@@ -884,34 +812,18 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 	return st, appCfg, storeDir, nil
 }
 
-// injectDOVolumeSecretLookup wires a SecretRepo-backed SecretLookup
-// into the do-volume driver's runefile config under the reserved key
-// dovolume.configKeySecretLookup. The closure resolves apiTokenSecretRef
-// at every API call so DO token rotation takes effect on the next
-// reconcile without restarting runed.
+// newStoreSecretLookup returns a SecretRepo-backed SecretLookup that
+// resolves a (namespace, name, key) triple to the plaintext value of a
+// Rune Secret. Shared by the volume / snapshot controllers and the
+// node-side agent volume subsystem so secret-ref-shaped values in
+// StorageClass / Volume parameters resolve identically wherever they
+// land. See RUNE-200 PR 3 / pkg/storage/driverparams.
 //
-// The same Drivers map is threaded into both the agent driver lookup
-// (Attach/Mount/Unmount/Detach) and the API-server's volume controller
-// (Provision/Delete/Snapshot/Restore/Expand), so injecting once here
-// covers both paths. No-op when the operator hasn't declared the
-// driver — we don't want to allocate an empty stanza for clusters
-// that aren't on DO.
-func injectDOVolumeSecretLookup(appCfg *config.Config, st store.Store) {
-	if appCfg == nil {
-		return
-	}
-	if _, present := appCfg.Storage.Drivers[dovolume.DriverName]; !present {
-		// Operator has not configured do-volume; nothing to wire.
-		return
-	}
-	if appCfg.Storage.Drivers == nil {
-		appCfg.Storage.Drivers = map[string]map[string]any{}
-	}
-	if appCfg.Storage.Drivers[dovolume.DriverName] == nil {
-		appCfg.Storage.Drivers[dovolume.DriverName] = map[string]any{}
-	}
+// The closure performs a fresh lookup on every call so secret rotation
+// takes effect on the next reconcile without restarting runed.
+func newStoreSecretLookup(st store.Store) driverparams.SecretLookup {
 	repo := repos.NewSecretRepo(st)
-	lookup := dovolume.SecretLookup(func(ctx context.Context, ns, name, key string) (string, error) {
+	return func(ctx context.Context, ns, name, key string) (string, error) {
 		sec, err := repo.Get(ctx, ns, name)
 		if err != nil {
 			return "", err
@@ -921,10 +833,7 @@ func injectDOVolumeSecretLookup(appCfg *config.Config, st store.Store) {
 			return "", fmt.Errorf("secret %s/%s has no key %q", ns, name, key)
 		}
 		return v, nil
-	})
-	// configKeySecretLookup is unexported; use the public string by
-	// agreement with the dovolume package.
-	appCfg.Storage.Drivers[dovolume.DriverName][dovolume.ConfigKeySecretLookup] = lookup
+	}
 }
 
 // makeAgentDriverLookup returns a volsub.DriverLookup closure that
@@ -993,6 +902,16 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 	if appCfg != nil && appCfg.Storage.PreserveOnDelete {
 		opts = append(opts, server.WithStoragePreserveOnDelete(true))
 	}
+	// Resolver for `secret:...` refs in StorageClass / Volume parameters.
+	// See RUNE-200 PR 3 — drivers receive plaintext via OpContext.Parameters
+	// regardless of where the ref lives in the parameter chain.
+	opts = append(opts, server.WithStorageSecretLookup(newStoreSecretLookup(st)))
+	// Pre-seed a never-ready MountResolver so the orchestrator's first
+	// reconcile tick (inside apiServer.Start) treats every volume as
+	// "not yet mounted — retry" rather than falling back to using
+	// Volume.Handle as the bind source. The agent's volumes Subsystem
+	// will replace this with its real resolver once it's up.
+	opts = append(opts, server.WithInitialMountResolver(notReadyMountResolver{}))
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
 	}

@@ -74,8 +74,11 @@ type restoreVolumeIn struct {
 }
 
 // httpClient is the production doClient backed by net/http. Each call
-// resolves the bearer token via Config.resolveToken so secret rotation
-// takes effect on the next reconcile.
+// reads the bearer token from context (stashed by the driver via
+// withToken before calling the client) so secret rotation takes effect
+// on the next reconcile — the controller resolves the StorageClass
+// parameters.apiToken secret ref on every call and the freshly
+// resolved value flows through OpContext.
 type httpClient struct {
 	cfg  *Config
 	http *http.Client
@@ -93,11 +96,29 @@ func newHTTPClient(cfg *Config) *httpClient {
 	}
 }
 
+// tokenCtxKey is the context key under which the driver stashes the
+// per-call bearer token for the HTTP client. Sourced from the
+// StorageClass `parameters.apiToken` value (already resolved by the
+// controller-side secret resolver).
+type tokenCtxKey struct{}
+
+func withToken(ctx context.Context, tok string) context.Context {
+	return context.WithValue(ctx, tokenCtxKey{}, tok)
+}
+
+func tokenFromContext(ctx context.Context) (string, error) {
+	v, _ := ctx.Value(tokenCtxKey{}).(string)
+	if strings.TrimSpace(v) == "" {
+		return "", errors.New("dovolume: parameters.apiToken is required (set on StorageClass.parameters, prefer a secret:<name>.<ns>.rune/<key> reference)")
+	}
+	return v, nil
+}
+
 // doRequest is the single HTTP call helper. Marshals body if non-nil,
 // authenticates, sends, decodes the JSON response into out. 404 returns
 // errDONotFound so Delete can swallow it for idempotency.
 func (c *httpClient) doRequest(ctx context.Context, method, path string, body any, out any) error {
-	tok, err := c.cfg.resolveToken(ctx)
+	tok, err := tokenFromContext(ctx)
 	if err != nil {
 		return err
 	}

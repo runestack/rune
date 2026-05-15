@@ -1440,19 +1440,58 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.Reason)
 	}
 
-	// Resolver-first: when the agent-side volumes Subsystem has
-	// reported a mount target for this volume on this node, use it
-	// verbatim. Otherwise fall back to Volume.Handle, which is the
-	// historical bind source and is correct for the in-tree local /
-	// local-host drivers (their Mount returns the host path verbatim).
-	source := vol.Handle
-	if c.mountResolver != nil {
-		if target, ok := c.mountResolver.MountTargetFor(vol.ID); ok {
-			source = target
+	// Bind the volume to this node + consuming instance so the agent-
+	// side volumes Subsystem will Attach + Mount it. The Subsystem
+	// gates on BoundNode == nodeID (see internal/agent/volumes/
+	// subsystem.go shouldMount). BoundClaim records which instance
+	// currently owns the binding — refreshed on every instance change
+	// (e.g. `rune restart` cycling 1→0→1) so the row doesn't keep
+	// pointing at a Deleted instance after a restart.
+	if c.nodeID != "" {
+		newClaim := service.Namespace + "/" + instance.Name
+		if vol.BoundNode != c.nodeID || vol.BoundClaim != newClaim {
+			vol.BoundNode = c.nodeID
+			vol.BoundClaim = newClaim
+			vol.UpdatedAt = time.Now().UTC()
+			if err := c.store.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &vol); err != nil {
+				return types.ResolvedVolumeMount{}, fmt.Errorf("bind volume %s/%s to node %s: %w", ns, name, c.nodeID, err)
+			}
 		}
 	}
+
+	// Resolve the bind source. When a MountResolver is wired (production
+	// runed), the agent-side Subsystem owns the host-path mapping; we
+	// require it to have reported a target before launching, because for
+	// any driver where Handle is not a host path (do-volume, future cloud
+	// drivers) a bare Handle is not a valid Docker bind source. The error
+	// is transient — the service reconciler retries until the Subsystem
+	// has finished Attach + Mount.
+	//
+	// When no MountResolver is wired (dev/standalone, tests), fall back
+	// to Volume.Handle. That's the historical behaviour and is correct
+	// for the in-tree local / local-host drivers where Handle == host
+	// path.
+	var source string
+	if c.mountResolver != nil {
+		target, ok := c.mountResolver.MountTargetFor(vol.ID)
+		if !ok {
+			return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s not yet mounted on node %s (will retry)", ns, name, c.nodeID)
+		}
+		source = target
+	} else {
+		source = vol.Handle
+	}
 	if source == "" {
-		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s has no handle", ns, name)
+		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s has no mount source", ns, name)
+	}
+
+	// Apply fsUser / fsGroup / fsMode to the mount root, idempotently.
+	// Solves the "fresh ext4 owned by root, container runs as uid N,
+	// EACCES on first write" pattern without an init-step chown. Only
+	// runs when the operator opted in — absent fields are a no-op so
+	// local-host mounts (operator-managed paths) aren't stomped on.
+	if err := applyFSOwnership(source, m.FSUser, m.FSGroup, m.FSMode); err != nil {
+		return types.ResolvedVolumeMount{}, fmt.Errorf("apply fs ownership on %s (volume %s/%s): %w", source, ns, name, err)
 	}
 
 	return types.ResolvedVolumeMount{

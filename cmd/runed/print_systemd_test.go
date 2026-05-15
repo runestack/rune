@@ -18,7 +18,7 @@ func TestRunPrintSystemd_DefaultsEmitValidUnit(t *testing.T) {
 		"[Unit]",
 		"[Service]",
 		"User=rune",
-		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
+		"AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER",
 		"ExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml",
 	} {
 		if !strings.Contains(out, w) {

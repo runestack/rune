@@ -181,21 +181,24 @@ func (d *managedDriver) Capabilities() driver.Capabilities {
 	}
 }
 
-func (d *managedDriver) Provision(ctx context.Context, req driver.ProvisionRequest) (driver.VolumeHandle, error) {
-	if err := assertAccessMode(req.Volume.AccessMode, d.Capabilities()); err != nil {
+func (d *managedDriver) Provision(ctx context.Context, opctx driver.OpContext, req driver.ProvisionRequest) (driver.VolumeHandle, error) {
+	if opctx.Volume == nil {
+		return "", fmt.Errorf("local: Provision: OpContext.Volume is required: %w", driver.ErrInvalidConfig)
+	}
+	if err := assertAccessMode(opctx.Volume.AccessMode, d.Capabilities()); err != nil {
 		return "", err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	dir := d.volumeDir(req.Volume)
+	dir := d.volumeDir(opctx.Volume)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("local: mkdir %q: %w", dir, err)
 	}
 	return driver.VolumeHandle(dir), nil
 }
 
-func (d *managedDriver) Delete(ctx context.Context, handle driver.VolumeHandle) error {
+func (d *managedDriver) Delete(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -225,16 +228,16 @@ func (d *managedDriver) Delete(ctx context.Context, handle driver.VolumeHandle) 
 	return nil
 }
 
-func (d *managedDriver) Attach(ctx context.Context, handle driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
+func (d *managedDriver) Attach(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
 	// Local volumes have no separate attach step.
 	return "", nil
 }
 
-func (d *managedDriver) Detach(ctx context.Context, handle driver.VolumeHandle, node driver.NodeID) error {
+func (d *managedDriver) Detach(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, node driver.NodeID) error {
 	return nil
 }
 
-func (d *managedDriver) Mount(ctx context.Context, opts driver.MountOpts) (driver.MountTarget, error) {
+func (d *managedDriver) Mount(ctx context.Context, opctx driver.OpContext, opts driver.MountOpts) (driver.MountTarget, error) {
 	// The Docker runner bind-mounts the source path the driver returns.
 	// For managed local volumes that's the volume directory itself —
 	// there is no separate mount step.
@@ -244,17 +247,20 @@ func (d *managedDriver) Mount(ctx context.Context, opts driver.MountOpts) (drive
 	return driver.MountTarget(string(opts.Handle)), nil
 }
 
-func (d *managedDriver) Unmount(ctx context.Context, target driver.MountTarget) error {
+func (d *managedDriver) Unmount(ctx context.Context, opctx driver.OpContext, target driver.MountTarget) error {
 	return nil
 }
 
-func (d *managedDriver) Snapshot(ctx context.Context, req driver.SnapshotRequest) (driver.SnapshotHandle, error) {
+func (d *managedDriver) Snapshot(ctx context.Context, opctx driver.OpContext, req driver.SnapshotRequest) (driver.SnapshotHandle, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	src := string(req.Handle)
 	if src == "" {
 		return "", fmt.Errorf("local: Snapshot called with empty handle: %w", driver.ErrInvalidConfig)
+	}
+	if req.Snapshot == nil {
+		return "", fmt.Errorf("local: Snapshot called with nil Snapshot: %w", driver.ErrInvalidConfig)
 	}
 	dst := filepath.Join(d.cfg.SnapshotRoot, req.Snapshot.Namespace, req.Snapshot.Name)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
@@ -266,14 +272,17 @@ func (d *managedDriver) Snapshot(ctx context.Context, req driver.SnapshotRequest
 	return driver.SnapshotHandle(dst), nil
 }
 
-func (d *managedDriver) RestoreFromSnapshot(ctx context.Context, req driver.RestoreRequest) (driver.VolumeHandle, error) {
+func (d *managedDriver) RestoreFromSnapshot(ctx context.Context, opctx driver.OpContext, req driver.RestoreRequest) (driver.VolumeHandle, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	if req.SourceHandle == "" {
 		return "", fmt.Errorf("local: RestoreFromSnapshot called with empty source handle: %w", driver.ErrInvalidConfig)
 	}
-	dst := d.volumeDir(req.Target)
+	if opctx.Volume == nil {
+		return "", fmt.Errorf("local: RestoreFromSnapshot: OpContext.Volume (target) is required: %w", driver.ErrInvalidConfig)
+	}
+	dst := d.volumeDir(opctx.Volume)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return "", fmt.Errorf("local: mkdir target parent %q: %w", filepath.Dir(dst), err)
 	}
@@ -285,12 +294,12 @@ func (d *managedDriver) RestoreFromSnapshot(ctx context.Context, req driver.Rest
 	return driver.VolumeHandle(dst), nil
 }
 
-func (d *managedDriver) Expand(ctx context.Context, handle driver.VolumeHandle, newSize string) error {
+func (d *managedDriver) Expand(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, newSize string) error {
 	return driver.ErrUnsupported
 }
 
 // DeleteSnapshot removes the on-disk snapshot tree. Bounded to SnapshotRoot.
-func (d *managedDriver) DeleteSnapshot(ctx context.Context, handle driver.SnapshotHandle) error {
+func (d *managedDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpContext, handle driver.SnapshotHandle) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -342,15 +351,18 @@ func (d *hostDriver) Capabilities() driver.Capabilities {
 	}
 }
 
-func (d *hostDriver) Provision(ctx context.Context, req driver.ProvisionRequest) (driver.VolumeHandle, error) {
-	if err := assertAccessMode(req.Volume.AccessMode, d.Capabilities()); err != nil {
+func (d *hostDriver) Provision(ctx context.Context, opctx driver.OpContext, req driver.ProvisionRequest) (driver.VolumeHandle, error) {
+	if opctx.Volume == nil {
+		return "", fmt.Errorf("local-host: Provision: OpContext.Volume is required: %w", driver.ErrInvalidConfig)
+	}
+	if err := assertAccessMode(opctx.Volume.AccessMode, d.Capabilities()); err != nil {
 		return "", err
 	}
-	if req.Volume.ReclaimPolicy == types.ReclaimPolicyDelete {
+	if opctx.Volume.ReclaimPolicy == types.ReclaimPolicyDelete {
 		return "", fmt.Errorf("local-host: reclaimPolicy %q is not allowed (operator owns the host path): %w",
 			types.ReclaimPolicyDelete, driver.ErrInvalidConfig)
 	}
-	hostPath, ok := req.MergedParameters["hostPath"]
+	hostPath, ok := opctx.Parameters["hostPath"]
 	if !ok || hostPath == "" {
 		return "", fmt.Errorf("local-host: parameters.hostPath is required: %w", driver.ErrInvalidConfig)
 	}
@@ -377,20 +389,20 @@ func (d *hostDriver) Provision(ctx context.Context, req driver.ProvisionRequest)
 	return driver.VolumeHandle(abs), nil
 }
 
-func (d *hostDriver) Delete(ctx context.Context, handle driver.VolumeHandle) error {
+func (d *hostDriver) Delete(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle) error {
 	// Operator owns the host path. Always a no-op.
 	return nil
 }
 
-func (d *hostDriver) Attach(ctx context.Context, handle driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
+func (d *hostDriver) Attach(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
 	return "", nil
 }
 
-func (d *hostDriver) Detach(ctx context.Context, handle driver.VolumeHandle, node driver.NodeID) error {
+func (d *hostDriver) Detach(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, node driver.NodeID) error {
 	return nil
 }
 
-func (d *hostDriver) Mount(ctx context.Context, opts driver.MountOpts) (driver.MountTarget, error) {
+func (d *hostDriver) Mount(ctx context.Context, opctx driver.OpContext, opts driver.MountOpts) (driver.MountTarget, error) {
 	if opts.Handle == "" {
 		return "", fmt.Errorf("local-host: Mount called with empty handle: %w", driver.ErrInvalidConfig)
 	}
@@ -403,23 +415,23 @@ func (d *hostDriver) Mount(ctx context.Context, opts driver.MountOpts) (driver.M
 	return driver.MountTarget(string(opts.Handle)), nil
 }
 
-func (d *hostDriver) Unmount(ctx context.Context, target driver.MountTarget) error {
+func (d *hostDriver) Unmount(ctx context.Context, opctx driver.OpContext, target driver.MountTarget) error {
 	return nil
 }
 
-func (d *hostDriver) Snapshot(ctx context.Context, req driver.SnapshotRequest) (driver.SnapshotHandle, error) {
+func (d *hostDriver) Snapshot(ctx context.Context, opctx driver.OpContext, req driver.SnapshotRequest) (driver.SnapshotHandle, error) {
 	return "", driver.ErrUnsupported
 }
 
-func (d *hostDriver) RestoreFromSnapshot(ctx context.Context, req driver.RestoreRequest) (driver.VolumeHandle, error) {
+func (d *hostDriver) RestoreFromSnapshot(ctx context.Context, opctx driver.OpContext, req driver.RestoreRequest) (driver.VolumeHandle, error) {
 	return "", driver.ErrUnsupported
 }
 
-func (d *hostDriver) Expand(ctx context.Context, handle driver.VolumeHandle, newSize string) error {
+func (d *hostDriver) Expand(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle, newSize string) error {
 	return driver.ErrUnsupported
 }
 
-func (d *hostDriver) DeleteSnapshot(ctx context.Context, handle driver.SnapshotHandle) error {
+func (d *hostDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpContext, handle driver.SnapshotHandle) error {
 	return driver.ErrUnsupported
 }
 

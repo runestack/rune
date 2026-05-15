@@ -95,7 +95,7 @@ func TestLocalRefusesDeleteOutsideRoot(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	err := d.Delete(context.Background(), driver.VolumeHandle(target))
+	err := d.Delete(context.Background(), driver.OpContext{}, driver.VolumeHandle(target))
 	if err == nil {
 		t.Fatal("Delete(outside-root): want error, got nil")
 	}
@@ -117,11 +117,12 @@ func TestLocalPreserveOnDelete(t *testing.T) {
 		t.Fatalf("New(local): %v", err)
 	}
 	vol := &types.Volume{Name: "keep-me", Namespace: "default", AccessMode: types.AccessModeRWO}
-	handle, err := d.Provision(context.Background(), driver.ProvisionRequest{Volume: vol})
+	opctx := driver.OpContext{Volume: vol}
+	handle, err := d.Provision(context.Background(), opctx, driver.ProvisionRequest{})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	if err := d.Delete(context.Background(), handle); err != nil {
+	if err := d.Delete(context.Background(), opctx, handle); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if _, err := os.Stat(string(handle)); err != nil {
@@ -143,10 +144,10 @@ func TestLocalHostRejectsReclaimDelete(t *testing.T) {
 		ReclaimPolicy: types.ReclaimPolicyDelete,
 		Parameters:    map[string]string{"hostPath": hostPath},
 	}
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: vol.Parameters,
-	})
+	_, err := d.Provision(context.Background(), driver.OpContext{
+		Volume:     vol,
+		Parameters: vol.Parameters,
+	}, driver.ProvisionRequest{})
 	if err == nil {
 		t.Fatal("Provision: want error for reclaimPolicy=delete on local-host, got nil")
 	}
@@ -165,10 +166,10 @@ func TestLocalHostRejectsPathOutsideAllowlist(t *testing.T) {
 		AccessMode: types.AccessModeRWO,
 		Parameters: map[string]string{"hostPath": stranger},
 	}
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: vol.Parameters,
-	})
+	_, err := d.Provision(context.Background(), driver.OpContext{
+		Volume:     vol,
+		Parameters: vol.Parameters,
+	}, driver.ProvisionRequest{})
 	if err == nil {
 		t.Fatal("Provision: want error for out-of-allowlist host path")
 	}
@@ -193,10 +194,10 @@ func TestLocalHostRejectsMissingPathWithoutCreate(t *testing.T) {
 		AccessMode: types.AccessModeRWO,
 		Parameters: map[string]string{"hostPath": missing},
 	}
-	_, perr := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: vol.Parameters,
-	})
+	_, perr := d.Provision(context.Background(), driver.OpContext{
+		Volume:     vol,
+		Parameters: vol.Parameters,
+	}, driver.ProvisionRequest{})
 	if !errors.Is(perr, driver.ErrInvalidConfig) {
 		t.Fatalf("want ErrInvalidConfig, got %v", perr)
 	}
@@ -205,7 +206,7 @@ func TestLocalHostRejectsMissingPathWithoutCreate(t *testing.T) {
 func TestLocalRejectsRWX(t *testing.T) {
 	d, _ := newManagedDriver(t)
 	vol := &types.Volume{Name: "v", Namespace: "default", AccessMode: types.AccessModeRWX}
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{Volume: vol})
+	_, err := d.Provision(context.Background(), driver.OpContext{Volume: vol}, driver.ProvisionRequest{})
 	if !errors.Is(err, driver.ErrAccessModeUnsupported) {
 		t.Fatalf("want ErrAccessModeUnsupported, got %v", err)
 	}
@@ -215,7 +216,8 @@ func TestLocalSnapshotRoundTrip(t *testing.T) {
 	d, _ := newManagedDriver(t)
 	ctx := context.Background()
 	vol := &types.Volume{Name: "src", Namespace: "default", AccessMode: types.AccessModeRWO}
-	handle, err := d.Provision(ctx, driver.ProvisionRequest{Volume: vol})
+	srcOpCtx := driver.OpContext{Volume: vol}
+	handle, err := d.Provision(ctx, srcOpCtx, driver.ProvisionRequest{})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
@@ -225,13 +227,14 @@ func TestLocalSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	snap := &types.Snapshot{Name: "snap1", Namespace: "default", SourceVolume: "src"}
-	snapHandle, err := d.Snapshot(ctx, driver.SnapshotRequest{Volume: vol, Handle: handle, Snapshot: snap})
+	snapHandle, err := d.Snapshot(ctx, srcOpCtx, driver.SnapshotRequest{Handle: handle, Snapshot: snap})
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	target := &types.Volume{Name: "restored", Namespace: "default", AccessMode: types.AccessModeRWO}
-	restoredHandle, err := d.RestoreFromSnapshot(ctx, driver.RestoreRequest{
-		Source: snap, SourceHandle: snapHandle, Target: target,
+	restoredOpCtx := driver.OpContext{Volume: target}
+	restoredHandle, err := d.RestoreFromSnapshot(ctx, restoredOpCtx, driver.RestoreRequest{
+		Source: snap, SourceHandle: snapHandle,
 	})
 	if err != nil {
 		t.Fatalf("RestoreFromSnapshot: %v", err)
@@ -278,15 +281,16 @@ func TestLocalHostWriteRestartRead(t *testing.T) {
 
 	ctx := context.Background()
 
+	opctx := driver.OpContext{
+		Volume:     vol,
+		Parameters: vol.Parameters,
+	}
 	d1 := mkDriver()
-	handle, err := d1.Provision(ctx, driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: vol.Parameters,
-	})
+	handle, err := d1.Provision(ctx, opctx, driver.ProvisionRequest{})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	target1, err := d1.Mount(ctx, driver.MountOpts{Volume: vol, Handle: handle})
+	target1, err := d1.Mount(ctx, opctx, driver.MountOpts{Handle: handle})
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
@@ -295,13 +299,13 @@ func TestLocalHostWriteRestartRead(t *testing.T) {
 	if err := os.WriteFile(payload, []byte("survives-restart"), 0o600); err != nil {
 		t.Fatalf("write payload: %v", err)
 	}
-	if err := d1.Unmount(ctx, target1); err != nil {
+	if err := d1.Unmount(ctx, opctx, target1); err != nil {
 		t.Fatalf("Unmount: %v", err)
 	}
 
 	// Fresh driver, fresh process state — same on-disk host path.
 	d2 := mkDriver()
-	target2, err := d2.Mount(ctx, driver.MountOpts{Volume: vol, Handle: handle})
+	target2, err := d2.Mount(ctx, opctx, driver.MountOpts{Handle: handle})
 	if err != nil {
 		t.Fatalf("Mount (post-restart): %v", err)
 	}
@@ -312,7 +316,7 @@ func TestLocalHostWriteRestartRead(t *testing.T) {
 	if string(got) != "survives-restart" {
 		t.Fatalf("payload mismatch after restart: got %q", got)
 	}
-	if err := d2.Unmount(ctx, target2); err != nil {
+	if err := d2.Unmount(ctx, opctx, target2); err != nil {
 		t.Fatalf("Unmount (post-restart): %v", err)
 	}
 }

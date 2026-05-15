@@ -341,7 +341,6 @@ func (f *fakeMounter) Unmount(_ context.Context, target string) error {
 func newTestDriver(t *testing.T, fake *fakeDO, ts *httptest.Server) (*doVolumeDriver, *fakeMounter) {
 	t.Helper()
 	cfg, err := parseConfig(map[string]any{
-		"apiToken":   "test-token",
 		"apiBaseURL": ts.URL,
 	})
 	if err != nil {
@@ -367,7 +366,7 @@ func mkVolume(name string) *types.Volume {
 // ============================================================================
 
 func TestFactoryRegistration(t *testing.T) {
-	d, err := driver.New(DriverName, map[string]any{"apiToken": "x"})
+	d, err := driver.New(DriverName, map[string]any{})
 	if err != nil {
 		t.Fatalf("driver.New(do-volume): %v", err)
 	}
@@ -388,68 +387,31 @@ func TestParseConfigErrors(t *testing.T) {
 		name string
 		raw  map[string]any
 	}{
-		{"both tokens", map[string]any{"apiToken": "x", "apiTokenSecretRef": "ns/n#k"}},
-		{"bad type", map[string]any{"apiToken": 42}},
-		{"bad secretRef no hash", map[string]any{"apiTokenSecretRef": "ns/name"}},
-		{"bad secretRef no slash", map[string]any{"apiTokenSecretRef": "name#k"}},
+		{"apiBaseURL bad type", map[string]any{"apiBaseURL": 42}},
+		{"volumeNamePrefix bad type", map[string]any{"volumeNamePrefix": 42}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := parseConfig(tc.raw)
-			if tc.name == "bad secretRef no hash" || tc.name == "bad secretRef no slash" {
-				// parseConfig itself accepts the string; resolveToken is what fails
-				if err != nil {
-					return
-				}
-				if _, rerr := cfg.resolveToken(context.Background()); rerr == nil {
-					t.Fatalf("expected resolveToken error for %s", tc.name)
-				}
-				return
-			}
-			if err == nil {
+			if _, err := parseConfig(tc.raw); err == nil {
 				t.Fatalf("expected parseConfig error for %s", tc.name)
 			}
 		})
 	}
 }
 
-func TestSecretLookupResolvesToken(t *testing.T) {
-	called := 0
-	lookup := SecretLookup(func(_ context.Context, ns, name, key string) (string, error) {
-		called++
-		if ns != "infra" || name != "do-creds" || key != "token" {
-			t.Fatalf("unexpected lookup args: %s/%s#%s", ns, name, key)
-		}
-		return "rotated-token-" + fmt.Sprint(called), nil
-	})
-	cfg, err := parseConfig(map[string]any{
-		"apiTokenSecretRef":   "infra/do-creds#token",
-		configKeySecretLookup: lookup,
-	})
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
-	tok1, err := cfg.resolveToken(context.Background())
-	if err != nil {
-		t.Fatalf("resolveToken: %v", err)
-	}
-	tok2, _ := cfg.resolveToken(context.Background())
-	if tok1 == tok2 {
-		t.Fatalf("expected fresh resolution per call (got %q twice)", tok1)
-	}
-	if called != 2 {
-		t.Fatalf("expected 2 lookups, got %d", called)
-	}
-}
-
-func TestResolveToken_MissingLookup(t *testing.T) {
-	cfg, err := parseConfig(map[string]any{"apiTokenSecretRef": "ns/n#k"})
-	if err != nil {
-		t.Fatalf("parseConfig: %v", err)
-	}
-	if _, err := cfg.resolveToken(context.Background()); err == nil ||
-		!strings.Contains(err.Error(), "no SecretLookup") {
-		t.Fatalf("expected SecretLookup-missing error, got %v", err)
+func TestTokenRequired(t *testing.T) {
+	fake := newFakeDO(t)
+	ts := fake.server()
+	defer ts.Close()
+	d, _ := newTestDriver(t, fake, ts)
+	// Omit apiToken — driver must surface a clear error rather than
+	// hitting DO with no bearer token.
+	_, err := d.Provision(context.Background(), driver.OpContext{
+		Volume:     mkVolume("data"),
+		Parameters: map[string]string{"region": "nyc3"},
+	}, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	if err == nil || !strings.Contains(err.Error(), "parameters.apiToken is required") {
+		t.Fatalf("expected apiToken-required error, got %v", err)
 	}
 }
 
@@ -459,10 +421,9 @@ func TestProvision_HappyPath(t *testing.T) {
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
 	vol := mkVolume("data")
-	handle, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        5 * 1_000_000_000,
+	opctx := nyc3OpCtx(vol)
+	handle, err := d.Provision(context.Background(), opctx, driver.ProvisionRequest{
+		SizeBytes: 5 * 1_000_000_000,
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -490,10 +451,11 @@ func TestProvision_RegionRequired(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:    mkVolume("data"),
-		SizeBytes: 1 << 30,
-	})
+	// Empty Parameters map — region is missing.
+	_, err := d.Provision(context.Background(), driver.OpContext{
+		Volume:     mkVolume("data"),
+		Parameters: map[string]string{},
+	}, driver.ProvisionRequest{SizeBytes: 1 << 30})
 	if err == nil || !strings.Contains(err.Error(), "region") {
 		t.Fatalf("expected region-required error, got %v", err)
 	}
@@ -506,11 +468,7 @@ func TestProvision_AccessModeUnsupported(t *testing.T) {
 	d, _ := newTestDriver(t, fake, ts)
 	vol := mkVolume("data")
 	vol.AccessMode = types.AccessModeRWX
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
+	_, err := d.Provision(context.Background(), nyc3OpCtx(vol), driver.ProvisionRequest{SizeBytes: 1 << 30})
 	if !errors.Is(err, driver.ErrAccessModeUnsupported) {
 		t.Fatalf("expected ErrAccessModeUnsupported, got %v", err)
 	}
@@ -522,10 +480,11 @@ func TestDelete_Idempotent(t *testing.T) {
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
 	// missing handle -> no error
-	if err := d.Delete(context.Background(), "vol-does-not-exist"); err != nil {
+	opctx := driver.OpContext{Parameters: map[string]string{"apiToken": "test-token"}}
+	if err := d.Delete(context.Background(), opctx, "vol-does-not-exist"); err != nil {
 		t.Fatalf("expected idempotent Delete, got %v", err)
 	}
-	if err := d.Delete(context.Background(), ""); err != nil {
+	if err := d.Delete(context.Background(), driver.OpContext{}, ""); err != nil {
 		t.Fatalf("empty handle Delete: %v", err)
 	}
 }
@@ -536,15 +495,13 @@ func TestAttachDetach(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	handle, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("data"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        2 * 1_000_000_000,
-	})
+	vol := mkVolume("data")
+	opctx := nyc3OpCtx(vol)
+	handle, err := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 2 * 1_000_000_000})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	dev, err := d.Attach(context.Background(), handle, "node-a")
+	dev, err := d.Attach(context.Background(), opctx, handle, "node-a")
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -552,21 +509,45 @@ func TestAttachDetach(t *testing.T) {
 		t.Fatalf("unexpected device path %q", dev)
 	}
 	// Idempotent re-attach: same droplet -> no error, no new attach action.
-	if _, err := d.Attach(context.Background(), handle, "node-a"); err != nil {
+	if _, err := d.Attach(context.Background(), opctx, handle, "node-a"); err != nil {
 		t.Fatalf("re-Attach: %v", err)
 	}
 	// Attach to a different droplet -> error
 	fake.addDroplet("node-b", 9002)
-	if _, err := d.Attach(context.Background(), handle, "node-b"); err == nil {
+	if _, err := d.Attach(context.Background(), opctx, handle, "node-b"); err == nil {
 		t.Fatalf("expected attach-to-different-droplet error")
 	}
 	// Detach
-	if err := d.Detach(context.Background(), handle, "node-a"); err != nil {
+	if err := d.Detach(context.Background(), opctx, handle, "node-a"); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
 	// Detach idempotent
-	if err := d.Detach(context.Background(), handle, "node-a"); err != nil {
+	if err := d.Detach(context.Background(), opctx, handle, "node-a"); err != nil {
 		t.Fatalf("re-Detach: %v", err)
+	}
+}
+
+// When the agent threads OpContext.NodeHostname through, the driver
+// must use it for the /v2/droplets?name=... lookup instead of the
+// Rune node ID — DO has no droplet named "node-<rand>" but it does
+// have one named after the host's hostname.
+func TestAttach_UsesNodeHostnameOverNodeID(t *testing.T) {
+	fake := newFakeDO(t)
+	fake.addDroplet("rune-edge-lon1", 570378027)
+	ts := fake.server()
+	defer ts.Close()
+	d, _ := newTestDriver(t, fake, ts)
+	vol := mkVolume("data")
+	opctx := nyc3OpCtx(vol)
+	opctx.NodeHostname = "rune-edge-lon1"
+	handle, err := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	// Pass a Rune-style NodeID that does NOT match any droplet name;
+	// the lookup must succeed via NodeHostname.
+	if _, err := d.Attach(context.Background(), opctx, handle, "node-5d7a0ab4bfe76078"); err != nil {
+		t.Fatalf("Attach: %v", err)
 	}
 }
 
@@ -575,12 +556,10 @@ func TestAttach_UnknownNode(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
-	_, err := d.Attach(context.Background(), handle, "ghost")
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	_, err := d.Attach(context.Background(), opctx, handle, "ghost")
 	if err == nil || !strings.Contains(err.Error(), "no DO droplet") {
 		t.Fatalf("expected no-droplet error, got %v", err)
 	}
@@ -592,14 +571,12 @@ func TestMountUnmount(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, mounter := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
-	dev, _ := d.Attach(context.Background(), handle, "node-a")
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	dev, _ := d.Attach(context.Background(), opctx, handle, "node-a")
 	target := "/var/lib/rune/mounts/" + string(handle)
-	got, err := d.Mount(context.Background(), driver.MountOpts{
+	got, err := d.Mount(context.Background(), opctx, driver.MountOpts{
 		Handle: handle,
 		Device: dev,
 		Target: driver.MountTarget(target),
@@ -617,7 +594,7 @@ func TestMountUnmount(t *testing.T) {
 	if mounter.mounts[target] != string(dev) {
 		t.Fatalf("not mounted: %+v", mounter.mounts)
 	}
-	if err := d.Unmount(context.Background(), got); err != nil {
+	if err := d.Unmount(context.Background(), opctx, got); err != nil {
 		t.Fatalf("Unmount: %v", err)
 	}
 	if _, ok := mounter.mounts[target]; ok {
@@ -630,12 +607,10 @@ func TestMount_ReadOnlySkipsFormat(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, mounter := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
-	_, err := d.Mount(context.Background(), driver.MountOpts{
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	_, err := d.Mount(context.Background(), opctx, driver.MountOpts{
 		Handle:   handle,
 		Device:   "/dev/sda",
 		Target:   "/mnt/x",
@@ -655,14 +630,11 @@ func TestSnapshotAndRestore(t *testing.T) {
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
 	vol := mkVolume("d")
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           vol,
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        2 * 1_000_000_000,
-	})
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 2 * 1_000_000_000})
 	snap := &types.Snapshot{Name: "s1", Namespace: "default"}
-	snapHandle, err := d.Snapshot(context.Background(), driver.SnapshotRequest{
-		Volume: vol, Handle: handle, Snapshot: snap,
+	snapHandle, err := d.Snapshot(context.Background(), opctx, driver.SnapshotRequest{
+		Handle: handle, Snapshot: snap,
 	})
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
@@ -671,12 +643,11 @@ func TestSnapshotAndRestore(t *testing.T) {
 		t.Fatalf("empty snapshot handle")
 	}
 	target := mkVolume("restored")
-	restoredHandle, err := d.RestoreFromSnapshot(context.Background(), driver.RestoreRequest{
-		Source:           snap,
-		SourceHandle:     snapHandle,
-		Target:           target,
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        2 * 1_000_000_000,
+	restoreOpCtx := nyc3OpCtx(target)
+	restoredHandle, err := d.RestoreFromSnapshot(context.Background(), restoreOpCtx, driver.RestoreRequest{
+		Source:       snap,
+		SourceHandle: snapHandle,
+		SizeBytes:    2 * 1_000_000_000,
 	})
 	if err != nil {
 		t.Fatalf("RestoreFromSnapshot: %v", err)
@@ -692,21 +663,34 @@ func TestExpand(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        2 * 1_000_000_000,
-	})
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 2 * 1_000_000_000})
 	// Detached -> expand succeeds.
-	if err := d.Expand(context.Background(), handle, "10G"); err != nil {
+	if err := d.Expand(context.Background(), opctx, handle, "10G"); err != nil {
 		t.Fatalf("Expand detached: %v", err)
 	}
 	// Attached -> ErrOnlineExpandUnsupported.
-	if _, err := d.Attach(context.Background(), handle, "node-a"); err != nil {
+	if _, err := d.Attach(context.Background(), opctx, handle, "node-a"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
-	if err := d.Expand(context.Background(), handle, "20G"); !errors.Is(err, driver.ErrOnlineExpandUnsupported) {
+	if err := d.Expand(context.Background(), opctx, handle, "20G"); !errors.Is(err, driver.ErrOnlineExpandUnsupported) {
 		t.Fatalf("expected ErrOnlineExpandUnsupported when attached, got %v", err)
+	}
+}
+
+// nyc3OpCtx builds an OpContext with the volume + a region=nyc3
+// parameter map that every Provision-shaped test in this file needs.
+// Keeping the construction in a helper means the bulk of each test
+// body stays focused on the behaviour being asserted rather than on
+// the boilerplate of building the request.
+func nyc3OpCtx(vol *types.Volume) driver.OpContext {
+	return driver.OpContext{
+		Volume: vol,
+		Parameters: map[string]string{
+			"region":   "nyc3",
+			"apiToken": "test-token",
+		},
 	}
 }
 
@@ -780,12 +764,10 @@ func TestActionPolling_Errored(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	handle, _ := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
-	_, err := d.Attach(context.Background(), handle, "n")
+	vol := mkVolume("d")
+	opctx := nyc3OpCtx(vol)
+	handle, _ := d.Provision(context.Background(), opctx, driver.ProvisionRequest{SizeBytes: 1 << 30})
+	_, err := d.Attach(context.Background(), opctx, handle, "n")
 	if err == nil || !strings.Contains(err.Error(), "errored") {
 		t.Fatalf("expected errored action failure, got %v", err)
 	}
@@ -796,11 +778,7 @@ func TestBearerTokenSent(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	if _, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	}); err != nil {
+	if _, err := d.Provision(context.Background(), nyc3OpCtx(mkVolume("d")), driver.ProvisionRequest{SizeBytes: 1 << 30}); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
 	fake.mu.Lock()
@@ -824,11 +802,7 @@ func TestProvision_ServerError(t *testing.T) {
 	ts := fake.server()
 	defer ts.Close()
 	d, _ := newTestDriver(t, fake, ts)
-	_, err := d.Provision(context.Background(), driver.ProvisionRequest{
-		Volume:           mkVolume("d"),
-		MergedParameters: map[string]string{"region": "nyc3"},
-		SizeBytes:        1 << 30,
-	})
+	_, err := d.Provision(context.Background(), nyc3OpCtx(mkVolume("d")), driver.ProvisionRequest{SizeBytes: 1 << 30})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("expected HTTP 500 error, got %v", err)
 	}
