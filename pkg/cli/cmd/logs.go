@@ -244,12 +244,17 @@ func streamLogs(ctx context.Context, apiClient *client.Client, targetName string
 		return fmt.Errorf("failed to send log request: %w", err)
 	}
 
-	// Handle logs based on mode (streaming or non-streaming)
+	// We don't send any further client-to-server messages today, so half-close
+	// the send side. This lets the server's client-watch goroutine observe EOF
+	// promptly when we cancel, instead of blocking on Recv forever.
+	if err := stream.CloseSend(); err != nil {
+		return fmt.Errorf("failed to close send stream: %w", err)
+	}
+
 	if !opts.follow {
 		return handleNonStreamingLogs(ctx, stream, opts)
-	} else {
-		return handleStreamingLogs(ctx, stream, opts)
 	}
+	return handleStreamingLogs(ctx, stream, opts)
 }
 
 // addCommonRequestParams adds common parameters to the log request
@@ -270,84 +275,75 @@ func addCommonRequestParams(logRequest *generated.LogRequest, opts *logsOptions)
 	}
 }
 
-// handleNonStreamingLogs handles logs in non-streaming (non-follow) mode
+// handleNonStreamingLogs collects logs until the server signals EOF (or the
+// user cancels), keeps at most opts.tail of them (across all instances), and
+// prints them in receive order. tail<=0 means "no client-side cap": rely on
+// the server-applied tail.
 func handleNonStreamingLogs(ctx context.Context, stream generated.LogService_StreamLogsClient, opts *logsOptions) error {
-	// Create a timeout context to prevent infinite waiting in non-follow mode
-	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	// Use a ring buffer approach to only keep the most recent logs
-	// This is much more memory efficient than collecting all logs first
-	ringBuffer := make([]*generated.LogResponse, opts.tail)
-	bufferIndex := 0
-	bufferFilled := false
-
-	// Collect logs until we have enough, hit EOF, or timeout
-	logsCollecting := true
-	for logsCollecting {
-		// Use a channel and goroutine to handle timeout gracefully
-		respCh := make(chan *generated.LogResponse, 1)
-		errCh := make(chan error, 1)
-
-		go func() {
+	type recvResult struct {
+		resp *generated.LogResponse
+		err  error
+	}
+	recvCh := make(chan recvResult, 1)
+	go func() {
+		defer close(recvCh)
+		for {
 			r, e := stream.Recv()
+			recvCh <- recvResult{resp: r, err: e}
 			if e != nil {
-				errCh <- e
 				return
 			}
-			respCh <- r
-		}()
+		}
+	}()
 
-		// Wait for either response, error, or timeout
+	useRing := opts.tail > 0
+	var ring []*generated.LogResponse
+	if useRing {
+		ring = make([]*generated.LogResponse, 0, opts.tail)
+	}
+	var all []*generated.LogResponse
+
+collect:
+	for {
 		select {
-		case resp := <-respCh:
-			// Skip logs that don't match filters
-			if !shouldProcessLog(resp, opts) {
+		case <-ctx.Done():
+			break collect
+		case res, ok := <-recvCh:
+			if !ok {
+				break collect
+			}
+			if res.err != nil {
+				if res.err == io.EOF {
+					break collect
+				}
+				if ctx.Err() != nil {
+					break collect
+				}
+				return fmt.Errorf("error receiving logs: %w", res.err)
+			}
+			if !shouldProcessLog(res.resp, opts) {
 				continue
 			}
-
-			// Add to ring buffer, overwriting older entries as needed
-			ringBuffer[bufferIndex] = resp
-			bufferIndex = (bufferIndex + 1) % opts.tail
-			if bufferIndex == 0 {
-				bufferFilled = true
-			}
-
-			// If we've received enough logs and filled the buffer, we can exit collection
-			if opts.tail > 0 && (bufferFilled || bufferIndex >= opts.tail) {
-				logsCollecting = false
-			}
-
-		case err := <-errCh:
-			// Check error type
-			if err == io.EOF {
-				// End of stream, proceed with processing collected logs
-				logsCollecting = false
+			if useRing {
+				if len(ring) < opts.tail {
+					ring = append(ring, res.resp)
+				} else {
+					copy(ring, ring[1:])
+					ring[len(ring)-1] = res.resp
+				}
 			} else {
-				// Any other error should be returned
-				return fmt.Errorf("error receiving logs: %w", err)
+				all = append(all, res.resp)
 			}
-
-		case <-timeoutCtx.Done():
-			// Timeout reached, proceed with processing the logs we have
-			logsCollecting = false
 		}
 	}
 
-	// Process logs in the correct order
-	var logsToProcess []*generated.LogResponse
-	if bufferFilled {
-		// Buffer has wrapped around, reorder to show oldest to newest
-		logsToProcess = append(ringBuffer[bufferIndex:], ringBuffer[:bufferIndex]...)
-	} else {
-		// Buffer hasn't filled up yet, just take the valid entries
-		logsToProcess = ringBuffer[:bufferIndex]
+	logsToProcess := all
+	if useRing {
+		logsToProcess = ring
 	}
-
-	// Process the filtered logs
 	for _, resp := range logsToProcess {
 		if resp == nil {
-			continue // Skip any nil entries in the buffer
+			continue
 		}
 		if err := processLogResponse(resp, opts); err != nil {
 			fmt.Fprintf(os.Stderr, "Error processing log: %v\n", err)
@@ -357,45 +353,29 @@ func handleNonStreamingLogs(ctx context.Context, stream generated.LogService_Str
 	return nil
 }
 
-// handleStreamingLogs handles logs in streaming (follow) mode
+// handleStreamingLogs handles logs in streaming (follow) mode. Logs are
+// printed inline as they arrive. The function returns when the server closes
+// the stream, an error occurs, or the user cancels via ctx (Ctrl+C). When ctx
+// is cancelled, the gRPC stream's Recv returns an error and the goroutine
+// exits cleanly.
 func handleStreamingLogs(ctx context.Context, stream generated.LogService_StreamLogsClient, opts *logsOptions) error {
-	errCh := make(chan error, 1)
-
-	// For follow mode, process logs as they arrive
-	go func() {
-		defer close(errCh)
-
-		for {
-			resp, err := stream.Recv()
-			if err == io.EOF {
-				// Stream closed normally
-				errCh <- nil
-				return
-			}
-			if err != nil {
-				errCh <- fmt.Errorf("error receiving logs: %w", err)
-				return
-			}
-
-			// Skip logs that don't match filters
-			if !shouldProcessLog(resp, opts) {
-				continue
-			}
-
-			// Process the log response
-			if err := processLogResponse(resp, opts); err != nil {
-				fmt.Fprintf(os.Stderr, "Error processing log: %v\n", err)
-			}
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			return nil
 		}
-	}()
-
-	// Wait for completion or error
-	select {
-	case <-ctx.Done():
-		// Context canceled, clean up
-		return nil
-	case err := <-errCh:
-		return err
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("error receiving logs: %w", err)
+		}
+		if !shouldProcessLog(resp, opts) {
+			continue
+		}
+		if err := processLogResponse(resp, opts); err != nil {
+			fmt.Fprintf(os.Stderr, "Error processing log: %v\n", err)
+		}
 	}
 }
 
@@ -418,12 +398,10 @@ func shouldProcessLog(resp *generated.LogResponse, opts *logsOptions) bool {
 	return true
 }
 
-// processLogResponse processes and displays a log response based on the output format
+// processLogResponse processes and displays a log response based on the output format.
+// Filtering is done upstream in shouldProcessLog; this function only formats output.
 func processLogResponse(resp *generated.LogResponse, opts *logsOptions) error {
-	// Get the log level
 	logLevel := resp.LogLevel
-
-	// Fallback determination if the server doesn't provide this field
 	if logLevel == "" {
 		logLevel = "info"
 		if strings.Contains(strings.ToLower(resp.Content), "error") {
@@ -431,25 +409,16 @@ func processLogResponse(resp *generated.LogResponse, opts *logsOptions) error {
 		}
 	}
 
-	// Apply pattern filter if specified
-	if opts.pattern != "" && !strings.Contains(strings.ToLower(resp.Content), strings.ToLower(opts.pattern)) {
-		return nil
-	}
-
-	// Clean up the content - remove any special characters that might cause line breaks
+	// Normalize embedded line breaks so each response prints on a single line.
 	content := resp.Content
-	// Replace any carriage returns or newlines with spaces
 	content = strings.ReplaceAll(content, "\r", " ")
 	content = strings.ReplaceAll(content, "\n", " ")
-	// Normalize multiple spaces into single spaces
 	content = strings.Join(strings.Fields(content), " ")
 
-	// Set up colors for text output
 	timeColor := color.New(color.FgCyan)
 	nameColor := color.New(color.FgGreen, color.Bold)
 	errorColor := color.New(color.FgRed)
 	infoColor := color.New(color.FgWhite)
-
 	if opts.noColor {
 		timeColor.DisableColor()
 		nameColor.DisableColor()
@@ -457,46 +426,43 @@ func processLogResponse(resp *generated.LogResponse, opts *logsOptions) error {
 		infoColor.DisableColor()
 	}
 
-	// Format timestamp if provided
-	timestamp := resp.Timestamp
-	if timestamp == "" {
-		timestamp = time.Now().Format("2006-01-02T15:04:05.000Z07:00")
-	} else {
-		// Convert RFC3339 to more readable format
-		if t, err := time.Parse(time.RFC3339, timestamp); err == nil {
-			timestamp = t.Format("2006-01-02T15:04:05.000Z07:00")
-		}
+	// Build a display timestamp; keep an RFC3339 form for JSON output.
+	const displayLayout = "2006-01-02T15:04:05.000Z07:00"
+	displayTimestamp := resp.Timestamp
+	rfcTimestamp := resp.Timestamp
+	if rfcTimestamp == "" {
+		now := time.Now().UTC()
+		rfcTimestamp = now.Format(time.RFC3339Nano)
+		displayTimestamp = now.Format(displayLayout)
+	} else if t, err := time.Parse(time.RFC3339, resp.Timestamp); err == nil {
+		displayTimestamp = t.Format(displayLayout)
+		rfcTimestamp = t.UTC().Format(time.RFC3339Nano)
 	}
 
-	// Create prefix if requested
 	var prefix string
 	if opts.showPrefix {
 		var prefixParts []string
-
 		if resp.ServiceName != "" {
 			prefixParts = append(prefixParts, resp.ServiceName)
 		}
-
 		if resp.InstanceName != "" {
 			prefixParts = append(prefixParts, resp.InstanceName)
 		}
-
-		prefix = nameColor.Sprint(strings.Join(prefixParts, "/")) + " "
+		if len(prefixParts) > 0 {
+			prefix = nameColor.Sprint(strings.Join(prefixParts, "/")) + " "
+		}
 	}
 
-	// Output based on format
 	switch opts.outputFormat {
 	case OutputFormatJSON:
-		// Output as JSON
 		jsonEntry := map[string]string{
-			"timestamp": resp.Timestamp,
+			"timestamp": rfcTimestamp,
 			"service":   resp.ServiceName,
 			"instance":  resp.InstanceId,
 			"content":   content,
 			"level":     logLevel,
 			"stream":    resp.Stream,
 		}
-
 		jsonBytes, err := json.Marshal(jsonEntry)
 		if err != nil {
 			return err
@@ -504,33 +470,23 @@ func processLogResponse(resp *generated.LogResponse, opts *logsOptions) error {
 		fmt.Println(string(jsonBytes))
 
 	case OutputFormatRaw:
-		// Output just the content without formatting
 		fmt.Println(content)
 
 	case OutputFormatText:
 		fallthrough
 	default:
-		// Format with colors based on log level
 		var formattedContent string
 		if logLevel == "error" {
 			formattedContent = errorColor.Sprint(content)
 		} else {
 			formattedContent = infoColor.Sprint(content)
 		}
-
-		// Normalize line breaks in the content
 		formattedContent = strings.TrimSpace(formattedContent)
 
-		// Check if timestamps should be shown
 		if opts.showTimestamps {
-			fmt.Printf("%s | %s%s\n",
-				timeColor.Sprint(timestamp),
-				prefix,
-				formattedContent)
+			fmt.Printf("%s | %s%s\n", timeColor.Sprint(displayTimestamp), prefix, formattedContent)
 		} else {
-			fmt.Printf("%s%s\n",
-				prefix,
-				formattedContent)
+			fmt.Printf("%s%s\n", prefix, formattedContent)
 		}
 	}
 

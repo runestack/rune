@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-// MultiLogStreamer combines log streams from multiple instances into a single stream
+// MultiLogStreamer combines log streams from multiple instances into a single
+// stream. Reads block until data is available, all collectors complete, or the
+// streamer is closed — no polling.
 type MultiLogStreamer struct {
 	readers  []io.ReadCloser
 	buffer   *bytes.Buffer
@@ -17,6 +19,7 @@ type MultiLogStreamer struct {
 	closed   bool
 	closeMu  sync.Mutex
 	done     chan struct{}
+	notify   chan struct{} // signalled (non-blocking) whenever new data is written
 	wg       sync.WaitGroup
 	metadata bool
 }
@@ -34,6 +37,7 @@ func NewMultiLogStreamer(instances []InstanceLogInfo, includeMetadata bool) *Mul
 		readers:  make([]io.ReadCloser, len(instances)),
 		buffer:   bytes.NewBuffer(nil),
 		done:     make(chan struct{}),
+		notify:   make(chan struct{}, 1),
 		metadata: includeMetadata,
 	}
 
@@ -57,10 +61,20 @@ func NewMultiLogStreamer(instances []InstanceLogInfo, includeMetadata bool) *Mul
 	return m
 }
 
+// signal wakes any blocked Read call. Non-blocking — a pending signal is
+// sufficient to wake the reader on its next loop iteration.
+func (m *MultiLogStreamer) signal() {
+	select {
+	case m.notify <- struct{}{}:
+	default:
+	}
+}
+
 // collectLogs reads from a reader and writes to the buffer with instance metadata
 func (m *MultiLogStreamer) collectLogs(reader io.ReadCloser, instance InstanceLogInfo) {
 	defer m.wg.Done()
 	defer reader.Close()
+	defer m.signal()
 
 	buf := make([]byte, 4096)
 	lineBuffer := make([]byte, 0, 4096)
@@ -70,75 +84,55 @@ func (m *MultiLogStreamer) collectLogs(reader io.ReadCloser, instance InstanceLo
 		if n > 0 {
 			m.bufMu.Lock()
 
-			// Process the buffer line by line to add metadata at the beginning of each line
 			if m.metadata {
 				data := buf[:n]
 				for i := 0; i < n; i++ {
 					lineBuffer = append(lineBuffer, data[i])
-
-					// If we have a full line or this is the last chunk of data
 					if data[i] == '\n' || (err == io.EOF && i == n-1) {
-						// Check if line already has our metadata format
-						lineStr := string(lineBuffer)
-						alreadyHasMetadata := lineHasMetadata(lineStr)
-
-						if alreadyHasMetadata {
-							// If already has metadata, write as is
+						if lineHasMetadata(string(lineBuffer)) {
 							m.buffer.Write(lineBuffer)
 						} else {
-							// Add metadata prefix
-							prefix := buildLineMetadata(instance)
-							m.buffer.WriteString(prefix)
+							m.buffer.WriteString(buildLineMetadata(instance))
 							m.buffer.Write(lineBuffer)
 						}
-
-						lineBuffer = lineBuffer[:0] // Clear the line buffer
+						lineBuffer = lineBuffer[:0]
 					}
 				}
 			} else {
-				// If not adding metadata, just write the data as is
 				m.buffer.Write(buf[:n])
 			}
 
 			m.bufMu.Unlock()
+			m.signal()
 		}
 
 		if err != nil {
 			if err != io.EOF {
-				// Log error but continue with other readers
 				fmt.Printf("Error reading from %s logs: %v\n", instance.InstanceID, err)
 			}
 
-			// If we have any remaining data in the line buffer, write it out
 			if m.metadata && len(lineBuffer) > 0 {
 				m.bufMu.Lock()
-
-				// Check if line already has our metadata format
-				lineStr := string(lineBuffer)
-				alreadyHasMetadata := lineHasMetadata(lineStr)
-
-				if alreadyHasMetadata {
-					// If already has metadata, write as is
+				if lineHasMetadata(string(lineBuffer)) {
 					m.buffer.Write(lineBuffer)
 				} else {
-					// Add metadata prefix
-					prefix := buildLineMetadata(instance)
-					m.buffer.WriteString(prefix)
+					m.buffer.WriteString(buildLineMetadata(instance))
 					m.buffer.Write(lineBuffer)
 				}
-
 				m.bufMu.Unlock()
+				m.signal()
 			}
 
-			break
+			return
 		}
 	}
 }
 
-// Read implements the io.Reader interface
+// Read implements the io.Reader interface. It blocks until data is available
+// or all collectors have finished. Returns io.EOF after all readers complete
+// and the buffer has been drained.
 func (m *MultiLogStreamer) Read(p []byte) (n int, err error) {
 	for {
-		// Check if we have data in the buffer
 		m.bufMu.Lock()
 		if m.buffer.Len() > 0 {
 			n, err = m.buffer.Read(p)
@@ -147,23 +141,19 @@ func (m *MultiLogStreamer) Read(p []byte) (n int, err error) {
 		}
 		m.bufMu.Unlock()
 
-		// If not, check if we're done
+		// No data; either wait for more or report EOF if collectors finished.
 		select {
+		case <-m.notify:
+			// Loop and try the buffer again.
 		case <-m.done:
-			if m.closed {
-				return 0, io.EOF
-			}
-			// One last check for data before returning EOF
 			m.bufMu.Lock()
-			n, err = m.buffer.Read(p)
-			m.bufMu.Unlock()
-			if n > 0 {
-				return n, err
+			if m.buffer.Len() > 0 {
+				n, err = m.buffer.Read(p)
+				m.bufMu.Unlock()
+				return
 			}
+			m.bufMu.Unlock()
 			return 0, io.EOF
-		default:
-			// Wait a bit before checking again
-			time.Sleep(100 * time.Millisecond)
 		}
 	}
 }
@@ -185,6 +175,9 @@ func (m *MultiLogStreamer) Close() error {
 			firstErr = err
 		}
 	}
+
+	// Wake any blocked Read so it can re-check m.done.
+	m.signal()
 
 	return firstErr
 }

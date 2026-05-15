@@ -457,15 +457,19 @@ func (r *DockerRunner) GetLogs(ctx context.Context, instance *runetypes.Instance
 		return nil, fmt.Errorf("failed to get container ID: %w", err)
 	}
 
-	// Convert our options to Docker options
-	since := options.Since.Format(time.RFC3339Nano)
-	until := options.Until.Format(time.RFC3339Nano)
+	// Only set Since/Until when explicitly provided; otherwise a zero time
+	// would serialize as "0001-01-01T00:00:00Z" and Docker would interpret
+	// Until=year-1 as "show no logs at all".
+	var since, until string
+	if !options.Since.IsZero() {
+		since = options.Since.Format(time.RFC3339Nano)
+	}
+	if !options.Until.IsZero() {
+		until = options.Until.Format(time.RFC3339Nano)
+	}
 
-	// Convert tail option to string
-	var tail string
-	if options.Tail <= 0 {
-		tail = "all"
-	} else {
+	tail := "all"
+	if options.Tail > 0 {
 		tail = fmt.Sprintf("%d", options.Tail)
 	}
 
