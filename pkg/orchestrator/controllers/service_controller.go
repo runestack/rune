@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ type ServiceController interface {
 	UpdateServiceStatus(ctx context.Context, service *types.Service, status types.ServiceStatus) error
 	GetServiceLogs(ctx context.Context, namespace, name string, opts types.LogOptions) (io.ReadCloser, error)
 	ExecInService(ctx context.Context, namespace, serviceName string, options types.ExecOptions) (types.ExecStream, error)
+	DialInService(ctx context.Context, namespace, serviceName string, port uint32) (net.Conn, *types.Instance, error)
 	RestartService(ctx context.Context, namespace, serviceName string) error
 	StopService(ctx context.Context, namespace, serviceName string) error
 	DeleteService(ctx context.Context, request *types.DeletionRequest) (*types.DeletionResponse, error)
@@ -455,6 +457,42 @@ func (sc *serviceController) ExecInService(ctx context.Context, namespace, servi
 
 	// Execute command in the selected instance
 	return sc.instanceController.Exec(ctx, runningInstance, options)
+}
+
+// DialInService picks the first Running instance for the service and
+// opens a TCP connection to the given port on it. Mirrors
+// ExecInService's selection semantics. Returns the chosen instance so
+// the caller can surface it (e.g. in a PortForwardReady frame).
+func (sc *serviceController) DialInService(ctx context.Context, namespace, serviceName string, port uint32) (net.Conn, *types.Instance, error) {
+	var service types.Service
+	if err := sc.store.Get(ctx, types.ResourceTypeService, namespace, serviceName, &service); err != nil {
+		return nil, nil, fmt.Errorf("failed to get service: %w", err)
+	}
+
+	instances, err := sc.listInstancesForService(ctx, namespace, serviceName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list instances: %w", err)
+	}
+	if len(instances) == 0 {
+		return nil, nil, fmt.Errorf("no instances found for service %s in namespace %s", serviceName, namespace)
+	}
+
+	var runningInstance *types.Instance
+	for _, instance := range instances {
+		if instance.Status == types.InstanceStatusRunning {
+			runningInstance = instance
+			break
+		}
+	}
+	if runningInstance == nil {
+		return nil, nil, fmt.Errorf("no running instances found for service %s in namespace %s", serviceName, namespace)
+	}
+
+	conn, err := sc.instanceController.Dial(ctx, runningInstance, port)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, runningInstance, nil
 }
 
 func (sc *serviceController) RestartService(ctx context.Context, namespace, serviceName string) error {

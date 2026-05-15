@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -31,6 +32,11 @@ type FakeOrchestrator struct {
 
 	// Track calls for testing
 	ExecInInstanceCalls []ExecInInstanceCall
+
+	// Port-forward (RUNE-122)
+	DialError    error
+	DialCalls    []FakeDialCall
+	LastDialPeer net.Conn
 
 	// Lifecycle
 	started bool
@@ -287,6 +293,40 @@ func (fo *FakeOrchestrator) ExecInService(ctx context.Context, namespace, servic
 		exitCode: fo.ExecExitCode,
 	}
 	return stream, nil
+}
+
+// DialInInstance returns a net.Pipe(); the peer end is stashed on the
+// fake so tests can read/write the "remote" side.
+func (fo *FakeOrchestrator) DialInInstance(ctx context.Context, namespace, instanceID string, port uint32) (net.Conn, *types.Instance, error) {
+	if fo.DialError != nil {
+		return nil, nil, fo.DialError
+	}
+	local, remote := net.Pipe()
+	fo.LastDialPeer = remote
+	fo.DialCalls = append(fo.DialCalls, FakeDialCall{Namespace: namespace, InstanceID: instanceID, Port: port})
+	inst := &types.Instance{ID: instanceID, Namespace: namespace, Status: types.InstanceStatusRunning}
+	return local, inst, nil
+}
+
+// DialInService is identical to DialInInstance for the fake, with a
+// synthetic instance name derived from the service.
+func (fo *FakeOrchestrator) DialInService(ctx context.Context, namespace, serviceName string, port uint32) (net.Conn, *types.Instance, error) {
+	if fo.DialError != nil {
+		return nil, nil, fo.DialError
+	}
+	local, remote := net.Pipe()
+	fo.LastDialPeer = remote
+	fo.DialCalls = append(fo.DialCalls, FakeDialCall{Namespace: namespace, ServiceName: serviceName, Port: port})
+	inst := &types.Instance{ID: serviceName + "-0", ServiceName: serviceName, Namespace: namespace, Status: types.InstanceStatusRunning}
+	return local, inst, nil
+}
+
+// FakeDialCall records a DialInInstance/DialInService call.
+type FakeDialCall struct {
+	Namespace   string
+	InstanceID  string
+	ServiceName string
+	Port        uint32
 }
 
 // GetDeletionStatus implements the old orchestrator interface for compatibility

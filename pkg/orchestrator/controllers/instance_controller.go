@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,10 @@ type InstanceController interface {
 	// Exec executes a command in a running instance
 	// Returns an ExecStream for bidirectional communication
 	Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+
+	// Dial opens a TCP connection to the given port on a running
+	// instance (RUNE-122). Returns a net.Conn owned by the caller.
+	Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error)
 
 	// SetEndpointPublisher wires the networking data plane (RUNE-063).
 	// May be called once at startup; nil-publisher disables publishing.
@@ -782,6 +787,29 @@ func (c *instanceController) GetInstanceLogs(ctx context.Context, instance *type
 }
 
 // Exec executes a command in a running instance
+// Dial opens a TCP connection to the given port on the instance's
+// running container/process (RUNE-122).
+func (c *instanceController) Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error) {
+	c.logger.Debug("Dialing instance",
+		log.Str("instance", instance.ID),
+		log.Int("port", int(port)))
+
+	if instance.Status != types.InstanceStatusRunning {
+		return nil, fmt.Errorf("instance is not running, status: %s", instance.Status)
+	}
+
+	_runner, err := c.runnerManager.GetInstanceRunner(instance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get runner for instance: %w", err)
+	}
+
+	conn, err := _runner.Dial(ctx, instance, port)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial instance %s:%d: %w", instance.ID, port, err)
+	}
+	return conn, nil
+}
+
 func (c *instanceController) Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error) {
 	c.logger.Debug("Executing command in instance",
 		log.Str("instance", instance.ID),

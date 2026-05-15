@@ -4,6 +4,7 @@ package runner
 import (
 	"context"
 	"io"
+	"net"
 	"time"
 
 	"github.com/runestack/rune/pkg/types"
@@ -39,6 +40,13 @@ type Runner interface {
 	// Exec creates an interactive exec session with a running instance.
 	// Returns an ExecStream for bidirectional communication.
 	Exec(ctx context.Context, instance *types.Instance, options ExecOptions) (ExecStream, error)
+
+	// Dial opens a TCP connection to the given port on the running
+	// instance. Used by the port-forward command (RUNE-122). The
+	// returned net.Conn is owned by the caller and must be Closed.
+	// Implementations should honour ctx for the dial itself; the
+	// returned Conn carries its own lifetime thereafter.
+	Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error)
 
 	// RunInit executes one InitStep (RUNE-121) synchronously against
 	// the given instance and returns the step's exit code (0 on

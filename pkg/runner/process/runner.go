@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1103,4 +1105,39 @@ func (r *ProcessRunner) Exec(ctx context.Context, instance *types.Instance, opti
 	}
 
 	return execStream, nil
+}
+
+// Dial opens a TCP connection to the given port on the local machine.
+// Process-runner instances share the host network namespace so the
+// target address is 127.0.0.1:port. Used by `rune port-forward`
+// (RUNE-122).
+func (r *ProcessRunner) Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error) {
+	if instance == nil {
+		return nil, fmt.Errorf("nil instance")
+	}
+	if port == 0 || port > 65535 {
+		return nil, fmt.Errorf("invalid port: %d", port)
+	}
+
+	r.mu.RLock()
+	_, exists := r.processes[instance.ID]
+	r.mu.RUnlock()
+	if !exists {
+		return nil, fmt.Errorf("instance not found: %s", instance.ID)
+	}
+
+	status, err := r.Status(ctx, instance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get instance status: %w", err)
+	}
+	if status != types.InstanceStatusRunning {
+		return nil, fmt.Errorf("instance is not running, status: %s", status)
+	}
+
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.FormatUint(uint64(port), 10)))
+	if err != nil {
+		return nil, fmt.Errorf("dial 127.0.0.1:%d: %w", port, err)
+	}
+	return conn, nil
 }

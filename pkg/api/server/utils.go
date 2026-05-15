@@ -38,6 +38,10 @@ func methodToAction(method string) (string, string) {
 		return "logs", "get"
 	case strings.HasPrefix(method, "/rune.api.ExecService/StreamExec"):
 		return "exec", "exec"
+	case strings.HasPrefix(method, "/rune.api.PortForwardService/StreamPortForward"):
+		// RUNE-122. Narrower than services.exec — only reaches
+		// already-listening ports, never a shell.
+		return "services", "port-forward"
 	case strings.HasPrefix(method, "/rune.api.HealthService/GetHealth"):
 		return "health", "get"
 

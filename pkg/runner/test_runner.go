@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -33,6 +34,10 @@ type TestRunner struct {
 	LogCalls         []string
 	StatusCalls      []string
 
+	// Port-forward tracking (RUNE-122)
+	DialCalls    []DialCall
+	LastDialPeer net.Conn
+
 	// Init step tracking (RUNE-121)
 	InitCalls    []InitCall
 	InitExitCode int
@@ -42,6 +47,12 @@ type TestRunner struct {
 	// scenarios). Returning a nil error and exit==0 means success.
 	InitFunc func(call int, step types.InitStep) (int, error)
 	mu       sync.RWMutex // protects the tracking fields
+}
+
+// DialCall captures one Runner.Dial invocation for assertions in tests.
+type DialCall struct {
+	InstanceID string
+	Port       uint32
 }
 
 // InitCall captures one Runner.RunInit invocation for assertions in tests.
@@ -238,6 +249,21 @@ func (r *TestRunner) Exec(ctx context.Context, instance *types.Instance, options
 		StderrContent: r.ExecErrOutput,
 		ExitCodeVal:   r.ExitCodeVal,
 	}, nil
+}
+
+// Dial returns one end of a net.Pipe; the other end is exposed via
+// LastDialPeer for tests that want to read/write the "remote side."
+// DialCalls captures the call. If ErrorToReturn is set the call fails.
+func (r *TestRunner) Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.DialCalls = append(r.DialCalls, DialCall{InstanceID: instance.ID, Port: port})
+	if r.ErrorToReturn != nil {
+		return nil, r.ErrorToReturn
+	}
+	local, remote := net.Pipe()
+	r.LastDialPeer = remote
+	return local, nil
 }
 
 // RunInit records the call and returns the configured init exit code.

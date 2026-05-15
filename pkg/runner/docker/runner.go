@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -601,6 +602,51 @@ func (r *DockerRunner) Exec(ctx context.Context, instance *runetypes.Instance, o
 	}
 
 	return execStream, nil
+}
+
+// Dial opens a TCP connection to the given port on the container's
+// network address. Used by `rune port-forward` (RUNE-122). The
+// container IP is discovered via the same logic the rest of the
+// runner uses (pickContainerIP) so behaviour is consistent with how
+// the orchestrator's ingress and networking layers reach containers.
+//
+// TODO(multi-node): today every container runs on the runed host so
+// this dial is local. Once instances can live on other nodes (Release
+// 2), this must route through the bound node's agent.
+func (r *DockerRunner) Dial(ctx context.Context, instance *runetypes.Instance, port uint32) (net.Conn, error) {
+	if instance == nil {
+		return nil, fmt.Errorf("nil instance")
+	}
+	if port == 0 || port > 65535 {
+		return nil, fmt.Errorf("invalid port: %d", port)
+	}
+
+	containerID, err := r.getContainerID(ctx, instance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get container ID: %w", err)
+	}
+
+	insp, err := r.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect container: %w", err)
+	}
+	if !insp.State.Running {
+		return nil, fmt.Errorf("container is not running")
+	}
+	if insp.NetworkSettings == nil {
+		return nil, fmt.Errorf("container has no network settings")
+	}
+	ip := pickContainerIP(insp.NetworkSettings)
+	if ip == "" {
+		return nil, fmt.Errorf("container has no reachable IP address")
+	}
+
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip, strconv.FormatUint(uint64(port), 10)))
+	if err != nil {
+		return nil, fmt.Errorf("dial %s:%d: %w", ip, port, err)
+	}
+	return conn, nil
 }
 
 // getContainerID gets the container ID for an instance.

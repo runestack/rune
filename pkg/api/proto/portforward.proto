@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package rune.api;
+
+import "pkg/api/proto/common.proto";
+
+option go_package = "github.com/runestack/rune/pkg/api/generated";
+
+// PortForwardService provides ad-hoc TCP port forwarding from an
+// operator's client to a port on a running service instance. See
+// RUNE-122. Multiplexes any number of local connections over a single
+// bidirectional stream using a per-connection conn_id.
+service PortForwardService {
+  rpc StreamPortForward(stream PortForwardClientMessage)
+      returns (stream PortForwardServerMessage);
+}
+
+// PortForwardClientMessage is sent from the CLI to the server.
+message PortForwardClientMessage {
+  oneof message {
+    PortForwardInit init = 1;
+    PortForwardOpen open = 2;
+    PortForwardData data = 3;
+    PortForwardClose close = 4;
+  }
+}
+
+// PortForwardServerMessage is sent from the server to the CLI.
+message PortForwardServerMessage {
+  oneof message {
+    PortForwardReady ready = 1;
+    PortForwardData data = 2;
+    PortForwardClose close = 3;
+    Status status = 4;
+  }
+}
+
+// PortForwardInit must be the first message on the stream. It selects
+// the target instance and (optionally) pins to a specific instance ID
+// for scale>1 services.
+message PortForwardInit {
+  oneof target {
+    string service_name = 1;
+    string instance_id = 2;
+  }
+
+  // Namespace of the service/instance. Empty string is treated as
+  // "default".
+  string namespace = 3;
+
+  // Ports the client intends to forward. Used today only for logging
+  // and audit; a per-Open frame names the actual port. Reserved for
+  // future RBAC use (e.g. policy that allows port-forward only to
+  // specific port names).
+  repeated uint32 ports = 4;
+
+  // Optional pin for scale>1 services. Ignored when target is
+  // instance_id.
+  string instance_selector = 5;
+}
+
+// PortForwardReady is sent once after Init succeeds and the server has
+// resolved the target instance. All subsequent Open frames are dialed
+// against this instance.
+message PortForwardReady {
+  string instance_id = 1;
+  string namespace = 2;
+  string service_name = 3;
+}
+
+// PortForwardOpen requests a new TCP connection to remote_port on the
+// already-bound instance. conn_id is client-assigned and must be
+// unique within the lifetime of the stream.
+message PortForwardOpen {
+  uint64 conn_id = 1;
+  uint32 remote_port = 2;
+}
+
+// PortForwardData carries bytes for an established connection.
+// Direction is implied by who sends it (client → remote or
+// remote → client).
+message PortForwardData {
+  uint64 conn_id = 1;
+  bytes payload = 2;
+}
+
+// PortForwardClose tears down a single connection. error is empty for
+// clean EOF; non-empty for transport errors.
+message PortForwardClose {
+  uint64 conn_id = 1;
+  string error = 2;
+}
