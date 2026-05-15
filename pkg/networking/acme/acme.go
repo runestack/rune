@@ -225,23 +225,58 @@ func New(cfg Config) *Orchestrator {
 // Submit registers (or refreshes) a request. Idempotent — calling
 // Submit with the same key on an already-issued cert is a no-op
 // until renewal time.
+//
+// On first registration of a host, Submit consults the CertStore for
+// an already-persisted cert and, when one exists and is still well
+// away from expiry, transitions the request directly to Issued (next
+// action = renewal point). This is the load-bearing fix for the
+// production outage where a runed restart re-issued every cert from
+// scratch and tripped the Let's Encrypt per-identifier-set rate
+// limit. See RUNE-BUG-ACME-REISSUE-ON-EVERY-RESTART.
 func (o *Orchestrator) Submit(req Request) {
 	if req.Host == "" {
 		return
 	}
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	if _, ok := o.requests[req.Key()]; ok {
 		// Already tracked.
+		o.mu.Unlock()
 		return
 	}
-	o.requests[req.Key()] = &requestState{
+	now := o.cfg.Now()
+	state := &requestState{
 		req: req,
 		status: types.IngressCertStatus{
 			Host:  req.Host,
 			State: types.IngressCertPending,
 		},
-		nextAction: o.cfg.Now(),
+		nextAction: now,
+	}
+	o.requests[req.Key()] = state
+	o.mu.Unlock()
+
+	// Probe the persistent CertStore for an existing cert outside the
+	// orchestrator mutex (Get may touch disk / a transactional store).
+	// A missing cert (nil / nil) or a parse failure falls through to
+	// the existing Pending → attemptIssue path. A live, non-expired
+	// cert short-circuits straight to Issued.
+	if cert, _, err := o.cfg.Certs.Get(context.Background(), req.Host); err == nil && len(cert) > 0 {
+		if expiry, perr := certNotAfter(cert); perr == nil && expiry.After(now.Add(o.cfg.RenewBefore)) {
+			o.mu.Lock()
+			state.status.State = types.IngressCertIssued
+			state.status.IssuedAt = nil // we don't know when LE issued it; leave nil
+			state.status.ExpiresAt = &expiry
+			state.status.LastError = ""
+			state.status.NextRetry = nil
+			state.nextAction = expiry.Add(-o.cfg.RenewBefore)
+			o.mu.Unlock()
+			o.cfg.Logger.Info("acme cert reused from persistent store",
+				log.Str("host", req.Host),
+				log.Str("namespace", req.Namespace),
+				log.Str("name", req.Name),
+				log.Time("expiresAt", expiry))
+			_ = o.cfg.Status.UpdateIngressCert(context.Background(), req.Namespace, req.Name, snapshotStatus(state, &o.mu))
+		}
 	}
 	o.wake()
 }

@@ -46,7 +46,7 @@ func TestProjectIngressRow_TLSMode(t *testing.T) {
 		t.Errorf("row mismatch: %+v", row)
 	}
 
-	svc.Expose.TLS = &types.ExposeServiceTLS{SecretName: "tls-secret"}
+	svc.Expose.TLS = &types.ExposeServiceTLS{Secret: "tls-secret"}
 	row, _ = projectIngressRow(svc)
 	if row.TLSMode != types.ExposeTLSModeManual {
 		t.Errorf("expected manual TLS mode, got %q", row.TLSMode)

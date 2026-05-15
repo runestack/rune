@@ -453,9 +453,9 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		}
 		if service.Expose.TLS != nil {
 			protoService.Expose.Tls = &generated.ExposeServiceTLS{
-				SecretName: service.Expose.TLS.SecretName,
-				Auto:       service.Expose.TLS.Auto,
-				Mode:       service.Expose.TLS.Mode,
+				Secret: service.Expose.TLS.Secret,
+				Auto:   service.Expose.TLS.Auto,
+				Mode:   service.Expose.TLS.Mode,
 			}
 		}
 	}
@@ -733,9 +733,9 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		}
 		if proto.Expose.Tls != nil {
 			service.Expose.TLS = &types.ExposeServiceTLS{
-				SecretName: proto.Expose.Tls.SecretName,
-				Auto:       proto.Expose.Tls.Auto,
-				Mode:       proto.Expose.Tls.Mode,
+				Secret: proto.Expose.Tls.Secret,
+				Auto:   proto.Expose.Tls.Auto,
+				Mode:   proto.Expose.Tls.Mode,
 			}
 		}
 	}

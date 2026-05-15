@@ -145,7 +145,7 @@ version instead of the current head.`,
 func newSecretUpdateCmd() *cobra.Command {
 	var ns string
 	var dataPairs []string
-	var fromFile string
+	var fromFile []string
 	cmd := &cobra.Command{
 		Use:   "update <name>",
 		Short: "Update an existing secret's data (creates a new version)",
@@ -156,12 +156,8 @@ or restored with 'rune secret rollback'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			data := map[string]string{}
-			if fromFile != "" {
-				fileData, err := readDataFromFile(fromFile)
-				if err != nil {
-					return fmt.Errorf("failed to read file %s: %w", fromFile, err)
-				}
-				data = fileData
+			if err := applyFromFileFlags(fromFile, data); err != nil {
+				return err
 			}
 			for _, pair := range dataPairs {
 				k, v, err := splitPair(pair)
@@ -187,8 +183,8 @@ or restored with 'rune secret rollback'.`,
 		},
 	}
 	addSecretNamespaceFlag(cmd, &ns)
-	cmd.Flags().StringSliceVar(&dataPairs, "data", nil, "Data entries key=value (can repeat)")
-	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read data from file (key=value format, one per line)")
+	cmd.Flags().StringArrayVar(&dataPairs, "data", nil, "Data entry key=value (can repeat; value is taken verbatim — no comma/newline splitting)")
+	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read data from file: --from-file=key=path (file's bytes become the value for key — use for binary or multi-line content like PEM). Can repeat.")
 	return cmd
 }
 

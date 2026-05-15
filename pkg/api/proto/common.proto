@@ -154,13 +154,16 @@ message ServiceExpose {
 // ExposeServiceTLS controls how the ingress terminates TLS for an
 // exposed service. The fields are mutually informative: setting
 // `mode = "acme"` (or `mode = "auto"`) requests an ACME-issued
-// certificate from the configured provider; `secret_name` points
-// at an operator-supplied cert; the legacy `auto` boolean is
-// equivalent to `mode = "acme"` when no mode is set.
+// certificate from the configured provider; `secret` points at an
+// operator-supplied cert; the legacy `auto` boolean is equivalent
+// to `mode = "acme"` when no mode is set.
 message ExposeServiceTLS {
-  // Name of a Secret resource holding tls.crt + tls.key for
-  // operator-supplied certificates.
-  string secret_name = 1;
+  // Reference to a Secret resource holding tls.crt + tls.key for
+  // operator-supplied certificates. Accepts three shapes:
+  //   - "name"                       (resolved in the service's namespace)
+  //   - "<namespace>/<name>"         (cross-namespace shorthand)
+  //   - "secret:<name>.<ns>.rune"    (FQDN secret ref)
+  string secret = 1;
 
   // Legacy boolean equivalent to mode = "acme". Kept for wire
   // compatibility with older clients.

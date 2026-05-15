@@ -96,6 +96,26 @@ func daemonPid(dir string) int {
 	return pid
 }
 
+// cleanOrphanState removes per-forward JSON descriptors plus the
+// daemon socket + pid file when the daemon is known to be dead.
+// Returns the number of forward records removed. Safe to call when
+// the directory is empty.
+func cleanOrphanState(dir string) (int, error) {
+	fwds, err := pfdaemon.LoadForwards(dir)
+	if err != nil {
+		return 0, err
+	}
+	for _, f := range fwds {
+		_ = pfdaemon.RemoveForward(dir, f.ID)
+	}
+	// Belt-and-braces: stale socket/pid files left behind by an
+	// ungracefully-exited daemon prevent the next `IsAlive` probe
+	// from being confused.
+	_ = os.Remove(pfdaemon.SocketPath(dir))
+	_ = os.Remove(pfdaemon.PidPath(dir))
+	return len(fwds), nil
+}
+
 func trimSpaceBytes(b []byte) []byte {
 	i, j := 0, len(b)
 	for i < j && (b[i] == ' ' || b[i] == '\n' || b[i] == '\r' || b[i] == '\t') {
@@ -130,7 +150,8 @@ func runPortForwardList() error {
 	sock := pfdaemon.SocketPath(dir)
 
 	var forwards []*pfdaemon.Forward
-	if pfdaemon.IsAlive(dir) {
+	daemonAlive := pfdaemon.IsAlive(dir)
+	if daemonAlive {
 		resp, err := pfdaemon.Call(sock, pfdaemon.Request{Cmd: pfdaemon.CmdList})
 		if err != nil {
 			return fmt.Errorf("daemon: %w", err)
@@ -140,8 +161,6 @@ func runPortForwardList() error {
 		}
 		forwards = resp.Forwards
 	} else {
-		// Daemon not running. Show whatever state we have on disk
-		// with a `(stale)` marker so the operator knows the truth.
 		on, err := pfdaemon.LoadForwards(dir)
 		if err != nil {
 			return err
@@ -151,7 +170,13 @@ func runPortForwardList() error {
 			fmt.Fprintln(os.Stderr, "no port-forwards active")
 			return nil
 		}
-		fmt.Fprintln(os.Stderr, "(daemon not running; showing stale state from disk)")
+		fmt.Fprintln(os.Stderr, "daemon not running — entries below are stale orphans.")
+		fmt.Fprintln(os.Stderr, "Run `rune port-forward stop --all` to clean, then re-create with `-d`.")
+		// Override per-row status so the table doesn't claim things are
+		// `active` when nothing is running them.
+		for _, f := range forwards {
+			f.Status = "orphan"
+		}
 	}
 
 	sort.Slice(forwards, func(i, j int) bool { return forwards[i].CreatedAt.Before(forwards[j].CreatedAt) })
@@ -211,7 +236,24 @@ func runPortForwardStop(ids []string, all bool) error {
 	sock := pfdaemon.SocketPath(dir)
 
 	if !pfdaemon.IsAlive(dir) {
-		fmt.Fprintln(os.Stderr, "daemon not running")
+		// Daemon died (panic, OOM, SIGKILL, lid-close-induced kill).
+		// State files for previously-active forwards may be lying
+		// around. `stop --all` is the operator's "clear all state"
+		// reflex; honour it by wiping the orphans rather than leaving
+		// them to mislead `list`.
+		if all {
+			n, err := cleanOrphanState(dir)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				fmt.Fprintf(os.Stderr, "✓ Daemon not running; cleaned %d stale forward record(s).\n", n)
+			} else {
+				fmt.Fprintln(os.Stderr, "daemon not running; no stale state to clean")
+			}
+			return nil
+		}
+		fmt.Fprintln(os.Stderr, "daemon not running (use `stop --all` to clear stale state)")
 		return nil
 	}
 
