@@ -208,32 +208,6 @@ func (s *LogService) getLogReader(ctx context.Context, req *generated.LogRequest
 	return logReader, serviceName, instanceName, nil
 }
 
-// watchClientStream consumes any follow-up messages from the client so we
-// notice when the client closes the stream. Parameter-update support is not
-// implemented yet; for now we just drain and watch for EOF/cancel so we can
-// shut down cleanly. Cancels the supplied context on EOF or recv error.
-func (s *LogService) watchClientStream(ctx context.Context, cancel context.CancelFunc, stream generated.LogService_StreamLogsServer) {
-	defer func() {
-		if r := recover(); r != nil {
-			s.logger.Debug("Recovered from panic in watchClientStream", log.Any("recover", r))
-		}
-	}()
-
-	for {
-		if _, err := stream.Recv(); err != nil {
-			if err != io.EOF && ctx.Err() == nil {
-				s.logger.Debug("Client stream receive ended", log.Err(err))
-			}
-			cancel()
-			return
-		}
-		// Future: handle parameter updates here.
-		if ctx.Err() != nil {
-			return
-		}
-	}
-}
-
 // StreamLogs provides bidirectional streaming for logs.
 func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) error {
 	// Get the initial request
@@ -273,11 +247,13 @@ func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) er
 	// Error channel to propagate errors from goroutines
 	errCh := make(chan error, 1)
 
-	// Start a goroutine to read from logReader and send to logCh
+	// Start a goroutine to read from logReader and send to logCh.
+	// gRPC will cancel stream.Context() automatically when the client
+	// disconnects, so we don't need a separate goroutine to Recv() — and
+	// doing so would race with the client's CloseSend() (which sends EOF
+	// immediately after the initial request) and tear down the stream
+	// before any logs are sent.
 	go s.readLogsFromReader(ctx, logReader, logCh, errCh, serviceName, instanceName)
-
-	// Watch the client stream so we shut down when the client cancels.
-	go s.watchClientStream(ctx, cancel, stream)
 
 	// Stream logs to client
 	return s.streamLogsToClient(ctx, stream, logCh, errCh)
