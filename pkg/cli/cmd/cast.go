@@ -115,19 +115,14 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 		return handleRunesetCastSource(args, sourceType, opts)
 	}
 
-	// Reject runeset-only flags in non-runeset mode. Previously these were
-	// silently ignored, but the template engine still ran on `{{ values:... }}`
-	// references and produced cryptic "__TEMPLATE_PLACEHOLDER_N__" errors when
-	// values weren't actually loaded. Fail fast with a clear message instead.
+	// --render and --release require a manifest (i.e. a runeset) — they
+	// have no defined semantics on a bare cast file. --values and --set,
+	// on the other hand, are useful for parameterising a single cast
+	// file too (CI overlays, per-env values, etc.), so we now accept
+	// them on the non-runeset path as well.
 	var badFlags []string
 	if opts.renderOnly {
 		badFlags = append(badFlags, "--render")
-	}
-	if len(opts.valuesFiles) > 0 {
-		badFlags = append(badFlags, "--values")
-	}
-	if len(opts.setValues) > 0 {
-		badFlags = append(badFlags, "--set")
 	}
 	if opts.releaseName != "" {
 		badFlags = append(badFlags, "--release")
@@ -158,8 +153,16 @@ func runCastNonRuneset(args []string, timeout time.Duration, opts *castOptions) 
 	// Print initial cast banner
 	printCastBanner(args, opts.detach)
 
+	// Build the values map (--values + --set + RUNE_VALUES_ env). Empty
+	// when the operator passed none of those, in which case the cast
+	// files are loaded verbatim with zero templating cost.
+	values, err := mergeCastFileValues(opts)
+	if err != nil {
+		return err
+	}
+
 	// Load, categorize, and validate resources using CastFile
-	resourceInfo, err := parseCastFilesResources(filePaths, args, opts)
+	resourceInfo, err := parseCastFilesResources(filePaths, args, opts, values)
 	if err != nil {
 		return err
 	}
@@ -210,7 +213,12 @@ func runCastNonRuneset(args []string, timeout time.Duration, opts *castOptions) 
 // processResourceFiles loads, categorizes, and validates resources from files
 // parseCastFilesResources reads and validates cast files, returning discovered resources.
 // It collects errors across files and reports them in a consolidated form.
-func parseCastFilesResources(filePaths []string, sourceArgs []string, opts *castOptions) (*ResourceInfo, error) {
+//
+// values, when non-empty, runs each cast file's bytes through the template
+// engine before parsing — supports `--values` and `--set` on plain cast
+// files in the same shape the runeset path uses. Pass nil for the
+// zero-templating fast path.
+func parseCastFilesResources(filePaths []string, sourceArgs []string, opts *castOptions, values map[string]interface{}) (*ResourceInfo, error) {
 	info := &ResourceInfo{
 		FilesByType:          make(map[string][]string),
 		ServicesByFile:       make(map[string][]*types.Service),
@@ -246,8 +254,21 @@ func parseCastFilesResources(filePaths []string, sourceArgs []string, opts *cast
 		fmt.Print(strings.Repeat(".", dotsNeeded))
 		fmt.Print(" ") // Space before validation result
 
-		// Parse as CastFile to extract all resources
-		castFile, err := types.ParseCastFile(filePath, opts.namespace)
+		// Parse as CastFile to extract all resources. When --values /
+		// --set were supplied, run the file through the template
+		// engine first so `{{ values.foo }}` references resolve in
+		// the same shape they would inside a runeset.
+		raw, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			fmt.Println("❌")
+			return nil, fmt.Errorf("failed to read file %s: %w", filePath, readErr)
+		}
+		rendered, renderErr := renderCastFileBytes(filePath, raw, values, opts.namespace, castMode(opts))
+		if renderErr != nil {
+			fmt.Println("❌")
+			return nil, renderErr
+		}
+		castFile, err := types.ParseCastFileFromBytes(rendered, opts.namespace)
 		if err != nil {
 			fmt.Println("❌") // Show failure
 			return nil, fmt.Errorf("failed to parse file %s: %w", filePath, err)

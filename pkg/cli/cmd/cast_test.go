@@ -57,7 +57,7 @@ services:
 	// Test loading a valid service file
 	t.Run("LoadValidServiceFile", func(t *testing.T) {
 		opts := &castOptions{}
-		info, err := parseCastFilesResources([]string{validFilePath}, []string{}, opts)
+		info, err := parseCastFilesResources([]string{validFilePath}, []string{}, opts, nil)
 		assert.NoError(t, err)
 		assert.Len(t, info.ServicesByFile, 1)
 		assert.Len(t, info.ServicesByFile[validFilePath], 1)
@@ -69,7 +69,7 @@ services:
 
 	// Test loading an invalid service file
 	t.Run("LoadInvalidServiceFile", func(t *testing.T) {
-		_, err := parseCastFilesResources([]string{invalidFilePath}, []string{}, &castOptions{})
+		_, err := parseCastFilesResources([]string{invalidFilePath}, []string{}, &castOptions{}, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "validation failed")
 	})
@@ -78,7 +78,7 @@ services:
 	t.Run("LoadMultiServiceFile", func(t *testing.T) {
 		opts := &castOptions{}
 		opts.namespace = "default"
-		info, err := parseCastFilesResources([]string{multiFilePath}, []string{}, opts)
+		info, err := parseCastFilesResources([]string{multiFilePath}, []string{}, opts, nil)
 		assert.NoError(t, err)
 		assert.Len(t, info.ServicesByFile, 1)
 		assert.Len(t, info.ServicesByFile[multiFilePath], 2)
@@ -90,7 +90,7 @@ services:
 	t.Run("LoadMultipleFiles", func(t *testing.T) {
 		opts := &castOptions{}
 		opts.namespace = "default"
-		info, err := parseCastFilesResources([]string{validFilePath, multiFilePath}, []string{}, opts)
+		info, err := parseCastFilesResources([]string{validFilePath, multiFilePath}, []string{}, opts, nil)
 		assert.NoError(t, err)
 		assert.Len(t, info.ServicesByFile, 2)
 		assert.Len(t, info.ServicesByFile[validFilePath], 1)

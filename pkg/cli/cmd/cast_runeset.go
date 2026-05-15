@@ -287,6 +287,82 @@ func mergeRunesetValues(mf types.RunesetManifest, root string, opts *castOptions
 	return merged, nil
 }
 
+// mergeCastFileValues builds the values map for a non-runeset cast.
+// Mirrors the runeset path's merging order minus the manifest defaults
+// and `values/` directory:
+//
+//  1. RUNE_VALUES_FOO=bar env (lowest precedence)
+//  2. --values files in argv order (last wins)
+//  3. --set key=value flags (highest precedence)
+//
+// Returns an empty map (nil-safe) when the operator passed no value
+// sources at all — that's the "plain cast file, no templating" path
+// and gets short-circuited before any rendering happens.
+func mergeCastFileValues(opts *castOptions) (map[string]interface{}, error) {
+	if len(opts.valuesFiles) == 0 && len(opts.setValues) == 0 {
+		// Don't even read env in this case — values are strictly opt-in
+		// for plain cast files. (Operators relying on RUNE_VALUES_ env
+		// already have a values file or --set somewhere in their chain.)
+		return map[string]interface{}{}, nil
+	}
+	merged := readEnvValues()
+	for _, vf := range opts.valuesFiles {
+		b, err := os.ReadFile(vf)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read values file %s: %w", vf, err)
+		}
+		text := utils.PreQuoteUnquotedPlaceholders(string(b))
+		var m map[string]interface{}
+		if err := yaml.Unmarshal([]byte(text), &m); err != nil {
+			return nil, fmt.Errorf("failed to parse values file %s: %w", vf, err)
+		}
+		mergeInto(merged, m)
+	}
+	if err := applySetValues(merged, opts.setValues); err != nil {
+		return nil, err
+	}
+	// Final templating fixpoint so values can reference each other,
+	// matching the runeset path's behaviour.
+	r := utils.NewRenderer(".", merged, map[string]interface{}{})
+	if err := r.RenderValuesMapFixpoint(merged, 3); err != nil {
+		return nil, err
+	}
+	return merged, nil
+}
+
+// castMode returns the same "apply" / "dry-run" / "render" string
+// buildContextFromManifest uses, derived from opts. Lets the
+// non-runeset render path expose `.Mode` to templates symmetrically.
+func castMode(opts *castOptions) string {
+	if opts.renderOnly {
+		return "render"
+	}
+	if opts.dryRun {
+		return "dry-run"
+	}
+	return "apply"
+}
+
+// renderCastFileBytes runs file's bytes through the same template
+// engine the runeset path uses, with the supplied values + a minimal
+// ctx (just namespace/mode). Returns the file's bytes unchanged when
+// values is nil/empty so non-templated files are zero-cost.
+func renderCastFileBytes(filePath string, content []byte, values map[string]interface{}, namespace, mode string) ([]byte, error) {
+	if len(values) == 0 {
+		return content, nil
+	}
+	ctx := map[string]interface{}{
+		"Namespace": namespace,
+		"Mode":      mode,
+	}
+	r := utils.NewRenderer(filepath.Dir(filePath), values, ctx)
+	out, err := r.RenderString(string(content), 0)
+	if err != nil {
+		return nil, fmt.Errorf("render %s: %w", filePath, err)
+	}
+	return []byte(out), nil
+}
+
 // mergeRunesetValuesTemplated collects all values plainly, then resolves templated strings
 // using the fully merged map. This requires templated scalars in YAML files to be quoted.
 func mergeRunesetValuesTemplated(mf types.RunesetManifest, root string, ctx map[string]interface{}, opts *castOptions) (map[string]interface{}, error) {
