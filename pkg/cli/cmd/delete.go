@@ -38,16 +38,24 @@ func newDeleteCmd() *cobra.Command {
 		Short:   "Delete targets and manage deletion operations",
 		Long: `Delete targets and manage deletion operations.
 
-This command provides a safe and controlled way to remove targets (services, functions, etc.) 
-from the Rune platform and manage ongoing deletion operations.
+This command provides a safe and controlled way to remove targets (services,
+secrets, configmaps, volumes, storage classes) from the Rune platform and
+manage ongoing deletion operations.
 
 Available subcommands:
-  delete service <service-name>  - Delete a service and its resources
+  delete service       <name>    - Delete a service and its resources
+  delete secret        <name>    - Delete a secret
+  delete config        <name>    - Delete a configmap
+  delete volume        <name>    - Delete a volume
+  delete storageclass  <name>    - Delete a (cluster-scoped) storage class
   delete list                    - List deletion operations
   delete status <deletion-id>    - Get status of a deletion operation
 
 Shorthand usage:
-  delete <target>                - Direct target deletion (currently supports services)
+  delete <name>                  - Resolves <name> against service, then
+                                   secret, configmap, volume, storage class
+                                   in that order. Use the explicit subcommand
+                                   when the name might collide across types.
 
 Examples:
   # Delete a service using shorthand
@@ -55,6 +63,9 @@ Examples:
 
   # Delete a service using full command
   rune delete service my-service
+
+  # Delete a secret explicitly (recommended when same name might exist as a service)
+  rune delete secret my-credentials -n shared
 
   # Delete a service with flags
   rune delete my-service --force --output json
@@ -93,9 +104,95 @@ Examples:
 
 	// Add subcommands
 	cmd.AddCommand(newDeleteServiceCmd())
+	cmd.AddCommand(newDeleteSecretSubCmd())
+	cmd.AddCommand(newDeleteConfigSubCmd())
+	cmd.AddCommand(newDeleteVolumeSubCmd())
+	cmd.AddCommand(newDeleteStorageClassSubCmd())
 	cmd.AddCommand(newDeleteListCmd())
 	cmd.AddCommand(newDeleteStatusCmd())
 
+	return cmd
+}
+
+// newDeleteSecretSubCmd lets operators write `rune delete secret <name>`
+// symmetric with `rune create secret <name>`. Delegates to the same
+// handler the umbrella shorthand uses (and that `rune secret delete`
+// has historically called).
+func newDeleteSecretSubCmd() *cobra.Command {
+	opts := &deleteOptions{}
+	cmd := &cobra.Command{
+		Use:           "secret <name>",
+		Short:         "Delete a secret",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.namespace = effectiveCmdNS(opts.namespace)
+			return runDeleteSecret(cmd.Context(), args[0], opts)
+		},
+	}
+	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace of the secret")
+	cmd.Flags().BoolVar(&opts.ignoreNotFound, "ignore-not-found", false, "Don't error if the secret doesn't exist")
+	return cmd
+}
+
+// newDeleteConfigSubCmd: `rune delete config <name>`. Mirrors
+// newDeleteSecretSubCmd for configmaps.
+func newDeleteConfigSubCmd() *cobra.Command {
+	opts := &deleteOptions{}
+	cmd := &cobra.Command{
+		Use:           "config <name>",
+		Aliases:       []string{"configmap"},
+		Short:         "Delete a configmap",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.namespace = effectiveCmdNS(opts.namespace)
+			return runDeleteConfigmap(cmd.Context(), args[0], opts)
+		},
+	}
+	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace of the configmap")
+	cmd.Flags().BoolVar(&opts.ignoreNotFound, "ignore-not-found", false, "Don't error if the configmap doesn't exist")
+	return cmd
+}
+
+// newDeleteVolumeSubCmd: `rune delete volume <name>`. Mirrors
+// newDeleteSecretSubCmd for namespaced volumes.
+func newDeleteVolumeSubCmd() *cobra.Command {
+	opts := &deleteOptions{}
+	cmd := &cobra.Command{
+		Use:           "volume <name>",
+		Short:         "Delete a volume",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.namespace = effectiveCmdNS(opts.namespace)
+			return runDeleteVolume(cmd.Context(), args[0], opts)
+		},
+	}
+	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace of the volume")
+	cmd.Flags().BoolVar(&opts.ignoreNotFound, "ignore-not-found", false, "Don't error if the volume doesn't exist")
+	return cmd
+}
+
+// newDeleteStorageClassSubCmd: `rune delete storageclass <name>`.
+// Cluster-scoped — no namespace flag.
+func newDeleteStorageClassSubCmd() *cobra.Command {
+	opts := &deleteOptions{}
+	cmd := &cobra.Command{
+		Use:           "storageclass <name>",
+		Aliases:       []string{"sc"},
+		Short:         "Delete a (cluster-scoped) storage class",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDeleteStorageClass(cmd.Context(), args[0], opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.ignoreNotFound, "ignore-not-found", false, "Don't error if the storage class doesn't exist")
 	return cmd
 }
 

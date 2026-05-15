@@ -51,7 +51,7 @@ func projectIngressRow(svc *types.Service) (ingressRow, bool) {
 		switch {
 		case svc.Expose.TLS.IsACME():
 			row.TLSMode = types.ExposeTLSModeACME
-		case svc.Expose.TLS.SecretName != "":
+		case svc.Expose.TLS.Secret != "":
 			row.TLSMode = types.ExposeTLSModeManual
 		}
 	}

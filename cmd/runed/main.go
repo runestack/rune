@@ -588,7 +588,13 @@ func main() {
 		// terminates :80/:443 and runs the ACME issuer.
 		if types.IsEdgeNode(a.Identity().Labels) {
 			challenges := ingress.NewMemChallengeStore()
-			certStore := acmesvc.NewMemCertStore()
+			// BadgerCertStore persists ACME-issued certs across runed
+			// restarts so we don't re-issue every cert on boot (which
+			// trips the LE per-identifier-set rate limit). Falls back
+			// to MemCertStore only if the SecretRepo's KEK isn't
+			// available, which would itself be a startup failure
+			// upstream of this code path.
+			certStore := acmesvc.NewBadgerCertStore(stateStore)
 			loader := ingress.NewCertLoader(certStore)
 			router := ingress.NewRouter()
 
@@ -629,11 +635,13 @@ func main() {
 			// dataplane endpoint cache. Without this, the route
 			// table stays empty and inbound requests 404.
 			ictl := ingressctl.New(ingressctl.Config{
-				Router: router,
-				Store:  stateStore,
-				Cache:  dpRef.Cache(),
-				ACME:   orch,
-				Logger: logger.WithComponent("ingressctl"),
+				Router:  router,
+				Store:   stateStore,
+				Cache:   dpRef.Cache(),
+				ACME:    orch,
+				Secrets: repos.NewSecretRepo(stateStore),
+				Certs:   acmeCertStoreWithReload{store: certStore, loader: loader},
+				Logger:  logger.WithComponent("ingressctl"),
 			})
 
 			isub, ierr := ingress.New(ingress.Config{

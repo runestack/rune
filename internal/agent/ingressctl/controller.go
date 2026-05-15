@@ -21,6 +21,7 @@ import (
 	"github.com/runestack/rune/pkg/networking/acme"
 	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -37,6 +38,15 @@ type Config struct {
 	// the controller submits a Request for every service whose
 	// Expose.TLS asks for ACME on each reconcile.
 	ACME *acme.Orchestrator
+	// Secrets, when set, lets the controller resolve `tls.mode:
+	// manual` exposes by reading the named Secret and pushing its
+	// `tls.crt` / `tls.key` data into Certs on each reconcile (so
+	// secret rotation flows through without operator action).
+	Secrets *repos.SecretRepo
+	// Certs is the same CertStore the ACME orchestrator + ingress
+	// cert loader are wired against. Required to enable manual
+	// mode; nil disables manual-mode handling.
+	Certs acme.CertStore
 	// Logger is the structured logger. Defaults to "ingressctl".
 	Logger log.Logger
 	// ReconcilePeriod is how often the controller rebuilds the
@@ -51,7 +61,28 @@ type Controller struct {
 
 	mu        sync.RWMutex
 	lastHosts map[string]struct{} // for log noise control
+
+	// manualPushed tracks the (host, secret-version) pair last pushed
+	// to the cert store via manual-mode handling. Lets the per-tick
+	// reconcile re-push when the underlying secret changes (so secret
+	// rotation flows through automatically) but skip the work when
+	// nothing changed (so we're not re-parsing a PEM every 2s).
+	manualPushed map[string]int
+
+	// manualLogged dedups warning logs on manual-TLS failures so a
+	// single bad secret doesn't spam the journal at the 2 s reconcile
+	// cadence. Keyed by "<host>::<errKind>"; first failure logs, then
+	// suppressed until ManualLogRepeat has elapsed (or the next
+	// successful push clears the entry).
+	manualLogged map[string]time.Time
 }
+
+// ManualLogRepeat is how often we re-emit "still failing" warnings
+// for a misconfigured manual-TLS Secret. First failure logs
+// immediately; subsequent failures of the same (host, errKind) are
+// suppressed until this interval elapses. A successful push clears
+// the dedup entry so the next failure logs immediately again.
+const ManualLogRepeat = 5 * time.Minute
 
 // New constructs a Controller. Logger and ReconcilePeriod default.
 func New(cfg Config) *Controller {
@@ -61,7 +92,12 @@ func New(cfg Config) *Controller {
 	if cfg.ReconcilePeriod <= 0 {
 		cfg.ReconcilePeriod = 2 * time.Second
 	}
-	return &Controller{cfg: cfg, lastHosts: map[string]struct{}{}}
+	return &Controller{
+		cfg:          cfg,
+		lastHosts:    map[string]struct{}{},
+		manualPushed: map[string]int{},
+		manualLogged: map[string]time.Time{},
+	}
 }
 
 // Resolve implements ingress.UpstreamResolver. It returns the first
@@ -137,6 +173,8 @@ func (c *Controller) reconcile(ctx context.Context) {
 				Name:      s.Name,
 				Host:      s.Expose.Host,
 			})
+		} else if s.Expose.TLS != nil && s.Expose.TLS.Mode == types.ExposeTLSModeManual && s.Expose.TLS.Secret != "" {
+			c.applyManualTLS(ctx, s)
 		}
 	}
 	c.cfg.Router.Apply(routes)
@@ -151,6 +189,130 @@ func (c *Controller) reconcile(ctx context.Context) {
 		c.cfg.Logger.Info("ingress routes applied",
 			log.Int("count", len(routes)),
 			log.Any("hosts", keys(hosts)))
+	}
+}
+
+// applyManualTLS loads the Secret referenced by Expose.TLS.Secret and
+// pushes its tls.crt / tls.key into the cert store. Idempotent per
+// (host, secret-version): subsequent reconcile ticks where the
+// underlying Secret hasn't changed skip the parse + push so we're
+// not re-doing PEM work every 2 s in the steady state.
+//
+// Expose.TLS.Secret accepts the three canonical resource-ref shapes
+// (see types.ParseResourceRefWithDefaults): bare name, ns/name
+// shorthand, FQDN secret ref. Non-secret types are rejected.
+//
+// Quiet on missing wiring (Secrets / Certs nil): the ingress route
+// is still applied so HTTP works; TLS handshakes will surface "no
+// cert for host" until the operator notices the missing secret. The
+// API-server validator is responsible for catching obvious cast-time
+// shapes (mode: manual + empty Secret).
+func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
+	if c.cfg.Secrets == nil || c.cfg.Certs == nil {
+		return
+	}
+	host := s.Expose.Host
+
+	ref, refErr := types.ParseResourceRefWithDefaults(s.Expose.TLS.Secret, types.ResourceTypeSecret, s.Namespace)
+	if refErr != nil {
+		c.warnManualOnce(host, "ref-parse", "manual TLS: secret ref parse failed",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", s.Expose.TLS.Secret),
+			log.Err(refErr))
+		return
+	}
+	if ref.Type != types.ResourceTypeSecret {
+		c.warnManualOnce(host, "ref-not-secret", "manual TLS: ref is not a secret",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", s.Expose.TLS.Secret),
+			log.Str("refType", string(ref.Type)))
+		return
+	}
+	secret, err := c.cfg.Secrets.Get(ctx, ref.Namespace, ref.Name)
+	if err != nil {
+		c.warnManualOnce(host, "secret-lookup", "manual TLS: secret lookup failed",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", ref.Namespace+"/"+ref.Name),
+			log.Err(err))
+		return
+	}
+	cert := secret.Data["tls.crt"]
+	key := secret.Data["tls.key"]
+	if cert == "" || key == "" {
+		c.warnManualOnce(host, "missing-keys", "manual TLS: secret missing tls.crt/tls.key data keys",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", ref.Namespace+"/"+ref.Name))
+		return
+	}
+
+	// Skip the push when this (host, secret-version) pair already
+	// landed in the cert store. Secret.Version monotonically
+	// increases on every Update so a rotation forces a re-push.
+	c.mu.Lock()
+	if prev, ok := c.manualPushed[host]; ok && prev == secret.Version {
+		c.mu.Unlock()
+		return
+	}
+	c.manualPushed[host] = secret.Version
+	c.mu.Unlock()
+
+	if err := c.cfg.Certs.Set(ctx, host, []byte(cert), []byte(key)); err != nil {
+		c.warnManualOnce(host, "cert-set", "manual TLS: cert store Set failed",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", ref.Namespace+"/"+ref.Name),
+			log.Err(err))
+		// Clear our cached version so the next tick retries.
+		c.mu.Lock()
+		delete(c.manualPushed, host)
+		c.mu.Unlock()
+		return
+	}
+	// On success: clear any prior warn-dedup entries for this host so
+	// the next failure (if there is one) logs immediately again, and
+	// emit the success line (which is always logged — it's rare).
+	c.clearManualWarns(host)
+	c.cfg.Logger.Info("manual TLS: cert loaded from secret",
+		log.Str("host", host),
+		log.Str("namespace", s.Namespace),
+		log.Str("secret", ref.Namespace+"/"+ref.Name),
+		log.Int("secretVersion", secret.Version))
+}
+
+// warnManualOnce emits a Warn-level log no more than once every
+// ManualLogRepeat for a given (host, errKind). Subsequent identical
+// failures within the window are dropped on the floor — useful because
+// the reconciler ticks every 2 s and an unfixed misconfigured Secret
+// would otherwise spam the journal.
+func (c *Controller) warnManualOnce(host, errKind, msg string, fields ...log.Field) {
+	key := host + "::" + errKind
+	c.mu.Lock()
+	last, seen := c.manualLogged[key]
+	now := time.Now()
+	if seen && now.Sub(last) < ManualLogRepeat {
+		c.mu.Unlock()
+		return
+	}
+	c.manualLogged[key] = now
+	c.mu.Unlock()
+	c.cfg.Logger.Warn(msg, fields...)
+}
+
+// clearManualWarns drops every dedup entry for host. Called on a
+// successful push so the operator gets an immediate warning if the
+// secret breaks again later (e.g. after a bad rotation).
+func (c *Controller) clearManualWarns(host string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prefix := host + "::"
+	for k := range c.manualLogged {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			delete(c.manualLogged, k)
+		}
 	}
 }
 

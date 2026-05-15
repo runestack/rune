@@ -27,7 +27,7 @@ func newCreateCmd() *cobra.Command {
 func newCreateSecretCmd() *cobra.Command {
 	var namespace string
 	var dataPairs []string
-	var fromFile string
+	var fromFile []string
 	var createNamespace bool
 	cmd := &cobra.Command{
 		Use:   "secret <name>",
@@ -37,13 +37,8 @@ func newCreateSecretCmd() *cobra.Command {
 			name := args[0]
 			data := map[string]string{}
 
-			// Read data from file if specified
-			if fromFile != "" {
-				fileData, err := readDataFromFile(fromFile)
-				if err != nil {
-					return fmt.Errorf("failed to read file %s: %w", fromFile, err)
-				}
-				data = fileData
+			if err := applyFromFileFlags(fromFile, data); err != nil {
+				return err
 			}
 
 			// Add any additional data pairs from command line
@@ -75,8 +70,8 @@ func newCreateSecretCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "Namespace")
-	cmd.Flags().StringSliceVar(&dataPairs, "data", nil, "Data entries key=value (can repeat)")
-	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read data from file (key=value format, one per line)")
+	cmd.Flags().StringArrayVar(&dataPairs, "data", nil, "Data entry key=value (can repeat; value is taken verbatim — no comma/newline splitting)")
+	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read data from file: --from-file=key=path (file's bytes become the value for key — use for binary or multi-line content like PEM). Can repeat.")
 	cmd.Flags().BoolVar(&createNamespace, "create-namespace", false, "Create the namespace if it doesn't exist")
 	return cmd
 }
@@ -84,7 +79,7 @@ func newCreateSecretCmd() *cobra.Command {
 func newCreateConfigCmd() *cobra.Command {
 	var namespace string
 	var dataPairs []string
-	var fromFile string
+	var fromFile []string
 	var createNamespace bool
 	cmd := &cobra.Command{
 		Use:   "config <name>",
@@ -94,13 +89,8 @@ func newCreateConfigCmd() *cobra.Command {
 			name := args[0]
 			data := map[string]string{}
 
-			// Read data from file if specified
-			if fromFile != "" {
-				fileData, err := readDataFromFile(fromFile)
-				if err != nil {
-					return fmt.Errorf("failed to read file %s: %w", fromFile, err)
-				}
-				data = fileData
+			if err := applyFromFileFlags(fromFile, data); err != nil {
+				return err
 			}
 
 			// Add any additional data pairs from command line
@@ -132,8 +122,8 @@ func newCreateConfigCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "Namespace")
-	cmd.Flags().StringSliceVar(&dataPairs, "data", nil, "Data entries key=value (can repeat)")
-	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read data from file (key=value format, one per line)")
+	cmd.Flags().StringArrayVar(&dataPairs, "data", nil, "Data entry key=value (can repeat; value is taken verbatim — no comma/newline splitting)")
+	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read data from file: --from-file=key=path (file's bytes become the value for key — use for binary or multi-line content). Can repeat.")
 	cmd.Flags().BoolVar(&createNamespace, "create-namespace", false, "Create the namespace if it doesn't exist")
 	return cmd
 }
@@ -191,30 +181,34 @@ func splitPair(pair string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-// readDataFromFile reads key=value pairs from a file
-func readDataFromFile(filename string) (map[string]string, error) {
-	content, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	data := make(map[string]string)
-	lines := strings.Split(string(content), "\n")
-
-	for i, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue // Skip empty lines and comments
+// applyFromFileFlags walks each --from-file value and merges its
+// contents into data. Each spec MUST take the form "key=path" — the
+// file's full byte contents (newlines and all) become the value for
+// "key". Used for binary or multi-line content (PEM certs, TLS keys,
+// raw config files).
+//
+// Mirrors `kubectl create secret generic --from-file=<key>=<path>`.
+func applyFromFileFlags(specs []string, data map[string]string) error {
+	for _, spec := range specs {
+		if spec == "" {
+			continue
 		}
-
-		k, v, err := splitPair(line)
+		eq := strings.IndexByte(spec, '=')
+		if eq <= 0 {
+			return fmt.Errorf("--from-file %q: expected key=path", spec)
+		}
+		key := spec[:eq]
+		path := spec[eq+1:]
+		if path == "" {
+			return fmt.Errorf("--from-file %q: empty path after '='", spec)
+		}
+		content, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", i+1, err)
+			return fmt.Errorf("--from-file %q: %w", spec, err)
 		}
-		data[k] = v
+		data[key] = string(content)
 	}
-
-	return data, nil
+	return nil
 }
 
 func init() { rootCmd.AddCommand(newCreateCmd()) }

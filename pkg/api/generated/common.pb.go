@@ -843,14 +843,17 @@ func (x *ServiceExpose) GetTls() *ExposeServiceTLS {
 // ExposeServiceTLS controls how the ingress terminates TLS for an
 // exposed service. The fields are mutually informative: setting
 // `mode = "acme"` (or `mode = "auto"`) requests an ACME-issued
-// certificate from the configured provider; `secret_name` points
-// at an operator-supplied cert; the legacy `auto` boolean is
-// equivalent to `mode = "acme"` when no mode is set.
+// certificate from the configured provider; `secret` points at an
+// operator-supplied cert; the legacy `auto` boolean is equivalent
+// to `mode = "acme"` when no mode is set.
 type ExposeServiceTLS struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Name of a Secret resource holding tls.crt + tls.key for
-	// operator-supplied certificates.
-	SecretName string `protobuf:"bytes,1,opt,name=secret_name,json=secretName,proto3" json:"secret_name,omitempty"`
+	// Reference to a Secret resource holding tls.crt + tls.key for
+	// operator-supplied certificates. Accepts three shapes:
+	//   - "name"                       (resolved in the service's namespace)
+	//   - "<namespace>/<name>"         (cross-namespace shorthand)
+	//   - "secret:<name>.<ns>.rune"    (FQDN secret ref)
+	Secret string `protobuf:"bytes,1,opt,name=secret,proto3" json:"secret,omitempty"`
 	// Legacy boolean equivalent to mode = "acme". Kept for wire
 	// compatibility with older clients.
 	Auto bool `protobuf:"varint,2,opt,name=auto,proto3" json:"auto,omitempty"`
@@ -892,9 +895,9 @@ func (*ExposeServiceTLS) Descriptor() ([]byte, []int) {
 	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *ExposeServiceTLS) GetSecretName() string {
+func (x *ExposeServiceTLS) GetSecret() string {
 	if x != nil {
-		return x.SecretName
+		return x.Secret
 	}
 	return ""
 }
@@ -1131,10 +1134,9 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12\x1f\n" +
 	"\thost_port\x18\x03 \x01(\rB\x02\x18\x01R\bhostPort\x12\x12\n" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x12,\n" +
-	"\x03tls\x18\x05 \x01(\v2\x1a.rune.api.ExposeServiceTLSR\x03tls\"[\n" +
-	"\x10ExposeServiceTLS\x12\x1f\n" +
-	"\vsecret_name\x18\x01 \x01(\tR\n" +
-	"secretName\x12\x12\n" +
+	"\x03tls\x18\x05 \x01(\v2\x1a.rune.api.ExposeServiceTLSR\x03tls\"R\n" +
+	"\x10ExposeServiceTLS\x12\x16\n" +
+	"\x06secret\x18\x01 \x01(\tR\x06secret\x12\x12\n" +
 	"\x04auto\x18\x02 \x01(\bR\x04auto\x12\x12\n" +
 	"\x04mode\x18\x03 \x01(\tR\x04mode\"\xd0\x02\n" +
 	"\x05Probe\x12'\n" +
