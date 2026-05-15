@@ -341,11 +341,13 @@ func (s *PortForwardService) handleOpen(
 }
 
 // sendStatus emits a terminal session-level Status message (best-effort).
+// gRPC codes are a small bounded enum (0..16) so the conversion to
+// int32 is always safe.
 func (s *PortForwardService) sendStatus(out chan<- *generated.PortForwardServerMessage, code codes.Code, msg string) {
 	select {
 	case out <- &generated.PortForwardServerMessage{
 		Message: &generated.PortForwardServerMessage_Status{
-			Status: &generated.Status{Code: int32(code), Message: msg},
+			Status: &generated.Status{Code: int32(code), Message: msg}, //nolint:gosec // G115: codes.Code is a small bounded enum
 		},
 	}:
 	default:

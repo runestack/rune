@@ -423,4 +423,3 @@ func parsePort(s string) (uint16, error) {
 	}
 	return uint16(n), nil
 }
-

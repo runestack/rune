@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"strconv"
@@ -422,10 +421,3 @@ func bytesTrimSpace(b []byte) []byte {
 }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\n' || c == '\r' || c == '\t' }
-
-// ioCopyClose is a small helper for tests / future use that doesn't
-// fit elsewhere; kept here to keep helpers in one place.
-func ioCopyClose(dst io.Writer, src io.Reader) error {
-	_, err := io.Copy(dst, src)
-	return err
-}
