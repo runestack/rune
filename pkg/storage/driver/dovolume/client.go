@@ -74,8 +74,11 @@ type restoreVolumeIn struct {
 }
 
 // httpClient is the production doClient backed by net/http. Each call
-// resolves the bearer token via Config.resolveToken so secret rotation
-// takes effect on the next reconcile.
+// reads the bearer token from context (stashed by the driver via
+// withToken before calling the client) so secret rotation takes effect
+// on the next reconcile — the controller resolves the StorageClass
+// parameters.apiToken secret ref on every call and the freshly
+// resolved value flows through OpContext.
 type httpClient struct {
 	cfg  *Config
 	http *http.Client

@@ -65,6 +65,46 @@ func TestVolumeCleanupFinalizer_ValidateRejectsNil(t *testing.T) {
 	require.NoError(t, f.Validate(&types.Service{Name: "api", Namespace: "default"}))
 }
 
+// A sibling service in the same namespace must NOT have its volume
+// bind state touched. The "release bind" step keys on instance names
+// belonging to *this* service (BoundClaim == "<ns>/<instance>" where
+// the instance is one of ours), so a volume claimed by some other
+// service's instance is invisible to us.
+func TestVolumeCleanupFinalizer_LeavesSiblingServiceVolumesAlone(t *testing.T) {
+	ts := store.NewTestStore()
+	siblingVol := &types.Volume{
+		ID:         "sibling",
+		Name:       "sibling",
+		Namespace:  "default",
+		Status:     types.VolumeStatusBound,
+		Handle:     "do-uuid-sibling",
+		BoundNode:  "node-a",
+		BoundClaim: "default/other-0", // claimed by service "other", not "api"
+		CreatedAt:  time.Now().UTC(),
+	}
+	require.NoError(t, ts.Create(context.Background(), types.ResourceTypeVolume, "default", "sibling", siblingVol))
+
+	// Sibling's instance — present in the same namespace, distinct ServiceName.
+	siblingInstance := &types.Instance{
+		ID:          "other-0-id",
+		Name:        "other-0",
+		Namespace:   "default",
+		ServiceName: "other",
+		Status:      types.InstanceStatusRunning,
+	}
+	require.NoError(t, ts.Create(context.Background(), types.ResourceTypeInstance, "default", "other-0-id", siblingInstance))
+
+	f := NewVolumeCleanupFinalizer(ts, log.NewLogger())
+	svc := &types.Service{Name: "api", Namespace: "default"} // deleting "api", not "other"
+	require.NoError(t, f.Execute(context.Background(), svc))
+
+	var after types.Volume
+	require.NoError(t, ts.Get(context.Background(), types.ResourceTypeVolume, "default", "sibling", &after))
+	assert.Equal(t, "node-a", after.BoundNode, "sibling service's BoundNode must NOT be cleared")
+	assert.Equal(t, "default/other-0", after.BoundClaim, "sibling service's BoundClaim must NOT be cleared")
+	assert.Equal(t, types.VolumeStatusBound, after.Status, "sibling service's volume Status untouched")
+}
+
 // On `rune delete <service>`, volumes bound to that service's instances
 // must have their BoundNode + BoundClaim cleared even when they are
 // operator-owned (no OwnerService). Clearing the bind state is what

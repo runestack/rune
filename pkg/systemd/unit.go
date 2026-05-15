@@ -77,12 +77,12 @@ func (o UnitOptions) Validate() error {
 // directive is there.
 //
 // Any directive that materially changes runed's process environment
-// (capabilities, resource limits, restart policy, security knobs)
-// belongs here, not in a drop-in. Drop-ins are reserved for
-// installer-detected facts that aren't universal — e.g.
-// `SupplementaryGroups=docker` is conditional on the docker group
-// being present, so it's written to runed.service.d/override.conf
-// rather than into the base unit.
+// (capabilities, resource limits, restart policy, security knobs,
+// SupplementaryGroups for runtime sockets) belongs here, not in a
+// drop-in. Drop-ins are reserved for facts the installer must
+// inject at install time — e.g. host-specific environment variables
+// in env.conf — that genuinely don't belong in the binary-versioned
+// canonical unit.
 const unitTemplate = `[Unit]
 Description=Rune Server
 After=network-online.target docker.service
