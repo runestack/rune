@@ -43,6 +43,7 @@ type APIServer struct {
 	instanceService     *service.InstanceService
 	logService          *service.LogService
 	execService         *service.ExecService
+	portForwardService  *service.PortForwardService
 	healthService       *service.HealthService
 	secretService       *service.SecretService
 	configService       *service.ConfigmapService
@@ -173,6 +174,7 @@ func (s *APIServer) Start() error {
 	s.instanceService = service.NewInstanceService(s.store, s.runnerManager, s.logger)
 	s.logService = service.NewLogService(s.store, s.logger, s.orchestrator)
 	s.execService = service.NewExecService(s.logger, s.orchestrator)
+	s.portForwardService = service.NewPortForwardService(s.logger, s.orchestrator)
 	s.healthService = service.NewHealthService(s.store, s.logger)
 	s.secretService = service.NewSecretService(s.store, s.logger)
 	s.configService = service.NewConfigmapService(s.store, s.logger)
@@ -249,6 +251,7 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterInstanceServiceServer(s.grpcServer, s.instanceService)
 	generated.RegisterLogServiceServer(s.grpcServer, s.logService)
 	generated.RegisterExecServiceServer(s.grpcServer, s.execService)
+	generated.RegisterPortForwardServiceServer(s.grpcServer, s.portForwardService)
 	generated.RegisterHealthServiceServer(s.grpcServer, s.healthService)
 	generated.RegisterSecretServiceServer(s.grpcServer, s.secretService)
 	generated.RegisterConfigmapServiceServer(s.grpcServer, s.configService)

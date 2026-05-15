@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,11 @@ type FakeInstanceController struct {
 	GetStatusCalls        []string // Instance IDs
 	GetLogsCalls          []string // Instance IDs
 	ExecCalls             []ExecCall
+
+	// Port-forward (RUNE-122)
+	DialCalls    []FakeDialControllerCall
+	DialError    error
+	LastDialPeer net.Conn
 
 	// Custom behavior options
 	CreateInstanceFunc   func(ctx context.Context, service *types.Service, instanceName string) (*types.Instance, error)
@@ -355,6 +361,26 @@ func (c *FakeInstanceController) GetInstanceLogs(ctx context.Context, instance *
 
 	// Default behavior - return empty reader
 	return io.NopCloser(strings.NewReader("")), nil
+}
+
+// Dial returns one end of a net.Pipe; the peer end is stashed on the
+// fake controller for tests.
+func (c *FakeInstanceController) Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.DialCalls = append(c.DialCalls, FakeDialControllerCall{Instance: instance, Port: port})
+	if c.DialError != nil {
+		return nil, c.DialError
+	}
+	local, remote := net.Pipe()
+	c.LastDialPeer = remote
+	return local, nil
+}
+
+// FakeDialControllerCall records one Dial invocation on the fake controller.
+type FakeDialControllerCall struct {
+	Instance *types.Instance
+	Port     uint32
 }
 
 // Exec records a call to execute a command in an instance

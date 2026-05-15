@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 
 	"github.com/runestack/rune/pkg/log"
@@ -38,6 +39,10 @@ type Orchestrator interface {
 	// Execution
 	ExecInService(ctx context.Context, namespace, serviceName string, options types.ExecOptions) (types.ExecStream, error)
 	ExecInInstance(ctx context.Context, namespace, instanceID string, options types.ExecOptions) (types.ExecStream, error)
+
+	// Port-forward (RUNE-122)
+	DialInService(ctx context.Context, namespace, serviceName string, port uint32) (net.Conn, *types.Instance, error)
+	DialInInstance(ctx context.Context, namespace, instanceID string, port uint32) (net.Conn, *types.Instance, error)
 
 	// Lifecycle operations
 	GetInstanceByID(ctx context.Context, namespace, instanceID string) (*types.Instance, error)
@@ -454,6 +459,24 @@ func (o *orchestrator) ExecInInstance(ctx context.Context, namespace, instanceID
 
 	// Delegate to instance controller for execution
 	return o.instanceController.Exec(ctx, instance, options)
+}
+
+// Port-forward operations (RUNE-122)
+
+func (o *orchestrator) DialInService(ctx context.Context, namespace, serviceName string, port uint32) (net.Conn, *types.Instance, error) {
+	return o.serviceController.DialInService(ctx, namespace, serviceName, port)
+}
+
+func (o *orchestrator) DialInInstance(ctx context.Context, namespace, instanceID string, port uint32) (net.Conn, *types.Instance, error) {
+	instance, err := o.store.GetInstanceByID(ctx, namespace, instanceID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get instance: %w", err)
+	}
+	conn, err := o.instanceController.Dial(ctx, instance, port)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, instance, nil
 }
 
 // Lifecycle operations
