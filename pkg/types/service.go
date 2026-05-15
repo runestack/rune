@@ -211,14 +211,21 @@ type ServiceExpose struct {
 
 // ExposeServiceTLS defines TLS configuration for exposed services.
 type ExposeServiceTLS struct {
-	// Secret name containing TLS certificate and key
-	SecretName string `json:"secretName,omitempty" yaml:"secretName,omitempty"`
+	// Secret references a Secret resource holding tls.crt + tls.key
+	// for operator-supplied certificates. Accepts three shapes:
+	//
+	//   - "name"                       (resolved in the service's namespace)
+	//   - "<namespace>/<name>"         (cross-namespace shorthand)
+	//   - "secret:<name>.<ns>.rune"    (FQDN secret ref)
+	//
+	// Required when Mode is "manual".
+	Secret string `json:"secret,omitempty" yaml:"secret,omitempty"`
 
 	// Whether to automatically generate a TLS certificate
 	Auto bool `json:"auto,omitempty" yaml:"auto,omitempty"`
 
 	// Mode selects the certificate provisioning strategy.
-	// Empty / "manual": operator supplies SecretName.
+	// Empty / "manual": operator supplies Secret.
 	// "acme": ingress controller obtains a cert from Let's Encrypt
 	// (HTTP-01) for Expose.Host. Auto implies Mode=acme.
 	// See RUNE-066.
@@ -869,7 +876,7 @@ func (s *Service) CalculateHash() string {
 		if s.Expose.TLS == nil {
 			fmt.Fprintf(h, "expose.tls:nil\n")
 		} else {
-			fmt.Fprintf(h, "expose.tls:%s:%t\n", s.Expose.TLS.SecretName, s.Expose.TLS.Auto)
+			fmt.Fprintf(h, "expose.tls:%s:%t\n", s.Expose.TLS.Secret, s.Expose.TLS.Auto)
 		}
 	}
 

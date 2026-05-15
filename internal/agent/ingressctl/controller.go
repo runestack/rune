@@ -158,7 +158,7 @@ func (c *Controller) reconcile(ctx context.Context) {
 				Name:      s.Name,
 				Host:      s.Expose.Host,
 			})
-		} else if s.Expose.TLS != nil && s.Expose.TLS.Mode == types.ExposeTLSModeManual && s.Expose.TLS.SecretName != "" {
+		} else if s.Expose.TLS != nil && s.Expose.TLS.Mode == types.ExposeTLSModeManual && s.Expose.TLS.Secret != "" {
 			c.applyManualTLS(ctx, s)
 		}
 	}
@@ -177,30 +177,50 @@ func (c *Controller) reconcile(ctx context.Context) {
 	}
 }
 
-// applyManualTLS loads the Secret named by Expose.TLS.SecretName and
+// applyManualTLS loads the Secret referenced by Expose.TLS.Secret and
 // pushes its tls.crt / tls.key into the cert store. Idempotent per
 // (host, secret-version): subsequent reconcile ticks where the
 // underlying Secret hasn't changed skip the parse + push so we're
 // not re-doing PEM work every 2 s in the steady state.
 //
+// Expose.TLS.Secret accepts the three canonical resource-ref shapes
+// (see types.ParseResourceRefWithDefaults): bare name, ns/name
+// shorthand, FQDN secret ref. Non-secret types are rejected.
+//
 // Quiet on missing wiring (Secrets / Certs nil): the ingress route
 // is still applied so HTTP works; TLS handshakes will surface "no
 // cert for host" until the operator notices the missing secret. The
 // API-server validator is responsible for catching obvious cast-time
-// shapes (mode: manual + empty SecretName).
+// shapes (mode: manual + empty Secret).
 func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 	if c.cfg.Secrets == nil || c.cfg.Certs == nil {
 		return
 	}
 	host := s.Expose.Host
-	secretName := s.Expose.TLS.SecretName
 
-	secret, err := c.cfg.Secrets.Get(ctx, s.Namespace, secretName)
+	ref, refErr := types.ParseResourceRefWithDefaults(s.Expose.TLS.Secret, types.ResourceTypeSecret, s.Namespace)
+	if refErr != nil {
+		c.cfg.Logger.Warn("manual TLS: secret ref parse failed",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", s.Expose.TLS.Secret),
+			log.Err(refErr))
+		return
+	}
+	if ref.Type != types.ResourceTypeSecret {
+		c.cfg.Logger.Warn("manual TLS: ref is not a secret",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", s.Expose.TLS.Secret),
+			log.Str("refType", string(ref.Type)))
+		return
+	}
+	secret, err := c.cfg.Secrets.Get(ctx, ref.Namespace, ref.Name)
 	if err != nil {
 		c.cfg.Logger.Warn("manual TLS: secret lookup failed",
 			log.Str("host", host),
 			log.Str("namespace", s.Namespace),
-			log.Str("secret", secretName),
+			log.Str("secret", ref.Namespace+"/"+ref.Name),
 			log.Err(err))
 		return
 	}
@@ -210,7 +230,7 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 		c.cfg.Logger.Warn("manual TLS: secret missing tls.crt/tls.key data keys",
 			log.Str("host", host),
 			log.Str("namespace", s.Namespace),
-			log.Str("secret", secretName))
+			log.Str("secret", ref.Namespace+"/"+ref.Name))
 		return
 	}
 
@@ -229,7 +249,7 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 		c.cfg.Logger.Warn("manual TLS: cert store Set failed",
 			log.Str("host", host),
 			log.Str("namespace", s.Namespace),
-			log.Str("secret", secretName),
+			log.Str("secret", ref.Namespace+"/"+ref.Name),
 			log.Err(err))
 		// Clear our cached version so the next tick retries.
 		c.mu.Lock()
@@ -240,7 +260,7 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 	c.cfg.Logger.Info("manual TLS: cert loaded from secret",
 		log.Str("host", host),
 		log.Str("namespace", s.Namespace),
-		log.Str("secret", secretName),
+		log.Str("secret", ref.Namespace+"/"+ref.Name),
 		log.Int("secretVersion", secret.Version))
 }
 

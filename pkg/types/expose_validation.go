@@ -32,8 +32,8 @@ func ValidateExpose(e *ServiceExpose, onEdge bool) error {
 		}
 	}
 	if e.TLS != nil && e.TLS.Mode == ExposeTLSModeManual {
-		if e.TLS.SecretName == "" {
-			return NewValidationError("expose.tls.secretName is required when expose.tls.mode is manual")
+		if e.TLS.Secret == "" {
+			return NewValidationError("expose.tls.secret is required when expose.tls.mode is manual")
 		}
 		if e.Host == "" {
 			return NewValidationError("expose.host is required when expose.tls.mode is manual")

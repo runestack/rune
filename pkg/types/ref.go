@@ -156,20 +156,41 @@ func ParseResourceRefWithDefaultNamespace(s, defaultNamespace string) (ResourceR
 // ParseResourceRefWithDefaults parses s as a ResourceRef and fills in
 // defaultType / defaultNamespace for fields the input does not specify.
 //
-// In addition to the canonical forms, a bare name (no "rune://", no ":",
-// no "/") is accepted and treated as Name. Callers supply the implicit
-// Type via defaultType — e.g., a fromSecret field passes
-// ResourceTypeSecret. An empty defaultType is allowed; the resulting
-// ResourceRef simply has an empty Type for callers that don't care.
+// In addition to the canonical forms, two operator-friendly shorthands
+// are accepted in *typed* contexts (callers supplying defaultType):
+//
+//   - Bare name:        "tls-smoke"          → defaultType + defaultNamespace
+//   - NS/name shorthand: "shared/tls-smoke"  → defaultType + explicit namespace
+//
+// Both keep the call-site terse for the common "name in this/another
+// namespace" case without forcing operators to type the canonical
+// "secret:name.namespace.rune" form.
+//
+// A "name" with two or more "/" is still rejected — those almost
+// certainly indicate a confused subPath or similar typo.
+//
+// An empty defaultType is allowed; the resulting ResourceRef simply
+// has an empty Type for callers that don't care. (The NS/name
+// shorthand is also accepted when defaultType is empty, since the
+// shorthand carries no type information of its own.)
 func ParseResourceRefWithDefaults(s string, defaultType ResourceType, defaultNamespace string) (ResourceRef, error) {
 	if s == "" {
 		return ResourceRef{}, fmt.Errorf("empty ref")
 	}
 	if !strings.HasPrefix(s, "rune://") && strings.IndexByte(s, ':') < 0 {
-		if strings.IndexByte(s, '/') >= 0 {
-			return ResourceRef{}, fmt.Errorf("invalid ref %q: bare name must not contain '/'", s)
+		switch strings.Count(s, "/") {
+		case 0:
+			return ResourceRef{Type: defaultType, Namespace: defaultNamespace, Name: s}, nil
+		case 1:
+			i := strings.IndexByte(s, '/')
+			ns, name := s[:i], s[i+1:]
+			if ns == "" || name == "" {
+				return ResourceRef{}, fmt.Errorf("invalid ref %q: namespace and name both required in ns/name shorthand", s)
+			}
+			return ResourceRef{Type: defaultType, Namespace: ns, Name: name}, nil
+		default:
+			return ResourceRef{}, fmt.Errorf("invalid ref %q: bare name must not contain more than one '/'", s)
 		}
-		return ResourceRef{Type: defaultType, Namespace: defaultNamespace, Name: s}, nil
 	}
 	rr, err := parseResourceRefInternal(s)
 	if err != nil {
