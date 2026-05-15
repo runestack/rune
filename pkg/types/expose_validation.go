@@ -31,5 +31,13 @@ func ValidateExpose(e *ServiceExpose, onEdge bool) error {
 			return NewValidationError("expose.host is required when expose.tls.mode is acme")
 		}
 	}
+	if e.TLS != nil && e.TLS.Mode == ExposeTLSModeManual {
+		if e.TLS.SecretName == "" {
+			return NewValidationError("expose.tls.secretName is required when expose.tls.mode is manual")
+		}
+		if e.Host == "" {
+			return NewValidationError("expose.host is required when expose.tls.mode is manual")
+		}
+	}
 	return nil
 }

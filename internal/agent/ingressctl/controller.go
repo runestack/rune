@@ -21,6 +21,7 @@ import (
 	"github.com/runestack/rune/pkg/networking/acme"
 	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -37,6 +38,15 @@ type Config struct {
 	// the controller submits a Request for every service whose
 	// Expose.TLS asks for ACME on each reconcile.
 	ACME *acme.Orchestrator
+	// Secrets, when set, lets the controller resolve `tls.mode:
+	// manual` exposes by reading the named Secret and pushing its
+	// `tls.crt` / `tls.key` data into Certs on each reconcile (so
+	// secret rotation flows through without operator action).
+	Secrets *repos.SecretRepo
+	// Certs is the same CertStore the ACME orchestrator + ingress
+	// cert loader are wired against. Required to enable manual
+	// mode; nil disables manual-mode handling.
+	Certs acme.CertStore
 	// Logger is the structured logger. Defaults to "ingressctl".
 	Logger log.Logger
 	// ReconcilePeriod is how often the controller rebuilds the
@@ -51,6 +61,13 @@ type Controller struct {
 
 	mu        sync.RWMutex
 	lastHosts map[string]struct{} // for log noise control
+
+	// manualPushed tracks the (host, secret-version) pair last pushed
+	// to the cert store via manual-mode handling. Lets the per-tick
+	// reconcile re-push when the underlying secret changes (so secret
+	// rotation flows through automatically) but skip the work when
+	// nothing changed (so we're not re-parsing a PEM every 2s).
+	manualPushed map[string]int
 }
 
 // New constructs a Controller. Logger and ReconcilePeriod default.
@@ -61,7 +78,11 @@ func New(cfg Config) *Controller {
 	if cfg.ReconcilePeriod <= 0 {
 		cfg.ReconcilePeriod = 2 * time.Second
 	}
-	return &Controller{cfg: cfg, lastHosts: map[string]struct{}{}}
+	return &Controller{
+		cfg:          cfg,
+		lastHosts:    map[string]struct{}{},
+		manualPushed: map[string]int{},
+	}
 }
 
 // Resolve implements ingress.UpstreamResolver. It returns the first
@@ -137,6 +158,8 @@ func (c *Controller) reconcile(ctx context.Context) {
 				Name:      s.Name,
 				Host:      s.Expose.Host,
 			})
+		} else if s.Expose.TLS != nil && s.Expose.TLS.Mode == types.ExposeTLSModeManual && s.Expose.TLS.SecretName != "" {
+			c.applyManualTLS(ctx, s)
 		}
 	}
 	c.cfg.Router.Apply(routes)
@@ -152,6 +175,73 @@ func (c *Controller) reconcile(ctx context.Context) {
 			log.Int("count", len(routes)),
 			log.Any("hosts", keys(hosts)))
 	}
+}
+
+// applyManualTLS loads the Secret named by Expose.TLS.SecretName and
+// pushes its tls.crt / tls.key into the cert store. Idempotent per
+// (host, secret-version): subsequent reconcile ticks where the
+// underlying Secret hasn't changed skip the parse + push so we're
+// not re-doing PEM work every 2 s in the steady state.
+//
+// Quiet on missing wiring (Secrets / Certs nil): the ingress route
+// is still applied so HTTP works; TLS handshakes will surface "no
+// cert for host" until the operator notices the missing secret. The
+// API-server validator is responsible for catching obvious cast-time
+// shapes (mode: manual + empty SecretName).
+func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
+	if c.cfg.Secrets == nil || c.cfg.Certs == nil {
+		return
+	}
+	host := s.Expose.Host
+	secretName := s.Expose.TLS.SecretName
+
+	secret, err := c.cfg.Secrets.Get(ctx, s.Namespace, secretName)
+	if err != nil {
+		c.cfg.Logger.Warn("manual TLS: secret lookup failed",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", secretName),
+			log.Err(err))
+		return
+	}
+	cert := secret.Data["tls.crt"]
+	key := secret.Data["tls.key"]
+	if cert == "" || key == "" {
+		c.cfg.Logger.Warn("manual TLS: secret missing tls.crt/tls.key data keys",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", secretName))
+		return
+	}
+
+	// Skip the push when this (host, secret-version) pair already
+	// landed in the cert store. Secret.Version monotonically
+	// increases on every Update so a rotation forces a re-push.
+	c.mu.Lock()
+	if prev, ok := c.manualPushed[host]; ok && prev == secret.Version {
+		c.mu.Unlock()
+		return
+	}
+	c.manualPushed[host] = secret.Version
+	c.mu.Unlock()
+
+	if err := c.cfg.Certs.Set(ctx, host, []byte(cert), []byte(key)); err != nil {
+		c.cfg.Logger.Warn("manual TLS: cert store Set failed",
+			log.Str("host", host),
+			log.Str("namespace", s.Namespace),
+			log.Str("secret", secretName),
+			log.Err(err))
+		// Clear our cached version so the next tick retries.
+		c.mu.Lock()
+		delete(c.manualPushed, host)
+		c.mu.Unlock()
+		return
+	}
+	c.cfg.Logger.Info("manual TLS: cert loaded from secret",
+		log.Str("host", host),
+		log.Str("namespace", s.Namespace),
+		log.Str("secret", secretName),
+		log.Int("secretVersion", secret.Version))
 }
 
 func primaryServicePort(s *types.Service) int {
