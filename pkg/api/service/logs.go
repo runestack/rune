@@ -69,8 +69,11 @@ func (s *LogService) parseLogLine(line, serviceName, fallbackInstanceName string
 	}
 }
 
-// processSingleLine processes a single log line from the reader
+// readLogsFromReader scans the combined log reader and emits parsed responses
+// on logCh. It owns logCh and closes it on completion (EOF, context cancel, or
+// scanner error) so downstream consumers can detect end-of-stream.
 func (s *LogService) readLogsFromReader(ctx context.Context, logReader io.ReadCloser, logCh chan<- *generated.LogResponse, errCh chan<- error, serviceName, instanceName string) {
+	defer close(logCh)
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Debug("Recovered from panic in readLogsFromReader", log.Any("recover", r))
@@ -78,29 +81,28 @@ func (s *LogService) readLogsFromReader(ctx context.Context, logReader io.ReadCl
 	}()
 
 	scanner := bufio.NewScanner(logReader)
+	// Allow long log lines (default bufio.Scanner caps at 64KB).
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Check if context is cancelled before sending
 		select {
 		case <-ctx.Done():
 			s.logger.Debug("Context cancelled, stopping log reading")
 			return
 		case logCh <- s.parseLogLine(line, serviceName, instanceName):
-			// Successfully sent
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		if ctx.Err() != nil {
-			// Context was cancelled, don't treat as error
 			s.logger.Debug("Scanner error after context cancellation", log.Err(err))
 			return
 		}
 		s.logger.Error("Failed to scan logs", log.Err(err))
 		select {
 		case <-ctx.Done():
-			return
 		case errCh <- fmt.Errorf("failed to scan logs: %v", err):
 		}
 		return
@@ -160,14 +162,14 @@ func (s *LogService) getLogReader(ctx context.Context, req *generated.LogRequest
 		return nil, "", "", status.Errorf(codes.InvalidArgument, "invalid resource target: %v", err)
 	}
 
-	if resourceTarget.Type == types.ResourceTypeService {
-		// Target is a service
+	switch resourceTarget.Type {
+	case types.ResourceTypeService:
 		service, err := resourceTarget.GetService()
 		if err != nil {
 			return nil, "", "", status.Errorf(codes.Internal, "resource is not a service: %v", err)
 		}
+		serviceName = service.Name
 
-		// Use orchestrator to get service logs
 		logReader, err = s.orchestrator.GetServiceLogs(ctx, types.NS(req.Namespace), service.Name, logOptions)
 		if err != nil {
 			s.logger.Error("Failed to get service logs",
@@ -175,15 +177,18 @@ func (s *LogService) getLogReader(ctx context.Context, req *generated.LogRequest
 				log.Err(err))
 			return nil, "", "", status.Errorf(codes.Internal, "failed to get service logs: %v", err)
 		}
-	}
 
-	if resourceTarget.Type == types.ResourceTypeInstance {
+	case types.ResourceTypeInstance:
 		instance, err := resourceTarget.GetInstance()
 		if err != nil {
 			return nil, "", "", status.Errorf(codes.Internal, "resource is not an instance: %v", err)
 		}
+		instanceName = instance.Name
+		// Fetch the parent service name for richer prefixes/output.
+		if instance.ServiceName != "" {
+			serviceName = instance.ServiceName
+		}
 
-		// Use orchestrator to get instance logs
 		logReader, err = s.orchestrator.GetInstanceLogs(ctx, types.NS(req.Namespace), instance.ID, logOptions)
 		if err != nil {
 			s.logger.Error("Failed to get instance logs",
@@ -191,6 +196,9 @@ func (s *LogService) getLogReader(ctx context.Context, req *generated.LogRequest
 				log.Err(err))
 			return nil, "", "", status.Errorf(codes.Internal, "failed to get instance logs: %v", err)
 		}
+
+	default:
+		return nil, "", "", status.Errorf(codes.InvalidArgument, "unsupported resource type: %s", resourceTarget.Type)
 	}
 
 	if logReader == nil {
@@ -200,52 +208,28 @@ func (s *LogService) getLogReader(ctx context.Context, req *generated.LogRequest
 	return logReader, serviceName, instanceName, nil
 }
 
-// handleParameterUpdates listens for parameter updates from the client
-func (s *LogService) handleParameterUpdates(ctx context.Context, stream generated.LogService_StreamLogsServer, errCh chan<- error) {
+// watchClientStream consumes any follow-up messages from the client so we
+// notice when the client closes the stream. Parameter-update support is not
+// implemented yet; for now we just drain and watch for EOF/cancel so we can
+// shut down cleanly. Cancels the supplied context on EOF or recv error.
+func (s *LogService) watchClientStream(ctx context.Context, cancel context.CancelFunc, stream generated.LogService_StreamLogsServer) {
 	defer func() {
 		if r := recover(); r != nil {
-			s.logger.Debug("Recovered from panic in handleParameterUpdates", log.Any("recover", r))
+			s.logger.Debug("Recovered from panic in watchClientStream", log.Any("recover", r))
 		}
 	}()
 
 	for {
-		newReq, err := stream.Recv()
-		if err == io.EOF {
-			// Client closed stream
+		if _, err := stream.Recv(); err != nil {
+			if err != io.EOF && ctx.Err() == nil {
+				s.logger.Debug("Client stream receive ended", log.Err(err))
+			}
+			cancel()
 			return
 		}
-		if err != nil {
-			if ctx.Err() != nil {
-				// Context was cancelled, don't treat as error
-				s.logger.Debug("Receive error after context cancellation", log.Err(err))
-				return
-			}
-			s.logger.Error("Failed to receive log request update", log.Err(err))
-			select {
-			case <-ctx.Done():
-				return
-			case errCh <- fmt.Errorf("failed to receive request update: %v", err):
-			}
+		// Future: handle parameter updates here.
+		if ctx.Err() != nil {
 			return
-		}
-
-		// Handle parameter update
-		if newReq.ParameterUpdate {
-			// Signal that we need to update parameters
-			select {
-			case <-ctx.Done():
-				return
-			case errCh <- fmt.Errorf("parameter update requested"):
-			}
-			return
-		}
-
-		// Check if context is cancelled
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			// Continue
 		}
 	}
 }
@@ -282,9 +266,9 @@ func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) er
 	}
 	defer logReader.Close()
 
-	// Channel to collect log output
+	// Channel to collect log output. The reader goroutine owns it and closes
+	// it on EOF/cancel so the sender can detect end-of-stream.
 	logCh := make(chan *generated.LogResponse, 100)
-	defer close(logCh)
 
 	// Error channel to propagate errors from goroutines
 	errCh := make(chan error, 1)
@@ -292,14 +276,16 @@ func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) er
 	// Start a goroutine to read from logReader and send to logCh
 	go s.readLogsFromReader(ctx, logReader, logCh, errCh, serviceName, instanceName)
 
-	// Handle parameter updates from client
-	go s.handleParameterUpdates(ctx, stream, errCh)
+	// Watch the client stream so we shut down when the client cancels.
+	go s.watchClientStream(ctx, cancel, stream)
 
 	// Stream logs to client
 	return s.streamLogsToClient(ctx, stream, logCh, errCh)
 }
 
-// streamLogsToClient sends log responses to the client
+// streamLogsToClient sends log responses to the client. It returns nil when
+// the reader signals end-of-stream by closing logCh (e.g. non-follow logs were
+// fully consumed) so the gRPC stream is half-closed and the client sees io.EOF.
 func (s *LogService) streamLogsToClient(ctx context.Context, stream generated.LogService_StreamLogsServer,
 	logCh <-chan *generated.LogResponse, errCh <-chan error) error {
 
@@ -307,14 +293,19 @@ func (s *LogService) streamLogsToClient(ctx context.Context, stream generated.Lo
 		select {
 		case logResp, ok := <-logCh:
 			if !ok {
-				// Channel closed
 				return nil
 			}
 			if err := stream.Send(logResp); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
 				s.logger.Error("Failed to send log response", log.Err(err))
 				return status.Errorf(codes.Internal, "failed to send log response: %v", err)
 			}
 		case err := <-errCh:
+			if err == nil {
+				continue
+			}
 			s.logger.Error("Log streaming error", log.Err(err))
 			return status.Errorf(codes.Internal, "log streaming error: %v", err)
 		case <-ctx.Done():
