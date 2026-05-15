@@ -68,7 +68,21 @@ type Controller struct {
 	// rotation flows through automatically) but skip the work when
 	// nothing changed (so we're not re-parsing a PEM every 2s).
 	manualPushed map[string]int
+
+	// manualLogged dedups warning logs on manual-TLS failures so a
+	// single bad secret doesn't spam the journal at the 2 s reconcile
+	// cadence. Keyed by "<host>::<errKind>"; first failure logs, then
+	// suppressed until ManualLogRepeat has elapsed (or the next
+	// successful push clears the entry).
+	manualLogged map[string]time.Time
 }
+
+// ManualLogRepeat is how often we re-emit "still failing" warnings
+// for a misconfigured manual-TLS Secret. First failure logs
+// immediately; subsequent failures of the same (host, errKind) are
+// suppressed until this interval elapses. A successful push clears
+// the dedup entry so the next failure logs immediately again.
+const ManualLogRepeat = 5 * time.Minute
 
 // New constructs a Controller. Logger and ReconcilePeriod default.
 func New(cfg Config) *Controller {
@@ -82,6 +96,7 @@ func New(cfg Config) *Controller {
 		cfg:          cfg,
 		lastHosts:    map[string]struct{}{},
 		manualPushed: map[string]int{},
+		manualLogged: map[string]time.Time{},
 	}
 }
 
@@ -200,7 +215,7 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 
 	ref, refErr := types.ParseResourceRefWithDefaults(s.Expose.TLS.Secret, types.ResourceTypeSecret, s.Namespace)
 	if refErr != nil {
-		c.cfg.Logger.Warn("manual TLS: secret ref parse failed",
+		c.warnManualOnce(host, "ref-parse", "manual TLS: secret ref parse failed",
 			log.Str("host", host),
 			log.Str("namespace", s.Namespace),
 			log.Str("secret", s.Expose.TLS.Secret),
@@ -208,7 +223,7 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 		return
 	}
 	if ref.Type != types.ResourceTypeSecret {
-		c.cfg.Logger.Warn("manual TLS: ref is not a secret",
+		c.warnManualOnce(host, "ref-not-secret", "manual TLS: ref is not a secret",
 			log.Str("host", host),
 			log.Str("namespace", s.Namespace),
 			log.Str("secret", s.Expose.TLS.Secret),
@@ -217,7 +232,7 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 	}
 	secret, err := c.cfg.Secrets.Get(ctx, ref.Namespace, ref.Name)
 	if err != nil {
-		c.cfg.Logger.Warn("manual TLS: secret lookup failed",
+		c.warnManualOnce(host, "secret-lookup", "manual TLS: secret lookup failed",
 			log.Str("host", host),
 			log.Str("namespace", s.Namespace),
 			log.Str("secret", ref.Namespace+"/"+ref.Name),
@@ -227,7 +242,7 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 	cert := secret.Data["tls.crt"]
 	key := secret.Data["tls.key"]
 	if cert == "" || key == "" {
-		c.cfg.Logger.Warn("manual TLS: secret missing tls.crt/tls.key data keys",
+		c.warnManualOnce(host, "missing-keys", "manual TLS: secret missing tls.crt/tls.key data keys",
 			log.Str("host", host),
 			log.Str("namespace", s.Namespace),
 			log.Str("secret", ref.Namespace+"/"+ref.Name))
@@ -246,7 +261,7 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 	c.mu.Unlock()
 
 	if err := c.cfg.Certs.Set(ctx, host, []byte(cert), []byte(key)); err != nil {
-		c.cfg.Logger.Warn("manual TLS: cert store Set failed",
+		c.warnManualOnce(host, "cert-set", "manual TLS: cert store Set failed",
 			log.Str("host", host),
 			log.Str("namespace", s.Namespace),
 			log.Str("secret", ref.Namespace+"/"+ref.Name),
@@ -257,11 +272,48 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 		c.mu.Unlock()
 		return
 	}
+	// On success: clear any prior warn-dedup entries for this host so
+	// the next failure (if there is one) logs immediately again, and
+	// emit the success line (which is always logged — it's rare).
+	c.clearManualWarns(host)
 	c.cfg.Logger.Info("manual TLS: cert loaded from secret",
 		log.Str("host", host),
 		log.Str("namespace", s.Namespace),
 		log.Str("secret", ref.Namespace+"/"+ref.Name),
 		log.Int("secretVersion", secret.Version))
+}
+
+// warnManualOnce emits a Warn-level log no more than once every
+// ManualLogRepeat for a given (host, errKind). Subsequent identical
+// failures within the window are dropped on the floor — useful because
+// the reconciler ticks every 2 s and an unfixed misconfigured Secret
+// would otherwise spam the journal.
+func (c *Controller) warnManualOnce(host, errKind, msg string, fields ...log.Field) {
+	key := host + "::" + errKind
+	c.mu.Lock()
+	last, seen := c.manualLogged[key]
+	now := time.Now()
+	if seen && now.Sub(last) < ManualLogRepeat {
+		c.mu.Unlock()
+		return
+	}
+	c.manualLogged[key] = now
+	c.mu.Unlock()
+	c.cfg.Logger.Warn(msg, fields...)
+}
+
+// clearManualWarns drops every dedup entry for host. Called on a
+// successful push so the operator gets an immediate warning if the
+// secret breaks again later (e.g. after a bad rotation).
+func (c *Controller) clearManualWarns(host string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prefix := host + "::"
+	for k := range c.manualLogged {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			delete(c.manualLogged, k)
+		}
+	}
 }
 
 func primaryServicePort(s *types.Service) int {
