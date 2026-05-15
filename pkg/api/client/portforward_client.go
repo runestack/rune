@@ -125,17 +125,22 @@ func (c *PortForwardClient) Open(ctx context.Context, target PortForwardTarget) 
 
 func (s *PortForwardSession) sendLoop() {
 	defer close(s.sendErr)
-	for msg := range s.sendCh {
-		if err := s.stream.Send(msg); err != nil {
-			s.sendErr <- err
-			// Drain remaining so producers don't block.
-			for range s.sendCh {
-			}
+	for {
+		select {
+		case <-s.closed:
+			// Graceful close: half-close the stream and exit. We
+			// deliberately do NOT drain remaining sendCh — late
+			// enqueuers will see s.closed in their select and get
+			// io.ErrClosedPipe.
+			_ = s.stream.CloseSend()
 			return
+		case msg := <-s.sendCh:
+			if err := s.stream.Send(msg); err != nil {
+				s.sendErr <- err
+				return
+			}
 		}
 	}
-	// Half-close on graceful drain.
-	_ = s.stream.CloseSend()
 }
 
 // SendOpen requests a new multiplexed connection.
@@ -166,6 +171,15 @@ func (s *PortForwardSession) SendClose(connID uint64, errStr string) error {
 }
 
 func (s *PortForwardSession) enqueue(msg *generated.PortForwardClientMessage) error {
+	// Fast path: a non-blocking check of s.closed first. Without this,
+	// a plain select picks randomly between the two ready cases after
+	// Close has run, and roughly half of late enqueues would silently
+	// succeed-and-be-dropped instead of returning an error.
+	select {
+	case <-s.closed:
+		return io.ErrClosedPipe
+	default:
+	}
 	select {
 	case <-s.closed:
 		return io.ErrClosedPipe
@@ -185,8 +199,11 @@ func (s *PortForwardSession) Recv() (*generated.PortForwardServerMessage, error)
 func (s *PortForwardSession) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.closed)
-		close(s.sendCh)
 		// Wait for sendLoop to drain (channel closes when loop exits).
+		// We deliberately do NOT close sendCh — late SendData / SendClose
+		// / SendOpen calls from in-flight proxy goroutines must observe
+		// s.closed and return io.ErrClosedPipe rather than racing into
+		// "send on closed channel".
 		<-s.sendErr
 	})
 	return nil

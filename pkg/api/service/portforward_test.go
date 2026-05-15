@@ -251,8 +251,8 @@ func waitDial(t *testing.T, orch *orchestrator.FakeOrchestrator) interface {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if orch.LastDialPeer != nil {
-			return orch.LastDialPeer
+		if peer := orch.GetLastDialPeer(); peer != nil {
+			return peer
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("orchestrator never received a Dial call")

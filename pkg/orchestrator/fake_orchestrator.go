@@ -298,6 +298,8 @@ func (fo *FakeOrchestrator) ExecInService(ctx context.Context, namespace, servic
 // DialInInstance returns a net.Pipe(); the peer end is stashed on the
 // fake so tests can read/write the "remote" side.
 func (fo *FakeOrchestrator) DialInInstance(ctx context.Context, namespace, instanceID string, port uint32) (net.Conn, *types.Instance, error) {
+	fo.mu.Lock()
+	defer fo.mu.Unlock()
 	if fo.DialError != nil {
 		return nil, nil, fo.DialError
 	}
@@ -311,6 +313,8 @@ func (fo *FakeOrchestrator) DialInInstance(ctx context.Context, namespace, insta
 // DialInService is identical to DialInInstance for the fake, with a
 // synthetic instance name derived from the service.
 func (fo *FakeOrchestrator) DialInService(ctx context.Context, namespace, serviceName string, port uint32) (net.Conn, *types.Instance, error) {
+	fo.mu.Lock()
+	defer fo.mu.Unlock()
 	if fo.DialError != nil {
 		return nil, nil, fo.DialError
 	}
@@ -319,6 +323,15 @@ func (fo *FakeOrchestrator) DialInService(ctx context.Context, namespace, servic
 	fo.DialCalls = append(fo.DialCalls, FakeDialCall{Namespace: namespace, ServiceName: serviceName, Port: port})
 	inst := &types.Instance{ID: serviceName + "-0", ServiceName: serviceName, Namespace: namespace, Status: types.InstanceStatusRunning}
 	return local, inst, nil
+}
+
+// GetLastDialPeer returns the remote end of the net.Pipe stashed by
+// the most recent DialIn{Instance,Service} call, or nil if none has
+// happened yet. Locked accessor — safe to poll from a test goroutine.
+func (fo *FakeOrchestrator) GetLastDialPeer() net.Conn {
+	fo.mu.RLock()
+	defer fo.mu.RUnlock()
+	return fo.LastDialPeer
 }
 
 // FakeDialCall records a DialInInstance/DialInService call.
