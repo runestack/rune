@@ -26,6 +26,7 @@ type portForwardOptions struct {
 
 	bindAddr string
 	instance string
+	detach   bool // -d: hand off to the daemon (RUNE-123)
 }
 
 // portMapping is one parsed [LOCAL:]REMOTE pair.
@@ -76,6 +77,11 @@ Examples:
 	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "", "namespace of the service/instance")
 	cmd.Flags().StringVar(&opts.bindAddr, "bind", "127.0.0.1", "local bind address")
 	cmd.Flags().StringVar(&opts.instance, "instance", "", "pin to a specific instance ID (for scale>1)")
+	cmd.Flags().BoolVarP(&opts.detach, "detach", "d", false, "background the forward to the rune port-forward daemon")
+
+	cmd.AddCommand(newPortForwardListCmd())
+	cmd.AddCommand(newPortForwardStopCmd())
+	cmd.AddCommand(newPortForwardLogsCmd())
 
 	return cmd
 }
@@ -91,6 +97,10 @@ func runPortForward(ctx context.Context, args []string, opts *portForwardOptions
 	ports := make([]uint32, 0, len(mappings))
 	for _, m := range mappings {
 		ports = append(ports, uint32(m.remote))
+	}
+
+	if opts.detach {
+		return runPortForwardDetached(target, mappings, opts)
 	}
 
 	apiClient, err := createAPIClient(&opts.cmdOptions)
