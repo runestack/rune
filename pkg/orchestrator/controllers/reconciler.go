@@ -693,21 +693,35 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 			log.Int("failed", failed),
 			log.Int("total", len(instanceData.Instances)))
 
-		// Determine overall service status
-		if failed > 0 {
+		// Determine overall service status.
+		//
+		// Stopping wins over Running/Deploying/Pending whenever the desired
+		// scale is below the current instance count — the reconciler is
+		// actively tearing instances down. Without this, `rune stop` and the
+		// drain phase of `rune restart` show "Running" the whole time the
+		// old instance is still around, which reads as a contradiction next
+		// to the desired scale of 0.
+		//
+		// Failed still wins over Stopping: an instance that's failing to
+		// terminate cleanly is more important to surface than the fact that
+		// we're trying to terminate it.
+		switch {
+		case failed > 0:
 			newStatus = types.ServiceStatusFailed
 			if worstFailed != nil {
 				newReason = types.DeriveServiceReason(worstFailed.Status, worstFailed.StatusMessage)
 				newMessage = worstFailed.StatusMessage
 			}
-		} else if pending > 0 {
+		case service.Scale < len(instanceData.Instances):
+			newStatus = types.ServiceStatusStopping
+		case pending > 0:
 			newStatus = types.ServiceStatusDeploying
 			if worstPending != nil && worstPending.StatusMessage != "" {
 				newMessage = worstPending.StatusMessage
 			}
-		} else if running == len(instanceData.Instances) {
+		case running == len(instanceData.Instances):
 			newStatus = types.ServiceStatusRunning
-		} else {
+		default:
 			newStatus = types.ServiceStatusPending
 		}
 	}

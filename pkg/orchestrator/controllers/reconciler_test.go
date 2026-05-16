@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/runestack/rune/pkg/log"
@@ -132,6 +133,98 @@ func TestReconcileScaleUp(t *testing.T) {
 	err = testStore.List(ctx, types.ResourceTypeInstance, "default", &instances)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(instances), "There should be exactly 2 instances in the store")
+}
+
+// TestUpdateServiceStatusStopping verifies that when the desired Scale is
+// below the current instance count (rune stop / rune restart drain phase),
+// the service status flips to Stopping rather than staying Running. Before
+// this branch, `rune status` showed "Running 0" during a restart drain,
+// which read as a contradiction next to the desired scale.
+func TestUpdateServiceStatusStopping(t *testing.T) {
+	cases := []struct {
+		name      string
+		scale     int
+		instances []types.InstanceStatus
+		want      types.ServiceStatus
+	}{
+		{
+			name:      "stop in flight: scale 0, one instance still running",
+			scale:     0,
+			instances: []types.InstanceStatus{types.InstanceStatusRunning},
+			want:      types.ServiceStatusStopping,
+		},
+		{
+			name:      "scale-down in flight: scale 1, two instances still running",
+			scale:     1,
+			instances: []types.InstanceStatus{types.InstanceStatusRunning, types.InstanceStatusRunning},
+			want:      types.ServiceStatusStopping,
+		},
+		{
+			name:      "fully drained: scale 0, no instances",
+			scale:     0,
+			instances: nil,
+			want:      types.ServiceStatusPending,
+		},
+		{
+			name:      "running: scale matches instances",
+			scale:     1,
+			instances: []types.InstanceStatus{types.InstanceStatusRunning},
+			want:      types.ServiceStatusRunning,
+		},
+		{
+			name:      "starting: scale matches instances but they're pending",
+			scale:     1,
+			instances: []types.InstanceStatus{types.InstanceStatusPending},
+			want:      types.ServiceStatusDeploying,
+		},
+		{
+			name:      "failed wins over stopping: scale 0, one running + one failed",
+			scale:     0,
+			instances: []types.InstanceStatus{types.InstanceStatusRunning, types.InstanceStatusFailed},
+			want:      types.ServiceStatusFailed,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testStore := setupStore(t)
+			ctx := context.Background()
+			reconciler := &reconciler{
+				store:              testStore,
+				instanceController: NewFakeInstanceController(),
+				healthController:   NewFakeHealthController(),
+				logger:             log.NewLogger().WithComponent("reconciler"),
+			}
+
+			svc := &types.Service{
+				ID: "svc", Name: "svc", Namespace: "default",
+				Image: "test", Scale: tc.scale,
+				Status: types.ServiceStatusRunning, // pre-existing
+			}
+			err := testStore.Create(ctx, types.ResourceTypeService, "default", "svc", svc)
+			assert.NoError(t, err)
+
+			for i, st := range tc.instances {
+				inst := &types.Instance{
+					ID:          fmt.Sprintf("svc-%d", i),
+					Name:        fmt.Sprintf("svc-%d", i),
+					ServiceName: "svc",
+					Namespace:   "default",
+					Status:      st,
+				}
+				err := testStore.CreateInstance(ctx, inst)
+				assert.NoError(t, err)
+			}
+
+			err = reconciler.updateServiceStatus(ctx, svc)
+			assert.NoError(t, err)
+
+			got := &types.Service{}
+			err = testStore.Get(ctx, types.ResourceTypeService, "default", "svc", got)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got.Status, "service status mismatch")
+		})
+	}
 }
 
 func TestReconcileScaleDown(t *testing.T) {
