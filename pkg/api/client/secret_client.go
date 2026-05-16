@@ -135,6 +135,40 @@ func (s *SecretClient) UpdateSecret(secret *types.Secret, force bool) error {
 	return nil
 }
 
+// PatchSecret performs a server-side merge update of a secret's data map.
+// set entries upsert; unset keys are removed. The server returns metadata
+// only (no plaintext) so this only requires the secrets:update RBAC verb.
+// Returns the updated metadata Secret (data map empty, DataKeys populated).
+func (s *SecretClient) PatchSecret(namespace, name string, set map[string]string, unset []string) (*types.Secret, error) {
+	s.logger.Debug("Patching secret",
+		log.Str("name", name), log.Str("namespace", namespace),
+		log.Int("set", len(set)), log.Int("unset", len(unset)))
+
+	req := &generated.PatchSecretRequest{
+		Name:      name,
+		Namespace: namespace,
+		Set:       set,
+		Unset:     unset,
+	}
+
+	ctx, cancel := s.client.Context()
+	defer cancel()
+
+	resp, err := s.svc.PatchSecret(ctx, req)
+	if err != nil {
+		s.logger.Error("Failed to patch secret", log.Err(err), log.Str("name", name))
+		return nil, convertGRPCError("patch secret", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	out, err := s.protoToSecret(resp.Secret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert secret: %w", err)
+	}
+	return out, nil
+}
+
 // DeleteSecret deletes a secret.
 func (s *SecretClient) DeleteSecret(namespace, name string) error {
 	s.logger.Debug("Deleting secret", log.Str("name", name), log.Str("namespace", namespace))

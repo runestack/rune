@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,13 @@ type SecretService struct {
 	logger log.Logger
 
 	limiter *tokenBucket
+
+	// patchLocks serialises concurrent PatchSecret calls per namespace/name
+	// so the read-merge-write cycle is atomic for a given secret. Without
+	// this, two patches setting different keys could race and the second
+	// writer would clobber the first's change. Acquired only on the patch
+	// path; replace-style UpdateSecret is unaffected.
+	patchLocks sync.Map // key: "namespace/name" → *sync.Mutex
 }
 
 func NewSecretService(coreStore store.Store, logger log.Logger) *SecretService {
@@ -150,6 +158,112 @@ func (s *SecretService) UpdateSecret(ctx context.Context, req *generated.UpdateS
 	}
 	s.emitAudit(ctx, "update", namespace, req.Secret.Name, types.AuditOutcomeSuccess, "", meta)
 	return &generated.SecretResponse{Secret: toProtoSecret(got, false), Status: &generated.Status{Code: int32(codes.OK)}}, nil
+}
+
+// PatchSecret applies a key-scoped merge to an existing secret: `set` entries
+// upsert, `unset` keys are removed. Runs under a per-secret lock so concurrent
+// patches don't clobber each other. The response carries metadata only — no
+// plaintext — so callers don't need secrets:reveal to rotate a single key.
+//
+// Idempotency:
+//   - If neither set nor unset is provided, returns InvalidArgument.
+//   - unset keys that don't exist are silently ignored.
+//   - If the merge produces a map identical to the current head, no new
+//     version is written and no audit event is emitted (matches UpdateSecret's
+//     unchanged-short-circuit behaviour).
+//
+// Audit:
+//   - On success, action="patch" with metadata listing the key names that
+//     were set/unset and the resulting keyCount/version. Values are never
+//     logged.
+func (s *SecretService) PatchSecret(ctx context.Context, req *generated.PatchSecretRequest) (*generated.SecretResponse, error) {
+	if req == nil || req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	if len(req.Set) == 0 && len(req.Unset) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "at least one of set or unset must be non-empty")
+	}
+
+	namespace := types.NS(req.Namespace)
+
+	// Serialise concurrent patches on this secret. Single-writer per key keeps
+	// the read-merge-write atomic without touching the store layer.
+	mu := s.acquirePatchLock(namespace, req.Name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	current, err := s.repo.Get(ctx, namespace, req.Name)
+	if err != nil {
+		s.emitAudit(ctx, "patch", namespace, req.Name, types.AuditOutcomeError, "secret not found", nil)
+		return nil, status.Errorf(codes.NotFound, "secret not found: %s/%s", namespace, req.Name)
+	}
+
+	// Build the merged data map. Start from current, apply set, then unset.
+	merged := make(map[string]string, len(current.Data)+len(req.Set))
+	for k, v := range current.Data {
+		merged[k] = v
+	}
+	for k, v := range req.Set {
+		merged[k] = v
+	}
+	removed := make([]string, 0, len(req.Unset))
+	for _, k := range req.Unset {
+		if _, ok := merged[k]; ok {
+			delete(merged, k)
+			removed = append(removed, k)
+		}
+	}
+
+	desired := &types.Secret{Name: req.Name, Namespace: namespace, Type: current.Type, Data: merged}
+
+	// Short-circuit no-op patches (matches UpdateSecret's unchanged path).
+	if reflect.DeepEqual(current.Data, desired.Data) {
+		s.logger.Info("Secret patch is a no-op; no update",
+			log.Str("name", desired.Name), log.Str("namespace", desired.Namespace))
+		return &generated.SecretResponse{Secret: toProtoSecret(current, false), Status: &generated.Status{Code: int32(codes.OK)}}, nil
+	}
+
+	oldHash := hashSecret(current)
+	newHash := hashSecret(desired)
+	s.logger.Info("Patching secret",
+		log.Str("name", desired.Name), log.Str("namespace", desired.Namespace),
+		log.Str("old_hash", oldHash[:8]), log.Str("new_hash", newHash[:8]),
+		log.Int("set", len(req.Set)), log.Int("unset", len(removed)))
+
+	if err := s.repo.Update(ctx, namespace, req.Name, desired, store.WithSource(store.EventSourceAPI)); err != nil {
+		s.emitAudit(ctx, "patch", namespace, req.Name, types.AuditOutcomeError, err.Error(), nil)
+		return nil, status.Errorf(codes.Internal, "patch: %v", err)
+	}
+	got, _ := s.repo.Get(ctx, namespace, req.Name)
+
+	// Audit metadata carries key NAMES only — never values.
+	setKeys := make([]string, 0, len(req.Set))
+	for k := range req.Set {
+		setKeys = append(setKeys, k)
+	}
+	sort.Strings(setKeys)
+	sort.Strings(removed)
+	meta := map[string]string{
+		"oldHash":  oldHash[:8],
+		"newHash":  newHash[:8],
+		"keyCount": fmt.Sprintf("%d", len(desired.Data)),
+		"set":      strings.Join(setKeys, ","),
+		"unset":    strings.Join(removed, ","),
+	}
+	if got != nil {
+		meta["version"] = fmt.Sprintf("%d", got.Version)
+	}
+	s.emitAudit(ctx, "patch", namespace, req.Name, types.AuditOutcomeSuccess, "", meta)
+	return &generated.SecretResponse{Secret: toProtoSecret(got, false), Status: &generated.Status{Code: int32(codes.OK)}}, nil
+}
+
+// acquirePatchLock returns the per-secret mutex, lazily creating it on first
+// use. Stored in a sync.Map so we don't need a global lock around the map
+// itself; LoadOrStore handles the race between two first-time patchers.
+func (s *SecretService) acquirePatchLock(namespace, name string) *sync.Mutex {
+	key := namespace + "/" + name
+	mu, _ := s.patchLocks.LoadOrStore(key, &sync.Mutex{})
+	return mu.(*sync.Mutex)
 }
 
 func (s *SecretService) DeleteSecret(ctx context.Context, req *generated.DeleteSecretRequest) (*generated.Status, error) {
