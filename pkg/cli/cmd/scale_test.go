@@ -21,14 +21,16 @@ const (
 	ScalingModeGradual   = "gradual"
 )
 
-// ScaleOptions represents options for scaling operations
+// ScaleOptions represents options for scaling operations.
+// `Detach` mirrors the CLI flag: false (default) waits for completion,
+// true exits immediately after the request is sent.
 type ScaleOptions struct {
 	Namespace      string
 	Mode           string
 	Step           int
 	Interval       time.Duration
 	RollbackOnFail bool
-	Wait           bool
+	Detach         bool
 	Timeout        time.Duration
 }
 
@@ -286,78 +288,47 @@ func TestScaleCommand_ValidateScalingMode(t *testing.T) {
 	}
 }
 
-func TestScaleOptions_WaitOverride(t *testing.T) {
+// TestScaleOptions_Detach verifies that --detach is a plain boolean: false
+// means wait for completion (default), true means fire-and-forget.
+func TestScaleOptions_Detach(t *testing.T) {
 	tests := []struct {
-		name     string
-		wait     bool
-		noWait   bool
-		expected bool
+		name        string
+		detach      bool
+		shouldWait  bool
 	}{
-		{
-			name:     "wait true, no-wait false",
-			wait:     true,
-			noWait:   false,
-			expected: true,
-		},
-		{
-			name:     "wait false, no-wait false",
-			wait:     false,
-			noWait:   false,
-			expected: false,
-		},
-		{
-			name:     "wait true, no-wait true",
-			wait:     true,
-			noWait:   true,
-			expected: false, // no-wait overrides wait
-		},
-		{
-			name:     "wait false, no-wait true",
-			wait:     false,
-			noWait:   true,
-			expected: false,
-		},
+		{name: "default waits", detach: false, shouldWait: true},
+		{name: "detach skips wait", detach: true, shouldWait: false},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			options := &ScaleOptions{
-				Wait: tt.wait && !tt.noWait, // no-wait overrides wait
-			}
-
-			assert.Equal(t, tt.expected, options.Wait, "wait option mismatch")
+			options := &ScaleOptions{Detach: tt.detach}
+			assert.Equal(t, tt.shouldWait, !options.Detach, "wait semantics mismatch")
 		})
 	}
 }
 
 func TestScaleOptions_Defaults(t *testing.T) {
-	// Reset global vars to defaults before test
 	origScaleMode := scaleMode
 	origScaleStep := scaleStep
 	origScaleInterval := scaleInterval
 	origScaleRollbackFail := scaleRollbackFail
-	origScaleWait := scaleWait
-	origScaleNoWait := scaleNoWait
+	origScaleDetach := scaleDetach
 	origScaleTimeout := scaleTimeout
 
 	defer func() {
-		// Restore original values after test
 		scaleMode = origScaleMode
 		scaleStep = origScaleStep
 		scaleInterval = origScaleInterval
 		scaleRollbackFail = origScaleRollbackFail
-		scaleWait = origScaleWait
-		scaleNoWait = origScaleNoWait
+		scaleDetach = origScaleDetach
 		scaleTimeout = origScaleTimeout
 	}()
 
-	// Set to defaults as they would be after init()
 	scaleMode = ScalingModeImmediate
 	scaleStep = 1
 	scaleInterval = 30 * time.Second
 	scaleRollbackFail = true
-	scaleWait = true
-	scaleNoWait = false
+	scaleDetach = false
 	scaleTimeout = 5 * time.Minute
 
 	options := &ScaleOptions{
@@ -365,16 +336,15 @@ func TestScaleOptions_Defaults(t *testing.T) {
 		Step:           scaleStep,
 		Interval:       scaleInterval,
 		RollbackOnFail: scaleRollbackFail,
-		Wait:           scaleWait && !scaleNoWait,
+		Detach:         scaleDetach,
 		Timeout:        scaleTimeout,
 	}
 
-	// Assert default values
 	assert.Equal(t, ScalingModeImmediate, options.Mode, "default mode should be immediate")
 	assert.Equal(t, 1, options.Step, "default step should be 1")
 	assert.Equal(t, 30*time.Second, options.Interval, "default interval should be 30s")
 	assert.True(t, options.RollbackOnFail, "default rollback-on-fail should be true")
-	assert.True(t, options.Wait, "default wait should be true")
+	assert.False(t, options.Detach, "default detach should be false (wait for completion)")
 	assert.Equal(t, 5*time.Minute, options.Timeout, "default timeout should be 5m")
 }
 
@@ -400,7 +370,7 @@ func TestImmediateScaling_Success(t *testing.T) {
 	// Create options
 	options := &ScaleOptions{
 		Namespace: namespace,
-		Wait:      false, // Don't wait to simplify the test
+		Detach:    true,  // detach to simplify the test
 	}
 
 	// Call the function
@@ -433,7 +403,7 @@ func TestImmediateScaling_AlreadyAtScale(t *testing.T) {
 	// Create options
 	options := &ScaleOptions{
 		Namespace: namespace,
-		Wait:      false,
+		Detach:    true,
 	}
 
 	// Call the function
@@ -460,7 +430,7 @@ func TestImmediateScaling_ServiceNotFound(t *testing.T) {
 	// Create options
 	options := &ScaleOptions{
 		Namespace: namespace,
-		Wait:      false,
+		Detach:    true,
 	}
 
 	// Call the function
@@ -496,7 +466,7 @@ func TestImmediateScaling_ScalingError(t *testing.T) {
 	// Create options
 	options := &ScaleOptions{
 		Namespace: namespace,
-		Wait:      false,
+		Detach:    true,
 	}
 
 	// Call the function
@@ -535,7 +505,7 @@ func TestGradualScaling_Success(t *testing.T) {
 		Mode:      ScalingModeGradual,
 		Step:      1,
 		Interval:  1 * time.Millisecond, // Very short for test
-		Wait:      false,                // Don't wait to simplify the test
+		Detach:    true,                 // detach to simplify the test
 	}
 
 	// Call the function
@@ -573,7 +543,7 @@ func TestGradualScaling_ScaleDown(t *testing.T) {
 		Mode:      ScalingModeGradual,
 		Step:      2,
 		Interval:  1 * time.Millisecond, // Very short for test
-		Wait:      false,                // Don't wait to simplify the test
+		Detach:    true,                 // detach to simplify the test
 	}
 
 	// Call the function
