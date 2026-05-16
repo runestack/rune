@@ -1,9 +1,107 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
+
+// TestExecArgParsing verifies the `--` separator behaviour: rune flags work
+// in any position before `--`, and the inner command (after `--`) is captured
+// verbatim. Errors when `--` is missing or misplaced are friendly.
+func TestExecArgParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		argv    []string // argv after "exec"
+		wantErr string   // substring expected in the error; "" means success
+		wantNs  string
+		wantCmd []string
+	}{
+		{name: "missing dash-dash", argv: []string{"web", "bash"}, wantErr: "missing '--'"},
+		{name: "dash-dash with no command", argv: []string{"web", "--"}, wantErr: "command cannot be empty"},
+		{name: "dash-dash with no target", argv: []string{"--", "bash"}, wantErr: "TARGET is required"},
+		{
+			name:    "flag after target before dash-dash",
+			argv:    []string{"web", "-n", "prod", "--", "bash"},
+			wantNs:  "prod",
+			wantCmd: []string{"bash"},
+		},
+		{
+			name:    "flag before target",
+			argv:    []string{"-n", "prod", "web", "--", "bash", "-c", "echo hi"},
+			wantNs:  "prod",
+			wantCmd: []string{"bash", "-c", "echo hi"},
+		},
+		{
+			name:    "inner flags after dash-dash are passed through",
+			argv:    []string{"web", "--", "ls", "-la", "/app"},
+			wantCmd: []string{"ls", "-la", "/app"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newExecCmd()
+
+			// Intercept RunE so we don't try to dial an API server. We mirror
+			// the real flag-validation logic so this test exercises it.
+			var gotNs string
+			var gotCmd []string
+			cmd.RunE = func(c *cobra.Command, args []string) error {
+				dashIdx := c.ArgsLenAtDash()
+				if dashIdx < 0 {
+					return errMissingDashDash(args)
+				}
+				if dashIdx == 0 {
+					return errTargetRequired()
+				}
+				cmdArgs := args[dashIdx:]
+				if len(cmdArgs) == 0 {
+					return errEmptyCommand(args[0])
+				}
+				gotNs, _ = c.Flags().GetString("namespace")
+				gotCmd = cmdArgs
+				return nil
+			}
+
+			cmd.SetArgs(tt.argv)
+			err := cmd.Execute()
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %q", tt.wantErr, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotNs != tt.wantNs {
+				t.Errorf("namespace: want %q, got %q", tt.wantNs, gotNs)
+			}
+			if !equalStrSlice(gotCmd, tt.wantCmd) {
+				t.Errorf("command: want %v, got %v", tt.wantCmd, gotCmd)
+			}
+		})
+	}
+}
+
+func equalStrSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // containsSubstring checks if a string contains a substring.
 func containsSubstring(s, substr string) bool {

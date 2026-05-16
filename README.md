@@ -251,13 +251,17 @@ rune cast runeset/ --render-only
 
 ```bash
 # Execute bash in running service
-rune exec api bash
+# Note: '--' separates rune's flags from the command to run inside the container.
+rune exec api -- bash
 
-# Run one-off command
-rune exec api ls -la /app
+# Run one-off command (flags like -la go after '--')
+rune exec api -- ls -la /app
+
+# Target a specific namespace
+rune exec -n prod web -- bash
 
 # Set working directory and environment
-rune exec api --workdir=/app --env=DEBUG=true python debug.py
+rune exec api --workdir=/app --env=DEBUG=true -- python debug.py
 ```
 
 ### Service Operations
