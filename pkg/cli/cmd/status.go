@@ -330,6 +330,9 @@ func renderAllNamespaces(w *os.File, report *statusReport, opts *statusOptions) 
 }
 
 // renderHeader prints the namespace header and the bucketed roll-up.
+// Buckets with zero services are omitted to keep the eye on what's actually
+// present — e.g. a healthy namespace just shows "✓ Running 12", not five
+// rows of zeros.
 func renderHeader(w *os.File, nr namespaceReport, hideRollUp bool) {
 	fmt.Fprintf(w, "Namespace: %s   ·   %d services   ·   %d instances\n",
 		format.Highlight("%s", nr.Namespace), nr.Summary.Total, nr.Summary.Instances)
@@ -338,12 +341,33 @@ func renderHeader(w *os.File, nr namespaceReport, hideRollUp bool) {
 		return
 	}
 	fmt.Fprintln(w)
+
 	s := nr.Summary
-	fmt.Fprintf(w, "  %s %-12s %d\n", glyphFor(types.ServiceStatusRunning), "Running", s.Running)
-	fmt.Fprintf(w, "  %s %-12s %d\n", glyphFor(types.ServiceStatusDeploying), "Deploying", s.Deploying)
-	fmt.Fprintf(w, "  %s %-12s %d\n", glyphFor(types.ServiceStatusStopping), "Stopping", s.Stopping)
-	fmt.Fprintf(w, "  %s %-12s %d\n", glyphFor(types.ServiceStatusFailed), "Failed", s.Failed)
-	fmt.Fprintf(w, "  %s %-12s %d\n", glyphFor(types.ServiceStatusPending), "Pending", s.Pending)
+	// Render in attention-priority order (matches the per-service sort).
+	// Empty namespaces still get a single "Pending 0" line so the user
+	// isn't left with just a blank header.
+	rows := []struct {
+		status types.ServiceStatus
+		label  string
+		count  int
+	}{
+		{types.ServiceStatusFailed, "Failed", s.Failed},
+		{types.ServiceStatusStopping, "Stopping", s.Stopping},
+		{types.ServiceStatusDeploying, "Deploying", s.Deploying},
+		{types.ServiceStatusPending, "Pending", s.Pending},
+		{types.ServiceStatusRunning, "Running", s.Running},
+	}
+	any := false
+	for _, r := range rows {
+		if r.count == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "  %s %-10s %d\n", glyphFor(r.status), r.label, r.count)
+		any = true
+	}
+	if !any {
+		fmt.Fprintf(w, "  %s\n", format.Dim("no services"))
+	}
 	fmt.Fprintln(w)
 }
 
