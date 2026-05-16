@@ -42,6 +42,7 @@ import (
 	// names with pkg/storage/driver.Registry at init() time. Adding a new
 	// driver (Hetzner, AWS EBS, ...) is one more line here.
 	_ "github.com/runestack/rune/pkg/storage/driver/dovolume"
+	_ "github.com/runestack/rune/pkg/storage/driver/hcloudvolume"
 	_ "github.com/runestack/rune/pkg/storage/driver/local"
 
 	"github.com/runestack/rune/pkg/store/repos"
