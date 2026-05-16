@@ -8,14 +8,24 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
+	"github.com/pterm/pterm"
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/cli/format"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
 )
+
+// statusTable returns a pterm table configured the same way as the rest of
+// the CLI: bold cyan headers, ANSI-width-aware column sizing. Use this
+// instead of tabwriter when cells contain colored content — tabwriter counts
+// escape codes as visible width, which is what caused the misaligned `-A`
+// output before the refactor.
+func statusTable() *pterm.TablePrinter {
+	t := pterm.DefaultTable.WithHasHeader(true)
+	return t.WithHeaderStyle(pterm.NewStyle(pterm.FgCyan, pterm.Bold))
+}
 
 // statusOptions holds the options for the `rune status` subcommand.
 type statusOptions struct {
@@ -314,19 +324,20 @@ func renderAllNamespaces(w *os.File, report *statusReport, opts *statusOptions) 
 		return nil
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAMESPACE\tSERVICES\tRUNNING\tDEPLOYING\tSTOPPING\tFAILED\tPENDING")
+	rows := [][]string{{"NAMESPACE", "SERVICES", "RUNNING", "DEPLOYING", "STOPPING", "FAILED", "PENDING"}}
 	for _, nr := range report.Namespaces {
 		s := nr.Summary
-		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
-			nr.Namespace, s.Total,
+		rows = append(rows, []string{
+			nr.Namespace,
+			fmt.Sprintf("%d", s.Total),
 			countCell(s.Running, types.ServiceStatusRunning),
 			countCell(s.Deploying, types.ServiceStatusDeploying),
 			countCell(s.Stopping, types.ServiceStatusStopping),
 			countCell(s.Failed, types.ServiceStatusFailed),
-			countCell(s.Pending, types.ServiceStatusPending))
+			countCell(s.Pending, types.ServiceStatusPending),
+		})
 	}
-	return tw.Flush()
+	return statusTable().WithData(rows).Render()
 }
 
 // renderHeader prints the namespace header and the bucketed roll-up.
@@ -373,10 +384,10 @@ func renderHeader(w *os.File, nr namespaceReport, hideRollUp bool) {
 
 // renderServiceTable prints the per-service rows. Reason/Message only
 // populated for non-Running rows so the column stays narrow when everything
-// is healthy. tabwriter handles alignment.
-func renderServiceTable(w *os.File, services []serviceReport) {
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tSTATUS\tSCALE\tAGE\tREASON / MESSAGE")
+// is healthy. Uses pterm so colored cells line up correctly (tabwriter
+// counts ANSI escape bytes as visible width and misaligns).
+func renderServiceTable(_ *os.File, services []serviceReport) {
+	rows := [][]string{{"NAME", "STATUS", "SCALE", "AGE", "REASON / MESSAGE"}}
 	for _, s := range services {
 		reason := ""
 		if s.Status != string(types.ServiceStatusRunning) {
@@ -389,10 +400,15 @@ func renderServiceTable(w *os.File, services []serviceReport) {
 				reason = s.StatusMessage
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d/%d\t%s\t%s\n",
-			s.Name, colorStatus(s.Status), s.DesiredScale, s.ReadyInstances, s.Age, reason)
+		rows = append(rows, []string{
+			s.Name,
+			colorStatus(s.Status),
+			fmt.Sprintf("%d/%d", s.DesiredScale, s.ReadyInstances),
+			s.Age,
+			reason,
+		})
 	}
-	tw.Flush()
+	_ = statusTable().WithData(rows).Render()
 }
 
 // glyphFor returns a bucket glyph for the roll-up. Auto-degrades to ASCII
