@@ -20,8 +20,7 @@ var (
 	scaleStep         int
 	scaleInterval     time.Duration
 	scaleRollbackFail bool
-	scaleWait         bool
-	scaleNoWait       bool
+	scaleDetach       bool
 	scaleTimeout      time.Duration
 	scaleClientAddr   string
 )
@@ -52,8 +51,7 @@ func init() {
 	scaleCmd.Flags().IntVar(&scaleStep, "step", 1, "Number of instances to add/remove per step in gradual mode")
 	scaleCmd.Flags().DurationVar(&scaleInterval, "interval", 30*time.Second, "Time between steps in gradual mode")
 	scaleCmd.Flags().BoolVar(&scaleRollbackFail, "rollback-on-fail", true, "Automatically rollback to previous scale on failure")
-	scaleCmd.Flags().BoolVar(&scaleWait, "wait", true, "Wait for scaling operation to complete")
-	scaleCmd.Flags().BoolVar(&scaleNoWait, "no-wait", false, "Don't wait for scaling operation (overrides --wait)")
+	scaleCmd.Flags().BoolVarP(&scaleDetach, "detach", "d", false, "Don't wait for the scaling operation to complete (fire-and-forget)")
 	scaleCmd.Flags().DurationVar(&scaleTimeout, "timeout", 5*time.Minute, "Timeout for the wait operation")
 
 	// API client flags
@@ -73,9 +71,6 @@ func runScale(cmd *cobra.Command, args []string) error {
 	if replicas < 0 {
 		return fmt.Errorf("replicas must be a non-negative integer")
 	}
-
-	// The --no-wait flag overrides the --wait flag
-	waitForCompletion := scaleWait && !scaleNoWait
 
 	// Validate scaling mode
 	if scaleMode != "immediate" && scaleMode != "gradual" {
@@ -108,90 +103,83 @@ func runScale(cmd *cobra.Command, args []string) error {
 		Scale:     utils.ToInt32NonNegative(replicas),
 	}
 
-	// Handle scaling mode
+	// Compose the header line. The renderer handles per-poll progress;
+	// here we just announce the operation.
+	label := "Scaling"
+	header := "scaling"
 	if scaleMode == "gradual" {
-		// Set gradual scaling parameters
 		req.Mode = generated.ScalingMode_SCALING_MODE_GRADUAL
 		req.StepSize = utils.ToInt32NonNegative(scaleStep)
 		req.IntervalSeconds = utils.ToInt32NonNegative(int(scaleInterval.Seconds()))
-
-		fmt.Printf("Gradually scaling service %s from %d to %d instances (step size: %d, interval: %s)\n",
-			format.Highlight("%s", serviceName), currentScale, replicas, scaleStep, scaleInterval)
+		label = fmt.Sprintf("Scaling (gradual, step=%d, interval=%s)", scaleStep, scaleInterval)
+		header = fmt.Sprintf("scaling (gradual, step=%d, interval=%s)", scaleStep, scaleInterval)
 	} else {
-		// Immediate scaling
 		req.Mode = generated.ScalingMode_SCALING_MODE_IMMEDIATE
-
-		fmt.Printf("Scaling service %s from %d to %d instances\n",
-			format.Highlight("%s", serviceName), currentScale, replicas)
 	}
+
+	fmt.Printf("↻ %s %s in %s (%d → %d)\n",
+		header,
+		format.Highlight("%s", serviceName),
+		format.Highlight("%s", scaleNamespace),
+		currentScale, replicas)
 
 	// Send the scale request to the server
 	ctx, cancel := context.WithTimeout(context.Background(), scaleTimeout)
 	defer cancel()
 
-	resp, err := serviceClient.ScaleServiceWithRequest(req)
-	if err != nil {
+	if _, err := serviceClient.ScaleServiceWithRequest(req); err != nil {
 		return fmt.Errorf("failed to scale service: %w", err)
 	}
 
-	fmt.Printf("Successfully initiated scaling: %s\n", resp.Status.Message)
-
-	// If wait is requested, poll the service until it reaches the target scale
-	if waitForCompletion {
-		fmt.Printf("Waiting for scaling operation to complete (timeout: %s)...\n", scaleTimeout)
-
-		err = waitForScalingComplete(apiClient, ctx, serviceName, scaleNamespace, replicas)
-		if err != nil {
-			return fmt.Errorf("error while waiting for scaling: %w", err)
-		}
-
-		fmt.Printf("%s Service %s successfully scaled to %d instances\n",
-			format.Success("✓"), format.Highlight("%s", serviceName), replicas)
+	if scaleDetach {
+		// Fire-and-forget: print a short note and exit.
+		fmt.Printf("  %s detached (use `rune status %s -n %s` to check)\n",
+			format.Dim("→"), serviceName, scaleNamespace)
+		return nil
 	}
 
+	renderer := newPhaseRenderer(label, replicas)
+	if err := waitForScalingComplete(apiClient, ctx, serviceName, scaleNamespace, replicas, renderer); err != nil {
+		return err
+	}
 	return nil
 }
 
-// waitForScalingComplete waits for scaling operations to complete
-func waitForScalingComplete(apiClient *client.Client, ctx context.Context, serviceName, namespace string, targetScale int) error {
-	// Create service client
+// waitForScalingComplete waits for scaling operations to complete, rendering
+// progress via the given phaseRenderer. The renderer's Finish() is called
+// exactly once: on success, on server-reported error, on timeout, or on
+// premature stream close. Callers should not call Finish() themselves.
+func waitForScalingComplete(apiClient *client.Client, ctx context.Context, serviceName, namespace string, targetScale int, renderer *phaseRenderer) error {
 	serviceClient := client.NewServiceClient(apiClient)
 
-	// Use the new WatchScaling method to get real-time updates
 	statusCh, cancelWatch, err := serviceClient.WatchScaling(namespace, serviceName, targetScale)
 	if err != nil {
+		renderer.finish(false, "watch failed")
 		return fmt.Errorf("failed to watch scaling: %w", err)
 	}
-	defer cancelWatch() // Ensure we clean up the stream when done
+	defer cancelWatch()
 
-	// Process status updates from the stream
-	for status := range statusCh {
-		// Check for errors
-		if status.Status != nil && status.Status.Code != 0 {
-			return fmt.Errorf("scaling error: %s", status.Status.Message)
-		}
+	renderer.start()
 
-		// Display current status
-		fmt.Printf("Current status: %d/%d instances running", status.RunningInstances, targetScale)
-		if status.PendingInstances > 0 {
-			fmt.Printf(" (%d pending)", status.PendingInstances)
-		}
-		fmt.Println()
-
-		// Check if scaling is complete
-		if status.Complete {
-			return nil
-		}
-
-		// Check for context cancellation (timeout)
+	for {
 		select {
 		case <-ctx.Done():
+			renderer.finish(false, "timeout")
 			return fmt.Errorf("timeout waiting for service to scale to %d instances", targetScale)
-		default:
-			// Continue processing
+		case status, ok := <-statusCh:
+			if !ok {
+				renderer.finish(false, "stream ended")
+				return fmt.Errorf("scaling operation ended without completion notification")
+			}
+			if status.Status != nil && status.Status.Code != 0 {
+				renderer.finish(false, status.Status.Message)
+				return fmt.Errorf("scaling error: %s", status.Status.Message)
+			}
+			renderer.update(status.RunningInstances, status.PendingInstances)
+			if status.Complete {
+				renderer.finish(true, "")
+				return nil
+			}
 		}
 	}
-
-	// If we get here, the stream ended without completion
-	return fmt.Errorf("scaling operation ended without completion notification")
 }
