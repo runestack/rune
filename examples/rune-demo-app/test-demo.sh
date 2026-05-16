@@ -145,15 +145,15 @@ test_exec() {
     
     # Execute simple command
     print_status "Executing 'ls' command..."
-    rune exec rune-demo-app --namespace=demo ls -la
+    rune exec --namespace=demo rune-demo-app -- ls -la
     
     # Execute environment check
     print_status "Checking environment variables..."
-    rune exec rune-demo-app --namespace=demo env | grep -E "(RUNE|SERVICE|INSTANCE)" || true
+    rune exec --namespace=demo rune-demo-app -- env | grep -E "(RUNE|SERVICE|INSTANCE)" || true
     
     # Execute status command
     print_status "Checking service status..."
-    rune exec rune-demo-app --namespace=demo ps aux | head -5
+    rune exec --namespace=demo rune-demo-app -- ps aux | head -5
 }
 
 # Test service discovery
@@ -254,7 +254,7 @@ main() {
     echo ""
     echo "To continue testing manually:"
     echo "  rune logs rune-demo-app --namespace=demo --follow"
-    echo "  rune exec rune-demo-app --namespace=demo bash"
+    echo "  rune exec --namespace=demo rune-demo-app -- bash"
     echo "  rune scale rune-demo-app 5 --namespace=demo"
     echo ""
     echo "To cleanup:"

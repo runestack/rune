@@ -39,34 +39,49 @@ type execOptions struct {
 func newExecCmd() *cobra.Command {
 	opts := &execOptions{}
 	cmd := &cobra.Command{
-		Use:   "exec TARGET COMMAND [args...]",
+		Use:   "exec [flags] TARGET [COMMAND [args...]]",
 		Short: "Execute a command in a running service or instance",
 		Long: `Execute commands directly within running service instances.
-	
-	This command provides interactive access to containers and processes,
-	allowing for real-time debugging, configuration verification, and
-	emergency maintenance tasks.
-	
-	Examples:
-	  # Start an interactive bash session in a service
-	  rune exec api bash
-	
-	  # Execute a one-off command
-	  rune exec api ls -la /app
-	
-	  # Execute in a specific instance
-	  rune exec api-instance-123 ps aux
-	
-	  # Set working directory and environment variables
-	  rune exec api --workdir=/app --env=DEBUG=true python debug.py
-	
-	  # Disable TTY for non-interactive commands
-	  rune exec api --no-tty python script.py
-	
-	  # Set a timeout for the exec session
-	  rune exec api --timeout=30s python long-running-script.py`,
+
+If no COMMAND is given, rune opens an interactive shell (bash if available,
+otherwise sh).
+
+Simple commands can be written inline:
+  rune exec api ps aux
+
+When the command itself has flags (like '-la' or '-c'), use '--' so cobra
+stops parsing flags. Anything after '--' is passed verbatim to the target:
+  rune exec api -- ls -la /app
+  rune exec api -- bash -c "echo hi"
+
+Rune's own flags (-n, --workdir, --env, --timeout, --no-tty, --api-server,
+-t) work in any position before '--'.
+
+Examples:
+  # Open an interactive shell (defaults to bash, falling back to sh)
+  rune exec web
+  rune exec -n prod web
+
+  # Run a simple command
+  rune exec api ps aux
+
+  # Command with flags (use '--')
+  rune exec api -- ls -la /app
+  rune exec api -- bash -c "echo $HOSTNAME"
+
+  # Target a specific instance
+  rune exec api-instance-123 ps aux
+
+  # Set working directory and environment variables
+  rune exec api --workdir=/app --env=DEBUG=true -- python debug.py
+
+  # Disable TTY for non-interactive commands
+  rune exec api --no-tty -- python script.py
+
+  # Set a timeout for the exec session
+  rune exec api --timeout=30s -- python long-running-script.py`,
 		Aliases: []string{"e"},
-		Args:    cobra.MinimumNArgs(2),
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.namespace = effectiveCmdNS(opts.namespace)
 			return runExec(cmd, args, opts)
@@ -84,21 +99,69 @@ func newExecCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.timeout, "timeout", "5m", "timeout for the exec session")
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "address of the API server")
 
-	// After the first positional arg (TARGET), stop parsing flags so command args like '-c' are passed through
-	cmd.Flags().SetInterspersed(false)
+	// Help users who type `rune exec web ls -la /app` without '--'. Cobra's
+	// default flag-error mentions "unknown shorthand flag: 'l' in -la"; we
+	// wrap it with a hint to use '--'.
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return fmt.Errorf("%w\n\nIf '-la' (or similar) is meant for the inner command, put it after '--':\n  rune exec TARGET -- COMMAND [args...]", err)
+	})
 
 	return cmd
 }
 
 func init() { rootCmd.AddCommand(newExecCmd()) }
 
+// errTargetRequired and errTooManyTargets are extracted so the test suite can
+// assert on the exact validation errors.
+func errTargetRequired() error {
+	return fmt.Errorf("TARGET is required\n\nUsage:\n  rune exec [flags] TARGET [COMMAND [args...]]\n\nExamples:\n  rune exec web                # interactive shell\n  rune exec web ps aux         # simple command\n  rune exec web -- ls -la /app # command with flags")
+}
+
+func errTooManyTargets(targets []string) error {
+	return fmt.Errorf("only one TARGET is allowed before '--' (got %d: %v)", len(targets), targets)
+}
+
+// errEmptyCommand is raised when the user typed `--` but didn't supply a
+// command after it. Treated as a typo rather than "give me a shell" — the
+// auto-shell path is reserved for the no-`--`-at-all form.
+func errEmptyCommand(target string) error {
+	return fmt.Errorf("command cannot be empty after '--'\n\nExample:\n  rune exec %s -- bash\n\nFor an interactive shell, omit '--':\n  rune exec %s", target, target)
+}
+
+// defaultShellCommand is what we run when the user doesn't supply a command.
+// Picks bash if present, falls back to sh, all in a single exec round-trip so
+// we don't need a probe step. Works on every POSIX container we've seen.
+func defaultShellCommand() []string {
+	return []string{"sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"}
+}
+
 func runExec(cmd *cobra.Command, args []string, opts *execOptions) error {
-	// Parse arguments
+	// Allow either form:
+	//   rune exec [flags] TARGET                     # auto-shell
+	//   rune exec [flags] TARGET COMMAND [args...]   # simple command, no flags
+	//   rune exec [flags] TARGET -- COMMAND [args...] # command with flags
+	//
+	// '--' is only required when the inner command itself has flags that
+	// would otherwise collide with rune's flag parser.
+	dashIdx := cmd.ArgsLenAtDash()
+	if dashIdx > 1 {
+		return errTooManyTargets(args[:dashIdx])
+	}
+	if dashIdx == 0 {
+		return errTargetRequired()
+	}
+
 	target := args[0]
 	command := args[1:]
 
+	// Distinguish "no command at all" (open auto-shell) from "explicit `--`
+	// with nothing after" (user committed to providing a command and didn't
+	// — surface as a typo). Matches docker exec / kubectl exec.
 	if len(command) == 0 {
-		return fmt.Errorf("command cannot be empty")
+		if dashIdx >= 0 {
+			return errEmptyCommand(target)
+		}
+		command = defaultShellCommand()
 	}
 
 	// Parse parsedOpts
@@ -213,12 +276,10 @@ func parseExecOptions(opts *execOptions) (*parsedExecOptions, error) {
 		parsedOpts.env[parts[0]] = parts[1]
 	}
 
-	// Determine TTY allocation
+	// TTY: explicit --no-tty wins, otherwise auto-detection happens against
+	// the parsed command in runExec (we don't have it here yet).
 	if opts.noTTY {
 		parsedOpts.tty = false
-	} else if !opts.tty {
-		// Auto-detect TTY for interactive commands
-		parsedOpts.tty = shouldAllocateTTY(os.Args[2:]) // Skip "rune" and "exec"
 	}
 
 	return parsedOpts, nil

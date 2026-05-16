@@ -1,9 +1,151 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
+
+// TestExecArgParsing verifies the three accepted shapes:
+//   - rune exec [flags] TARGET                      → auto-shell
+//   - rune exec [flags] TARGET COMMAND [args...]    → simple command
+//   - rune exec [flags] TARGET -- COMMAND [args...] → command with flags
+//
+// And confirms that rune flags work in any position before '--', that
+// targets-only sanity errors are friendly, and that unknown flags after the
+// TARGET (without '--') get a hint to use '--'.
+func TestExecArgParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		argv    []string // argv after "exec"
+		wantErr string   // substring in the error; "" means success
+		wantNs  string
+		wantCmd []string
+	}{
+		{
+			name:    "target only opens default shell",
+			argv:    []string{"web"},
+			wantCmd: defaultShellCommand(),
+		},
+		{
+			name:    "target plus namespace flag, no command",
+			argv:    []string{"-n", "prod", "web"},
+			wantNs:  "prod",
+			wantCmd: defaultShellCommand(),
+		},
+		{
+			name:    "simple command without dash-dash",
+			argv:    []string{"web", "bash"},
+			wantCmd: []string{"bash"},
+		},
+		{
+			name:    "simple command with positional args (no flags)",
+			argv:    []string{"web", "ps", "aux"},
+			wantCmd: []string{"ps", "aux"},
+		},
+		{
+			name:    "command with flags requires dash-dash",
+			argv:    []string{"web", "--", "ls", "-la", "/app"},
+			wantCmd: []string{"ls", "-la", "/app"},
+		},
+		{
+			name:    "rune flag after target before dash-dash",
+			argv:    []string{"web", "-n", "prod", "--", "bash"},
+			wantNs:  "prod",
+			wantCmd: []string{"bash"},
+		},
+		{
+			name:    "rune flag before target",
+			argv:    []string{"-n", "prod", "web", "--", "bash", "-c", "echo hi"},
+			wantNs:  "prod",
+			wantCmd: []string{"bash", "-c", "echo hi"},
+		},
+		{
+			name:    "dash-dash with no target",
+			argv:    []string{"--", "bash"},
+			wantErr: "TARGET is required",
+		},
+		{
+			// Distinct from "no command at all": typing -- is an explicit
+			// "I'm about to give you a command", so leaving it empty is a
+			// typo we surface rather than silently auto-shelling.
+			name:    "dash-dash with no command after",
+			argv:    []string{"web", "--"},
+			wantErr: "command cannot be empty",
+		},
+		{
+			name:    "unknown flag after target hints at dash-dash",
+			argv:    []string{"web", "ls", "-la"},
+			wantErr: "after '--'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := newExecCmd()
+
+			// Intercept RunE so we don't try to dial an API server. We mirror
+			// the real arg handling so this test exercises it.
+			var gotNs string
+			var gotCmd []string
+			cmd.RunE = func(c *cobra.Command, args []string) error {
+				dashIdx := c.ArgsLenAtDash()
+				if dashIdx > 1 {
+					return errTooManyTargets(args[:dashIdx])
+				}
+				if dashIdx == 0 {
+					return errTargetRequired()
+				}
+				cmdArgs := args[1:]
+				if len(cmdArgs) == 0 {
+					if dashIdx >= 0 {
+						return errEmptyCommand(args[0])
+					}
+					cmdArgs = defaultShellCommand()
+				}
+				gotNs, _ = c.Flags().GetString("namespace")
+				gotCmd = cmdArgs
+				return nil
+			}
+
+			cmd.SetArgs(tt.argv)
+			err := cmd.Execute()
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %q", tt.wantErr, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotNs != tt.wantNs {
+				t.Errorf("namespace: want %q, got %q", tt.wantNs, gotNs)
+			}
+			if !equalStrSlice(gotCmd, tt.wantCmd) {
+				t.Errorf("command: want %v, got %v", tt.wantCmd, gotCmd)
+			}
+		})
+	}
+}
+
+func equalStrSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // containsSubstring checks if a string contains a substring.
 func containsSubstring(s, substr string) bool {
