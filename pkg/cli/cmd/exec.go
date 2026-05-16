@@ -121,6 +121,13 @@ func errTooManyTargets(targets []string) error {
 	return fmt.Errorf("only one TARGET is allowed before '--' (got %d: %v)", len(targets), targets)
 }
 
+// errEmptyCommand is raised when the user typed `--` but didn't supply a
+// command after it. Treated as a typo rather than "give me a shell" — the
+// auto-shell path is reserved for the no-`--`-at-all form.
+func errEmptyCommand(target string) error {
+	return fmt.Errorf("command cannot be empty after '--'\n\nExample:\n  rune exec %s -- bash\n\nFor an interactive shell, omit '--':\n  rune exec %s", target, target)
+}
+
 // defaultShellCommand is what we run when the user doesn't supply a command.
 // Picks bash if present, falls back to sh, all in a single exec round-trip so
 // we don't need a probe step. Works on every POSIX container we've seen.
@@ -147,7 +154,13 @@ func runExec(cmd *cobra.Command, args []string, opts *execOptions) error {
 	target := args[0]
 	command := args[1:]
 
+	// Distinguish "no command at all" (open auto-shell) from "explicit `--`
+	// with nothing after" (user committed to providing a command and didn't
+	// — surface as a typo). Matches docker exec / kubectl exec.
 	if len(command) == 0 {
+		if dashIdx >= 0 {
+			return errEmptyCommand(target)
+		}
 		command = defaultShellCommand()
 	}
 

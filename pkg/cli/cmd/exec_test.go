@@ -68,6 +68,14 @@ func TestExecArgParsing(t *testing.T) {
 			wantErr: "TARGET is required",
 		},
 		{
+			// Distinct from "no command at all": typing -- is an explicit
+			// "I'm about to give you a command", so leaving it empty is a
+			// typo we surface rather than silently auto-shelling.
+			name:    "dash-dash with no command after",
+			argv:    []string{"web", "--"},
+			wantErr: "command cannot be empty",
+		},
+		{
 			name:    "unknown flag after target hints at dash-dash",
 			argv:    []string{"web", "ls", "-la"},
 			wantErr: "after '--'",
@@ -92,6 +100,9 @@ func TestExecArgParsing(t *testing.T) {
 				}
 				cmdArgs := args[1:]
 				if len(cmdArgs) == 0 {
+					if dashIdx >= 0 {
+						return errEmptyCommand(args[0])
+					}
 					cmdArgs = defaultShellCommand()
 				}
 				gotNs, _ = c.Flags().GetString("namespace")
