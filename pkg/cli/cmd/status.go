@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+
 // statusOptions holds the options for the status subcommand
 type statusOptions struct {
 	cmdOptions
@@ -52,10 +53,27 @@ func runStatus(cmd *cobra.Command, args []string, opts *statusOptions) error {
 		return nil
 	}
 
+	// Fetch instances once for the namespace and count the ready ones per
+	// service so we can render "desired/ready" instead of just desired.
+	// Don't fail status if the instance list errors — services still render.
+	ready := map[string]int{}
+	ic := client.NewInstanceClient(api)
+	if insts, err := ic.ListInstances(namespace, "", "", ""); err == nil {
+		for _, inst := range insts {
+			if inst == nil || inst.Status != types.InstanceStatusRunning {
+				continue
+			}
+			ready[inst.ServiceName]++
+		}
+	}
+
 	fmt.Printf("Services in %s:\n", namespace)
 	fmt.Printf("%-24s %-12s %-8s\n", "NAME", "STATUS", "SCALE")
 	for _, s := range resp {
-		fmt.Printf("%-24s %-12s %-8d\n", s.Name, string(s.Status), s.Scale)
+		// "desired/ready". During a restart this reads naturally:
+		//   1/1 → 0/1 (drain in flight) → 0/0 → 1/0 (start in flight) → 1/1
+		scale := fmt.Sprintf("%d/%d", s.Scale, ready[s.Name])
+		fmt.Printf("%-24s %-12s %-8s\n", s.Name, string(s.Status), scale)
 	}
 	return nil
 }
