@@ -356,6 +356,13 @@ const (
 	// ServiceStatusDeploying indicates the service is being updated.
 	ServiceStatusDeploying ServiceStatus = "Deploying"
 
+	// ServiceStatusStopping indicates the service has a lower desired
+	// scale than its current instance count — instances are actively being
+	// torn down to reach the desired state. Set during `rune stop` and the
+	// drain phase of `rune restart`. Visible distinct from "Running" so
+	// operators can tell at a glance that a service is in flight, not idle.
+	ServiceStatusStopping ServiceStatus = "Stopping"
+
 	// ServiceStatusFailed indicates the service failed to deploy or run.
 	ServiceStatusFailed ServiceStatus = "Failed"
 
