@@ -110,16 +110,16 @@ rune logs rune-demo-app-instance-123 --namespace=demo
 
 ```bash
 # Execute command in a service instance
-rune exec rune-demo-app --namespace=demo ls -la
+rune exec --namespace=demo rune-demo-app -- ls -la
 
 # Interactive shell
-rune exec rune-demo-app --namespace=demo bash
+rune exec --namespace=demo rune-demo-app -- bash
 
 # Execute in specific instance
-rune exec rune-demo-app-instance-123 --namespace=demo ps aux
+rune exec --namespace=demo rune-demo-app-instance-123 -- ps aux
 
 # Check environment variables
-rune exec rune-demo-app --namespace=demo env | grep RUNE
+rune exec --namespace=demo rune-demo-app -- env | grep RUNE
 ```
 
 ### Service Discovery
@@ -289,7 +289,7 @@ The application exposes Prometheus-compatible metrics at `/metrics`:
    rune get instance --namespace=demo
    
    # Try exec with verbose output
-   rune exec rune-demo-app --namespace=demo --debug
+   rune exec --namespace=demo rune-demo-app -- --debug
    ```
 
 ### Debug Mode

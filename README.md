@@ -250,14 +250,19 @@ rune cast runeset/ --render-only
 ### Interactive Debugging
 
 ```bash
-# Execute bash in running service
-rune exec api bash
+# Open an interactive shell (bash if present, else sh) — no command needed
+rune exec api
+rune exec -n prod web
 
-# Run one-off command
-rune exec api ls -la /app
+# Simple commands inline
+rune exec api ps aux
+
+# Commands with flags: use '--' so rune doesn't try to parse them
+rune exec api -- ls -la /app
+rune exec api -- bash -c "echo $HOSTNAME"
 
 # Set working directory and environment
-rune exec api --workdir=/app --env=DEBUG=true python debug.py
+rune exec api --workdir=/app --env=DEBUG=true -- python debug.py
 ```
 
 ### Service Operations

@@ -39,7 +39,7 @@ The demo app uses extensive environment variables to demonstrate Rune's configur
 
 ```bash
 # View current configuration
-rune exec rune-demo-app --namespace=development env | grep -E "(ENVIRONMENT|VERSION|DEBUG|FEATURE)"
+rune exec --namespace=development rune-demo-app -- env | grep -E "(ENVIRONMENT|VERSION|DEBUG|FEATURE)"
 
 # Test configuration endpoint
 curl http://localhost:7863/ | jq '.config'
@@ -96,19 +96,19 @@ rune logs rune-demo-app --namespace=development --tail=50
 
 ```bash
 # Execute simple commands
-rune exec rune-demo-app --namespace=development ls -la
+rune exec --namespace=development rune-demo-app -- ls -la
 
 # Interactive shell
-rune exec rune-demo-app --namespace=development bash
+rune exec --namespace=development rune-demo-app -- bash
 
 # Check environment variables
-rune exec rune-demo-app --namespace=development env
+rune exec --namespace=development rune-demo-app -- env
 
 # Check process status
-rune exec rune-demo-app --namespace=development ps aux
+rune exec --namespace=development rune-demo-app -- ps aux
 
 # View application config
-rune exec rune-demo-app --namespace=development cat config.json
+rune exec --namespace=development rune-demo-app -- cat config.json
 ```
 
 **Exec Features:**
@@ -200,7 +200,7 @@ The demo app includes network policies for testing:
 rune get service rune-demo-app --namespace=development -o yaml | grep -A 20 networkPolicy
 
 # Test network connectivity
-rune exec rune-demo-app --namespace=development curl -I http://google.com
+rune exec --namespace=development rune-demo-app -- curl -I http://google.com
 ```
 
 ## 🔧 Advanced Testing Scenarios
@@ -250,7 +250,7 @@ curl http://localhost:7863/metrics | grep requests_total
 rune get instance --namespace=development
 
 # Execute in specific instance
-rune exec rune-demo-app-instance-123 --namespace=development env
+rune exec --namespace=development rune-demo-app-instance-123 -- env
 
 # View logs from specific instance
 rune logs rune-demo-app-instance-123 --namespace=development
@@ -351,7 +351,7 @@ rune logs rune-demo-app --namespace=development | grep health
 rune get instance --namespace=development
 
 # Try exec with debug
-rune exec rune-demo-app --namespace=development --debug ls
+rune exec --namespace=development rune-demo-app -- --debug ls
 
 # Check container status
 docker ps | grep rune-demo-app

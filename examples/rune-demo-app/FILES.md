@@ -100,7 +100,7 @@ rune cast service.yaml
 
 # Manual testing
 rune logs rune-demo-app --namespace=demo --follow
-rune exec rune-demo-app --namespace=demo bash
+rune exec --namespace=demo rune-demo-app -- bash
 rune scale rune-demo-app 5 --namespace=demo
 ```
 
