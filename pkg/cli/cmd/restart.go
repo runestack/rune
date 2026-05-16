@@ -59,7 +59,7 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		if desired <= 0 {
 			desired = 1
 		}
-		fmt.Printf("↻ Starting %s in %s (stopped → %d)\n",
+		fmt.Printf("↻ Restarting %s in %s (stopped → %d)\n",
 			format.Highlight("%s", serviceName),
 			format.Highlight("%s", restartNamespace),
 			desired)
