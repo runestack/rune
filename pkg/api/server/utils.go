@@ -58,6 +58,10 @@ func methodToAction(method string) (string, string) {
 
 	case strings.HasPrefix(method, "/rune.api.SecretService/RollbackSecret"):
 		return "secrets", "update"
+	case strings.HasPrefix(method, "/rune.api.SecretService/Patch"):
+		// PatchSecret is a server-side merge: caller never sees other keys'
+		// plaintext, so it only needs secrets:update (not secrets:reveal).
+		return "secrets", "update"
 	case strings.HasPrefix(method, "/rune.api.SecretService/ListSecretVersions"):
 		return "secrets", "get"
 	case strings.HasPrefix(method, "/rune.api.SecretService/RevealSecretVersion"):

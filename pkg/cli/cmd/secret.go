@@ -31,6 +31,8 @@ func newSecretCmd() *cobra.Command {
 	cmd.AddCommand(newSecretListCmd())
 	cmd.AddCommand(newSecretRevealCmd())
 	cmd.AddCommand(newSecretUpdateCmd())
+	cmd.AddCommand(newSecretSetCmd())
+	cmd.AddCommand(newSecretUnsetCmd())
 	cmd.AddCommand(newSecretDeleteCmd())
 	cmd.AddCommand(newSecretVersionsCmd())
 	cmd.AddCommand(newSecretRollbackCmd())
@@ -186,6 +188,122 @@ or restored with 'rune secret rollback'.`,
 	cmd.Flags().StringArrayVar(&dataPairs, "data", nil, "Data entry key=value (can repeat; value is taken verbatim — no comma/newline splitting)")
 	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read data from file: --from-file=key=path (file's bytes become the value for key — use for binary or multi-line content like PEM). Can repeat.")
 	return cmd
+}
+
+// --- set (server-side merge) ---
+//
+// `set` is the safe way to rotate a single key in a multi-key secret. Unlike
+// `update`, it preserves all other keys: the server reads the current data
+// map, applies the requested upserts, and writes a new version atomically
+// under a per-secret lock. The client never sees the existing keys' plaintext,
+// so this requires only secrets:update (not secrets:reveal).
+
+func newSecretSetCmd() *cobra.Command {
+	var ns string
+	var fromFile []string
+	cmd := &cobra.Command{
+		Use:   "set <name> [KEY=VALUE ...]",
+		Short: "Upsert one or more keys in a secret (server-side merge)",
+		Long: `Set upserts the given keys into an existing secret's data map without
+touching the other keys. Each invocation creates a new version.
+
+Use this when you want to rotate a single key — e.g. update INFRA_JWT_SECRET
+without wiping INFRA_ENCRYPTION_PASSPHRASE that lives in the same secret.
+
+Auth: requires secrets:update (NOT secrets:reveal). The server performs the
+merge internally and the response is metadata-only.
+
+Examples:
+  rune secret set gateway-secrets -n prod INFRA_JWT_SECRET=new-value
+  rune secret set gateway-secrets -n prod KEY1=v1 KEY2=v2
+  rune secret set gateway-secrets -n prod --from-file=TLS_CERT=./cert.pem`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			pairs := args[1:]
+
+			set := map[string]string{}
+			if err := applyFromFileFlags(fromFile, set); err != nil {
+				return err
+			}
+			for _, pair := range pairs {
+				k, v, err := splitPair(pair)
+				if err != nil {
+					return err
+				}
+				set[k] = v
+			}
+			if len(set) == 0 {
+				return fmt.Errorf("no keys provided. Pass KEY=VALUE positional args and/or --from-file")
+			}
+
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			out, err := client.NewSecretClient(api).PatchSecret(ns, name, set, nil)
+			if err != nil {
+				return err
+			}
+			keys := keysOf(set)
+			sort.Strings(keys)
+			fmt.Printf("Secret %s/%s patched (v%d): set %s\n", ns, name, out.Version, strings.Join(keys, ","))
+			return nil
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read a key from a file: --from-file=key=path (file bytes become the value, useful for PEM/binary). Can repeat.")
+	return cmd
+}
+
+// --- unset (server-side merge, idempotent) ---
+
+func newSecretUnsetCmd() *cobra.Command {
+	var ns string
+	cmd := &cobra.Command{
+		Use:   "unset <name> KEY [KEY ...]",
+		Short: "Remove one or more keys from a secret (server-side merge)",
+		Long: `Unset removes the listed keys from an existing secret's data map without
+touching the other keys. Missing keys are silently ignored — re-running the
+same unset is safe. Each invocation that actually removes a key creates a
+new version.
+
+Auth: requires secrets:update (NOT secrets:reveal).
+
+Examples:
+  rune secret unset gateway-secrets -n prod LEGACY_TOKEN
+  rune secret unset gateway-secrets -n prod KEY1 KEY2`,
+		Args: cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			unset := args[1:]
+
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			out, err := client.NewSecretClient(api).PatchSecret(ns, name, nil, unset)
+			if err != nil {
+				return err
+			}
+			sort.Strings(unset)
+			fmt.Printf("Secret %s/%s patched (v%d): unset %s\n", ns, name, out.Version, strings.Join(unset, ","))
+			return nil
+		},
+	}
+	addSecretNamespaceFlag(cmd, &ns)
+	return cmd
+}
+
+// keysOf returns the keys of a string map in unspecified order.
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // --- delete ---

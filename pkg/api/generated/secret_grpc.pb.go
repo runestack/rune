@@ -22,6 +22,7 @@ const (
 	SecretService_CreateSecret_FullMethodName        = "/rune.api.SecretService/CreateSecret"
 	SecretService_GetSecret_FullMethodName           = "/rune.api.SecretService/GetSecret"
 	SecretService_UpdateSecret_FullMethodName        = "/rune.api.SecretService/UpdateSecret"
+	SecretService_PatchSecret_FullMethodName         = "/rune.api.SecretService/PatchSecret"
 	SecretService_DeleteSecret_FullMethodName        = "/rune.api.SecretService/DeleteSecret"
 	SecretService_ListSecrets_FullMethodName         = "/rune.api.SecretService/ListSecrets"
 	SecretService_RevealSecret_FullMethodName        = "/rune.api.SecretService/RevealSecret"
@@ -39,6 +40,12 @@ type SecretServiceClient interface {
 	// to retrieve the plaintext payload; callers must hold the secrets:reveal verb.
 	GetSecret(ctx context.Context, in *GetSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
 	UpdateSecret(ctx context.Context, in *UpdateSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
+	// PatchSecret merges set/unset entries into the existing data map under a
+	// per-secret lock and writes a new version. The response is metadata-only
+	// (no plaintext) so callers only need secrets:update — never
+	// secrets:reveal. An audit event with action=patch records the key names
+	// that were set/unset; values are never logged.
+	PatchSecret(ctx context.Context, in *PatchSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error)
 	DeleteSecret(ctx context.Context, in *DeleteSecretRequest, opts ...grpc.CallOption) (*Status, error)
 	// ListSecrets returns secret metadata only (no plaintext data).
 	ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error)
@@ -88,6 +95,16 @@ func (c *secretServiceClient) UpdateSecret(ctx context.Context, in *UpdateSecret
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SecretResponse)
 	err := c.cc.Invoke(ctx, SecretService_UpdateSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *secretServiceClient) PatchSecret(ctx context.Context, in *PatchSecretRequest, opts ...grpc.CallOption) (*SecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecretResponse)
+	err := c.cc.Invoke(ctx, SecretService_PatchSecret_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +180,12 @@ type SecretServiceServer interface {
 	// to retrieve the plaintext payload; callers must hold the secrets:reveal verb.
 	GetSecret(context.Context, *GetSecretRequest) (*SecretResponse, error)
 	UpdateSecret(context.Context, *UpdateSecretRequest) (*SecretResponse, error)
+	// PatchSecret merges set/unset entries into the existing data map under a
+	// per-secret lock and writes a new version. The response is metadata-only
+	// (no plaintext) so callers only need secrets:update — never
+	// secrets:reveal. An audit event with action=patch records the key names
+	// that were set/unset; values are never logged.
+	PatchSecret(context.Context, *PatchSecretRequest) (*SecretResponse, error)
 	DeleteSecret(context.Context, *DeleteSecretRequest) (*Status, error)
 	// ListSecrets returns secret metadata only (no plaintext data).
 	ListSecrets(context.Context, *ListSecretsRequest) (*ListSecretsResponse, error)
@@ -196,6 +219,9 @@ func (UnimplementedSecretServiceServer) GetSecret(context.Context, *GetSecretReq
 }
 func (UnimplementedSecretServiceServer) UpdateSecret(context.Context, *UpdateSecretRequest) (*SecretResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateSecret not implemented")
+}
+func (UnimplementedSecretServiceServer) PatchSecret(context.Context, *PatchSecretRequest) (*SecretResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PatchSecret not implemented")
 }
 func (UnimplementedSecretServiceServer) DeleteSecret(context.Context, *DeleteSecretRequest) (*Status, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteSecret not implemented")
@@ -286,6 +312,24 @@ func _SecretService_UpdateSecret_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(SecretServiceServer).UpdateSecret(ctx, req.(*UpdateSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SecretService_PatchSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PatchSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SecretServiceServer).PatchSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SecretService_PatchSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SecretServiceServer).PatchSecret(ctx, req.(*PatchSecretRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -416,6 +460,10 @@ var SecretService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateSecret",
 			Handler:    _SecretService_UpdateSecret_Handler,
+		},
+		{
+			MethodName: "PatchSecret",
+			Handler:    _SecretService_PatchSecret_Handler,
 		},
 		{
 			MethodName: "DeleteSecret",
