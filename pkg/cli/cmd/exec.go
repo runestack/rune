@@ -159,11 +159,17 @@ func runExec(cmd *cobra.Command, args []string, opts *execOptions) error {
 	// — surface as a typo). Matches docker exec / kubectl exec.
 	if len(command) == 0 {
 <<<<<<< HEAD
+<<<<<<< HEAD
 		if dashIdx >= 0 {
 			return errEmptyCommand(target)
 		}
 =======
 >>>>>>> 0954abe (exec: make `--` optional and auto-shell when no command given)
+=======
+		if dashIdx >= 0 {
+			return errEmptyCommand(target)
+		}
+>>>>>>> d9b1e15 (fix(exec): error on `--` with no command, instead of auto-shelling)
 		command = defaultShellCommand()
 	}
 
