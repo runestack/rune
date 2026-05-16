@@ -39,34 +39,43 @@ type execOptions struct {
 func newExecCmd() *cobra.Command {
 	opts := &execOptions{}
 	cmd := &cobra.Command{
-		Use:   "exec TARGET COMMAND [args...]",
+		Use:   "exec [flags] TARGET -- COMMAND [args...]",
 		Short: "Execute a command in a running service or instance",
 		Long: `Execute commands directly within running service instances.
-	
-	This command provides interactive access to containers and processes,
-	allowing for real-time debugging, configuration verification, and
-	emergency maintenance tasks.
-	
-	Examples:
-	  # Start an interactive bash session in a service
-	  rune exec api bash
-	
-	  # Execute a one-off command
-	  rune exec api ls -la /app
-	
-	  # Execute in a specific instance
-	  rune exec api-instance-123 ps aux
-	
-	  # Set working directory and environment variables
-	  rune exec api --workdir=/app --env=DEBUG=true python debug.py
-	
-	  # Disable TTY for non-interactive commands
-	  rune exec api --no-tty python script.py
-	
-	  # Set a timeout for the exec session
-	  rune exec api --timeout=30s python long-running-script.py`,
+
+This command provides interactive access to containers and processes,
+allowing for real-time debugging, configuration verification, and
+emergency maintenance tasks.
+
+The command to run inside the target MUST be separated from rune's own
+flags by '--'. Anything after '--' is passed verbatim to the container,
+including flags like '-c' or '-la' that would otherwise be interpreted
+by rune. This matches the convention used by 'kubectl exec', 'ssh',
+'git bisect run', and similar tools.
+
+Examples:
+  # Start an interactive bash session in a service
+  rune exec api -- bash
+
+  # Execute a one-off command (note the '--' before the command)
+  rune exec api -- ls -la /app
+
+  # Target a specific instance
+  rune exec api-instance-123 -- ps aux
+
+  # Run in a non-default namespace
+  rune exec -n prod web -- bash
+
+  # Set working directory and environment variables
+  rune exec api --workdir=/app --env=DEBUG=true -- python debug.py
+
+  # Disable TTY for non-interactive commands
+  rune exec api --no-tty -- python script.py
+
+  # Set a timeout for the exec session
+  rune exec api --timeout=30s -- python long-running-script.py`,
 		Aliases: []string{"e"},
-		Args:    cobra.MinimumNArgs(2),
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.namespace = effectiveCmdNS(opts.namespace)
 			return runExec(cmd, args, opts)
@@ -84,21 +93,54 @@ func newExecCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.timeout, "timeout", "5m", "timeout for the exec session")
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "address of the API server")
 
-	// After the first positional arg (TARGET), stop parsing flags so command args like '-c' are passed through
-	cmd.Flags().SetInterspersed(false)
-
 	return cmd
 }
 
 func init() { rootCmd.AddCommand(newExecCmd()) }
 
+// errMissingDashDash, errTargetRequired, and errEmptyCommand are extracted so
+// the test suite can assert on the exact validation errors.
+func errMissingDashDash(args []string) error {
+	example := "web"
+	if len(args) > 0 {
+		example = args[0]
+	}
+	return fmt.Errorf("missing '--' before command\n\nUsage:\n  rune exec [flags] TARGET -- COMMAND [args...]\n\nExample:\n  rune exec %s -- bash", example)
+}
+
+func errTargetRequired() error {
+	return fmt.Errorf("TARGET is required before '--'\n\nUsage:\n  rune exec [flags] TARGET -- COMMAND [args...]")
+}
+
+func errTooManyTargets(targets []string) error {
+	return fmt.Errorf("only one TARGET is allowed before '--' (got %d: %v)", len(targets), targets)
+}
+
+func errEmptyCommand(target string) error {
+	return fmt.Errorf("command cannot be empty after '--'\n\nExample:\n  rune exec %s -- bash", target)
+}
+
 func runExec(cmd *cobra.Command, args []string, opts *execOptions) error {
-	// Parse arguments
+	// Require '--' to separate rune flags/target from the command to execute.
+	// This eliminates ambiguity (a stray '-n' meant for the inner command can
+	// never be silently consumed as rune's --namespace) and matches
+	// kubectl/ssh/git conventions.
+	dashIdx := cmd.ArgsLenAtDash()
+	if dashIdx < 0 {
+		return errMissingDashDash(args)
+	}
+	if dashIdx == 0 {
+		return errTargetRequired()
+	}
+	if dashIdx > 1 {
+		return errTooManyTargets(args[:dashIdx])
+	}
+
 	target := args[0]
 	command := args[1:]
 
 	if len(command) == 0 {
-		return fmt.Errorf("command cannot be empty")
+		return errEmptyCommand(target)
 	}
 
 	// Parse parsedOpts
@@ -213,12 +255,10 @@ func parseExecOptions(opts *execOptions) (*parsedExecOptions, error) {
 		parsedOpts.env[parts[0]] = parts[1]
 	}
 
-	// Determine TTY allocation
+	// TTY: explicit --no-tty wins, otherwise auto-detection happens against
+	// the parsed command in runExec (we don't have it here yet).
 	if opts.noTTY {
 		parsedOpts.tty = false
-	} else if !opts.tty {
-		// Auto-detect TTY for interactive commands
-		parsedOpts.tty = shouldAllocateTTY(os.Args[2:]) // Skip "rune" and "exec"
 	}
 
 	return parsedOpts, nil

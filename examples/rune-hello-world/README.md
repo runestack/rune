@@ -48,11 +48,11 @@ curl http://localhost:7863/health
 
 ```bash
 # Exec into the service to check environment
-rune exec rune-hello-world env
+rune exec rune-hello-world -- env
 
 # Check specific environment variables
-rune exec rune-hello-world bash -c "echo \$CUSTOM_MESSAGE"
-rune exec rune-hello-world bash -c "echo \$DEBUG_MODE"
+rune exec rune-hello-world -- bash -c "echo \$CUSTOM_MESSAGE"
+rune exec rune-hello-world -- bash -c "echo \$DEBUG_MODE"
 ```
 
 ## API Endpoints
@@ -156,31 +156,31 @@ The application supports extensive environment variable configuration:
 
 ```bash
 # Interactive bash session
-rune exec rune-hello-world bash
+rune exec rune-hello-world -- bash
 
 # Check environment variables
-rune exec rune-hello-world env | grep CUSTOM_MESSAGE
+rune exec rune-hello-world -- env | grep CUSTOM_MESSAGE
 
 # View running processes
-rune exec rune-hello-world ps aux
+rune exec rune-hello-world -- ps aux
 
 # Check application files
-rune exec rune-hello-world ls -la
+rune exec rune-hello-world -- ls -la
 
 # Test interactive commands
-rune exec rune-hello-world bash -c "curl localhost:7863/health"
+rune exec rune-hello-world -- bash -c "curl localhost:7863/health"
 ```
 
 ### 2. Testing Environment Variable Injection
 
 ```bash
 # Check all environment variables
-rune exec rune-hello-world env
+rune exec rune-hello-world -- env
 
 # Test specific variables
-rune exec rune-hello-world bash -c "echo \$DEBUG_MODE"
-rune exec rune-hello-world bash -c "echo \$CUSTOM_MESSAGE"
-rune exec rune-hello-world bash -c "echo \$DATABASE_URL"
+rune exec rune-hello-world -- bash -c "echo \$DEBUG_MODE"
+rune exec rune-hello-world -- bash -c "echo \$CUSTOM_MESSAGE"
+rune exec rune-hello-world -- bash -c "echo \$DATABASE_URL"
 ```
 
 ### 3. Testing Health Checks
@@ -197,18 +197,18 @@ rune logs rune-hello-world | grep health
 
 ```bash
 # Enable debug mode and check debug endpoint
-rune exec rune-hello-world bash -c "curl localhost:7863/debug"
+rune exec rune-hello-world -- bash -c "curl localhost:7863/debug"
 
 # Check memory usage
-rune exec rune-hello-world bash -c "free -h"
+rune exec rune-hello-world -- bash -c "free -h"
 
 # Monitor processes
-rune exec rune-hello-world htop
+rune exec rune-hello-world -- htop
 ```
 
 ## Interactive Commands
 
-When using `rune exec rune-hello-world bash`, you can test these commands:
+When using `rune exec rune-hello-world -- bash`, you can test these commands:
 
 ### System Information
 ```bash
@@ -273,7 +273,7 @@ tail -f /var/log/application.log 2>/dev/null || echo "No log file"
 2. **Environment variables not set**
    ```bash
    # Check environment in container
-   rune exec rune-hello-world env
+   rune exec rune-hello-world -- env
    
    # Verify service configuration
    rune get service rune-hello-world -o yaml
@@ -282,10 +282,10 @@ tail -f /var/log/application.log 2>/dev/null || echo "No log file"
 3. **Health checks failing**
    ```bash
    # Test health endpoint directly
-   rune exec rune-hello-world curl localhost:7863/health
+   rune exec rune-hello-world -- curl localhost:7863/health
    
    # Check if port is listening
-   rune exec rune-hello-world netstat -tuln | grep 8080
+   rune exec rune-hello-world -- netstat -tuln | grep 8080
    ```
 
 ### Debug Mode
