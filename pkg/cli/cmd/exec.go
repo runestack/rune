@@ -39,32 +39,38 @@ type execOptions struct {
 func newExecCmd() *cobra.Command {
 	opts := &execOptions{}
 	cmd := &cobra.Command{
-		Use:   "exec [flags] TARGET -- COMMAND [args...]",
+		Use:   "exec [flags] TARGET [COMMAND [args...]]",
 		Short: "Execute a command in a running service or instance",
 		Long: `Execute commands directly within running service instances.
 
-This command provides interactive access to containers and processes,
-allowing for real-time debugging, configuration verification, and
-emergency maintenance tasks.
+If no COMMAND is given, rune opens an interactive shell (bash if available,
+otherwise sh).
 
-The command to run inside the target MUST be separated from rune's own
-flags by '--'. Anything after '--' is passed verbatim to the container,
-including flags like '-c' or '-la' that would otherwise be interpreted
-by rune. This matches the convention used by 'kubectl exec', 'ssh',
-'git bisect run', and similar tools.
+Simple commands can be written inline:
+  rune exec api ps aux
+
+When the command itself has flags (like '-la' or '-c'), use '--' so cobra
+stops parsing flags. Anything after '--' is passed verbatim to the target:
+  rune exec api -- ls -la /app
+  rune exec api -- bash -c "echo hi"
+
+Rune's own flags (-n, --workdir, --env, --timeout, --no-tty, --api-server,
+-t) work in any position before '--'.
 
 Examples:
-  # Start an interactive bash session in a service
-  rune exec api -- bash
+  # Open an interactive shell (defaults to bash, falling back to sh)
+  rune exec web
+  rune exec -n prod web
 
-  # Execute a one-off command (note the '--' before the command)
+  # Run a simple command
+  rune exec api ps aux
+
+  # Command with flags (use '--')
   rune exec api -- ls -la /app
+  rune exec api -- bash -c "echo $HOSTNAME"
 
   # Target a specific instance
-  rune exec api-instance-123 -- ps aux
-
-  # Run in a non-default namespace
-  rune exec -n prod web -- bash
+  rune exec api-instance-123 ps aux
 
   # Set working directory and environment variables
   rune exec api --workdir=/app --env=DEBUG=true -- python debug.py
@@ -93,54 +99,56 @@ Examples:
 	cmd.Flags().StringVar(&opts.timeout, "timeout", "5m", "timeout for the exec session")
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "address of the API server")
 
+	// Help users who type `rune exec web ls -la /app` without '--'. Cobra's
+	// default flag-error mentions "unknown shorthand flag: 'l' in -la"; we
+	// wrap it with a hint to use '--'.
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return fmt.Errorf("%w\n\nIf '-la' (or similar) is meant for the inner command, put it after '--':\n  rune exec TARGET -- COMMAND [args...]", err)
+	})
+
 	return cmd
 }
 
 func init() { rootCmd.AddCommand(newExecCmd()) }
 
-// errMissingDashDash, errTargetRequired, and errEmptyCommand are extracted so
-// the test suite can assert on the exact validation errors.
-func errMissingDashDash(args []string) error {
-	example := "web"
-	if len(args) > 0 {
-		example = args[0]
-	}
-	return fmt.Errorf("missing '--' before command\n\nUsage:\n  rune exec [flags] TARGET -- COMMAND [args...]\n\nExample:\n  rune exec %s -- bash", example)
-}
-
+// errTargetRequired and errTooManyTargets are extracted so the test suite can
+// assert on the exact validation errors.
 func errTargetRequired() error {
-	return fmt.Errorf("TARGET is required before '--'\n\nUsage:\n  rune exec [flags] TARGET -- COMMAND [args...]")
+	return fmt.Errorf("TARGET is required\n\nUsage:\n  rune exec [flags] TARGET [COMMAND [args...]]\n\nExamples:\n  rune exec web                # interactive shell\n  rune exec web ps aux         # simple command\n  rune exec web -- ls -la /app # command with flags")
 }
 
 func errTooManyTargets(targets []string) error {
 	return fmt.Errorf("only one TARGET is allowed before '--' (got %d: %v)", len(targets), targets)
 }
 
-func errEmptyCommand(target string) error {
-	return fmt.Errorf("command cannot be empty after '--'\n\nExample:\n  rune exec %s -- bash", target)
+// defaultShellCommand is what we run when the user doesn't supply a command.
+// Picks bash if present, falls back to sh, all in a single exec round-trip so
+// we don't need a probe step. Works on every POSIX container we've seen.
+func defaultShellCommand() []string {
+	return []string{"sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"}
 }
 
 func runExec(cmd *cobra.Command, args []string, opts *execOptions) error {
-	// Require '--' to separate rune flags/target from the command to execute.
-	// This eliminates ambiguity (a stray '-n' meant for the inner command can
-	// never be silently consumed as rune's --namespace) and matches
-	// kubectl/ssh/git conventions.
+	// Allow either form:
+	//   rune exec [flags] TARGET                     # auto-shell
+	//   rune exec [flags] TARGET COMMAND [args...]   # simple command, no flags
+	//   rune exec [flags] TARGET -- COMMAND [args...] # command with flags
+	//
+	// '--' is only required when the inner command itself has flags that
+	// would otherwise collide with rune's flag parser.
 	dashIdx := cmd.ArgsLenAtDash()
-	if dashIdx < 0 {
-		return errMissingDashDash(args)
+	if dashIdx > 1 {
+		return errTooManyTargets(args[:dashIdx])
 	}
 	if dashIdx == 0 {
 		return errTargetRequired()
-	}
-	if dashIdx > 1 {
-		return errTooManyTargets(args[:dashIdx])
 	}
 
 	target := args[0]
 	command := args[1:]
 
 	if len(command) == 0 {
-		return errEmptyCommand(target)
+		command = defaultShellCommand()
 	}
 
 	// Parse parsedOpts
