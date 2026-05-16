@@ -412,6 +412,14 @@ func (r *ProcessRunner) Stop(ctx context.Context, instance *types.Instance, time
 	return nil
 }
 
+// Rename is a no-op for the process runner: process instances have no
+// docker-style name to free up for a replacement. Returns nil so the
+// shared failed-instance retention code path (which calls Rename
+// unconditionally) doesn't error against process runtimes.
+func (r *ProcessRunner) Rename(ctx context.Context, instance *types.Instance, newName string) error {
+	return nil
+}
+
 // Remove removes a process instance
 func (r *ProcessRunner) Remove(ctx context.Context, instance *types.Instance, force bool) error {
 	r.mu.Lock()

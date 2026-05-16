@@ -19,6 +19,18 @@ const deletedInstanceRetentionTime = 10 * time.Minute
 // The amount of time to wait before running garbage collection
 const garbageCollectionInterval = 1 * time.Minute
 
+// Defaults for the failed-instance retention GC. Kept here as constants for
+// v1; the orchestrator can plumb config-driven overrides in a follow-up
+// (runed.FailedInstanceRetention is already defined in internal/config).
+const (
+	// failedInstancePerServiceCap is the maximum number of tombstoned
+	// Failed instances retained per service before the oldest is evicted.
+	failedInstancePerServiceCap = 3
+	// failedInstanceTTL is the maximum age of a tombstoned Failed instance
+	// before it is evicted regardless of cap.
+	failedInstanceTTL = 1 * time.Hour
+)
+
 // reconciler is responsible for ensuring the actual state of instances
 // matches the desired state defined in the services
 type reconciler struct {
@@ -289,10 +301,25 @@ func (r *reconciler) getServiceInstances(ctx context.Context, service *types.Ser
 	serviceRunningInstances := make(map[string]bool)
 
 	for _, instance := range storeInstances {
-		if instance.ServiceName == service.Name && instance.Status != types.InstanceStatusDeleted {
-			serviceInstances = append(serviceInstances, instance)
-			serviceRunningInstances[instance.ID] = true
+		if instance.ServiceName != service.Name {
+			continue
 		}
+		// Skip Deleted instances and Failed *tombstones*. Tombstones
+		// are preserved containers from a previous restart cycle kept
+		// around for postmortem; the retention GC reclaims them
+		// separately and they don't count against the desired scale.
+		// Failed instances without a FailedAt timestamp are *not*
+		// tombstones — they're transient Failed states from create/start
+		// errors that the reconciler still needs to act on (replace,
+		// surface in service status, etc.).
+		if instance.Status == types.InstanceStatusDeleted {
+			continue
+		}
+		if instance.Status == types.InstanceStatusFailed && instance.FailedAt != nil {
+			continue
+		}
+		serviceInstances = append(serviceInstances, instance)
+		serviceRunningInstances[instance.ID] = true
 	}
 
 	// Check for orphaned instances (running but not in store for this service)
@@ -847,6 +874,12 @@ func (r *reconciler) runGarbageCollection(ctx context.Context) error {
 		return fmt.Errorf("failed to list instances for garbage collection: %w", err)
 	}
 
+	// Failed-instance retention pass. Done before the deleted-instance pass
+	// below because we want any tombstones whose TTL has expired to be
+	// promoted to Deleted so the existing deleted-instance retention can
+	// keep cleaning them out of the store.
+	r.gcFailedInstances(ctx, instances)
+
 	// Filter for deleted instances
 	for _, instance := range instances {
 		if instance.Status == types.InstanceStatusDeleted && instance.Metadata != nil {
@@ -885,4 +918,61 @@ func (r *reconciler) runGarbageCollection(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// gcFailedInstances evicts tombstoned Failed instances per the retention
+// policy: per-service cap and TTL, whichever fires first. Eviction
+// transitions a Failed instance to Deleted (with a DeletionTimestamp) so the
+// existing deleted-instance retention sweep above picks it up on a later
+// tick. Removing the underlying container is handled by
+// instanceController.DeleteInstance.
+func (r *reconciler) gcFailedInstances(ctx context.Context, instances []types.Instance) {
+	now := time.Now()
+
+	// Bucket Failed-and-still-preserved instances by service.
+	bySvc := map[string][]*types.Instance{}
+	for i := range instances {
+		inst := &instances[i]
+		if inst.Status != types.InstanceStatusFailed || inst.FailedAt == nil {
+			continue
+		}
+		key := inst.Namespace + "/" + inst.ServiceName
+		bySvc[key] = append(bySvc[key], inst)
+	}
+
+	for key, tombs := range bySvc {
+		// Sort newest-first so the cap evicts the oldest first.
+		sort.Slice(tombs, func(i, j int) bool {
+			return tombs[i].FailedAt.After(*tombs[j].FailedAt)
+		})
+
+		for i, t := range tombs {
+			tooOld := failedInstanceTTL > 0 && now.Sub(*t.FailedAt) > failedInstanceTTL
+			beyondCap := failedInstancePerServiceCap > 0 && i >= failedInstancePerServiceCap
+			if !tooOld && !beyondCap {
+				continue
+			}
+
+			reason := "ttl"
+			if beyondCap && !tooOld {
+				reason = "cap"
+			}
+			r.logger.Info("Evicting failed-instance tombstone",
+				log.Str("service", key),
+				log.Str("tombstone_instance", t.ID),
+				log.Str("container_id", t.ContainerID),
+				log.Str("age", now.Sub(*t.FailedAt).String()),
+				log.Str("reason", reason))
+
+			// DeleteInstance stops + removes the container (idempotent
+			// against an already-stopped container) and marks the store
+			// record Deleted with a DeletionTimestamp. The deleted-
+			// instance retention sweep cleans the row a few minutes later.
+			if err := r.instanceController.DeleteInstance(ctx, t); err != nil {
+				r.logger.Warn("Failed to evict failed-instance tombstone",
+					log.Str("tombstone_instance", t.ID),
+					log.Err(err))
+			}
+		}
+	}
 }

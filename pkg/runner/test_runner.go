@@ -163,6 +163,13 @@ func (r *TestRunner) Stop(ctx context.Context, instance *types.Instance, timeout
 	return nil
 }
 
+// Rename is a no-op for the test runner; included so it satisfies the
+// Runner interface alongside the docker runner where Rename is used
+// during failed-instance retention to free a container name.
+func (r *TestRunner) Rename(ctx context.Context, instance *types.Instance, newName string) error {
+	return nil
+}
+
 // Remove tracks instance removal
 func (r *TestRunner) Remove(ctx context.Context, instance *types.Instance, force bool) error {
 	r.mu.Lock()

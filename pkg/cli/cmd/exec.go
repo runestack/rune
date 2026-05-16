@@ -32,6 +32,7 @@ type execOptions struct {
 	tty     bool
 	noTTY   bool
 	timeout string
+	debug   bool
 }
 
 // execCmd represents the exec command
@@ -97,6 +98,7 @@ Examples:
 	cmd.Flags().BoolVarP(&opts.tty, "tty", "t", false, "allocate a pseudo-TTY (defaults to true for interactive commands)")
 	cmd.Flags().BoolVar(&opts.noTTY, "no-tty", false, "disable TTY allocation for non-interactive commands")
 	cmd.Flags().StringVar(&opts.timeout, "timeout", "5m", "timeout for the exec session")
+	cmd.Flags().BoolVar(&opts.debug, "debug", false, "spawn an inspection container for a Failed instance (postmortem); replaces the entrypoint with `sleep infinity` so the inner app does not re-run. Requires an instance ID, not a service name")
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "address of the API server")
 
 	// Help users who type `rune exec web ls -la /app` without '--'. Cobra's
@@ -209,6 +211,7 @@ func runExec(cmd *cobra.Command, args []string, opts *execOptions) error {
 		WorkingDir: parsedOpts.workdir,
 		TTY:        parsedOpts.tty,
 		Timeout:    parsedOpts.timeout,
+		Debug:      opts.debug,
 	}
 
 	// Set terminal size if TTY is enabled

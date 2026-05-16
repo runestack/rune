@@ -28,6 +28,13 @@ type Runner interface {
 	// Remove removes a service instance.
 	Remove(ctx context.Context, instance *types.Instance, force bool) error
 
+	// Rename changes the underlying container's name. Used by the
+	// failed-instance retention path to move an old container aside
+	// ("<name>-failed-<shortuuid>") so a fresh container can take the
+	// original name. Returns an error if the runner type doesn't
+	// support renaming (process runner, etc.).
+	Rename(ctx context.Context, instance *types.Instance, newName string) error
+
 	// GetLogs retrieves logs from a service instance.
 	GetLogs(ctx context.Context, instance *types.Instance, options LogOptions) (io.ReadCloser, error)
 

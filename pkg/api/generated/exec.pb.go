@@ -163,7 +163,17 @@ type ExecInitRequest struct {
 	// Whether to allocate a TTY
 	Tty bool `protobuf:"varint,7,opt,name=tty,proto3" json:"tty,omitempty"`
 	// Initial terminal size if TTY is true
-	TerminalSize  *TerminalSize `protobuf:"bytes,8,opt,name=terminal_size,json=terminalSize,proto3" json:"terminal_size,omitempty"`
+	TerminalSize *TerminalSize `protobuf:"bytes,8,opt,name=terminal_size,json=terminalSize,proto3" json:"terminal_size,omitempty"`
+	// Debug requests an ephemeral inspection container for postmortem of a
+	// Failed instance. Set by `rune exec --debug <failed-inst-id>`. Server
+	// creates a sidecar from the failed instance's image/env/mounts/volumes
+	// with the entrypoint replaced by `sleep infinity`, runs the command
+	// there, and tears the sidecar down on session end. The original
+	// failed container is never touched. Requires the target to be a
+	// Failed instance with a preserved container; rejected on Running
+	// instances and on tombstones whose containers have already been
+	// GC'd by the failed-instance retention sweep.
+	Debug         bool `protobuf:"varint,9,opt,name=debug,proto3" json:"debug,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -263,6 +273,13 @@ func (x *ExecInitRequest) GetTerminalSize() *TerminalSize {
 		return x.TerminalSize
 	}
 	return nil
+}
+
+func (x *ExecInitRequest) GetDebug() bool {
+	if x != nil {
+		return x.Debug
+	}
+	return false
 }
 
 type isExecInitRequest_Target interface {
@@ -579,7 +596,7 @@ const file_pkg_api_proto_exec_proto_rawDesc = "" +
 	"\x05stdin\x18\x02 \x01(\fH\x00R\x05stdin\x120\n" +
 	"\x06resize\x18\x03 \x01(\v2\x16.rune.api.TerminalSizeH\x00R\x06resize\x12*\n" +
 	"\x06signal\x18\x04 \x01(\v2\x10.rune.api.SignalH\x00R\x06signalB\t\n" +
-	"\arequest\"\xf9\x02\n" +
+	"\arequest\"\x8f\x03\n" +
 	"\x0fExecInitRequest\x12#\n" +
 	"\fservice_name\x18\x01 \x01(\tH\x00R\vserviceName\x12!\n" +
 	"\vinstance_id\x18\x02 \x01(\tH\x00R\n" +
@@ -590,7 +607,8 @@ const file_pkg_api_proto_exec_proto_rawDesc = "" +
 	"\vworking_dir\x18\x06 \x01(\tR\n" +
 	"workingDir\x12\x10\n" +
 	"\x03tty\x18\a \x01(\bR\x03tty\x12;\n" +
-	"\rterminal_size\x18\b \x01(\v2\x16.rune.api.TerminalSizeR\fterminalSize\x1a6\n" +
+	"\rterminal_size\x18\b \x01(\v2\x16.rune.api.TerminalSizeR\fterminalSize\x12\x14\n" +
+	"\x05debug\x18\t \x01(\bR\x05debug\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\b\n" +

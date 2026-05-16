@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
@@ -225,6 +226,110 @@ func TestUpdateServiceStatusStopping(t *testing.T) {
 			assert.Equal(t, tc.want, got.Status, "service status mismatch")
 		})
 	}
+}
+
+// TestGCFailedInstancesEvictsByCap verifies the per-service cap of the
+// failed-instance retention GC: when there are more Failed tombstones than
+// the cap allows, the oldest ones are evicted (DeleteInstance is called),
+// newest ones are kept.
+func TestGCFailedInstancesEvictsByCap(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	reconciler := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	// Build perServiceCap + 2 Failed tombstones for the same service, each
+	// 1m older than the previous so the GC has clear "oldest" candidates.
+	now := time.Now()
+	want := failedInstancePerServiceCap
+	var tombs []types.Instance
+	for i := 0; i < want+2; i++ {
+		age := -time.Duration(i+1) * time.Minute // tomb 0 = newest, tomb N = oldest
+		failedAt := now.Add(age)
+		tombs = append(tombs, types.Instance{
+			ID: fmt.Sprintf("tomb-%d", i), Name: fmt.Sprintf("svc-0-failed-%d", i),
+			ServiceName: "svc", Namespace: "default",
+			Status:        types.InstanceStatusFailed,
+			FailedAt:      &failedAt,
+			FailureReason: "test",
+			ContainerID:   fmt.Sprintf("ctr-%d", i),
+		})
+	}
+
+	reconciler.gcFailedInstances(context.Background(), tombs)
+
+	// Expect the 2 oldest (highest index) to have been evicted.
+	gotEvicted := map[string]bool{}
+	for _, call := range instanceController.DeleteInstanceCalls {
+		gotEvicted[call.Instance.ID] = true
+	}
+	for i := want; i < want+2; i++ {
+		id := fmt.Sprintf("tomb-%d", i)
+		assert.True(t, gotEvicted[id], "tombstone %s should have been evicted (beyond cap)", id)
+	}
+	for i := 0; i < want; i++ {
+		id := fmt.Sprintf("tomb-%d", i)
+		assert.False(t, gotEvicted[id], "tombstone %s should NOT have been evicted (within cap)", id)
+	}
+}
+
+// TestGCFailedInstancesEvictsByTTL verifies the TTL path: a tombstone older
+// than failedInstanceTTL is evicted even when it's within the per-service cap.
+func TestGCFailedInstancesEvictsByTTL(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	reconciler := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	// One tombstone, well past TTL, well within cap.
+	old := time.Now().Add(-failedInstanceTTL - 1*time.Minute)
+	tombs := []types.Instance{{
+		ID: "ancient", Name: "svc-0-failed-old",
+		ServiceName: "svc", Namespace: "default",
+		Status:        types.InstanceStatusFailed,
+		FailedAt:      &old,
+		FailureReason: "test",
+		ContainerID:   "ctr-old",
+	}}
+
+	reconciler.gcFailedInstances(context.Background(), tombs)
+
+	assert.Equal(t, 1, len(instanceController.DeleteInstanceCalls), "TTL-expired tombstone should have been evicted")
+	assert.Equal(t, "ancient", instanceController.DeleteInstanceCalls[0].Instance.ID)
+}
+
+// TestGCFailedInstancesIgnoresNonTombstones verifies that the GC only
+// touches Failed-instances-with-FailedAt (true tombstones); transient
+// Failed states from create/start errors that haven't been tombstoned
+// don't count and aren't evicted.
+func TestGCFailedInstancesIgnoresNonTombstones(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	reconciler := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	// Failed but no FailedAt — not a tombstone; should be ignored.
+	tombs := []types.Instance{{
+		ID: "transient", Name: "svc-0",
+		ServiceName: "svc", Namespace: "default",
+		Status: types.InstanceStatusFailed,
+		// FailedAt intentionally nil.
+	}}
+
+	reconciler.gcFailedInstances(context.Background(), tombs)
+	assert.Equal(t, 0, len(instanceController.DeleteInstanceCalls), "transient Failed without FailedAt must not be evicted")
 }
 
 func TestReconcileScaleDown(t *testing.T) {

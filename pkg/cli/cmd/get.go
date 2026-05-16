@@ -28,6 +28,12 @@ type getOptions struct {
 	limit          int
 	watchTimeout   string
 	serviceName    string
+
+	// showFailed includes Failed-instance tombstones (preserved containers
+	// from prior restart cycles, kept around for postmortem) in `rune get
+	// instances` output. They're hidden by default so the listing only
+	// shows the live instance set.
+	showFailed bool
 }
 
 // Resource type abbreviations
@@ -121,6 +127,7 @@ func newGetCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.noHeaders, "no-headers", false, "Don't print headers for table output")
 	cmd.Flags().IntVar(&opts.limit, "limit", 0, "Maximum number of resources to list (0 for unlimited)")
 	cmd.Flags().StringVar(&opts.watchTimeout, "timeout", "", "Timeout for watch operations (e.g., 30s, 5m, 1h) - default is no timeout")
+	cmd.Flags().BoolVar(&opts.showFailed, "show-failed", false, "Include Failed-instance tombstones (preserved containers awaiting retention GC) in `rune get instances` output")
 	cmd.Flags().StringVar(&opts.serviceName, "service-name", "", "Filter instances by service name")
 
 	// Remove api-key flag; token comes from config/env
@@ -444,6 +451,21 @@ func handleInstanceGet(cmd *cobra.Command, opts *getOptions, resourceName string
 	instances, err := instanceClient.ListInstances(opts.namespace, opts.serviceName, opts.labelSelector, opts.fieldSelector)
 	if err != nil {
 		return fmt.Errorf("failed to list instances: %w", err)
+	}
+
+	// Hide Failed-instance tombstones unless --show-failed is set. They
+	// belong to retention bookkeeping (preserved containers awaiting GC),
+	// not the live instance set; operators care about them only when
+	// debugging.
+	if !opts.showFailed {
+		filtered := instances[:0]
+		for _, inst := range instances {
+			if inst.Status == types.InstanceStatusFailed && inst.FailedAt != nil {
+				continue
+			}
+			filtered = append(filtered, inst)
+		}
+		instances = filtered
 	}
 
 	// Render the instances

@@ -657,6 +657,83 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 	return nil
 }
 
+// tombstoneFailingContainer preserves the stopped container of a failing
+// instance as a separate Failed tombstone record so operators can inspect
+// it postmortem (`rune logs <tombstone-id>`, `rune exec --debug
+// <tombstone-id>`). Called from RestartInstance just before the live
+// instance would otherwise have its container removed and recreated.
+//
+// Mechanics:
+//
+//   - Renames the docker container from "<name>" to "<name>-failed-<short>"
+//     so the freshly recreated container can take the original name without
+//     a collision.
+//   - Writes a new Instance record (new UUID, derived name, Status=Failed,
+//     FailedAt=now, FailureReason from restart cause) that holds the
+//     renamed container's ID directly. Lookups in the docker runner prefer
+//     instance.ContainerID over labels (see DockerRunner.getContainerID),
+//     so the tombstone and the live instance never collide on the
+//     `rune.instance.id` label both still carry.
+//   - The reconciler's failed-instance GC pass (per-service cap + TTL)
+//     reaps tombstones later, removing the stopped container at that
+//     point.
+//
+// Caller is responsible for clearing the live instance's ContainerID
+// afterwards so runner.Create produces a fresh container.
+func (c *instanceController) tombstoneFailingContainer(ctx context.Context, runner runner.Runner, instance *types.Instance, restartReason InstanceRestartReason) error {
+	if instance.ContainerID == "" {
+		// No container to preserve (e.g. earlier Create failed before a
+		// container existed). Nothing useful to tombstone; signal to the
+		// caller that we couldn't preserve, and let it fall through to
+		// the destructive path.
+		return fmt.Errorf("no container to tombstone (instance has no ContainerID)")
+	}
+
+	short := uuid.New().String()
+	if len(short) >= 8 {
+		short = short[:8]
+	}
+	tombName := fmt.Sprintf("%s-failed-%s", instance.Name, short)
+
+	// Rename the underlying container first; if this fails we want to
+	// abort before forking the store record. The new container name only
+	// matters for human inspection (e.g. `docker ps`) — runner ops route
+	// via ContainerID after this point.
+	if err := runner.Rename(ctx, instance, tombName); err != nil {
+		return fmt.Errorf("rename failing container: %w", err)
+	}
+
+	now := time.Now()
+	tombstone := *instance // shallow copy carries metadata, mounts, env, etc.
+	tombstone.ID = uuid.New().String()
+	tombstone.Name = tombName
+	tombstone.Status = types.InstanceStatusFailed
+	tombstone.StatusMessage = fmt.Sprintf("Preserved for postmortem after %s", restartReason)
+	tombstone.FailedAt = &now
+	tombstone.FailureReason = string(restartReason)
+	tombstone.UpdatedAt = now
+	// ContainerID stays the same — that's the whole point: tombstone owns
+	// the original stopped container.
+
+	if err := c.store.Create(ctx, types.ResourceTypeInstance, tombstone.Namespace, tombstone.ID, &tombstone); err != nil {
+		// Best-effort rollback: rename the container back so the
+		// recreate path doesn't collide.
+		if rbErr := runner.Rename(ctx, &tombstone, instance.Name); rbErr != nil {
+			c.logger.Error("Failed to roll back tombstone rename after store error",
+				log.Str("instance", instance.ID),
+				log.Err(rbErr))
+		}
+		return fmt.Errorf("write tombstone instance record: %w", err)
+	}
+
+	c.logger.Info("Tombstoned failing container for postmortem",
+		log.Str("live_instance", instance.ID),
+		log.Str("tombstone_instance", tombstone.ID),
+		log.Str("container_id", tombstone.ContainerID),
+		log.Str("reason", string(restartReason)))
+	return nil
+}
+
 // DeleteInstance marks an instance for deletion and cleans up runner resources
 func (c *instanceController) DeleteInstance(ctx context.Context, instance *types.Instance) error {
 	c.logger.Info("Marking instance for deletion",
@@ -925,12 +1002,24 @@ func (c *instanceController) RestartInstance(ctx context.Context, instance *type
 			log.Err(err))
 	}
 
-	// Always remove the container to ensure clean restart
-	if err := runner.Remove(ctx, instance, true); err != nil {
-		c.logger.Error("Failed to remove instance during restart",
+	// Preserve the stopped container as a tombstone (failed-instance
+	// retention) before clearing the container ID. The tombstone holds the
+	// original ContainerID so `rune logs <tombstone-id>` and
+	// `rune exec --debug <tombstone-id>` keep working until the
+	// retention GC reaps it. The docker container is renamed so the new
+	// container can take the original name on Create below.
+	if err := c.tombstoneFailingContainer(ctx, runner, instance, reason); err != nil {
+		// Tombstoning is best-effort — if it fails we still want the
+		// restart to proceed. Operators lose postmortem visibility for
+		// this restart but the service keeps recovering.
+		c.logger.Warn("Failed to tombstone container for retention; proceeding with destructive restart",
 			log.Str("instance", instance.ID),
 			log.Err(err))
-		// Continue anyway, but this might cause container name conflicts
+		if rmErr := runner.Remove(ctx, instance, true); rmErr != nil {
+			c.logger.Error("Failed to remove instance during restart fallback",
+				log.Str("instance", instance.ID),
+				log.Err(rmErr))
+		}
 	}
 
 	// Clear the container ID to ensure a fresh container is created

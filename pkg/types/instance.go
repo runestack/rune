@@ -80,6 +80,34 @@ type Instance struct {
 	// SecurityContext and applied to the main container by the runner.
 	// nil means runtime defaults.
 	SecurityContext *SecurityContext `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
+
+	// FailedAt is the timestamp the instance entered the Failed state.
+	// Used by the reconciler's failed-instance retention GC to drive
+	// per-service cap + TTL eviction. nil for instances that have never
+	// failed.
+	FailedAt *time.Time `json:"failedAt,omitempty" yaml:"failedAt,omitempty"`
+
+	// FailureReason is a short, machine-friendly slug describing why the
+	// instance failed (e.g. "HealthCheckFailure", "ImagePullFailed",
+	// "OOMKilled"). Set at the moment of the Failed transition.
+	FailureReason string `json:"failureReason,omitempty" yaml:"failureReason,omitempty"`
+
+	// LastLogs is a snapshot of the last N bytes of the instance's stdout
+	// and stderr, captured before the container is removed (either during
+	// a restart-on-failure cycle or at retention-GC eviction). Lets
+	// `rune logs --previous` show what the dead container said even after
+	// the container itself is gone. Bounded by runed config
+	// (failedInstanceRetention.snapshotLogBytes, default 200 KB).
+	LastLogs []byte `json:"lastLogs,omitempty" yaml:"lastLogs,omitempty"`
+
+	// LastLogsCapturedAt records when LastLogs was snapshotted so the
+	// CLI can show "logs as of <time>" instead of pretending they're live.
+	LastLogsCapturedAt *time.Time `json:"lastLogsCapturedAt,omitempty" yaml:"lastLogsCapturedAt,omitempty"`
+
+	// LastLogsTruncated is true when LastLogs is a tail-only snapshot
+	// (we hit the byte cap). The CLI shows a "[truncated]" marker so
+	// operators know there was more output above what's preserved.
+	LastLogsTruncated bool `json:"lastLogsTruncated,omitempty" yaml:"lastLogsTruncated,omitempty"`
 }
 
 func (i *Instance) GetResourceType() ResourceType {
