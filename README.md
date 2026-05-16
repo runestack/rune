@@ -250,15 +250,16 @@ rune cast runeset/ --render-only
 ### Interactive Debugging
 
 ```bash
-# Execute bash in running service
-# Note: '--' separates rune's flags from the command to run inside the container.
-rune exec api -- bash
+# Open an interactive shell (bash if present, else sh) — no command needed
+rune exec api
+rune exec -n prod web
 
-# Run one-off command (flags like -la go after '--')
+# Simple commands inline
+rune exec api ps aux
+
+# Commands with flags: use '--' so rune doesn't try to parse them
 rune exec api -- ls -la /app
-
-# Target a specific namespace
-rune exec -n prod web -- bash
+rune exec api -- bash -c "echo $HOSTNAME"
 
 # Set working directory and environment
 rune exec api --workdir=/app --env=DEBUG=true -- python debug.py

@@ -8,36 +8,69 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// TestExecArgParsing verifies the `--` separator behaviour: rune flags work
-// in any position before `--`, and the inner command (after `--`) is captured
-// verbatim. Errors when `--` is missing or misplaced are friendly.
+// TestExecArgParsing verifies the three accepted shapes:
+//   - rune exec [flags] TARGET                      → auto-shell
+//   - rune exec [flags] TARGET COMMAND [args...]    → simple command
+//   - rune exec [flags] TARGET -- COMMAND [args...] → command with flags
+//
+// And confirms that rune flags work in any position before '--', that
+// targets-only sanity errors are friendly, and that unknown flags after the
+// TARGET (without '--') get a hint to use '--'.
 func TestExecArgParsing(t *testing.T) {
 	tests := []struct {
 		name    string
 		argv    []string // argv after "exec"
-		wantErr string   // substring expected in the error; "" means success
+		wantErr string   // substring in the error; "" means success
 		wantNs  string
 		wantCmd []string
 	}{
-		{name: "missing dash-dash", argv: []string{"web", "bash"}, wantErr: "missing '--'"},
-		{name: "dash-dash with no command", argv: []string{"web", "--"}, wantErr: "command cannot be empty"},
-		{name: "dash-dash with no target", argv: []string{"--", "bash"}, wantErr: "TARGET is required"},
 		{
-			name:    "flag after target before dash-dash",
+			name:    "target only opens default shell",
+			argv:    []string{"web"},
+			wantCmd: defaultShellCommand(),
+		},
+		{
+			name:    "target plus namespace flag, no command",
+			argv:    []string{"-n", "prod", "web"},
+			wantNs:  "prod",
+			wantCmd: defaultShellCommand(),
+		},
+		{
+			name:    "simple command without dash-dash",
+			argv:    []string{"web", "bash"},
+			wantCmd: []string{"bash"},
+		},
+		{
+			name:    "simple command with positional args (no flags)",
+			argv:    []string{"web", "ps", "aux"},
+			wantCmd: []string{"ps", "aux"},
+		},
+		{
+			name:    "command with flags requires dash-dash",
+			argv:    []string{"web", "--", "ls", "-la", "/app"},
+			wantCmd: []string{"ls", "-la", "/app"},
+		},
+		{
+			name:    "rune flag after target before dash-dash",
 			argv:    []string{"web", "-n", "prod", "--", "bash"},
 			wantNs:  "prod",
 			wantCmd: []string{"bash"},
 		},
 		{
-			name:    "flag before target",
+			name:    "rune flag before target",
 			argv:    []string{"-n", "prod", "web", "--", "bash", "-c", "echo hi"},
 			wantNs:  "prod",
 			wantCmd: []string{"bash", "-c", "echo hi"},
 		},
 		{
-			name:    "inner flags after dash-dash are passed through",
-			argv:    []string{"web", "--", "ls", "-la", "/app"},
-			wantCmd: []string{"ls", "-la", "/app"},
+			name:    "dash-dash with no target",
+			argv:    []string{"--", "bash"},
+			wantErr: "TARGET is required",
+		},
+		{
+			name:    "unknown flag after target hints at dash-dash",
+			argv:    []string{"web", "ls", "-la"},
+			wantErr: "after '--'",
 		},
 	}
 
@@ -46,20 +79,20 @@ func TestExecArgParsing(t *testing.T) {
 			cmd := newExecCmd()
 
 			// Intercept RunE so we don't try to dial an API server. We mirror
-			// the real flag-validation logic so this test exercises it.
+			// the real arg handling so this test exercises it.
 			var gotNs string
 			var gotCmd []string
 			cmd.RunE = func(c *cobra.Command, args []string) error {
 				dashIdx := c.ArgsLenAtDash()
-				if dashIdx < 0 {
-					return errMissingDashDash(args)
+				if dashIdx > 1 {
+					return errTooManyTargets(args[:dashIdx])
 				}
 				if dashIdx == 0 {
 					return errTargetRequired()
 				}
-				cmdArgs := args[dashIdx:]
+				cmdArgs := args[1:]
 				if len(cmdArgs) == 0 {
-					return errEmptyCommand(args[0])
+					cmdArgs = defaultShellCommand()
 				}
 				gotNs, _ = c.Flags().GetString("namespace")
 				gotCmd = cmdArgs
