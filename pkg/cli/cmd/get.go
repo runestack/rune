@@ -453,14 +453,18 @@ func handleInstanceGet(cmd *cobra.Command, opts *getOptions, resourceName string
 		return fmt.Errorf("failed to list instances: %w", err)
 	}
 
-	// Hide Failed-instance tombstones unless --show-failed is set. They
-	// belong to retention bookkeeping (preserved containers awaiting GC),
-	// not the live instance set; operators care about them only when
-	// debugging.
+	// Hide retention-bookkeeping rows from the default view: Failed-
+	// instance tombstones (preserved containers awaiting GC) and Deleted
+	// instances (already evicted by GC, store row still awaiting the
+	// deleted-instance retention sweep). Operators see them with
+	// --show-failed when actively debugging; the default is the live
+	// instance set only.
 	if !opts.showFailed {
 		filtered := instances[:0]
 		for _, inst := range instances {
-			if inst.Status == types.InstanceStatusFailed && inst.FailedAt != nil {
+			isFailedTombstone := inst.Status == types.InstanceStatusFailed && inst.FailedAt != nil
+			isDeleted := inst.Status == types.InstanceStatusDeleted
+			if isFailedTombstone || isDeleted {
 				continue
 			}
 			filtered = append(filtered, inst)
