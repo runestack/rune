@@ -274,9 +274,9 @@ func TestPatchSecretMergesAndPreservesUntouchedKeys(t *testing.T) {
 		t.Fatalf("reveal: %v", err)
 	}
 	want := map[string]string{
-		"INFRA_JWT_SECRET":            "jwt-v1",   // unchanged
-		"INFRA_ENCRYPTION_PASSPHRASE": "pass-v2",  // updated
-		"OTHER":                       "keep-me",  // unchanged
+		"INFRA_JWT_SECRET":            "jwt-v1",  // unchanged
+		"INFRA_ENCRYPTION_PASSPHRASE": "pass-v2", // updated
+		"OTHER":                       "keep-me", // unchanged
 	}
 	for k, v := range want {
 		if rev.Secret.Data[k] != v {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/cli/format"
+	"github.com/runestack/rune/pkg/utils"
 	"golang.org/x/term"
 )
 
@@ -53,7 +54,7 @@ func newPhaseRenderer(label string, target int) *phaseRenderer {
 	out := os.Stdout
 	return &phaseRenderer{
 		label:   label,
-		target:  int32(target),
+		target:  utils.ToInt32NonNegative(target),
 		out:     out,
 		isTTY:   term.IsTerminal(int(out.Fd())),
 		started: time.Now(),

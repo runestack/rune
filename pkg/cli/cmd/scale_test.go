@@ -292,9 +292,9 @@ func TestScaleCommand_ValidateScalingMode(t *testing.T) {
 // means wait for completion (default), true means fire-and-forget.
 func TestScaleOptions_Detach(t *testing.T) {
 	tests := []struct {
-		name        string
-		detach      bool
-		shouldWait  bool
+		name       string
+		detach     bool
+		shouldWait bool
 	}{
 		{name: "default waits", detach: false, shouldWait: true},
 		{name: "detach skips wait", detach: true, shouldWait: false},
@@ -370,7 +370,7 @@ func TestImmediateScaling_Success(t *testing.T) {
 	// Create options
 	options := &ScaleOptions{
 		Namespace: namespace,
-		Detach:    true,  // detach to simplify the test
+		Detach:    true, // detach to simplify the test
 	}
 
 	// Call the function
