@@ -207,16 +207,16 @@ func newSecretSetCmd() *cobra.Command {
 		Long: `Set upserts the given keys into an existing secret's data map without
 touching the other keys. Each invocation creates a new version.
 
-Use this when you want to rotate a single key — e.g. update INFRA_JWT_SECRET
-without wiping INFRA_ENCRYPTION_PASSPHRASE that lives in the same secret.
+Use this when you want to rotate a single key — e.g. update SAMPLE_SECRET_1
+without wiping SAMPLE_SECRET_2 that lives in the same secret.
 
 Auth: requires secrets:update (NOT secrets:reveal). The server performs the
 merge internally and the response is metadata-only.
 
 Examples:
-  rune secret set gateway-secrets -n prod INFRA_JWT_SECRET=new-value
-  rune secret set gateway-secrets -n prod KEY1=v1 KEY2=v2
-  rune secret set gateway-secrets -n prod --from-file=TLS_CERT=./cert.pem`,
+  rune secret set app-secrets -n prod SAMPLE_SECRET_1=new-value
+  rune secret set app-secrets -n prod KEY1=v1 KEY2=v2
+  rune secret set app-secrets -n prod --from-file=TLS_CERT=./cert.pem`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -272,8 +272,8 @@ new version.
 Auth: requires secrets:update (NOT secrets:reveal).
 
 Examples:
-  rune secret unset gateway-secrets -n prod LEGACY_TOKEN
-  rune secret unset gateway-secrets -n prod KEY1 KEY2`,
+  rune secret unset app-secrets -n prod LEGACY_TOKEN
+  rune secret unset app-secrets -n prod KEY1 KEY2`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
