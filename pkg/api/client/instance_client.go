@@ -450,6 +450,22 @@ func (i *InstanceClient) protoToInstance(proto *generated.Instance) (*types.Inst
 		instance.Metadata.DeletionTimestamp = deletionTimestamp
 	}
 
+	// Failed-instance retention fields. FailedAt + FailureReason mark
+	// a tombstoned container preserved for postmortem; the CLI uses
+	// FailedAt != nil to distinguish tombstones from transient Failed
+	// states behind `--show-failed`.
+	if proto.FailedAt != "" {
+		if t, perr := parseTimestamp(proto.FailedAt); perr == nil {
+			instance.FailedAt = t
+		} else {
+			i.logger.Warn("Failed to parse failed_at timestamp",
+				log.Str("instance", proto.Id),
+				log.Str("timestamp", proto.FailedAt),
+				log.Err(perr))
+		}
+	}
+	instance.FailureReason = proto.FailureReason
+
 	// Convert status
 	switch proto.Status {
 	case generated.InstanceStatus_INSTANCE_STATUS_PENDING:

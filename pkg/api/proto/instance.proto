@@ -72,6 +72,18 @@ message Instance {
 
   // Metadata
   InstanceMetadata metadata = 17;
+
+  // FailedAt is the RFC-3339 timestamp the instance entered the Failed
+  // state. Set by the failed-instance-retention path; empty for instances
+  // that have never been tombstoned. The CLI uses this (alongside
+  // status == Failed) to identify true tombstones vs transient Failed
+  // states from create/start errors.
+  string failed_at = 18;
+
+  // FailureReason is a short slug describing why the instance failed
+  // (e.g. "HealthCheckFailure", "ImagePullFailed", "OOMKilled"). Set at
+  // the moment of the Failed transition; empty otherwise.
+  string failure_reason = 19;
 }
 
 // InstanceMetadata represents metadata for an instance.
