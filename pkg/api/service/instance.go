@@ -398,6 +398,15 @@ func (s *InstanceService) instanceModelToProto(instance *types.Instance) (*gener
 		protoInstance.Metadata.DeletionTimestamp = instance.Metadata.DeletionTimestamp.Format(time.RFC3339)
 	}
 
+	// Failed-instance retention bookkeeping. FailedAt distinguishes a true
+	// tombstone (a preserved container from the retention path) from a
+	// transient Failed state (e.g. create/start error). The CLI uses this
+	// pair to decide what to hide behind `--show-failed`.
+	if instance.FailedAt != nil {
+		protoInstance.FailedAt = instance.FailedAt.Format(time.RFC3339)
+	}
+	protoInstance.FailureReason = instance.FailureReason
+
 	// Convert status
 	protoInstance.Status = s.instanceStatusToProto(instance.Status)
 

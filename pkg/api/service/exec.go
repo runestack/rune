@@ -37,11 +37,15 @@ func (s *ExecService) getTargetInstance(ctx context.Context, initReq *generated.
 	namespace := types.NS(initReq.Namespace)
 
 	if initReq.GetServiceName() != "" {
+		if initReq.Debug {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"--debug requires a specific instance ID, not a service name (it targets a single Failed instance for postmortem)")
+		}
 		s.logger.Debug("Getting instance from service", log.Str("service", initReq.GetServiceName()))
 		return s.getInstanceFromService(ctx, namespace, initReq.GetServiceName())
 	}
 
-	return s.getInstanceByID(ctx, namespace, initReq.GetInstanceId())
+	return s.getInstanceByID(ctx, namespace, initReq.GetInstanceId(), initReq.Debug)
 }
 
 // getInstanceFromService finds a running instance for the given service
@@ -80,8 +84,10 @@ func (s *ExecService) getInstanceFromService(ctx context.Context, namespace, ser
 	return nil, status.Errorf(codes.NotFound, "no running instances found for service: %s in namespace: %s", serviceName, namespace)
 }
 
-// getInstanceByID retrieves an instance by ID and validates it's running
-func (s *ExecService) getInstanceByID(ctx context.Context, namespace, instanceID string) (*types.Instance, error) {
+// getInstanceByID retrieves an instance by ID and validates it for the
+// requested mode. Normal exec requires Running; --debug requires a Failed
+// tombstone with a preserved container.
+func (s *ExecService) getInstanceByID(ctx context.Context, namespace, instanceID string, debug bool) (*types.Instance, error) {
 	// Get instance from store first
 	instance, err := s.orchestrator.GetInstanceByID(ctx, namespace, instanceID)
 	if err != nil {
@@ -92,13 +98,34 @@ func (s *ExecService) getInstanceByID(ctx context.Context, namespace, instanceID
 		return nil, status.Errorf(codes.Internal, "failed to get instance: %v", err)
 	}
 
-	// Get current status from orchestrator to ensure we have the latest status
+	if debug {
+		// --debug only applies to preserved Failed tombstones (a tombstone
+		// has FailedAt set and a non-empty ContainerID). Reject anything
+		// else with a directive error so the CLI can show a useful hint.
+		if instance.Status == types.InstanceStatusRunning {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"instance %s is Running; --debug only applies to Failed instances. Drop the flag for a normal exec",
+				instanceID)
+		}
+		if instance.Status != types.InstanceStatusFailed || instance.FailedAt == nil {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"instance %s is %s; --debug requires a Failed instance with a preserved container",
+				instanceID, instance.Status)
+		}
+		if instance.ContainerID == "" {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"instance %s has no preserved container (already evicted by retention GC). Use `rune logs --previous %s` if available",
+				instanceID, instanceID)
+		}
+		return instance, nil
+	}
+
+	// Normal exec path: get current status from orchestrator to ensure we
+	// have the latest, then require Running.
 	statusInfo, err := s.orchestrator.GetInstanceStatus(ctx, namespace, instanceID)
 	if err != nil {
 		s.logger.Warn("Failed to get instance status from orchestrator, using store status", log.Err(err))
-		// Continue with store status if orchestrator fails
 	} else {
-		// Update instance with current status
 		instance.Status = statusInfo.Status
 	}
 
@@ -193,6 +220,21 @@ func (s *ExecService) createExecOptions(initReq *generated.ExecInitRequest) type
 // createExecStream creates the exec stream based on the target type
 func (s *ExecService) createExecStream(ctx context.Context, initReq *generated.ExecInitRequest, instance *types.Instance, execOptions types.ExecOptions) (types.ExecStream, error) {
 	namespace := types.NS(initReq.Namespace)
+
+	// Debug exec: spawn an ephemeral inspection container from the failed
+	// instance's image+config with the entrypoint overridden to
+	// `sleep infinity`, then exec the user's command inside it. The
+	// failed container itself is never touched. Server-side
+	// implementation lands in the next release; for now we surface a
+	// clear, actionable Unimplemented so the CLI's `--debug` flow can
+	// route users to `rune logs <id>` (which already works against the
+	// preserved tombstone).
+	if initReq.Debug {
+		return nil, status.Errorf(codes.Unimplemented,
+			"--debug ephemeral inspection container is not yet implemented server-side (coming in a follow-up). "+
+				"The failed container is preserved — use `rune logs %s` to inspect its output.",
+			instance.ID)
+	}
 
 	if initReq.GetServiceName() != "" {
 		// Target is a service - use ExecInService

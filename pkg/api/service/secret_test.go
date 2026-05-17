@@ -235,11 +235,11 @@ func TestPatchSecretMergesAndPreservesUntouchedKeys(t *testing.T) {
 
 	if _, err := svc.CreateSecret(ctx, &generated.CreateSecretRequest{
 		Secret: &generated.Secret{
-			Name: "gateway-secrets", Namespace: "prod", Type: "static",
+			Name: "app-secrets", Namespace: "prod", Type: "static",
 			Data: map[string]string{
-				"INFRA_JWT_SECRET":            "jwt-v1",
-				"INFRA_ENCRYPTION_PASSPHRASE": "pass-v1",
-				"OTHER":                       "keep-me",
+				"SAMPLE_SECRET_1": "jwt-v1",
+				"SAMPLE_SECRET_2": "pass-v1",
+				"OTHER":           "keep-me",
 			},
 		},
 		EnsureNamespace: true,
@@ -247,10 +247,10 @@ func TestPatchSecretMergesAndPreservesUntouchedKeys(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Patch only INFRA_ENCRYPTION_PASSPHRASE.
+	// Patch only SAMPLE_SECRET_2.
 	resp, err := svc.PatchSecret(ctx, &generated.PatchSecretRequest{
-		Name: "gateway-secrets", Namespace: "prod",
-		Set: map[string]string{"INFRA_ENCRYPTION_PASSPHRASE": "pass-v2"},
+		Name: "app-secrets", Namespace: "prod",
+		Set: map[string]string{"SAMPLE_SECRET_2": "pass-v2"},
 	})
 	if err != nil {
 		t.Fatalf("patch: %v", err)
@@ -269,14 +269,14 @@ func TestPatchSecretMergesAndPreservesUntouchedKeys(t *testing.T) {
 	}
 
 	// Reveal and check the actual stored data.
-	rev, err := svc.RevealSecret(ctx, &generated.RevealSecretRequest{Name: "gateway-secrets", Namespace: "prod"})
+	rev, err := svc.RevealSecret(ctx, &generated.RevealSecretRequest{Name: "app-secrets", Namespace: "prod"})
 	if err != nil {
 		t.Fatalf("reveal: %v", err)
 	}
 	want := map[string]string{
-		"INFRA_JWT_SECRET":            "jwt-v1",   // unchanged
-		"INFRA_ENCRYPTION_PASSPHRASE": "pass-v2",  // updated
-		"OTHER":                       "keep-me",  // unchanged
+		"SAMPLE_SECRET_1": "jwt-v1",  // unchanged
+		"SAMPLE_SECRET_2": "pass-v2", // updated
+		"OTHER":           "keep-me", // unchanged
 	}
 	for k, v := range want {
 		if rev.Secret.Data[k] != v {

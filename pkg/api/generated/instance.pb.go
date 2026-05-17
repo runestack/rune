@@ -128,7 +128,17 @@ type Instance struct {
 	// Environment variables
 	Environment map[string]string `protobuf:"bytes,16,rep,name=environment,proto3" json:"environment,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Metadata
-	Metadata      *InstanceMetadata `protobuf:"bytes,17,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Metadata *InstanceMetadata `protobuf:"bytes,17,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	// FailedAt is the RFC-3339 timestamp the instance entered the Failed
+	// state. Set by the failed-instance-retention path; empty for instances
+	// that have never been tombstoned. The CLI uses this (alongside
+	// status == Failed) to identify true tombstones vs transient Failed
+	// states from create/start errors.
+	FailedAt string `protobuf:"bytes,18,opt,name=failed_at,json=failedAt,proto3" json:"failed_at,omitempty"`
+	// FailureReason is a short slug describing why the instance failed
+	// (e.g. "HealthCheckFailure", "ImagePullFailed", "OOMKilled"). Set at
+	// the moment of the Failed transition; empty otherwise.
+	FailureReason string `protobuf:"bytes,19,opt,name=failure_reason,json=failureReason,proto3" json:"failure_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -280,6 +290,20 @@ func (x *Instance) GetMetadata() *InstanceMetadata {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *Instance) GetFailedAt() string {
+	if x != nil {
+		return x.FailedAt
+	}
+	return ""
+}
+
+func (x *Instance) GetFailureReason() string {
+	if x != nil {
+		return x.FailureReason
+	}
+	return ""
 }
 
 // InstanceMetadata represents metadata for an instance.
@@ -1044,7 +1068,7 @@ var File_pkg_api_proto_instance_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_instance_proto_rawDesc = "" +
 	"\n" +
-	"\x1cpkg/api/proto/instance.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\x8d\x05\n" +
+	"\x1cpkg/api/proto/instance.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\xd1\x05\n" +
 	"\bInstance\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06runner\x18\x02 \x01(\tR\x06runner\x12\x1c\n" +
@@ -1066,7 +1090,9 @@ const file_pkg_api_proto_instance_proto_rawDesc = "" +
 	"updated_at\x18\x0e \x01(\tR\tupdatedAt\x121\n" +
 	"\tresources\x18\x0f \x01(\v2\x13.rune.api.ResourcesR\tresources\x12E\n" +
 	"\venvironment\x18\x10 \x03(\v2#.rune.api.Instance.EnvironmentEntryR\venvironment\x126\n" +
-	"\bmetadata\x18\x11 \x01(\v2\x1a.rune.api.InstanceMetadataR\bmetadata\x1a>\n" +
+	"\bmetadata\x18\x11 \x01(\v2\x1a.rune.api.InstanceMetadataR\bmetadata\x12\x1b\n" +
+	"\tfailed_at\x18\x12 \x01(\tR\bfailedAt\x12%\n" +
+	"\x0efailure_reason\x18\x13 \x01(\tR\rfailureReason\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8e\x02\n" +

@@ -42,6 +42,12 @@ type ExecOptions struct {
 	TerminalWidth  uint32            // Initial terminal width
 	TerminalHeight uint32            // Initial terminal height
 	Timeout        time.Duration     // Timeout for the exec session
+	// Debug requests a postmortem inspection session against a Failed
+	// instance. The server creates an ephemeral sidecar container with
+	// the failing instance's image/env/mounts and a sleep entrypoint, so
+	// the inner command runs against the same state without re-triggering
+	// the original crash. Only valid for instance-ID targets.
+	Debug bool
 }
 
 // ExecSession represents an active exec session.
@@ -77,6 +83,7 @@ func (s *ExecSession) InitializeInstanceTarget(target string, namespace string, 
 		Env:        options.Env,
 		WorkingDir: options.WorkingDir,
 		Tty:        options.TTY,
+		Debug:      options.Debug,
 	}
 
 	// Set terminal size if TTY is enabled

@@ -34,6 +34,11 @@ func (m *MockRunner) Remove(ctx context.Context, instance *types.Instance, force
 	return args.Error(0)
 }
 
+func (m *MockRunner) Rename(ctx context.Context, instance *types.Instance, newName string) error {
+	args := m.Called(ctx, instance, newName)
+	return args.Error(0)
+}
+
 func (m *MockRunner) GetLogs(ctx context.Context, instance *types.Instance, options LogOptions) (io.ReadCloser, error) {
 	args := m.Called(ctx, instance, options)
 	return args.Get(0).(io.ReadCloser), args.Error(1)

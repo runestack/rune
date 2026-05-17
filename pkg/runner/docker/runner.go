@@ -427,6 +427,26 @@ func (r *DockerRunner) Stop(ctx context.Context, instance *runetypes.Instance, t
 	return nil
 }
 
+// Rename changes the docker container's name. Used by the failed-instance
+// retention path so a tombstone container can be moved aside ("foo" →
+// "foo-failed-abcd1234") and a freshly-created replacement can take the
+// original name without colliding. No-op semantically — the container ID
+// and labels stay the same.
+func (r *DockerRunner) Rename(ctx context.Context, instance *runetypes.Instance, newName string) error {
+	containerID, err := r.getContainerID(ctx, instance)
+	if err != nil {
+		return fmt.Errorf("failed to get container ID: %w", err)
+	}
+	if err := r.client.ContainerRename(ctx, containerID, newName); err != nil {
+		return fmt.Errorf("failed to rename container: %w", err)
+	}
+	r.logger.Info("Renamed container for instance",
+		log.Str("container_id", containerID),
+		log.Str("instance_id", instance.ID),
+		log.Str("new_name", newName))
+	return nil
+}
+
 // Remove removes a container.
 func (r *DockerRunner) Remove(ctx context.Context, instance *runetypes.Instance, force bool) error {
 	containerID, err := r.getContainerID(ctx, instance)
@@ -654,7 +674,17 @@ func (r *DockerRunner) Dial(ctx context.Context, instance *runetypes.Instance, p
 }
 
 // getContainerID gets the container ID for an instance.
+//
+// Prefers instance.ContainerID when set so failed-instance retention
+// tombstones (which share their label-scoped instance.id with a freshly-
+// recreated replacement container during the brief window before the GC
+// reclaims them) can be addressed unambiguously. Falls back to label
+// lookup only on first creation or after a server restart that lost
+// the in-memory ContainerID.
 func (r *DockerRunner) getContainerID(ctx context.Context, instance *runetypes.Instance) (string, error) {
+	if instance.ContainerID != "" {
+		return instance.ContainerID, nil
+	}
 	// Try to get the container directly from the instance ID using labels
 	args := filters.NewArgs(
 		filters.Arg("label", "rune.managed=true"),

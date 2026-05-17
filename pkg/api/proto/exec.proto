@@ -52,6 +52,17 @@ message ExecInitRequest {
   
   // Initial terminal size if TTY is true
   TerminalSize terminal_size = 8;
+
+  // Debug requests an ephemeral inspection container for postmortem of a
+  // Failed instance. Set by `rune exec --debug <failed-inst-id>`. Server
+  // creates a sidecar from the failed instance's image/env/mounts/volumes
+  // with the entrypoint replaced by `sleep infinity`, runs the command
+  // there, and tears the sidecar down on session end. The original
+  // failed container is never touched. Requires the target to be a
+  // Failed instance with a preserved container; rejected on Running
+  // instances and on tombstones whose containers have already been
+  // GC'd by the failed-instance retention sweep.
+  bool debug = 9;
 }
 
 // TerminalSize represents the size of a terminal.

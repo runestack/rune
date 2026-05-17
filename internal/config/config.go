@@ -209,6 +209,33 @@ type Config struct {
 	Ingress    Ingress    `yaml:"ingress"`
 	ACME       ACME       `yaml:"acme"`
 	Storage    Storage    `yaml:"storage"`
+
+	// FailedInstanceRetention controls how long failed-but-preserved
+	// instance containers stick around for postmortem (logs, exec --debug)
+	// before the reconciler evicts them. See FailedInstanceRetention for
+	// individual knobs and defaults.
+	FailedInstanceRetention FailedInstanceRetention `yaml:"failed_instance_retention"`
+}
+
+// FailedInstanceRetention configures the reconciler's failed-instance GC.
+// When an instance enters the Failed state, the runner stops (but does not
+// remove) its container so operators can inspect it via `rune logs` and
+// `rune exec --debug`. This struct bounds the resulting disk and container-
+// slot growth.
+type FailedInstanceRetention struct {
+	// PerServiceCap is the maximum number of Failed instances to retain
+	// per service before the oldest is evicted. 0 disables the cap.
+	PerServiceCap int `yaml:"per_service_cap"`
+
+	// TTL is the maximum age of a Failed instance before it is evicted,
+	// regardless of cap. 0 disables TTL (only the cap applies).
+	TTL time.Duration `yaml:"ttl"`
+
+	// SnapshotLogBytes is the upper bound on the per-instance log
+	// snapshot we capture into Instance.LastLogs at eviction time, so
+	// `rune logs --previous` still has output to show after the
+	// container is gone. 0 disables snapshotting.
+	SnapshotLogBytes int `yaml:"snapshot_log_bytes"`
 }
 
 func Default() *Config {
@@ -231,6 +258,11 @@ func Default() *Config {
 		ConfigResource: struct {
 			Limits store.Limits `yaml:"limits"`
 		}{Limits: store.Limits{MaxObjectBytes: 1 << 20, MaxKeyNameLength: 256}},
+		FailedInstanceRetention: FailedInstanceRetention{
+			PerServiceCap:    3,
+			TTL:              1 * time.Hour,
+			SnapshotLogBytes: 200_000,
+		},
 	}
 }
 

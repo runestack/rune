@@ -106,9 +106,29 @@ type RuneFile struct {
 	// `any` and hands it to the driver factory.
 	Storage *StorageConfig `yaml:"storage,omitempty"`
 
+	// FailedInstanceRetention bounds how long preserved Failed-instance
+	// containers (tombstones) survive before the reconciler's retention
+	// GC reaps them. Mirrors internal/config.FailedInstanceRetention.
+	FailedInstanceRetention *FailedInstanceRetentionConfig `yaml:"failed_instance_retention,omitempty"`
+
 	// Internal tracking for line numbers (not serialized)
 	lineInfo map[string]int `json:"-" yaml:"-"`
 	rawNode  *yaml.Node     `json:"-" yaml:"-"`
+}
+
+// FailedInstanceRetentionConfig is the runefile-side view of the failed-
+// instance retention policy. Parallel to internal/config.FailedInstanceRetention.
+type FailedInstanceRetentionConfig struct {
+	// PerServiceCap is the max number of Failed tombstones kept per
+	// service before the oldest is evicted. 0 disables the cap.
+	PerServiceCap int `yaml:"per_service_cap,omitempty"`
+	// TTL is the max age of a Failed tombstone before it is evicted
+	// regardless of cap. 0 disables TTL.
+	TTL time.Duration `yaml:"ttl,omitempty"`
+	// SnapshotLogBytes caps the per-instance log snapshot captured into
+	// Instance.LastLogs at eviction. 0 disables snapshotting. Reserved
+	// for v2 — not yet honoured by the eviction path.
+	SnapshotLogBytes int `yaml:"snapshot_log_bytes,omitempty"`
 }
 
 func (rf *RuneFile) GetName() string {
@@ -360,23 +380,24 @@ func validateRuneFileTopLevelKeys(node *yaml.Node) error {
 	}
 
 	knownKeys := map[string]bool{
-		"server":     true,
-		"data_dir":   true,
-		"client":     true,
-		"docker":     true,
-		"namespace":  true,
-		"auth":       true,
-		"resources":  true,
-		"log":        true,
-		"secret":     true,
-		"config":     true,
-		"plugins":    true,
-		"networking": true,
-		"telemetry":  true,
-		"node":       true,
-		"ingress":    true,
-		"acme":       true,
-		"storage":    true,
+		"server":                    true,
+		"data_dir":                  true,
+		"client":                    true,
+		"docker":                    true,
+		"namespace":                 true,
+		"auth":                      true,
+		"resources":                 true,
+		"log":                       true,
+		"secret":                    true,
+		"config":                    true,
+		"plugins":                   true,
+		"networking":                true,
+		"telemetry":                 true,
+		"node":                      true,
+		"ingress":                   true,
+		"acme":                      true,
+		"storage":                   true,
+		"failed_instance_retention": true,
 	}
 
 	for i := 0; i < len(root.Content); i += 2 {
@@ -593,6 +614,12 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 		"ingress":    true,
 		"acme":       true,
 		"storage":    true,
+
+		// failed-instance retention (preserve failed containers for
+		// postmortem; per-service cap + TTL)
+		"failed_instance_retention": true,
+		"per_service_cap":           true,
+		"snapshot_log_bytes":        true,
 
 		// storage.* (typed knobs + opaque per-driver maps; key names
 		// under .drivers are driver-specific so we accept anything
