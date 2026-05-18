@@ -637,24 +637,41 @@ func TestGetServiceLogs_FallsBackToDeletedWhenNoFailed(t *testing.T) {
 	assert.Contains(t, string(body), "deleted-tombstone-says-hello")
 }
 
-// TestGetServiceLogs_NoLogsAtAllReturnsClearError verifies that the
-// fallback doesn't mask the genuinely-empty case: when no instance
-// has LastLogs AND none are Running, we return a clear error
-// (so operators know the snapshot was already GC'd) instead of an
-// empty stream or a confusing one.
-func TestGetServiceLogs_NoLogsAtAllReturnsClearError(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+// TestGetServiceLogs_NoCapturedOutput_SynthesizesWhyLine asserts the
+// service-level counterpart of the
+// TestGetInstanceLogs_TerminalNoLogs_SynthesizesWhyLine guarantee:
+// when no live instance has logs AND no tombstone has a snapshot,
+// the most-recent terminal tombstone's FailureReason / StatusMessage
+// is surfaced through `rune logs <service>` as a synthesized line.
+// Without this, `rune logs gateway` on a crashing-without-stdout
+// service silently returns nothing and operators have no signal.
+func TestGetServiceLogs_NoCapturedOutput_SynthesizesWhyLine(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
 	service := createTestService(ctx, t, testStore, "test-service")
 	at := time.Now()
 	tomb := &types.Instance{
 		ID: "no-snapshot", Name: "tomb-0", Namespace: "default",
 		ServiceID: service.ID, ServiceName: service.Name,
 		Status: types.InstanceStatusFailed, FailedAt: &at,
+		FailureReason: "HealthCheckFailure",
+		StatusMessage: "container exited with code 137 before binding port",
 		// LastLogs intentionally empty.
 	}
 	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+	// Stub the per-instance lookup so the service-level fallback
+	// can reach the synthesised-line path. The fake's default
+	// returns nil, nil — matching the real GetInstanceLogs return
+	// when an instance has no logs and no container — so a
+	// non-nil stub is required to exercise the synth path.
+	fakeInstanceController.GetLogsFunc = func(ctx context.Context, instance *types.Instance, _ types.LogOptions) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(synthesizeNoLogsLine(instance))), nil
+	}
 
-	_, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no logs available")
+	rc, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
+	require.NoError(t, err)
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	got := string(body)
+	assert.Contains(t, got, "HealthCheckFailure")
+	assert.Contains(t, got, "no captured output")
 }

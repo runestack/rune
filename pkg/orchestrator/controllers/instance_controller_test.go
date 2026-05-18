@@ -1404,27 +1404,43 @@ func TestGetInstanceLogs_FallsBackToLastLogsWhenRunnerHasNoContainer(t *testing.
 		"LastLogs snapshot must be served when the runner has no container")
 }
 
-// TestGetInstanceLogs_FallbackError_WhenNoSnapshotAndNoContainer verifies
-// the symmetric negative: an instance with no LastLogs AND no live
-// container yields a clear "nothing to serve" error, not a panic and
-// not a generic runner error.
-func TestGetInstanceLogs_FallbackError_WhenNoSnapshotAndNoContainer(t *testing.T) {
+// TestGetInstanceLogs_TerminalNoLogs_SynthesizesWhyLine asserts the
+// crashed-container-with-no-stdout UX: when an instance is in a
+// terminal state and has no LastLogs (common case: container PID 1
+// SIGKILL'd by a failed health check before printing anything),
+// `rune logs` returns a synthesized one-liner explaining the
+// failure rather than silent empty output. Without this, operators
+// see exit 0 / empty body from `rune logs <crashed-id>` and assume
+// the CLI is broken.
+func TestGetInstanceLogs_TerminalNoLogs_SynthesizesWhyLine(t *testing.T) {
 	ctx, testStore, testRunner, controller := setupTestController(t)
 	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
 
+	at := time.Now()
 	tomb := &types.Instance{
-		ID:        "empty-tomb",
-		Name:      "empty-0",
-		Namespace: "default",
-		Runner:    testRunner.Type(),
-		Status:    types.InstanceStatusFailed,
-		// LastLogs intentionally empty.
+		ID:            "empty-tomb",
+		Name:          "empty-0",
+		Namespace:     "default",
+		Runner:        testRunner.Type(),
+		Status:        types.InstanceStatusFailed,
+		FailureReason: "HealthCheckFailure",
+		StatusMessage: "Preserved for postmortem after health-check-failure",
+		FailedAt:      &at,
+		// LastLogs intentionally empty — container produced no output.
 	}
 	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
 	testRunner.ErrorToReturn = assert.AnError
 
-	_, err := controller.GetInstanceLogs(ctx, tomb, types.LogOptions{})
-	require.Error(t, err)
+	rc, err := controller.GetInstanceLogs(ctx, tomb, types.LogOptions{})
+	require.NoError(t, err, "terminal instances must yield SOMETHING from rune logs, not an error")
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	got := string(body)
+	assert.Contains(t, got, "empty-tomb", "synthesized line must identify the instance")
+	assert.Contains(t, got, "Failed", "synthesized line must include the terminal status")
+	assert.Contains(t, got, "HealthCheckFailure", "synthesized line must include FailureReason so operators know why")
+	assert.Contains(t, got, "no captured output", "synthesized line must say no logs were captured (vs. truncated)")
 }
 
 // TestDeleteInstance_SnapshotsLastLogsBeforeTearDown is the

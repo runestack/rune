@@ -1111,10 +1111,65 @@ func (c *instanceController) GetInstanceLogs(ctx context.Context, instance *type
 		return io.NopCloser(bytes.NewReader(instance.LastLogs)), nil
 	}
 
+	// Terminal-state instances with no captured stdout/stderr still
+	// deserve SOMETHING from `rune logs` rather than silent empty
+	// output. Synthesize a one-liner from the tombstone's
+	// FailureReason / StatusMessage so operators can at least see
+	// "instance died, here's why" instead of having to dig through
+	// `rune get instance -o yaml` separately. Common case:
+	// containers that crash before printing anything (PID 1
+	// SIGKILL'd by a failed health check, image entrypoint exits
+	// instantly, etc.).
+	if isTerminalInstanceStatus(instance.Status) {
+		return io.NopCloser(strings.NewReader(synthesizeNoLogsLine(instance))), nil
+	}
+
 	if runnerErr != nil {
 		return nil, fmt.Errorf("failed to get logs for instance %s: %w", instance.ID, runnerErr)
 	}
 	return nil, fmt.Errorf("failed to get logs for instance %s: container unavailable and no LastLogs snapshot", instance.ID)
+}
+
+// isTerminalInstanceStatus is true for statuses that mean the
+// instance is not running and not coming back without operator
+// action — so any "no logs" answer is final, not transient.
+func isTerminalInstanceStatus(s types.InstanceStatus) bool {
+	switch s {
+	case types.InstanceStatusFailed,
+		types.InstanceStatusStalled,
+		types.InstanceStatusDeleted,
+		types.InstanceStatusExited,
+		types.InstanceStatusUnknown:
+		return true
+	}
+	return false
+}
+
+// synthesizeNoLogsLine builds a single user-facing line explaining
+// why a terminal instance has nothing in its logs. Pulls everything
+// from the tombstone record itself so the answer travels with
+// `rune logs <id>` even after the container is gone.
+func synthesizeNoLogsLine(instance *types.Instance) string {
+	var b strings.Builder
+	b.WriteString("[rune] instance ")
+	b.WriteString(instance.ID)
+	b.WriteString(" (")
+	b.WriteString(string(instance.Status))
+	b.WriteString(") produced no captured output")
+	if instance.FailureReason != "" {
+		b.WriteString(" — reason: ")
+		b.WriteString(instance.FailureReason)
+	}
+	if instance.StatusMessage != "" {
+		b.WriteString("\n[rune] status: ")
+		b.WriteString(instance.StatusMessage)
+	}
+	if instance.FailedAt != nil {
+		b.WriteString("\n[rune] failed at: ")
+		b.WriteString(instance.FailedAt.UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // Exec executes a command in a running instance

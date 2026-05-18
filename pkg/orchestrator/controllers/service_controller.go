@@ -383,7 +383,7 @@ func (sc *serviceController) GetServiceLogs(ctx context.Context, namespace, name
 	// `rune restart` — operators still want to see "what did the
 	// dead container say?" without chasing UUIDs.
 	if len(logInfos) == 0 {
-		if tomb := pickMostRecentTombstoneWithLogs(instances); tomb != nil {
+		if tomb := pickMostRecentTombstone(instances); tomb != nil {
 			sc.logger.Info("No live instance logs; serving most-recent tombstone snapshot",
 				log.Str("service", name),
 				log.Str("namespace", namespace),
@@ -417,32 +417,47 @@ func (sc *serviceController) GetServiceLogs(ctx context.Context, namespace, name
 	return utils.NewMultiLogStreamer(logInfos, true), nil
 }
 
-// pickMostRecentTombstoneWithLogs returns the newest non-Running
-// instance that has a LastLogs snapshot, prioritising Failed
-// tombstones (postmortem-preserved containers) over Deleted ones.
-// Returns nil when no tombstone has captured logs. Newness is
-// determined by FailedAt when present, falling back to UpdatedAt.
-func pickMostRecentTombstoneWithLogs(instances []*types.Instance) *types.Instance {
-	var bestFailed, bestDeleted *types.Instance
+// pickMostRecentTombstone returns the newest non-Running instance,
+// prioritising Failed tombstones (postmortem-preserved containers)
+// over Deleted ones, and preferring tombstones that carry a
+// LastLogs snapshot. The "no-snapshot" tombstones are still
+// candidates because GetInstanceLogs synthesises a "why-this-died"
+// one-liner for terminal instances with no captured output — so a
+// crashed-without-logs container still produces something useful at
+// the service-level `rune logs`. Newness is determined by FailedAt
+// when present, falling back to UpdatedAt.
+func pickMostRecentTombstone(instances []*types.Instance) *types.Instance {
+	// Prefer-with-logs is a two-tier preference: among Failed, take
+	// the newest WITH logs; if none have logs, take the newest
+	// without. Then fall back to Deleted with the same rule.
+	var failedWithLogs, failedAny, deletedWithLogs, deletedAny *types.Instance
 	for _, inst := range instances {
-		if len(inst.LastLogs) == 0 {
-			continue
-		}
 		switch inst.Status {
 		case types.InstanceStatusFailed:
-			if bestFailed == nil || tombstoneTime(inst).After(tombstoneTime(bestFailed)) {
-				bestFailed = inst
+			if failedAny == nil || tombstoneTime(inst).After(tombstoneTime(failedAny)) {
+				failedAny = inst
+			}
+			if len(inst.LastLogs) > 0 && (failedWithLogs == nil || tombstoneTime(inst).After(tombstoneTime(failedWithLogs))) {
+				failedWithLogs = inst
 			}
 		case types.InstanceStatusDeleted:
-			if bestDeleted == nil || tombstoneTime(inst).After(tombstoneTime(bestDeleted)) {
-				bestDeleted = inst
+			if deletedAny == nil || tombstoneTime(inst).After(tombstoneTime(deletedAny)) {
+				deletedAny = inst
+			}
+			if len(inst.LastLogs) > 0 && (deletedWithLogs == nil || tombstoneTime(inst).After(tombstoneTime(deletedWithLogs))) {
+				deletedWithLogs = inst
 			}
 		}
 	}
-	if bestFailed != nil {
-		return bestFailed
+	switch {
+	case failedWithLogs != nil:
+		return failedWithLogs
+	case deletedWithLogs != nil:
+		return deletedWithLogs
+	case failedAny != nil:
+		return failedAny
 	}
-	return bestDeleted
+	return deletedAny
 }
 
 // tombstoneTime returns the best wall-clock anchor for ordering
