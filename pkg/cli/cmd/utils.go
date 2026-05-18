@@ -80,7 +80,14 @@ func resolveResourceTarget(apiClient *client.Client, targetExpression string, na
 		return instanceTarget, nil
 	}
 
-	return nil, fmt.Errorf("failed to resolve resource target")
+	// Neither matched. Give an actionable error that tells the user what
+	// the resolver actually tried, instead of leaking the cryptic "instance
+	// not found" message from the LAST attempt (which made it look like
+	// the user typed an instance ID when they typed a service name).
+	return nil, fmt.Errorf("no service or instance named %q in namespace %q\n"+
+		"  · `rune get services -n %s` to list services\n"+
+		"  · `rune get instances -n %s --show-failed` to list instances (including Failed tombstones)",
+		targetExpression, namespace, namespace, namespace)
 }
 
 func resolveTargetService(apiClient *client.Client, target string, namespace string) (*resolvedResourceTarget, error) {
@@ -96,12 +103,32 @@ func resolveTargetService(apiClient *client.Client, target string, namespace str
 
 func resolveTargetInstance(apiClient *client.Client, target string, namespace string) (*resolvedResourceTarget, error) {
 	instanceClient := client.NewInstanceClient(apiClient)
-	_, err := instanceClient.GetInstance(namespace, target)
-	if err != nil {
-		return nil, err
+
+	// First try literal lookup — fast path when the user pasted a UUID
+	// from `rune get instances`. The server's GetInstance only looks up
+	// by ID, not by name.
+	if _, err := instanceClient.GetInstance(namespace, target); err == nil {
+		return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: target, namespace: namespace}, nil
 	}
 
-	return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: target, namespace: namespace}, nil
+	// Fallback: walk the namespace's instances and match by Name. Lets
+	// the user pass `gateway-0` or `gateway-0-failed-3af45bde` (the
+	// human-readable names from `rune get instances --show-failed`)
+	// rather than forcing them to copy a UUID. Cheap — one extra
+	// ListInstances per failed UUID lookup.
+	insts, listErr := instanceClient.ListInstances(namespace, "", "", "")
+	if listErr != nil {
+		// Surface the original UUID-lookup error if list also fails; the
+		// list error is usually a permission/transport issue and obscures
+		// the real problem.
+		return nil, fmt.Errorf("instance not found by id or name: %s", target)
+	}
+	for _, inst := range insts {
+		if inst.Name == target {
+			return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: inst.ID, namespace: namespace}, nil
+		}
+	}
+	return nil, fmt.Errorf("instance not found by id or name: %s", target)
 }
 
 // buildClientOptions builds ClientOptions using current context from viper and an optional address override.

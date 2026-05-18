@@ -132,6 +132,27 @@ func (s *ExecService) getInstanceByID(ctx context.Context, namespace, instanceID
 	}
 
 	if instance.Status != types.InstanceStatusRunning {
+		// Tombstoned Failed instance: the user almost certainly meant
+		// --debug. Point them at it directly so they don't have to
+		// hunt for the right flag.
+		if instance.Status == types.InstanceStatusFailed && instance.FailedAt != nil && instance.ContainerID != "" {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"instance %s is a Failed tombstone (not running). "+
+					"To inspect its filesystem/env without re-triggering the original crash, "+
+					"re-run with --debug:\n  rune exec --debug %s -- <command>\n"+
+					"To see its logs:\n  rune logs %s",
+				instanceID, instanceID, instanceID)
+		}
+		// Evicted tombstone (preserved container reaped by retention GC):
+		// the only remaining postmortem signal is logs (when LastLogs
+		// snapshot lands in v2).
+		if instance.Status == types.InstanceStatusDeleted {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"instance %s is Deleted (already evicted by retention). Exec is no longer possible against this instance.",
+				instanceID)
+		}
+		// Generic non-Running case (transient Failed without tombstone,
+		// Pending, Starting, etc.).
 		return nil, status.Errorf(codes.FailedPrecondition, "instance is not running, status: %s", instance.Status)
 	}
 
