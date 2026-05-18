@@ -863,7 +863,17 @@ const snapshotLogBytes = 200 * 1024
 // — i.e. exactly the lifecycle moments where we are ABOUT to lose
 // the container and therefore the live log stream.
 func (c *instanceController) snapshotInstanceLogs(ctx context.Context, instance *types.Instance) {
-	if instance == nil || instance.ContainerEverCreatedAt == nil {
+	if instance == nil {
+		return
+	}
+	// Skip when there has never been a container — nothing to snapshot.
+	// Accept either ContainerEverCreatedAt (set by PR2) OR a non-empty
+	// ContainerID (covers legacy records created before PR2 where the
+	// new field is nil but a container existed). Without the
+	// ContainerID fallback, services that predate dev.75 never get
+	// LastLogs captured, so the GetServiceLogs fallback has nothing
+	// to serve.
+	if instance.ContainerEverCreatedAt == nil && instance.ContainerID == "" {
 		return
 	}
 	// Already snapshotted? Don't overwrite — keep the original
