@@ -16,18 +16,19 @@ import (
 
 // FakeInstanceController implements the InstanceController interface for testing purposes
 type FakeInstanceController struct {
-	mu                    sync.Mutex
-	logger                log.Logger
-	instances             map[string]*types.Instance // Keyed by ID
-	CreateInstanceCalls   []CreateInstanceCall
-	RecreateInstanceCalls []RecreateInstanceCall
-	UpdateInstanceCalls   []UpdateInstanceCall
-	StopInstanceCalls     []StopInstanceCall
-	DeleteInstanceCalls   []DeleteInstanceCall
-	RestartInstanceCalls  []RestartInstanceCall
-	GetStatusCalls        []string // Instance IDs
-	GetLogsCalls          []string // Instance IDs
-	ExecCalls             []ExecCall
+	mu                       sync.Mutex
+	logger                   log.Logger
+	instances                map[string]*types.Instance // Keyed by ID
+	CreateInstanceCalls      []CreateInstanceCall
+	RetryCreateInstanceCalls []RetryCreateInstanceCall
+	RecreateInstanceCalls    []RecreateInstanceCall
+	UpdateInstanceCalls      []UpdateInstanceCall
+	StopInstanceCalls        []StopInstanceCall
+	DeleteInstanceCalls      []DeleteInstanceCall
+	RestartInstanceCalls     []RestartInstanceCall
+	GetStatusCalls           []string // Instance IDs
+	GetLogsCalls             []string // Instance IDs
+	ExecCalls                []ExecCall
 
 	// Port-forward (RUNE-122)
 	DialCalls    []FakeDialControllerCall
@@ -35,26 +36,28 @@ type FakeInstanceController struct {
 	LastDialPeer net.Conn
 
 	// Custom behavior options
-	CreateInstanceFunc   func(ctx context.Context, service *types.Service, instanceName string) (*types.Instance, error)
-	RecreateInstanceFunc func(ctx context.Context, service *types.Service, instance *types.Instance) (*types.Instance, error)
-	UpdateInstanceFunc   func(ctx context.Context, service *types.Service, instance *types.Instance) error
-	StopInstanceFunc     func(ctx context.Context, instance *types.Instance) error
-	DeleteInstanceFunc   func(ctx context.Context, instance *types.Instance) error
-	RestartInstanceFunc  func(ctx context.Context, instance *types.Instance, reason InstanceRestartReason) error
-	GetStatusFunc        func(ctx context.Context, instance *types.Instance) (*types.InstanceStatusInfo, error)
-	GetLogsFunc          func(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error)
-	ExecFunc             func(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+	CreateInstanceFunc      func(ctx context.Context, service *types.Service, instanceName string) (*types.Instance, error)
+	RetryCreateInstanceFunc func(ctx context.Context, service *types.Service, instance *types.Instance) error
+	RecreateInstanceFunc    func(ctx context.Context, service *types.Service, instance *types.Instance) (*types.Instance, error)
+	UpdateInstanceFunc      func(ctx context.Context, service *types.Service, instance *types.Instance) error
+	StopInstanceFunc        func(ctx context.Context, instance *types.Instance) error
+	DeleteInstanceFunc      func(ctx context.Context, instance *types.Instance) error
+	RestartInstanceFunc     func(ctx context.Context, instance *types.Instance, reason InstanceRestartReason) error
+	GetStatusFunc           func(ctx context.Context, instance *types.Instance) (*types.InstanceStatusInfo, error)
+	GetLogsFunc             func(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error)
+	ExecFunc                func(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
 
 	// Default error responses
-	CreateInstanceError   error
-	RecreateInstanceError error
-	UpdateInstanceError   error
-	StopInstanceError     error
-	DeleteInstanceError   error
-	RestartInstanceError  error
-	GetStatusError        error
-	GetLogsError          error
-	ExecError             error
+	CreateInstanceError      error
+	RetryCreateInstanceError error
+	RecreateInstanceError    error
+	UpdateInstanceError      error
+	StopInstanceError        error
+	DeleteInstanceError      error
+	RestartInstanceError     error
+	GetStatusError           error
+	GetLogsError             error
+	ExecError                error
 
 	// Mock responses
 	ExecStdout   []byte
@@ -70,6 +73,12 @@ type CreateInstanceCall struct {
 
 // RecreateInstanceCall records the parameters of a RecreateInstance call
 type RecreateInstanceCall struct {
+	Service  *types.Service
+	Instance *types.Instance
+}
+
+// RetryCreateInstanceCall records the parameters of a RetryCreateInstance call
+type RetryCreateInstanceCall struct {
 	Service  *types.Service
 	Instance *types.Instance
 }
@@ -182,6 +191,29 @@ func (c *FakeInstanceController) CreateInstance(ctx context.Context, service *ty
 	c.instances[instance.ID] = instance
 
 	return instance, nil
+}
+
+// RetryCreateInstance records a call to retry the create pipeline on an
+// existing record. Default behavior: no-op success (record stays as-is
+// in the fake's instance map). Tests that need to observe retry calls
+// inspect RetryCreateInstanceCalls; tests that need to simulate retry
+// failure set RetryCreateInstanceError or RetryCreateInstanceFunc.
+func (c *FakeInstanceController) RetryCreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.RetryCreateInstanceCalls = append(c.RetryCreateInstanceCalls, RetryCreateInstanceCall{
+		Service:  service,
+		Instance: instance,
+	})
+
+	if c.RetryCreateInstanceFunc != nil {
+		return c.RetryCreateInstanceFunc(ctx, service, instance)
+	}
+	if c.RetryCreateInstanceError != nil {
+		return c.RetryCreateInstanceError
+	}
+	return nil
 }
 
 // RecreateInstance records a call to recreate an instance

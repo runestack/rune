@@ -123,6 +123,14 @@ type Instance struct {
 	// vanished" (docker rm, host reboot — tombstone and recreate).
 	// nil until the first successful runner.Create.
 	ContainerEverCreatedAt *time.Time `json:"containerEverCreatedAt,omitempty" yaml:"containerEverCreatedAt,omitempty"`
+
+	// NextCreateAttemptAt is the earliest wall-clock time the
+	// reconciler may try CreateInstance again for this record.
+	// Populated after every failed attempt as an exponential backoff
+	// (30s → 1m → 2m → 4m → 5m cap). Reconciler ticks before this
+	// time leave the record alone. nil means "ready now" or "not in
+	// retry mode". Cleared on first success and on operator restart.
+	NextCreateAttemptAt *time.Time `json:"nextCreateAttemptAt,omitempty" yaml:"nextCreateAttemptAt,omitempty"`
 }
 
 func (i *Instance) GetResourceType() ResourceType {
@@ -281,6 +289,15 @@ const (
 	// InstanceStatusDeleted indicates the instance has been marked for deletion
 	// but is retained in the store for a period before garbage collection.
 	InstanceStatusDeleted InstanceStatus = "Deleted"
+
+	// InstanceStatusStalled indicates create has failed too many times
+	// with a stable precondition error (StorageClassMissing, secret
+	// missing, image-pull error) and the reconciler has stopped
+	// auto-retrying until an operator intervenes. The slot is still
+	// held by this record; operators unstick it with
+	// `rune restart instance` or `rune cast` (new service generation).
+	// Mirrors the volume controller's ProvisionRetriesExhausted shape.
+	InstanceStatusStalled InstanceStatus = "Stalled"
 
 	// Process runner specific statuses
 	InstanceStatusCreated  InstanceStatus = "Created"
