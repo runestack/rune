@@ -67,13 +67,43 @@ func resolveResourceTarget(ctx context.Context, _store store.Store, arg string, 
 		return ResourceTarget{Type: types.ResourceTypeService, Resource: &service}, nil
 	}
 
-	// Try to fetch as an instance
-	instance, err := _store.GetInstanceByID(ctx, namespace, arg)
-	if err != nil {
-		return ResourceTarget{}, err
+	// Try to fetch as an instance — first by ID (fast path for UUIDs the
+	// CLI pastes), then by Name. In the new naming scheme multiple records
+	// share Names within a namespace (one live + zero-or-more Failed
+	// tombstones), so the Name lookup picks the live record first,
+	// falling back to the most-recent Failed tombstone.
+	if instance, err := _store.GetInstanceByID(ctx, namespace, arg); err == nil {
+		return ResourceTarget{Type: types.ResourceTypeInstance, Resource: instance}, nil
 	}
 
-	return ResourceTarget{Type: types.ResourceTypeInstance, Resource: instance}, nil
+	var allInstances []types.Instance
+	if listErr := _store.List(ctx, types.ResourceTypeInstance, namespace, &allInstances); listErr == nil {
+		var live *types.Instance
+		var newestFailed *types.Instance
+		for i := range allInstances {
+			inst := &allInstances[i]
+			if inst.Name != arg {
+				continue
+			}
+			switch {
+			case inst.Status != types.InstanceStatusFailed && inst.Status != types.InstanceStatusDeleted:
+				live = inst
+			case inst.Status == types.InstanceStatusFailed && inst.FailedAt != nil:
+				if newestFailed == nil || inst.FailedAt.After(*newestFailed.FailedAt) {
+					newestFailed = inst
+				}
+			}
+		}
+		winner := live
+		if winner == nil {
+			winner = newestFailed
+		}
+		if winner != nil {
+			return ResourceTarget{Type: types.ResourceTypeInstance, Resource: winner}, nil
+		}
+	}
+
+	return ResourceTarget{}, fmt.Errorf("no service or instance %q found in namespace %s", arg, namespace)
 }
 
 func getResourceByType(ctx context.Context, _store store.Store, resourceType string, resourceName string, namespace string) (interface{}, error) {
