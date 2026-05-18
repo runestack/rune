@@ -1502,3 +1502,36 @@ func TestSnapshotInstanceLogs_NoOpForNeverCreated(t *testing.T) {
 
 	assert.Empty(t, rec.LastLogs, "stuck-in-create records (no container) must not trigger a runner.GetLogs call")
 }
+
+// TestGetInstanceLogs_LiveSilentContainer_FallsBackToLastLogs is the
+// per-instance counterpart of
+// TestGetServiceLogs_SilentLiveInstance_FallsBackToTombstone:
+// `rune logs <instance-id>` on a container that's running but
+// producing zero stdout/stderr must still surface the LastLogs
+// snapshot from the previous attempt. The bug originally manifested
+// at the service level on prod/gateway but the per-instance code
+// path had the same gap — a single zero-byte successful read from
+// the runner masked everything else.
+func TestGetInstanceLogs_LiveSilentContainer_FallsBackToLastLogs(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	rec := &types.Instance{
+		ID:        "silent-live",
+		Name:      "silent-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusRunning,
+		LastLogs:  []byte("previous-attempt-output\n"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+	// Runner returns empty bytes successfully — the docker-quiet case.
+	testRunner.LogOutput = []byte("")
+
+	rc, err := controller.GetInstanceLogs(ctx, rec, types.LogOptions{})
+	require.NoError(t, err)
+	defer rc.Close()
+	body, _ := io.ReadAll(rc)
+	assert.Equal(t, "previous-attempt-output\n", string(body),
+		"silent live container must fall back to LastLogs, not return empty body")
+}

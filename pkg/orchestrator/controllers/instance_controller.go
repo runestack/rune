@@ -1098,10 +1098,33 @@ func (c *instanceController) GetInstanceLogs(ctx context.Context, instance *type
 			Timestamps: opts.Timestamps,
 		})
 		if err == nil {
-			return logs, nil
+			// In follow mode we cannot peek (would block waiting for
+			// the first byte that may never come for a silent
+			// container). Hand the live stream through verbatim;
+			// operators reaching for --follow are accepting that
+			// "nothing right now" is a possible state.
+			if opts.Follow {
+				return logs, nil
+			}
+			// Non-follow: detect the silent-container case and prefer
+			// the LastLogs snapshot from a previous attempt over a
+			// zero-byte live stream. This is the load-bearing fix
+			// for prod/gateway, where docker logs returned 0 bytes
+			// for the current container while a prior attempt had
+			// real crash output. Without this, `rune logs <id>`
+			// against a silent container returns exit 0 + empty
+			// body and the operator sees nothing.
+			pr := newPeekingReader(logs)
+			if has, _ := pr.HasData(); has {
+				return pr, nil
+			}
+			// Live reader was empty. Close it (we're abandoning it)
+			// and fall through to LastLogs / synth path below.
+			_ = pr.Close()
 		}
-		// Runner is reachable but the container is gone — fall through
-		// to the LastLogs snapshot below.
+		// Runner is reachable but the container is gone (err != nil)
+		// or returned no data (handled above) — fall through to the
+		// LastLogs snapshot below.
 	}
 
 	if len(instance.LastLogs) > 0 {
