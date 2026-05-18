@@ -346,14 +346,21 @@ func (sc *serviceController) GetServiceLogs(ctx context.Context, namespace, name
 		return nil, fmt.Errorf("no instances found for service %s in namespace %s", name, namespace)
 	}
 
-	// First pass: collect logs from live (Running) instances. This is
-	// the common path for healthy services.
+	// First pass: collect logs from live (Running) instances. Wrap
+	// each in a peekingReader so we can tell later whether the
+	// stream is actually going to yield anything — without this we
+	// can't distinguish "container produced 5MB of output" from
+	// "container is silent" and the tombstone fallback never fires
+	// for the silent case. (Live-observed on prod/gateway:
+	// docker logs returned 0 bytes for the live container while a
+	// previous tombstone had 14KB — `rune logs gateway` returned
+	// nothing.)
 	logInfos := make([]utils.InstanceLogInfo, 0, len(instances))
+	peekers := make([]*peekingReader, 0)
 	for _, instance := range instances {
 		if instance.Status != types.InstanceStatusRunning {
 			continue
 		}
-		// For running instances, we need at least one type of log enabled
 		if !opts.ShowLogs && !opts.ShowEvents && !opts.ShowStatus {
 			sc.logger.Debug("Skipping running instance - no log types enabled",
 				log.Str("instance_id", instance.ID))
@@ -368,32 +375,46 @@ func (sc *serviceController) GetServiceLogs(ctx context.Context, namespace, name
 				log.Err(err))
 			continue
 		}
+		pr := newPeekingReader(logReader)
+		peekers = append(peekers, pr)
 		logInfos = append(logInfos, utils.InstanceLogInfo{
 			InstanceID:   instance.ID,
 			InstanceName: instance.Name,
-			Reader:       logReader,
+			Reader:       pr,
 		})
 	}
 
-	// Second pass — tombstone fallback. If we got nothing from
-	// live instances, surface logs from the most-recent failed or
-	// deleted instance that has a LastLogs snapshot. This is what
-	// makes `rune logs <service>` useful for debugging a service
-	// that crashed on startup or was scaled to 0 by a failed
-	// `rune restart` — operators still want to see "what did the
-	// dead container say?" without chasing UUIDs.
-	if len(logInfos) == 0 {
+	// Second pass — tombstone fallback. Two trigger conditions:
+	//   (a) No live instances at all: collect the most-recent
+	//       tombstone (already supported).
+	//   (b) Live instances exist but all are SILENT (zero bytes
+	//       observed via the peek). Skip in --follow mode because
+	//       peeking would block until the live stream produces
+	//       output — defeating follow semantics.
+	needFallback := len(logInfos) == 0
+	if !needFallback && !opts.Follow {
+		allLiveEmpty := true
+		for _, p := range peekers {
+			if has, _ := p.HasData(); has {
+				allLiveEmpty = false
+				break
+			}
+		}
+		needFallback = allLiveEmpty
+	}
+	if needFallback {
 		if tomb := pickMostRecentTombstone(instances); tomb != nil {
-			sc.logger.Info("No live instance logs; serving most-recent tombstone snapshot",
+			sc.logger.Info("Live instances silent or absent; serving most-recent tombstone snapshot",
 				log.Str("service", name),
 				log.Str("namespace", namespace),
 				log.Str("tombstone", tomb.ID),
-				log.Str("status", string(tomb.Status)))
+				log.Str("status", string(tomb.Status)),
+				log.Int("live_count", len(logInfos)))
 			logReader, err := sc.instanceController.GetInstanceLogs(ctx, tomb, opts)
 			if err == nil {
 				logInfos = append(logInfos, utils.InstanceLogInfo{
-					InstanceID:   tomb.ID,
-					InstanceName: tomb.Name,
+					InstanceID:   tomb.ID + " (previous)",
+					InstanceName: tomb.Name + " (previous)",
 					Reader:       logReader,
 				})
 			} else {
@@ -469,6 +490,60 @@ func tombstoneTime(inst *types.Instance) time.Time {
 	}
 	return inst.UpdatedAt
 }
+
+// peekingReader wraps an io.ReadCloser so we can answer "is this
+// stream actually going to produce anything?" without consuming the
+// data. The first byte is buffered on Peek/HasData and re-emitted
+// on the next Read, so the wrapper is transparent to downstream
+// consumers (MultiLogStreamer, the CLI client). Used by
+// GetServiceLogs to detect silent live containers and fall back to
+// the previous tombstone's LastLogs.
+type peekingReader struct {
+	rc       io.ReadCloser
+	peek     []byte // buffered first byte; len() > 0 means "stream had data"
+	peeked   bool   // first read has been attempted
+	peekDone bool   // returned EOF/error during peek (no more data)
+}
+
+func newPeekingReader(rc io.ReadCloser) *peekingReader {
+	return &peekingReader{rc: rc}
+}
+
+// HasData returns true if the underlying stream produced at least
+// one byte. Triggers the lazy first read on first call. Safe to call
+// multiple times; cached. On a read error the byte (if any) is still
+// surfaced — we don't want to treat a partial first-byte-then-error
+// as "no data" and silently mask the real failure.
+func (p *peekingReader) HasData() (bool, error) {
+	if p.peeked {
+		return len(p.peek) > 0, nil
+	}
+	p.peeked = true
+	buf := make([]byte, 1)
+	n, err := p.rc.Read(buf)
+	if n > 0 {
+		p.peek = buf[:n]
+	}
+	if err == io.EOF {
+		p.peekDone = true
+		return n > 0, nil
+	}
+	return n > 0, err
+}
+
+func (p *peekingReader) Read(buf []byte) (int, error) {
+	if len(p.peek) > 0 {
+		n := copy(buf, p.peek)
+		p.peek = p.peek[n:]
+		return n, nil
+	}
+	if p.peekDone {
+		return 0, io.EOF
+	}
+	return p.rc.Read(buf)
+}
+
+func (p *peekingReader) Close() error { return p.rc.Close() }
 
 func (sc *serviceController) ExecInService(ctx context.Context, namespace, serviceName string, options types.ExecOptions) (types.ExecStream, error) {
 	// Get service from store

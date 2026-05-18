@@ -655,3 +655,75 @@ func TestReconcileExistingInstance_Stalled_NoAutoRetry(t *testing.T) {
 	assert.Len(t, instanceController.UpdateInstanceCalls, 0,
 		"Stalled records must not flow into UpdateInstance either")
 }
+
+// TestCleanUpStoreOrphanInstances_DeletesInstanceWhenServiceMissing
+// is the regression guard for the orphan reported live: prod/tombstone-test
+// stayed up 13h after its service was deleted because the
+// InstanceCleanupFinalizer didn't sweep it. Without this safety net,
+// `rune get instances` shows ghosts that `rune delete <name>` can't
+// address because the parent service no longer exists.
+func TestCleanUpStoreOrphanInstances_DeletesInstanceWhenServiceMissing(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	logger := log.NewLogger()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             logger.WithComponent("reconciler"),
+	}
+
+	// Seed an orphan instance whose service name is unknown to the
+	// reconciler. Status=Running mirrors the prod/tombstone-test case
+	// — long-lived orphan still being healthchecked.
+	orphan := &types.Instance{
+		ID:          "orphan-id",
+		Name:        "ghost-0",
+		Namespace:   "default",
+		ServiceID:   "ghost-service",
+		ServiceName: "ghost-service",
+		Status:      types.InstanceStatusRunning,
+	}
+	require.NoError(t, testStore.Create(context.Background(), types.ResourceTypeInstance, "default", orphan.ID, orphan))
+
+	// Run the sweep against an empty knownServices slice — i.e. no
+	// service exists with that ServiceName.
+	r.cleanUpStoreOrphanInstances(context.Background(), nil, []types.Instance{*orphan})
+
+	require.Len(t, instanceController.DeleteInstanceCalls, 1,
+		"orphan whose service is missing must be DeleteInstance'd by the reconciler safety net")
+	assert.Equal(t, "orphan-id", instanceController.DeleteInstanceCalls[0].Instance.ID)
+}
+
+// TestCleanUpStoreOrphanInstances_LeavesKnownAndDeletedAlone asserts
+// the negative space: instances with a live parent service AND
+// already-Deleted records must NOT be re-deleted (would race the
+// retention GC path and either fail or double-evict).
+func TestCleanUpStoreOrphanInstances_LeavesKnownAndDeletedAlone(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	logger := log.NewLogger()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             logger.WithComponent("reconciler"),
+	}
+
+	live := &types.Instance{
+		ID: "live-id", Name: "alive-0", Namespace: "default",
+		ServiceName: "alive", Status: types.InstanceStatusRunning,
+	}
+	already := &types.Instance{
+		ID: "already-deleted", Name: "ghost-0", Namespace: "default",
+		ServiceName: "ghost-service", Status: types.InstanceStatusDeleted,
+	}
+	require.NoError(t, testStore.Create(context.Background(), types.ResourceTypeInstance, "default", live.ID, live))
+	require.NoError(t, testStore.Create(context.Background(), types.ResourceTypeInstance, "default", already.ID, already))
+
+	known := []types.Service{{Name: "alive", Namespace: "default"}}
+	r.cleanUpStoreOrphanInstances(context.Background(), known, []types.Instance{*live, *already})
+
+	assert.Len(t, instanceController.DeleteInstanceCalls, 0,
+		"neither live (service known) nor Deleted (already on the way out) instances should be touched")
+}

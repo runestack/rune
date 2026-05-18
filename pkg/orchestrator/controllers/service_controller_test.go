@@ -675,3 +675,78 @@ func TestGetServiceLogs_NoCapturedOutput_SynthesizesWhyLine(t *testing.T) {
 	assert.Contains(t, got, "HealthCheckFailure")
 	assert.Contains(t, got, "no captured output")
 }
+
+// TestGetServiceLogs_SilentLiveInstance_FallsBackToTombstone is the
+// regression guard for the prod/gateway live observation: a Running
+// instance whose container is genuinely silent (docker logs = 0
+// bytes — the bun process started but the app never wrote to
+// stdout) used to mask the previous attempt's tombstone snapshot.
+// `rune logs gateway -n prod` would return exit 0 + empty body and
+// operators saw nothing, even though a previous container had 14KB
+// of real crash output. Fix: peek the live stream; if no data,
+// surface the previous tombstone's LastLogs.
+func TestGetServiceLogs_SilentLiveInstance_FallsBackToTombstone(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+
+	// Live, Running, but the container has zero stdout/stderr.
+	serviceControllerCreateTestInstance(ctx, t, testStore, service.Name, "live-silent", types.InstanceStatusRunning)
+	// Previous attempt's tombstone WITH a captured snapshot.
+	earlier := time.Now().Add(-2 * time.Minute)
+	tomb := &types.Instance{
+		ID: "tomb-with-logs", Name: "tomb-0", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status: types.InstanceStatusFailed, FailedAt: &earlier,
+		LastLogs: []byte("previous-attempt-crash-trace"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+
+	// Stub: live instance returns empty stream, tombstone returns its LastLogs.
+	fakeInstanceController.GetLogsFunc = func(ctx context.Context, instance *types.Instance, _ types.LogOptions) (io.ReadCloser, error) {
+		if instance.ID == "live-silent" {
+			return io.NopCloser(strings.NewReader("")), nil
+		}
+		return io.NopCloser(strings.NewReader(string(instance.LastLogs))), nil
+	}
+
+	rc, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
+	require.NoError(t, err)
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	assert.Contains(t, string(body), "previous-attempt-crash-trace",
+		"silent live container must trigger tombstone fallback, not silent empty output")
+}
+
+// TestGetServiceLogs_LiveHasContent_NoFallback asserts the negative:
+// when the live instance actually produces output, we don't append
+// the tombstone snapshot — that would just be noise for healthy
+// services.
+func TestGetServiceLogs_LiveHasContent_NoFallback(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+	serviceControllerCreateTestInstance(ctx, t, testStore, service.Name, "live-talking", types.InstanceStatusRunning)
+	earlier := time.Now().Add(-1 * time.Minute)
+	tomb := &types.Instance{
+		ID: "tomb-with-logs", Name: "tomb-0", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status: types.InstanceStatusFailed, FailedAt: &earlier,
+		LastLogs: []byte("OLD-LOGS-MUST-NOT-LEAK"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+
+	fakeInstanceController.GetLogsFunc = func(ctx context.Context, instance *types.Instance, _ types.LogOptions) (io.ReadCloser, error) {
+		if instance.ID == "live-talking" {
+			return io.NopCloser(strings.NewReader("LIVE-CONTENT-HERE")), nil
+		}
+		return io.NopCloser(strings.NewReader(string(instance.LastLogs))), nil
+	}
+
+	rc, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
+	require.NoError(t, err)
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	got := string(body)
+	assert.Contains(t, got, "LIVE-CONTENT-HERE")
+	assert.NotContains(t, got, "OLD-LOGS-MUST-NOT-LEAK",
+		"tombstone fallback must NOT fire when live instance has content")
+}

@@ -72,6 +72,9 @@ func init() {
 	rootCmd.AddCommand(newAdminCmd())
 	// Audit log query
 	rootCmd.AddCommand(newAuditCmd())
+	// Service noun-tree (delete; other verbs still live as top-level
+	// commands until they're migrated here).
+	rootCmd.AddCommand(newServiceCmd())
 	// Secret management (get, list, reveal, update, versions, rollback)
 	rootCmd.AddCommand(newSecretCmd())
 	// Storage management noun-trees (RUNE-072)
