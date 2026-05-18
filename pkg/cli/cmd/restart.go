@@ -104,6 +104,33 @@ func runRestart(cmd *cobra.Command, args []string) error {
 
 	wallStart := time.Now()
 
+	// Guard against the operator-visible failure mode where the
+	// drain succeeds (or the drain wait times out / is cancelled)
+	// and the scale-back-up never gets sent — the service is then
+	// silently stranded at scale 0 and operators have to debug
+	// "why is my service gone" without a clear signal that they
+	// did it themselves. The defer below restores the scale on
+	// any error path before we have positively queued the
+	// scale-up request.
+	scaleUpQueued := false
+	defer func() {
+		if scaleUpQueued {
+			return
+		}
+		fmt.Printf("  %s restart aborted before scale-up; restoring scale to %d\n",
+			format.Dim("⚠"), current)
+		restoreReq := &generated.ScaleServiceRequest{
+			Name:      serviceName,
+			Namespace: restartNamespace,
+			Scale:     utils.ToInt32NonNegative(current),
+			Mode:      generated.ScalingMode_SCALING_MODE_IMMEDIATE,
+		}
+		if _, restoreErr := svcClient.ScaleServiceWithRequest(restoreReq); restoreErr != nil {
+			fmt.Printf("  %s failed to restore scale: %v (run `rune scale %s -n %s --replicas %d` manually)\n",
+				format.Dim("✗"), restoreErr, serviceName, restartNamespace, current)
+		}
+	}()
+
 	// Phase 1: drain.
 	downReq := &generated.ScaleServiceRequest{
 		Name:      serviceName,
@@ -133,6 +160,7 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	if _, err := svcClient.ScaleServiceWithRequest(upReq); err != nil {
 		return fmt.Errorf("failed to scale up service: %w", err)
 	}
+	scaleUpQueued = true // server has the desired scale; deferred restore is a no-op now.
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), restartTimeout)
 		defer cancel()

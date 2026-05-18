@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -999,26 +1000,42 @@ func (c *instanceController) GetInstanceStatus(ctx context.Context, instance *ty
 	}, nil
 }
 
-// GetInstanceLogs gets logs for an instance
+// GetInstanceLogs gets logs for an instance. When the live container is
+// unavailable (the runner has no record of it — usually because the
+// instance has been tombstoned and the container removed, or because
+// the host runner is down), fall back to the LastLogs snapshot
+// captured at tombstone/retention-GC time. This is what makes
+// `rune logs <failed-id>` and the service-level `rune logs <name>`
+// keep working after the container is gone — operators investigating
+// a failure do not have to race the retention GC.
 func (c *instanceController) GetInstanceLogs(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error) {
-	// Try to get logs from both runners and use the first one that succeeds
-	_runner, err := c.runnerManager.GetInstanceRunner(instance)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get runner for instance: %w", err)
+	_runner, runnerErr := c.runnerManager.GetInstanceRunner(instance)
+	if runnerErr == nil {
+		logs, err := _runner.GetLogs(ctx, instance, runner.LogOptions{
+			Follow:     opts.Follow,
+			Since:      opts.Since,
+			Until:      opts.Until,
+			Tail:       opts.Tail,
+			Timestamps: opts.Timestamps,
+		})
+		if err == nil {
+			return logs, nil
+		}
+		// Runner is reachable but the container is gone — fall through
+		// to the LastLogs snapshot below.
 	}
 
-	logs, err := _runner.GetLogs(ctx, instance, runner.LogOptions{
-		Follow:     opts.Follow,
-		Since:      opts.Since,
-		Until:      opts.Until,
-		Tail:       opts.Tail,
-		Timestamps: opts.Timestamps,
-	})
-	if err == nil {
-		return logs, nil
+	if len(instance.LastLogs) > 0 {
+		c.logger.Debug("Serving LastLogs snapshot for instance",
+			log.Str("instance", instance.ID),
+			log.Int("bytes", len(instance.LastLogs)))
+		return io.NopCloser(bytes.NewReader(instance.LastLogs)), nil
 	}
 
-	return nil, fmt.Errorf("failed to get logs for instance %s: %w", instance.ID, err)
+	if runnerErr != nil {
+		return nil, fmt.Errorf("failed to get logs for instance %s: %w", instance.ID, runnerErr)
+	}
+	return nil, fmt.Errorf("failed to get logs for instance %s: container unavailable and no LastLogs snapshot", instance.ID)
 }
 
 // Exec executes a command in a running instance

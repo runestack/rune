@@ -346,48 +346,26 @@ func (sc *serviceController) GetServiceLogs(ctx context.Context, namespace, name
 		return nil, fmt.Errorf("no instances found for service %s in namespace %s", name, namespace)
 	}
 
-	// Collect log streams from all instances
+	// First pass: collect logs from live (Running) instances. This is
+	// the common path for healthy services.
 	logInfos := make([]utils.InstanceLogInfo, 0, len(instances))
 	for _, instance := range instances {
-		// Skip instances that are marked as deleted
-		if instance.Status == types.InstanceStatusDeleted {
-			sc.logger.Debug("Skipping deleted instance for logs",
-				log.Str("namespace", namespace),
-				log.Str("service", name),
-				log.Str("instance_id", instance.ID),
-				log.Str("instance_name", instance.Name))
+		if instance.Status != types.InstanceStatusRunning {
 			continue
 		}
-
-		// Apply filtering based on instance status and requested log types
-		// - Running instances provide container logs (if ShowLogs is true)
-		// - All instances can provide events and status updates
-		if instance.Status == types.InstanceStatusRunning {
-			// For running instances, we need at least one type of log enabled
-			if !opts.ShowLogs && !opts.ShowEvents && !opts.ShowStatus {
-				sc.logger.Debug("Skipping running instance - no log types enabled",
-					log.Str("instance_id", instance.ID))
-				continue
-			}
-		} else {
-			// For non-running instances, we only care about events and status
-			// Skip if we're not interested in those
-			if !opts.ShowEvents && !opts.ShowStatus {
-				sc.logger.Debug("Skipping non-running instance - events/status not enabled",
-					log.Str("instance_id", instance.ID),
-					log.Str("status", string(instance.Status)))
-				continue
-			}
+		// For running instances, we need at least one type of log enabled
+		if !opts.ShowLogs && !opts.ShowEvents && !opts.ShowStatus {
+			sc.logger.Debug("Skipping running instance - no log types enabled",
+				log.Str("instance_id", instance.ID))
+			continue
 		}
-
 		logReader, err := sc.instanceController.GetInstanceLogs(ctx, instance, opts)
 		if err != nil {
-			sc.logger.Warn("Failed to get logs for instance",
+			sc.logger.Warn("Failed to get logs for running instance; will try tombstones",
 				log.Str("service", name),
 				log.Str("namespace", namespace),
 				log.Str("instance", instance.ID),
 				log.Err(err))
-			// Continue with other instances even if one fails
 			continue
 		}
 		logInfos = append(logInfos, utils.InstanceLogInfo{
@@ -397,32 +375,84 @@ func (sc *serviceController) GetServiceLogs(ctx context.Context, namespace, name
 		})
 	}
 
+	// Second pass — tombstone fallback. If we got nothing from
+	// live instances, surface logs from the most-recent failed or
+	// deleted instance that has a LastLogs snapshot. This is what
+	// makes `rune logs <service>` useful for debugging a service
+	// that crashed on startup or was scaled to 0 by a failed
+	// `rune restart` — operators still want to see "what did the
+	// dead container say?" without chasing UUIDs.
+	if len(logInfos) == 0 {
+		if tomb := pickMostRecentTombstoneWithLogs(instances); tomb != nil {
+			sc.logger.Info("No live instance logs; serving most-recent tombstone snapshot",
+				log.Str("service", name),
+				log.Str("namespace", namespace),
+				log.Str("tombstone", tomb.ID),
+				log.Str("status", string(tomb.Status)))
+			logReader, err := sc.instanceController.GetInstanceLogs(ctx, tomb, opts)
+			if err == nil {
+				logInfos = append(logInfos, utils.InstanceLogInfo{
+					InstanceID:   tomb.ID,
+					InstanceName: tomb.Name,
+					Reader:       logReader,
+				})
+			} else {
+				sc.logger.Warn("Failed to read LastLogs from tombstone",
+					log.Str("tombstone", tomb.ID),
+					log.Err(err))
+			}
+		}
+	}
+
 	sc.logger.Debug("Collected log streams",
 		log.Str("service", name),
 		log.Int("streams", len(logInfos)))
 
 	if len(logInfos) == 0 {
-		// Check if we have any non-deleted instances
-		hasNonDeletedInstances := false
-		for _, instance := range instances {
-			if instance.Status != types.InstanceStatusDeleted {
-				hasNonDeletedInstances = true
-				break
-			}
-		}
-
-		// If we have non-deleted instances but couldn't get logs, report error
-		if hasNonDeletedInstances {
-			return nil, fmt.Errorf("failed to get logs from any instance of service %s in namespace %s", name, namespace)
-		} else {
-			// If all instances are deleted, return a specific message
-			return nil, fmt.Errorf("all instances of service %s in namespace %s are marked as deleted", name, namespace)
-		}
+		return nil, fmt.Errorf("no logs available for service %s in namespace %s: no running instances and no tombstone snapshots", name, namespace)
 	}
 
 	// Always use MultiLogStreamer to ensure consistent metadata handling
 	// regardless of whether we have one or multiple log readers
 	return utils.NewMultiLogStreamer(logInfos, true), nil
+}
+
+// pickMostRecentTombstoneWithLogs returns the newest non-Running
+// instance that has a LastLogs snapshot, prioritising Failed
+// tombstones (postmortem-preserved containers) over Deleted ones.
+// Returns nil when no tombstone has captured logs. Newness is
+// determined by FailedAt when present, falling back to UpdatedAt.
+func pickMostRecentTombstoneWithLogs(instances []*types.Instance) *types.Instance {
+	var bestFailed, bestDeleted *types.Instance
+	for _, inst := range instances {
+		if len(inst.LastLogs) == 0 {
+			continue
+		}
+		switch inst.Status {
+		case types.InstanceStatusFailed:
+			if bestFailed == nil || tombstoneTime(inst).After(tombstoneTime(bestFailed)) {
+				bestFailed = inst
+			}
+		case types.InstanceStatusDeleted:
+			if bestDeleted == nil || tombstoneTime(inst).After(tombstoneTime(bestDeleted)) {
+				bestDeleted = inst
+			}
+		}
+	}
+	if bestFailed != nil {
+		return bestFailed
+	}
+	return bestDeleted
+}
+
+// tombstoneTime returns the best wall-clock anchor for ordering
+// tombstones — FailedAt when set (the moment the postmortem was
+// taken), else UpdatedAt (the last lifecycle write).
+func tombstoneTime(inst *types.Instance) time.Time {
+	if inst.FailedAt != nil {
+		return *inst.FailedAt
+	}
+	return inst.UpdatedAt
 }
 
 func (sc *serviceController) ExecInService(ctx context.Context, namespace, serviceName string, options types.ExecOptions) (types.ExecStream, error) {

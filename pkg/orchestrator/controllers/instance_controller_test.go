@@ -1371,3 +1371,58 @@ func TestRestartInstance_StuckInCreateReusesSameRecord(t *testing.T) {
 	assert.Equal(t, 0, got.CreateAttempts, "operator restart resets attempt counter")
 	assert.Equal(t, types.InstanceStatusRunning, got.Status, "successful retry promotes to Running")
 }
+
+// TestGetInstanceLogs_FallsBackToLastLogsWhenRunnerHasNoContainer is the
+// regression guard for bug RUNE-BUG-RUNE-LOGS-IGNORES-TOMBSTONE-LASTLOGS:
+// when the runner can't serve container logs (container removed by
+// retention GC, or the tombstone-recreate path took it down), the
+// LastLogs snapshot must be surfaced instead. Without this,
+// `rune logs <failed-id>` and `rune logs <service>` go dark right when
+// operators need them most.
+func TestGetInstanceLogs_FallsBackToLastLogsWhenRunnerHasNoContainer(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	tomb := &types.Instance{
+		ID:        "tomb-id",
+		Name:      "tomb-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusFailed,
+		LastLogs:  []byte("captured stderr from the failing container\n"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+	// Container is gone from the runner.
+	testRunner.ErrorToReturn = assert.AnError
+
+	rc, err := controller.GetInstanceLogs(ctx, tomb, types.LogOptions{})
+	require.NoError(t, err)
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, "captured stderr from the failing container\n", string(body),
+		"LastLogs snapshot must be served when the runner has no container")
+}
+
+// TestGetInstanceLogs_FallbackError_WhenNoSnapshotAndNoContainer verifies
+// the symmetric negative: an instance with no LastLogs AND no live
+// container yields a clear "nothing to serve" error, not a panic and
+// not a generic runner error.
+func TestGetInstanceLogs_FallbackError_WhenNoSnapshotAndNoContainer(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	tomb := &types.Instance{
+		ID:        "empty-tomb",
+		Name:      "empty-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusFailed,
+		// LastLogs intentionally empty.
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+	testRunner.ErrorToReturn = assert.AnError
+
+	_, err := controller.GetInstanceLogs(ctx, tomb, types.LogOptions{})
+	require.Error(t, err)
+}

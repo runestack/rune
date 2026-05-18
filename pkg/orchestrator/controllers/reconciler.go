@@ -744,7 +744,12 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 				}
 			case types.InstanceStatusRunning:
 				running++
-			case types.InstanceStatusFailed, types.InstanceStatusExited, types.InstanceStatusUnknown:
+			case types.InstanceStatusFailed, types.InstanceStatusExited, types.InstanceStatusUnknown, types.InstanceStatusStalled:
+				// Stalled is the PR2 terminal "create retries
+				// exhausted, operator must act" state. Roll it up as
+				// Failed so `rune get services` doesn't show
+				// misleading Pending for a slot that will never
+				// self-recover.
 				failed++
 				if worstFailed == nil {
 					worstFailed = instance
