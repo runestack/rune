@@ -284,6 +284,20 @@ func (fo *FakeOrchestrator) ExecInInstance(ctx context.Context, namespace, insta
 	return stream, nil
 }
 
+// DebugInInstance implements Orchestrator interface. For the fake, we just
+// return the same stream shape as ExecInInstance — production tests cover
+// the real sidecar lifecycle in pkg/runner/docker.
+func (fo *FakeOrchestrator) DebugInInstance(ctx context.Context, namespace, instanceID string, options types.ExecOptions) (types.ExecStream, error) {
+	fo.mu.RLock()
+	defer fo.mu.RUnlock()
+	stream := &fakeExecStream{
+		stdout:   fo.ExecStdout,
+		stderr:   fo.ExecStderr,
+		exitCode: fo.ExecExitCode,
+	}
+	return stream, nil
+}
+
 // ExecInService implements the old orchestrator interface for compatibility
 func (fo *FakeOrchestrator) ExecInService(ctx context.Context, namespace, serviceName string, options types.ExecOptions) (types.ExecStream, error) {
 	// For fake implementation, just return the same stream as ExecInInstance

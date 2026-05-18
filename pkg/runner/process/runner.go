@@ -420,6 +420,14 @@ func (r *ProcessRunner) Rename(ctx context.Context, instance *types.Instance, ne
 	return nil
 }
 
+// RunDebug is unsupported by the process runner — there's no image to
+// clone and no entrypoint to override, so spawning an inspection sidecar
+// has no meaningful equivalent. The exec service surfaces this as
+// FailedPrecondition.
+func (r *ProcessRunner) RunDebug(ctx context.Context, instance *types.Instance, options runner.ExecOptions) (runner.ExecStream, error) {
+	return nil, runner.ErrDebugNotSupported
+}
+
 // Remove removes a process instance
 func (r *ProcessRunner) Remove(ctx context.Context, instance *types.Instance, force bool) error {
 	r.mu.Lock()

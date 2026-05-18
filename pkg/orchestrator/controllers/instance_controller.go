@@ -72,6 +72,13 @@ type InstanceController interface {
 	// Returns an ExecStream for bidirectional communication
 	Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
 
+	// ExecDebug spawns an ephemeral inspection sidecar from a Failed
+	// instance's template (image, env, mounts), with the entrypoint
+	// overridden to `sleep infinity`, and execs options.Command inside
+	// the sidecar. The sidecar is removed when the returned ExecStream
+	// is Closed. The original Failed container is never touched.
+	ExecDebug(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+
 	// Dial opens a TCP connection to the given port on a running
 	// instance (RUNE-122). Returns a net.Conn owned by the caller.
 	Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error)
@@ -914,6 +921,37 @@ func (c *instanceController) Exec(ctx context.Context, instance *types.Instance,
 		return nil, fmt.Errorf("failed to execute command in instance %s: %w", instance.ID, err)
 	}
 
+	return execStreamAdapter{execStream}, nil
+}
+
+// ExecDebug spawns an ephemeral inspection sidecar for the given (Failed)
+// instance and execs options.Command inside it. The sidecar is removed when
+// the returned ExecStream is Closed. Used by `rune exec --debug
+// <tombstone-id>` to inspect the failed container's image+env+mounts state
+// without re-running the failing app.
+func (c *instanceController) ExecDebug(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error) {
+	c.logger.Info("Spawning debug sidecar",
+		log.Str("instance", instance.ID),
+		log.Str("command", strings.Join(options.Command, " ")))
+
+	_runner, err := c.runnerManager.GetInstanceRunner(instance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get runner for instance: %w", err)
+	}
+
+	runnerOptions := runner.ExecOptions{
+		Command:        options.Command,
+		Env:            options.Env,
+		WorkingDir:     options.WorkingDir,
+		TTY:            options.TTY,
+		TerminalWidth:  options.TerminalWidth,
+		TerminalHeight: options.TerminalHeight,
+	}
+
+	execStream, err := _runner.RunDebug(ctx, instance, runnerOptions)
+	if err != nil {
+		return nil, fmt.Errorf("debug exec on instance %s: %w", instance.ID, err)
+	}
 	return execStreamAdapter{execStream}, nil
 }
 

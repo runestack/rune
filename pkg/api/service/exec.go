@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
+	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/utils"
 	"google.golang.org/grpc/codes"
@@ -221,19 +223,26 @@ func (s *ExecService) createExecOptions(initReq *generated.ExecInitRequest) type
 func (s *ExecService) createExecStream(ctx context.Context, initReq *generated.ExecInitRequest, instance *types.Instance, execOptions types.ExecOptions) (types.ExecStream, error) {
 	namespace := types.NS(initReq.Namespace)
 
-	// Debug exec: spawn an ephemeral inspection container from the failed
-	// instance's image+config with the entrypoint overridden to
-	// `sleep infinity`, then exec the user's command inside it. The
-	// failed container itself is never touched. Server-side
-	// implementation lands in the next release; for now we surface a
-	// clear, actionable Unimplemented so the CLI's `--debug` flow can
-	// route users to `rune logs <id>` (which already works against the
-	// preserved tombstone).
+	// Debug exec: spawn an ephemeral inspection sidecar from the Failed
+	// instance's image+env+mounts with the entrypoint overridden to
+	// `sleep infinity`, then exec the user's command inside the sidecar.
+	// The original failed container is never touched. The sidecar is
+	// torn down when the returned ExecStream is Closed (handled by the
+	// runner's cleanupExecStream wrapper).
 	if initReq.Debug {
-		return nil, status.Errorf(codes.Unimplemented,
-			"--debug ephemeral inspection container is not yet implemented server-side (coming in a follow-up). "+
-				"The failed container is preserved — use `rune logs %s` to inspect its output.",
-			instance.ID)
+		stream, err := s.orchestrator.DebugInInstance(ctx, namespace, instance.ID, execOptions)
+		if err != nil {
+			// Unsupported-runner case (process runner, etc.) gets a
+			// clear FailedPrecondition rather than Internal.
+			if errors.Is(err, runner.ErrDebugNotSupported) {
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"--debug is not supported for the %s runner (only docker today)", instance.Runner)
+			}
+			s.logger.Error("Failed to spawn debug sidecar",
+				log.Str("instance", instance.ID), log.Err(err))
+			return nil, status.Errorf(codes.Internal, "failed to start debug sidecar: %v", err)
+		}
+		return stream, nil
 	}
 
 	if initReq.GetServiceName() != "" {

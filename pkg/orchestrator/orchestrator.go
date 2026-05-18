@@ -39,6 +39,11 @@ type Orchestrator interface {
 	// Execution
 	ExecInService(ctx context.Context, namespace, serviceName string, options types.ExecOptions) (types.ExecStream, error)
 	ExecInInstance(ctx context.Context, namespace, instanceID string, options types.ExecOptions) (types.ExecStream, error)
+	// DebugInInstance spawns an ephemeral inspection sidecar from a
+	// Failed instance's template (image, env, mounts) with the
+	// entrypoint overridden to `sleep infinity`, then execs the user's
+	// command inside it. Cleanup happens on ExecStream.Close.
+	DebugInInstance(ctx context.Context, namespace, instanceID string, options types.ExecOptions) (types.ExecStream, error)
 
 	// Port-forward (RUNE-122)
 	DialInService(ctx context.Context, namespace, serviceName string, port uint32) (net.Conn, *types.Instance, error)
@@ -459,6 +464,14 @@ func (o *orchestrator) ExecInInstance(ctx context.Context, namespace, instanceID
 
 	// Delegate to instance controller for execution
 	return o.instanceController.Exec(ctx, instance, options)
+}
+
+func (o *orchestrator) DebugInInstance(ctx context.Context, namespace, instanceID string, options types.ExecOptions) (types.ExecStream, error) {
+	instance, err := o.store.GetInstanceByID(ctx, namespace, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get instance: %w", err)
+	}
+	return o.instanceController.ExecDebug(ctx, instance, options)
 }
 
 // Port-forward operations (RUNE-122)

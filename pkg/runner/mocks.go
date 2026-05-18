@@ -39,6 +39,14 @@ func (m *MockRunner) Rename(ctx context.Context, instance *types.Instance, newNa
 	return args.Error(0)
 }
 
+func (m *MockRunner) RunDebug(ctx context.Context, instance *types.Instance, options ExecOptions) (ExecStream, error) {
+	args := m.Called(ctx, instance, options)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(ExecStream), args.Error(1)
+}
+
 func (m *MockRunner) GetLogs(ctx context.Context, instance *types.Instance, options LogOptions) (io.ReadCloser, error) {
 	args := m.Called(ctx, instance, options)
 	return args.Get(0).(io.ReadCloser), args.Error(1)
