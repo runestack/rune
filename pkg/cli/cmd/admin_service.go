@@ -196,10 +196,16 @@ func deriveNamespacedPolicy(ctx context.Context, cli generated.AdminServiceClien
 	}
 	for _, r := range src.GetRules() {
 		ns := namespace
-		if r.GetResource() == "namespaces" {
+		switch r.GetResource() {
+		case "namespaces":
 			// Don't pin the rule that grants access to the namespaces
 			// resource itself — pinning it would deny the lookup
 			// during --create-namespace.
+			ns = ""
+		case "auth":
+			// `auth` covers cluster-scoped calls like WhoAmI used by
+			// `rune login --verify`. The request carries no namespace,
+			// so pinning would deny credential verification.
 			ns = ""
 		}
 		derived.Rules = append(derived.Rules, &generated.PolicyRule{
