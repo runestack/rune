@@ -1181,3 +1181,193 @@ func controllerTestStore(c InstanceController) *store.TestStore {
 	}
 	return nil
 }
+
+// TestCreateBackoffFor_ExponentialWithCap verifies the schedule
+// 30s → 1m → 2m → 4m → 5m(cap) — the contract referenced by the
+// reconciler retry-in-place branch and documented in PR2's description.
+// Tightening this without coordinating with the reconciler tick (30s)
+// risks either retry-storms or extending the time-to-Stalled past
+// what operators expect.
+func TestCreateBackoffFor_ExponentialWithCap(t *testing.T) {
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{1, 30 * time.Second},
+		{2, 1 * time.Minute},
+		{3, 2 * time.Minute},
+		{4, 4 * time.Minute},
+		{5, 5 * time.Minute},  // capped
+		{6, 5 * time.Minute},  // still capped
+		{0, 30 * time.Second}, // clamps to attempt=1
+	}
+	for _, c := range cases {
+		got := createBackoffFor(c.attempt)
+		assert.Equal(t, c.want, got, "attempt %d", c.attempt)
+	}
+}
+
+// TestRecordCreateFailure_SchedulesBackoff asserts that a non-terminal
+// create failure populates NextCreateAttemptAt so the reconciler can
+// honour the schedule. Without this, the reconciler would hit the
+// retry path every tick and we'd be back to a 30s-cadence churn —
+// just on the same UUID instead of new ones.
+func TestRecordCreateFailure_SchedulesBackoff(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+	testRunner.ErrorToReturn = assert.AnError
+
+	before := time.Now()
+	_, err := controller.CreateInstance(ctx, service, "test-instance-0")
+	require.Error(t, err)
+
+	var stored []types.Instance
+	require.NoError(t, testStore.List(ctx, types.ResourceTypeInstance, "default", &stored))
+	require.Len(t, stored, 1)
+	rec := stored[0]
+	require.NotNil(t, rec.NextCreateAttemptAt, "NextCreateAttemptAt must be scheduled after a failed attempt")
+	delay := rec.NextCreateAttemptAt.Sub(before)
+	assert.InDelta(t, (30 * time.Second).Seconds(), delay.Seconds(), 2.0,
+		"first-attempt backoff should be ~30s, got %s", delay)
+	assert.Equal(t, types.InstanceStatusFailed, rec.Status,
+		"first failures stay at Failed; Stalled only after retries exhaust")
+}
+
+// TestRecordCreateFailure_StallsAfterMaxAttempts walks the record
+// past maxCreateAttempts and asserts it flips to Stalled with
+// NextCreateAttemptAt cleared (operators see a clear "stop waiting"
+// signal). This is the contract operators rely on to know when
+// manual intervention is required vs. when to keep watching.
+func TestRecordCreateFailure_StallsAfterMaxAttempts(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	rec := &types.Instance{
+		ID:        "stuck-id",
+		Name:      "stuck-0",
+		Namespace: "default",
+		ServiceID: "test-service",
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+
+	cc := controller.(*instanceController)
+	// Walk attempts up to (max-1) — should still be Failed with backoff scheduled.
+	for i := 0; i < maxCreateAttempts-1; i++ {
+		cc.recordCreateFailure(ctx, rec, assert.AnError, "VolumeNotReady")
+		assert.Equal(t, types.InstanceStatusFailed, rec.Status, "still Failed at attempt %d", rec.CreateAttempts)
+		assert.NotNil(t, rec.NextCreateAttemptAt, "backoff scheduled at attempt %d", rec.CreateAttempts)
+	}
+	// The maxCreateAttempts-th failure flips to Stalled.
+	cc.recordCreateFailure(ctx, rec, assert.AnError, "VolumeNotReady")
+	assert.Equal(t, maxCreateAttempts, rec.CreateAttempts)
+	assert.Equal(t, types.InstanceStatusStalled, rec.Status,
+		"record must flip to Stalled after maxCreateAttempts failures")
+	assert.Nil(t, rec.NextCreateAttemptAt,
+		"Stalled records must NOT schedule auto-retry — operator must restart")
+}
+
+// TestIsInstanceCompatibleWithService_StalledHoldsSlot mirrors the
+// existing stuck-in-create gate but for the terminal Stalled state.
+// Without this, a Stalled record would be tombstoned by the
+// reconciler and we'd lose the operator-visible "intervention
+// required" signal.
+func TestIsInstanceCompatibleWithService_StalledHoldsSlot(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	stalled := &types.Instance{
+		ID:                     "stalled-id",
+		Name:                   "stalled-0",
+		Namespace:              "default",
+		ServiceID:              service.ID,
+		ServiceName:            service.Name,
+		Status:                 types.InstanceStatusStalled,
+		ContainerEverCreatedAt: nil,
+		Metadata:               &types.InstanceMetadata{ServiceGeneration: 1},
+	}
+	ok, reason := controller.isInstanceCompatibleWithService(ctx, stalled, service)
+	assert.True(t, ok, "Stalled stuck-in-create record must claim its slot")
+	assert.Empty(t, reason)
+}
+
+// TestRetryCreateInstance_ResetsTransientStateAndPreservesAttempts
+// asserts the retry contract: Status flips back to Pending and
+// NextCreateAttemptAt is cleared (a new attempt is happening), but
+// CreateAttempts is preserved (the backoff schedule needs to know how
+// many failures have already happened so the NEXT failure schedules
+// the correct next-backoff and the Stalled threshold is reached
+// after the right number of cumulative failures).
+func TestRetryCreateInstance_ResetsTransientStateAndPreservesAttempts(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	// Seed a stuck-in-create record (as if 2 attempts had already failed).
+	earlier := time.Now().Add(-1 * time.Minute)
+	rec := &types.Instance{
+		ID:                  "stuck-id",
+		Name:                "stuck-0",
+		Namespace:           "default",
+		ServiceID:           service.ID,
+		ServiceName:         service.Name,
+		Status:              types.InstanceStatusFailed,
+		StatusMessage:       "old error",
+		FailureReason:       "VolumeNotReady",
+		CreateAttempts:      2,
+		NextCreateAttemptAt: &earlier,
+		Metadata:            &types.InstanceMetadata{ServiceGeneration: 1},
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+
+	// Inject another failure so we can verify the post-retry state without success.
+	testRunner.ErrorToReturn = assert.AnError
+	err := controller.RetryCreateInstance(ctx, service, rec)
+	require.Error(t, err, "retry must surface the new failure to the caller")
+
+	var stored []types.Instance
+	require.NoError(t, testStore.List(ctx, types.ResourceTypeInstance, "default", &stored))
+	require.Len(t, stored, 1, "retry must not create a new UUID — same slot, same record")
+	got := stored[0]
+	assert.Equal(t, "stuck-id", got.ID, "UUID preserved")
+	assert.Equal(t, 3, got.CreateAttempts, "CreateAttempts must increment cumulatively across retries")
+	assert.NotNil(t, got.NextCreateAttemptAt, "next backoff scheduled")
+	assert.NotEqual(t, "old error", got.StatusMessage, "StatusMessage refreshed to the new failure")
+}
+
+// TestRestartInstance_StuckInCreateReusesSameRecord asserts the
+// operator-action path: `rune restart instance` on a Stalled (or
+// Failed-with-backoff) stuck-in-create record clears CreateAttempts
+// and re-runs the create pipeline against the SAME UUID, instead of
+// the tombstone+replace dance used for Running instances. Operators
+// following an instance ID don't have to chase a moving identifier
+// just because they restarted a stuck slot.
+func TestRestartInstance_StuckInCreateReusesSameRecord(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	// Seed a Stalled stuck-in-create record (the case operators most
+	// commonly encounter — retries exhausted, waiting for them to act).
+	rec := &types.Instance{
+		ID:             "stalled-id",
+		Name:           "stalled-0",
+		Namespace:      "default",
+		ServiceID:      service.ID,
+		ServiceName:    service.Name,
+		Status:         types.InstanceStatusStalled,
+		StatusMessage:  "old stalled reason",
+		FailureReason:  "VolumeNotReady",
+		CreateAttempts: maxCreateAttempts,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+
+	require.NoError(t, controller.RestartInstance(ctx, rec, InstanceRestartReasonManual))
+
+	var stored []types.Instance
+	require.NoError(t, testStore.List(ctx, types.ResourceTypeInstance, "default", &stored))
+	require.Len(t, stored, 1, "manual restart on stuck-in-create must NOT spawn a new UUID")
+	got := stored[0]
+	assert.Equal(t, "stalled-id", got.ID, "same UUID preserved across operator restart")
+	// CreateAttempts was reset to 0 before the retry, then the (successful)
+	// retry zeroes it again at the Running transition. Either way, must be 0.
+	assert.Equal(t, 0, got.CreateAttempts, "operator restart resets attempt counter")
+	assert.Equal(t, types.InstanceStatusRunning, got.Status, "successful retry promotes to Running")
+}

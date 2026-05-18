@@ -46,6 +46,13 @@ type InstanceController interface {
 	// CreateInstance creates a new instance for a service
 	CreateInstance(ctx context.Context, service *types.Service, instanceName string) (*types.Instance, error)
 
+	// RetryCreateInstance re-runs the create pipeline against an
+	// existing record that previously failed in a stuck-in-create
+	// state (Status=Failed, ContainerEverCreatedAt==nil). Same UUID,
+	// same Name. Called by the reconciler when the stuck record's
+	// NextCreateAttemptAt backoff has elapsed.
+	RetryCreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error
+
 	// RecreateInstance recreates an instance
 	RecreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) (*types.Instance, error)
 
@@ -396,12 +403,58 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 		return nil, fmt.Errorf("failed to create instance in store: %w", err)
 	}
 
+	if err := c.runCreateAttempt(ctx, service, instance); err != nil {
+		return nil, err
+	}
+	return instance, nil
+}
+
+// RetryCreateInstance re-runs the CreateInstance pipeline against an
+// existing instance record (same UUID, same Name) that previously
+// failed in a stuck-in-create state (Status=Failed,
+// ContainerEverCreatedAt==nil). Called by the reconciler when a
+// stuck record's NextCreateAttemptAt backoff has elapsed.
+//
+// Resets transient state (Status→Pending, StatusMessage cleared,
+// NextCreateAttemptAt cleared) before re-running the create pipeline.
+// CreateAttempts is preserved so the backoff schedule and Stalled
+// threshold see the cumulative history.
+func (c *instanceController) RetryCreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error {
+	if instance == nil {
+		return fmt.Errorf("retry: nil instance")
+	}
+	c.logger.Info("Retrying create on stuck-in-create instance",
+		log.Str("service", service.Name),
+		log.Str("instance", instance.Name),
+		log.Str("id", instance.ID),
+		log.Int("attempt", instance.CreateAttempts+1))
+
+	now := time.Now()
+	instance.Status = types.InstanceStatusPending
+	instance.StatusMessage = ""
+	instance.NextCreateAttemptAt = nil
+	instance.UpdatedAt = now
+	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
+		return fmt.Errorf("reset instance for retry: %w", err)
+	}
+
+	return c.runCreateAttempt(ctx, service, instance)
+}
+
+// runCreateAttempt is the shared body of CreateInstance and
+// RetryCreateInstance — everything after the instance record exists
+// in the store. Walks the create pipeline (runner lookup → env →
+// mounts → init steps → runner.Create → ContainerEverCreatedAt
+// stamp → runner.Start → Running). Every error path routes through
+// recordCreateFailure so the reason lands on the record and backoff
+// is scheduled.
+func (c *instanceController) runCreateAttempt(ctx context.Context, service *types.Service, instance *types.Instance) error {
 	// Create instance based on runtime
 	serviceRunner, err := c.runnerManager.GetServiceRunner(service)
 	if err != nil {
 		wrapped := fmt.Errorf("failed to get runner for service: %w", err)
 		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
-		return nil, wrapped
+		return wrapped
 	}
 
 	// Set the runner type for the instance
@@ -412,10 +465,10 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	if err != nil {
 		wrapped := fmt.Errorf("failed to prepare environment variables: %w", err)
 		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
-		return nil, wrapped
+		return wrapped
 	}
 	c.logger.Debug("Prepared environment variables",
-		log.Str("instance", instanceName),
+		log.Str("instance", instance.Name),
 		log.Int("env_var_count", len(envVars)))
 
 	// Set environment variables in the instance
@@ -425,7 +478,7 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	if err := c.resolveMounts(ctx, service, instance); err != nil {
 		wrapped := fmt.Errorf("failed to resolve secret and config mounts: %w", err)
 		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
-		return nil, wrapped
+		return wrapped
 	}
 
 	// Store original image for future compatibility checks
@@ -454,7 +507,7 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	if err := c.runInitSteps(ctx, serviceRunner, service, instance); err != nil {
 		wrapped := fmt.Errorf("init steps failed: %w", err)
 		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
-		return nil, wrapped
+		return wrapped
 	}
 
 	// Update instance with pending status
@@ -469,7 +522,7 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	if err := serviceRunner.Create(ctx, instance); err != nil {
 		wrapped := fmt.Errorf("failed to create instance: %w", err)
 		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
-		return nil, wrapped
+		return wrapped
 	}
 
 	// Stamp the first-success marker so the reconciler can tell apart
@@ -485,13 +538,17 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	if err := serviceRunner.Start(ctx, instance); err != nil {
 		wrapped := fmt.Errorf("failed to start instance: %w", err)
 		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
-		return nil, wrapped
+		return wrapped
 	}
 
-	// Update instance with running status
+	// Update instance with running status. Clear all retry bookkeeping
+	// so the record looks pristine — operators querying a healthy
+	// instance shouldn't see leftover attempt counts from earlier
+	// stuck-in-create retries.
 	instance.Status = types.InstanceStatusRunning
 	instance.StatusMessage = "Created successfully"
 	instance.CreateAttempts = 0
+	instance.NextCreateAttemptAt = nil
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, service.Namespace, instance.ID, instance); err != nil {
 		c.logger.Error("Failed to update instance status",
 			log.Str("instance", instance.ID),
@@ -504,7 +561,7 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	c.republishService(ctx, service)
 	c.republishLocalInstances(ctx)
 
-	return instance, nil
+	return nil
 }
 
 // RecreateInstance destroys an existing instance and creates a new one with the same name
@@ -732,23 +789,71 @@ func (c *instanceController) recordCreateFailure(ctx context.Context, instance *
 	}
 	now := time.Now()
 	instance.CreateAttempts++
-	instance.Status = types.InstanceStatusFailed
 	instance.StatusMessage = err.Error()
 	instance.FailureReason = reason
 	instance.UpdatedAt = now
+
+	// Flip to Stalled when retries are exhausted so operators get a
+	// clear "stop waiting, take action" signal in `rune get instance`.
+	// Mirrors the volume controller's ProvisionRetriesExhausted shape.
+	// While Stalled, NextCreateAttemptAt stays nil — the reconciler
+	// never auto-retries; only `rune restart instance` or `rune cast`
+	// (new generation) re-arms the slot.
+	if instance.CreateAttempts >= maxCreateAttempts {
+		instance.Status = types.InstanceStatusStalled
+		instance.NextCreateAttemptAt = nil
+		c.logger.Warn("Instance create retries exhausted; marking Stalled",
+			log.Str("instance", instance.ID),
+			log.Str("reason", reason),
+			log.Int("attempts", instance.CreateAttempts))
+	} else {
+		instance.Status = types.InstanceStatusFailed
+		next := now.Add(createBackoffFor(instance.CreateAttempts))
+		instance.NextCreateAttemptAt = &next
+	}
+
 	// Deliberately do NOT set FailedAt here. FailedAt marks a *tombstone*
 	// — a container that successfully ran and was preserved for
 	// postmortem — and is what the retention GC keys off. A
 	// stuck-in-create record (ContainerEverCreatedAt == nil) is neither
 	// a tombstone nor evictable; the reconciler holds the slot in
-	// place via the isInstanceCompatibleWithService gate and an
-	// operator restart (or `rune cast`) re-arms the attempt.
+	// place via the isInstanceCompatibleWithService gate.
 	if updateErr := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); updateErr != nil {
 		c.logger.Error("Failed to persist create-failure status on instance",
 			log.Str("instance", instance.ID),
 			log.Str("reason", reason),
 			log.Err(updateErr))
 	}
+}
+
+// Backoff schedule for CreateInstance retries on a stuck-in-create
+// record. Reconciler tick is ~30s (see reconciler.go), so the
+// schedule 30s → 1m → 2m → 4m → 5m (cap) gives ~17 min total before
+// the 6th attempt flips the record to Stalled. The intent: precondition
+// errors that require operator action (StorageClassMissing, missing
+// secret, image-pull failures) take minutes to resolve and shouldn't
+// hammer the volume controller / image registry every tick.
+const (
+	maxCreateAttempts = 6
+	createBaseBackoff = 30 * time.Second
+	createMaxBackoff  = 5 * time.Minute
+)
+
+// createBackoffFor returns the delay to wait before the (attempt+1)-th
+// retry. Exponential with a cap at createMaxBackoff; attempt is
+// 1-based. Mirrors volumeController.backoffFor.
+func createBackoffFor(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := createBaseBackoff
+	for i := 1; i < attempt && d < createMaxBackoff; i++ {
+		d *= 2
+	}
+	if d > createMaxBackoff {
+		d = createMaxBackoff
+	}
+	return d
 }
 
 // classifyCreateError maps an error returned during CreateInstance to
@@ -1013,6 +1118,27 @@ func (c *instanceController) RestartInstance(ctx context.Context, instance *type
 		return fmt.Errorf("instance no longer exists: %w", err)
 	}
 
+	// Stuck-in-create record (Failed or Stalled with no container ever
+	// created): there's nothing to stop, no tombstone to spawn, and
+	// we want to keep the SAME UUID so operators following the slot
+	// don't have to chase a moving identifier. Reset the backoff
+	// counter so this manual restart gives the record a fresh
+	// retry budget, then re-run the create pipeline against the
+	// existing record.
+	if currentInstance.ContainerEverCreatedAt == nil &&
+		(currentInstance.Status == types.InstanceStatusFailed ||
+			currentInstance.Status == types.InstanceStatusStalled) {
+		var service types.Service
+		if err := c.store.Get(ctx, types.ResourceTypeService, currentInstance.Namespace, currentInstance.ServiceName, &service); err != nil {
+			return fmt.Errorf("failed to get service for restart: %w", err)
+		}
+		c.logger.Info("Operator restart on stuck-in-create instance; resetting attempt counter",
+			log.Str("instance", currentInstance.ID),
+			log.Int("prior_attempts", currentInstance.CreateAttempts))
+		currentInstance.CreateAttempts = 0
+		return c.RetryCreateInstance(ctx, &service, currentInstance)
+	}
+
 	// Check if the instance is in a state that can be restarted
 	if currentInstance.Status == types.InstanceStatusDeleted ||
 		currentInstance.Status == types.InstanceStatusFailed {
@@ -1177,18 +1303,20 @@ func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context
 		return false, "instance belongs to different service"
 	}
 
-	// Stuck-in-create record: Status=Failed but a container was never
-	// successfully created for this UUID (precondition failure such as
-	// StorageClassMissing, missing secret, image-pull error). The slot
-	// is legitimately held by this record — returning false would
-	// trigger tombstone+recreate-with-new-UUID every reconcile tick,
-	// the exact churn that
+	// Stuck-in-create record: Status=Failed (or Stalled) but a
+	// container was never successfully created for this UUID
+	// (precondition failure such as StorageClassMissing, missing
+	// secret, image-pull error). The slot is legitimately held by
+	// this record — returning false would trigger
+	// tombstone+recreate-with-new-UUID every reconcile tick, the
+	// exact churn that
 	// _docs/bugs-reporting/RUNE-BUG-RECONCILER-CHURN-ON-STABLE-PRECONDITION-FAILURE.md
 	// describes. Return true so the reconciler leaves the record in
-	// place; the operator unsticks it with `rune restart instance`
-	// (or a new service generation via `rune cast`). PR2 will add
-	// automatic retry with exponential backoff.
-	if instance.Status == types.InstanceStatusFailed && instance.ContainerEverCreatedAt == nil {
+	// place; the reconciler's retry-in-place branch handles backoff
+	// (Failed) or holds-without-retry (Stalled — operator must run
+	// `rune restart instance` or `rune cast` to re-arm).
+	if instance.ContainerEverCreatedAt == nil &&
+		(instance.Status == types.InstanceStatusFailed || instance.Status == types.InstanceStatusStalled) {
 		return true, ""
 	}
 

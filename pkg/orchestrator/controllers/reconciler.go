@@ -581,6 +581,45 @@ func (r *reconciler) reconcileExistingInstance(ctx context.Context, service *typ
 		log.Str("service", service.Name),
 		log.Str("instance", instance.ID))
 
+	// Stuck-in-create record: ContainerEverCreatedAt is nil so we
+	// know the runner never accepted a container for this UUID. The
+	// isInstanceCompatibleWithService gate already routed it here
+	// (the slot is held). Two branches:
+	//
+	//   * Status=Stalled       — retries exhausted; operator must
+	//                            run `rune restart instance` or
+	//                            `rune cast` (new generation) to
+	//                            re-arm. Do nothing this tick.
+	//   * Status=Failed        — backoff schedule controls the next
+	//                            attempt. If NextCreateAttemptAt
+	//                            has not yet passed, leave alone.
+	//                            Otherwise call RetryCreateInstance
+	//                            against the same UUID.
+	//
+	// This is the auto-retry counterpart to the loop-break gate
+	// added in PR1; together they restore self-healing without the
+	// UUID-confetti churn.
+	if instance.ContainerEverCreatedAt == nil {
+		switch instance.Status {
+		case types.InstanceStatusStalled:
+			// Operator action required; nothing to do.
+			return nil
+		case types.InstanceStatusFailed:
+			if instance.NextCreateAttemptAt != nil && time.Now().Before(*instance.NextCreateAttemptAt) {
+				// Backoff still in effect.
+				return nil
+			}
+			if err := r.instanceController.RetryCreateInstance(ctx, service, instance); err != nil {
+				r.logger.Warn("Retry create on stuck-in-create instance failed; backoff scheduled",
+					log.Str("service", service.Name),
+					log.Str("instance", instance.Name),
+					log.Int("attempt", instance.CreateAttempts),
+					log.Err(err))
+			}
+			return nil
+		}
+	}
+
 	// Try to update the instance in-place
 	if err := r.instanceController.UpdateInstance(ctx, service, instance); err != nil {
 		// Check if the error indicates that recreation is needed

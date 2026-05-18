@@ -10,6 +10,7 @@ import (
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func setupStore(t *testing.T) *store.TestStore {
@@ -551,4 +552,106 @@ func TestReconcilerCreateInstance(t *testing.T) {
 	assert.Equal(t, 1, len(instanceController.CreateInstanceCalls))
 	assert.Equal(t, "instance1", instanceController.CreateInstanceCalls[0].InstanceName)
 	assert.Equal(t, service, instanceController.CreateInstanceCalls[0].Service)
+}
+
+// TestReconcileExistingInstance_StuckInCreate_HonorsBackoff is the
+// reconciler-side guard for the PR2 backoff contract: when a
+// stuck-in-create record has NextCreateAttemptAt in the future, the
+// reconciler must NOT call RetryCreateInstance. Without this, the
+// reconciler would retry every 30s tick (matching today's churn cadence)
+// — the whole point of backoff would be defeated.
+func TestReconcileExistingInstance_StuckInCreate_HonorsBackoff(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	fakeHealthController := NewFakeHealthController()
+	logger := log.NewLogger()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   fakeHealthController,
+		logger:             logger.WithComponent("reconciler"),
+	}
+
+	future := time.Now().Add(2 * time.Minute)
+	stuck := &types.Instance{
+		ID:                  "stuck-id",
+		Name:                "stuck-0",
+		Namespace:           "default",
+		ServiceID:           "svc",
+		ServiceName:         "svc",
+		Status:              types.InstanceStatusFailed,
+		NextCreateAttemptAt: &future,
+	}
+	require.NoError(t, r.reconcileExistingInstance(context.Background(), &types.Service{ID: "svc", Name: "svc", Namespace: "default"}, stuck))
+
+	assert.Len(t, instanceController.RetryCreateInstanceCalls, 0,
+		"RetryCreateInstance must not be called while backoff is in effect")
+}
+
+// TestReconcileExistingInstance_StuckInCreate_RetriesWhenBackoffElapsed
+// is the positive case: once NextCreateAttemptAt is in the past, the
+// reconciler must trigger RetryCreateInstance so the workload has a
+// chance to self-heal (the inverse of the churn-bug fix — PR1 stopped
+// the bleed, PR2 restores self-healing on the same UUID).
+func TestReconcileExistingInstance_StuckInCreate_RetriesWhenBackoffElapsed(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	fakeHealthController := NewFakeHealthController()
+	logger := log.NewLogger()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   fakeHealthController,
+		logger:             logger.WithComponent("reconciler"),
+	}
+
+	past := time.Now().Add(-1 * time.Second)
+	stuck := &types.Instance{
+		ID:                  "stuck-id",
+		Name:                "stuck-0",
+		Namespace:           "default",
+		ServiceID:           "svc",
+		ServiceName:         "svc",
+		Status:              types.InstanceStatusFailed,
+		NextCreateAttemptAt: &past,
+	}
+	require.NoError(t, r.reconcileExistingInstance(context.Background(), &types.Service{ID: "svc", Name: "svc", Namespace: "default"}, stuck))
+
+	require.Len(t, instanceController.RetryCreateInstanceCalls, 1,
+		"backoff elapsed: reconciler must trigger RetryCreateInstance")
+	assert.Equal(t, "stuck-id", instanceController.RetryCreateInstanceCalls[0].Instance.ID,
+		"retry must target the SAME record (no new UUID)")
+}
+
+// TestReconcileExistingInstance_Stalled_NoAutoRetry is the
+// operator-action guard: Stalled records must never trigger auto-retry,
+// only `rune restart instance` / `rune cast` can re-arm them. Without
+// this guard a Stalled record would retry on every tick (the same
+// churn cadence we just fixed, just on the same UUID).
+func TestReconcileExistingInstance_Stalled_NoAutoRetry(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	fakeHealthController := NewFakeHealthController()
+	logger := log.NewLogger()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   fakeHealthController,
+		logger:             logger.WithComponent("reconciler"),
+	}
+
+	stalled := &types.Instance{
+		ID:          "stalled-id",
+		Name:        "stalled-0",
+		Namespace:   "default",
+		ServiceID:   "svc",
+		ServiceName: "svc",
+		Status:      types.InstanceStatusStalled,
+	}
+	require.NoError(t, r.reconcileExistingInstance(context.Background(), &types.Service{ID: "svc", Name: "svc", Namespace: "default"}, stalled))
+
+	assert.Len(t, instanceController.RetryCreateInstanceCalls, 0,
+		"Stalled records must never auto-retry")
+	assert.Len(t, instanceController.UpdateInstanceCalls, 0,
+		"Stalled records must not flow into UpdateInstance either")
 }
