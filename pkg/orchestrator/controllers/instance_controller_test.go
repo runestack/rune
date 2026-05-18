@@ -1426,3 +1426,63 @@ func TestGetInstanceLogs_FallbackError_WhenNoSnapshotAndNoContainer(t *testing.T
 	_, err := controller.GetInstanceLogs(ctx, tomb, types.LogOptions{})
 	require.Error(t, err)
 }
+
+// TestDeleteInstance_SnapshotsLastLogsBeforeTearDown is the
+// regression guard that closes the loop on bug
+// RUNE-BUG-RUNE-LOGS-IGNORES-TOMBSTONE-LASTLOGS: the LastLogs field
+// existed in the type but was never populated, so the
+// service-level tombstone fallback (GetServiceLogs → most-recent
+// tombstone with LastLogs) had nothing to read. DeleteInstance is
+// the lifecycle moment that destroys the container; if we don't
+// snapshot here, the only postmortem trail (LastLogs) goes with it.
+func TestDeleteInstance_SnapshotsLastLogsBeforeTearDown(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	created := time.Now().Add(-1 * time.Hour)
+	rec := &types.Instance{
+		ID:                     "with-container",
+		Name:                   "doomed-0",
+		Namespace:              "default",
+		Runner:                 testRunner.Type(),
+		Status:                 types.InstanceStatusRunning,
+		ContainerEverCreatedAt: &created, // had a container
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+	testRunner.LogOutput = []byte("captured stderr from the dying container\n")
+
+	require.NoError(t, controller.DeleteInstance(ctx, rec))
+
+	var stored types.Instance
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, "default", rec.ID, &stored))
+	assert.Equal(t, types.InstanceStatusDeleted, stored.Status)
+	assert.NotEmpty(t, stored.LastLogs, "DeleteInstance must snapshot LastLogs before tearing the container down")
+	assert.Equal(t, "captured stderr from the dying container\n", string(stored.LastLogs))
+	require.NotNil(t, stored.LastLogsCapturedAt)
+}
+
+// TestSnapshotInstanceLogs_NoOpForNeverCreated guards the
+// optimisation that skips snapshotting when there was no container
+// in the first place (precondition-failed records). Without this
+// the snapshot would invoke the runner with no container to look
+// at, generating noise.
+func TestSnapshotInstanceLogs_NoOpForNeverCreated(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	rec := &types.Instance{
+		ID:                     "never-had-container",
+		Name:                   "stuck-0",
+		Namespace:              "default",
+		Runner:                 testRunner.Type(),
+		Status:                 types.InstanceStatusFailed,
+		ContainerEverCreatedAt: nil,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+	testRunner.LogOutput = []byte("should not be read")
+
+	cc := controller.(*instanceController)
+	cc.snapshotInstanceLogs(ctx, rec)
+
+	assert.Empty(t, rec.LastLogs, "stuck-in-create records (no container) must not trigger a runner.GetLogs call")
+}

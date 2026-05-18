@@ -756,6 +756,11 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 // replacement next reconcile tick (or synchronously from RestartInstance)
 // will just work.
 func (c *instanceController) markInstanceFailedInPlace(ctx context.Context, instance *types.Instance, restartReason InstanceRestartReason) error {
+	// Capture the tail of the container's stdout/stderr before we
+	// freeze the record. Without this, `rune logs <id>` falls back
+	// to the LastLogs snapshot only to find the field empty —
+	// defeating the whole point of preserving the postmortem.
+	c.snapshotInstanceLogs(ctx, instance)
 	now := time.Now()
 	instance.Status = types.InstanceStatusFailed
 	instance.StatusMessage = fmt.Sprintf("Preserved for postmortem after %s", restartReason)
@@ -840,6 +845,64 @@ const (
 	createMaxBackoff  = 5 * time.Minute
 )
 
+// snapshotLogBytes caps the per-instance stdout/stderr snapshot
+// captured into Instance.LastLogs before the runner removes the
+// container. 200KB matches the runefile config comment and is
+// enough to carry the tail of a typical crash trace (a couple
+// hundred lines of stack), without bloating the store.
+const snapshotLogBytes = 200 * 1024
+
+// snapshotInstanceLogs reads the tail of an instance's runner logs
+// and stamps Instance.LastLogs / LastLogsCapturedAt / LastLogsTruncated
+// so `rune logs <id>` and the service-level tombstone fallback can
+// still serve them after the container is gone. Best-effort: if the
+// runner can't be reached or has no logs (the common cases where the
+// snapshot would have been empty anyway), this is a no-op.
+//
+// Designed to be called from DeleteInstance and markInstanceFailedInPlace
+// — i.e. exactly the lifecycle moments where we are ABOUT to lose
+// the container and therefore the live log stream.
+func (c *instanceController) snapshotInstanceLogs(ctx context.Context, instance *types.Instance) {
+	if instance == nil || instance.ContainerEverCreatedAt == nil {
+		return
+	}
+	// Already snapshotted? Don't overwrite — keep the original
+	// crash output rather than replacing it with whatever the
+	// reconciler picks up later.
+	if len(instance.LastLogs) > 0 {
+		return
+	}
+	_runner, err := c.runnerManager.GetInstanceRunner(instance)
+	if err != nil {
+		return
+	}
+	rc, err := _runner.GetLogs(ctx, instance, runner.LogOptions{Tail: 0})
+	if err != nil || rc == nil {
+		return
+	}
+	defer rc.Close()
+	// Bounded read: at most snapshotLogBytes+1 so we can detect
+	// truncation cheaply.
+	limited := io.LimitReader(rc, int64(snapshotLogBytes)+1)
+	buf, err := io.ReadAll(limited)
+	if err != nil || len(buf) == 0 {
+		return
+	}
+	truncated := false
+	if len(buf) > snapshotLogBytes {
+		buf = buf[:snapshotLogBytes]
+		truncated = true
+	}
+	now := time.Now()
+	instance.LastLogs = buf
+	instance.LastLogsCapturedAt = &now
+	instance.LastLogsTruncated = truncated
+	c.logger.Debug("Captured LastLogs snapshot",
+		log.Str("instance", instance.ID),
+		log.Int("bytes", len(buf)),
+		log.Bool("truncated", truncated))
+}
+
 // createBackoffFor returns the delay to wait before the (attempt+1)-th
 // retry. Exponential with a cap at createMaxBackoff; attempt is
 // 1-based. Mirrors volumeController.backoffFor.
@@ -899,6 +962,12 @@ func (c *instanceController) DeleteInstance(ctx context.Context, instance *types
 		log.Str("instance", instance.ID),
 		log.Str("namespace", instance.Namespace),
 		log.Str("service", instance.ServiceName))
+
+	// Snapshot the container's stdout/stderr before we tear it down,
+	// so `rune logs <id>` and the service-level tombstone fallback
+	// can serve them after the container is gone. Best-effort; no-op
+	// for instances that never had a container.
+	c.snapshotInstanceLogs(ctx, instance)
 
 	// Get the runner for this instance
 	runner, err := c.runnerManager.GetInstanceRunner(instance)
