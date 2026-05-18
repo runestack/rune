@@ -1535,3 +1535,44 @@ func TestGetInstanceLogs_LiveSilentContainer_FallsBackToLastLogs(t *testing.T) {
 	assert.Equal(t, "previous-attempt-output\n", string(body),
 		"silent live container must fall back to LastLogs, not return empty body")
 }
+
+// TestCreateInstance_WithReadinessProbe_StaysStartingUntilProbePasses
+// asserts the readiness gate added in this PR: when a service
+// defines a readiness probe, the freshly-created instance must NOT
+// flip to Running on runner.Start success — it stays Starting until
+// the health controller observes the first readiness pass. Without
+// this, prod/gateway showed Status=Running for ~30s before the
+// liveness probe killed it, even though the app was never ready to
+// serve traffic.
+func TestCreateInstance_WithReadinessProbe_StaysStartingUntilProbePasses(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+	service.Health = &types.HealthCheck{
+		Readiness: &types.Probe{Type: "http", Path: "/ready", Port: 8080},
+	}
+	// Persist the updated spec so prepareEnvVars / etc. see the same one.
+	require.NoError(t, testStore.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, service))
+
+	instance, err := controller.CreateInstance(ctx, service, "ready-gated-0")
+	require.NoError(t, err)
+	assert.Equal(t, types.InstanceStatusStarting, instance.Status,
+		"with a readiness probe defined, runner.Start must NOT promote to Running")
+	assert.Contains(t, instance.StatusMessage, "readiness probe",
+		"status message must signal what we're waiting on")
+}
+
+// TestCreateInstance_NoReadinessProbe_PromotesToRunningAsBefore
+// is the regression guard for the unchanged path: services WITHOUT
+// a readiness probe still flip to Running on runner.Start (no
+// probe = no signal = trust the runner). Tightening too far here
+// would surprise every service that omitted readiness (i.e. most
+// of them today).
+func TestCreateInstance_NoReadinessProbe_PromotesToRunningAsBefore(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+	// No service.Health → no readiness probe.
+
+	instance, err := controller.CreateInstance(ctx, service, "no-probe-0")
+	require.NoError(t, err)
+	assert.Equal(t, types.InstanceStatusRunning, instance.Status)
+}

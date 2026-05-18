@@ -542,12 +542,27 @@ func (c *instanceController) runCreateAttempt(ctx context.Context, service *type
 		return wrapped
 	}
 
-	// Update instance with running status. Clear all retry bookkeeping
-	// so the record looks pristine — operators querying a healthy
-	// instance shouldn't see leftover attempt counts from earlier
-	// stuck-in-create retries.
-	instance.Status = types.InstanceStatusRunning
-	instance.StatusMessage = "Created successfully"
+	// Status transition after a successful container start.
+	//
+	// Without a readiness probe we promote straight to Running — that's
+	// what "the runtime accepted the container" means in the absence of
+	// any other signal.
+	//
+	// With a readiness probe we hold at Starting until the health
+	// controller observes the first readiness pass and promotes us. The
+	// previous behaviour (always flip to Running on runner.Start
+	// success) was operator-confusing on services like prod/gateway
+	// that show `Running` for ~30s while the app boots, then get
+	// SIGKILL'd by the liveness probe — the "Running" status was real
+	// but didn't mean "ready to serve traffic." Matches K8s semantics
+	// where Pod.Phase=Running ≠ Ready.
+	if service.Health != nil && service.Health.Readiness != nil {
+		instance.Status = types.InstanceStatusStarting
+		instance.StatusMessage = "Waiting for readiness probe"
+	} else {
+		instance.Status = types.InstanceStatusRunning
+		instance.StatusMessage = "Created successfully"
+	}
 	instance.CreateAttempts = 0
 	instance.NextCreateAttemptAt = nil
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, service.Namespace, instance.ID, instance); err != nil {

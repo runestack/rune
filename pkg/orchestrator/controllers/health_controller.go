@@ -499,10 +499,26 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 			ih.readinessResults = ih.readinessResults[1:]
 		}
 
-		// Update readiness status based on success
+		wasReady := ih.readinessStatus
 		ih.readinessStatus = result.Success
 
-		// Log the result
+		// First successful readiness pass promotes the instance from
+		// Starting to Running. CreateInstance leaves freshly-started
+		// instances at Starting when a readiness probe is defined so
+		// that Status=Running can carry its conventional meaning of
+		// "ready to serve traffic". Best-effort: a store update
+		// failure leaves the instance at Starting, which the
+		// reconciler will surface as Pending in the service rollup
+		// (the bigger truth — "service isn't serving yet" — still
+		// reaches the operator).
+		if result.Success && !wasReady {
+			if err := c.promoteToRunningOnReady(instanceID); err != nil {
+				c.logger.Warn("Failed to promote instance to Running on first readiness pass",
+					log.Str("instance", instanceID),
+					log.Err(err))
+			}
+		}
+
 		if result.Success {
 			c.logger.Debug("Readiness check passed",
 				log.Str("instance", instanceID),
@@ -516,6 +532,38 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 	}
 
 	ih.lastCheck = time.Now()
+}
+
+// promoteToRunningOnReady flips an instance's Status from Starting to
+// Running on the first successful readiness probe. Loads the current
+// record (so we don't overwrite concurrent updates from the
+// reconciler) and only writes when the instance is still in the
+// Starting state we left it in — otherwise the reconciler may have
+// already moved it (Failed, Stopped, Deleted) and we have no business
+// resurrecting it. Best-effort; called under the instanceHealth lock
+// but operates on the store independently.
+func (c *healthController) promoteToRunningOnReady(instanceID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	current, err := c.store.GetInstanceByID(ctx, "", instanceID)
+	if err != nil {
+		return fmt.Errorf("get instance: %w", err)
+	}
+	if current.Status != types.InstanceStatusStarting {
+		// Nothing to do — instance has moved on (Running already,
+		// or Failed/Stopped/Deleted by some other path).
+		return nil
+	}
+	current.Status = types.InstanceStatusRunning
+	current.StatusMessage = "Ready"
+	current.UpdatedAt = time.Now()
+	if err := c.store.Update(ctx, types.ResourceTypeInstance, current.Namespace, current.ID, current); err != nil {
+		return fmt.Errorf("update instance status: %w", err)
+	}
+	c.logger.Info("Instance promoted to Running on first readiness pass",
+		log.Str("instance", instanceID))
+	return nil
 }
 
 // restartInstanceWithBackoff restarts an instance with exponential backoff

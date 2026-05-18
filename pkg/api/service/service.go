@@ -245,6 +245,24 @@ func (s *ServiceService) ListServices(ctx context.Context, req *generated.ListSe
 			continue
 		}
 
+		// Inline instances so the CLI's READY column can show a real
+		// running/desired count instead of inferring it from
+		// service.Status. Without this, `rune get services` shows
+		// `Running 1/1` for any service whose status field is Running,
+		// even if the underlying instance is mid-restart and not
+		// actually serving. Matches what GetService already does.
+		if instances, ierr := s.getServiceInstances(ctx, service.Namespace, service.ID); ierr != nil {
+			s.logger.Warn("Failed to list instances for service during ListServices",
+				log.Str("namespace", service.Namespace), log.Str("service", service.Name), log.Err(ierr))
+		} else {
+			service.Instances = make([]types.Instance, 0, len(instances))
+			for _, inst := range instances {
+				if inst != nil {
+					service.Instances = append(service.Instances, *inst)
+				}
+			}
+		}
+
 		protoService := client.ServiceToProto(service)
 		if err != nil {
 			s.logger.Error("Failed to convert service to proto", log.Err(err))
