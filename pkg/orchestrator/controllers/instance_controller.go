@@ -399,7 +399,9 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	// Create instance based on runtime
 	serviceRunner, err := c.runnerManager.GetServiceRunner(service)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get runner for service: %w", err)
+		wrapped := fmt.Errorf("failed to get runner for service: %w", err)
+		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
+		return nil, wrapped
 	}
 
 	// Set the runner type for the instance
@@ -408,7 +410,9 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	// Build environment variables and interpolate secret:/config: values
 	envVars, err := c.prepareEnvVars(ctx, service, instance)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare environment variables: %w", err)
+		wrapped := fmt.Errorf("failed to prepare environment variables: %w", err)
+		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
+		return nil, wrapped
 	}
 	c.logger.Debug("Prepared environment variables",
 		log.Str("instance", instanceName),
@@ -419,7 +423,9 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 
 	// Resolve secret and config mounts for this instance
 	if err := c.resolveMounts(ctx, service, instance); err != nil {
-		return nil, fmt.Errorf("failed to resolve secret and config mounts: %w", err)
+		wrapped := fmt.Errorf("failed to resolve secret and config mounts: %w", err)
+		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
+		return nil, wrapped
 	}
 
 	// Store original image for future compatibility checks
@@ -446,7 +452,9 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	// Run init steps before the main container is created (RUNE-121).
 	// On failure this sets instance.Status=Failed and returns an error.
 	if err := c.runInitSteps(ctx, serviceRunner, service, instance); err != nil {
-		return nil, fmt.Errorf("init steps failed: %w", err)
+		wrapped := fmt.Errorf("init steps failed: %w", err)
+		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
+		return nil, wrapped
 	}
 
 	// Update instance with pending status
@@ -459,29 +467,31 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 
 	// Create the instance using the runner
 	if err := serviceRunner.Create(ctx, instance); err != nil {
-		instance.Status = types.InstanceStatusFailed
-		if updateErr := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); updateErr != nil {
-			c.logger.Error("Failed to update instance status after create failure",
-				log.Str("instance", instance.ID),
-				log.Err(updateErr))
-		}
-		return nil, fmt.Errorf("failed to create instance: %w", err)
+		wrapped := fmt.Errorf("failed to create instance: %w", err)
+		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
+		return nil, wrapped
+	}
+
+	// Stamp the first-success marker so the reconciler can tell apart
+	// "container vanished" (recreate is correct) from "create never
+	// succeeded" (recreate would just churn — keep retrying the same
+	// record). Set once; never cleared.
+	if instance.ContainerEverCreatedAt == nil {
+		now := time.Now()
+		instance.ContainerEverCreatedAt = &now
 	}
 
 	// Start the instance
 	if err := serviceRunner.Start(ctx, instance); err != nil {
-		instance.Status = types.InstanceStatusFailed
-		if updateErr := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); updateErr != nil {
-			c.logger.Error("Failed to update instance status after start failure",
-				log.Str("instance", instance.ID),
-				log.Err(updateErr))
-		}
-		return nil, fmt.Errorf("failed to start instance: %w", err)
+		wrapped := fmt.Errorf("failed to start instance: %w", err)
+		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
+		return nil, wrapped
 	}
 
 	// Update instance with running status
 	instance.Status = types.InstanceStatusRunning
 	instance.StatusMessage = "Created successfully"
+	instance.CreateAttempts = 0
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, service.Namespace, instance.ID, instance); err != nil {
 		c.logger.Error("Failed to update instance status",
 			log.Str("instance", instance.ID),
@@ -702,6 +712,79 @@ func (c *instanceController) markInstanceFailedInPlace(ctx context.Context, inst
 		log.Str("container_id", instance.ContainerID),
 		log.Str("reason", string(restartReason)))
 	return nil
+}
+
+// recordCreateFailure persists the failure of a CreateInstance attempt
+// onto the existing instance record (same UUID, same Name) so operators
+// can see why an instance is stuck via `rune get instance -o yaml`.
+// Without this, the failure reason only lives in transient runed logs
+// and the record stays at Status=Pending with no detail.
+//
+// Sets Status=Failed, FailedAt=now, FailureReason, StatusMessage, and
+// increments CreateAttempts. Whether the reconciler retries this same
+// record in place or tombstones and recreates is decided downstream
+// via the ContainerEverCreatedAt gate: nil means create never
+// succeeded (precondition failure — operator must fix), non-nil means
+// the container existed at some point (transient — recreate).
+func (c *instanceController) recordCreateFailure(ctx context.Context, instance *types.Instance, err error, reason string) {
+	if instance == nil {
+		return
+	}
+	now := time.Now()
+	instance.CreateAttempts++
+	instance.Status = types.InstanceStatusFailed
+	instance.StatusMessage = err.Error()
+	instance.FailureReason = reason
+	instance.UpdatedAt = now
+	// Deliberately do NOT set FailedAt here. FailedAt marks a *tombstone*
+	// — a container that successfully ran and was preserved for
+	// postmortem — and is what the retention GC keys off. A
+	// stuck-in-create record (ContainerEverCreatedAt == nil) is neither
+	// a tombstone nor evictable; the reconciler holds the slot in
+	// place via the isInstanceCompatibleWithService gate and an
+	// operator restart (or `rune cast`) re-arms the attempt.
+	if updateErr := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); updateErr != nil {
+		c.logger.Error("Failed to persist create-failure status on instance",
+			log.Str("instance", instance.ID),
+			log.Str("reason", reason),
+			log.Err(updateErr))
+	}
+}
+
+// classifyCreateError maps an error returned during CreateInstance to
+// a short, machine-friendly FailureReason slug surfaced on the
+// instance record. New reasons can be added without breaking
+// consumers — unrecognised errors fall through to "CreateFailed".
+func classifyCreateError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "StorageClassMissing"):
+		return "StorageClassMissing"
+	case strings.Contains(msg, "InvalidParameters"):
+		return "VolumeInvalidParameters"
+	case strings.Contains(msg, "ProvisionRetriesExhausted"):
+		return "VolumeProvisionStalled"
+	case strings.Contains(msg, "volume ") && strings.Contains(msg, "is not ready"):
+		return "VolumeNotReady"
+	case strings.Contains(msg, "resolve secret"):
+		return "SecretNotFound"
+	case strings.Contains(msg, "resolve config"):
+		return "ConfigmapNotFound"
+	case strings.Contains(msg, "prepare environment variables"):
+		return "EnvResolveFailed"
+	case strings.Contains(msg, "init steps failed"):
+		return "InitStepFailed"
+	case strings.Contains(msg, "get runner"):
+		return "RunnerUnavailable"
+	case strings.Contains(msg, "failed to create instance:"):
+		return "RunnerCreateError"
+	case strings.Contains(msg, "failed to start instance"):
+		return "RunnerStartError"
+	}
+	return "CreateFailed"
 }
 
 // DeleteInstance marks an instance for deletion and cleans up runner resources
@@ -1092,6 +1175,21 @@ func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context
 	// Check if the instance belongs to the correct service
 	if instance.ServiceID != service.ID {
 		return false, "instance belongs to different service"
+	}
+
+	// Stuck-in-create record: Status=Failed but a container was never
+	// successfully created for this UUID (precondition failure such as
+	// StorageClassMissing, missing secret, image-pull error). The slot
+	// is legitimately held by this record — returning false would
+	// trigger tombstone+recreate-with-new-UUID every reconcile tick,
+	// the exact churn that
+	// _docs/bugs-reporting/RUNE-BUG-RECONCILER-CHURN-ON-STABLE-PRECONDITION-FAILURE.md
+	// describes. Return true so the reconciler leaves the record in
+	// place; the operator unsticks it with `rune restart instance`
+	// (or a new service generation via `rune cast`). PR2 will add
+	// automatic retry with exponential backoff.
+	if instance.Status == types.InstanceStatusFailed && instance.ContainerEverCreatedAt == nil {
+		return true, ""
 	}
 
 	// Check if the instance is in a failed state

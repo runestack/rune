@@ -108,6 +108,21 @@ type Instance struct {
 	// (we hit the byte cap). The CLI shows a "[truncated]" marker so
 	// operators know there was more output above what's preserved.
 	LastLogsTruncated bool `json:"lastLogsTruncated,omitempty" yaml:"lastLogsTruncated,omitempty"`
+
+	// CreateAttempts counts how many times the orchestrator has tried
+	// to stand this instance record up (resolve mounts → run init →
+	// runner.Create → runner.Start). Persisted on the record so a runed
+	// restart does not reset progress against a stable precondition
+	// failure (e.g. StorageClassMissing). Zeroed on first success.
+	CreateAttempts int `json:"createAttempts,omitempty" yaml:"createAttempts,omitempty"`
+
+	// ContainerEverCreatedAt is the wall-clock time `runner.Create`
+	// first succeeded for this instance ID. The reconciler uses this
+	// to distinguish "create has never succeeded" (precondition
+	// failure — keep retrying the same record) from "container
+	// vanished" (docker rm, host reboot — tombstone and recreate).
+	// nil until the first successful runner.Create.
+	ContainerEverCreatedAt *time.Time `json:"containerEverCreatedAt,omitempty" yaml:"containerEverCreatedAt,omitempty"`
 }
 
 func (i *Instance) GetResourceType() ResourceType {
