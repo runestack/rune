@@ -1063,3 +1063,121 @@ func TestPrepareEnvVars_EnvFrom(t *testing.T) {
 	_, err = instanceCtrl.prepareEnvVars(ctx, badService, instance)
 	require.Error(t, err)
 }
+
+// TestCreateInstance_SuccessSetsContainerEverCreatedAt asserts that a
+// successful CreateInstance stamps ContainerEverCreatedAt and zeroes
+// CreateAttempts. This is the load-bearing field used by the reconciler
+// to tell "container vanished" apart from "create never succeeded";
+// regressing this would re-introduce the churn loop documented in
+// _docs/bugs-reporting/RUNE-BUG-RECONCILER-CHURN-ON-STABLE-PRECONDITION-FAILURE.md.
+func TestCreateInstance_SuccessSetsContainerEverCreatedAt(t *testing.T) {
+	ctx, _, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(t.Context(), t, controllerTestStore(controller), "test-service", types.RestartPolicyAlways)
+
+	instance, err := controller.CreateInstance(ctx, service, "test-instance-0")
+	require.NoError(t, err)
+	require.NotNil(t, instance.ContainerEverCreatedAt, "ContainerEverCreatedAt must be set after first successful Create")
+	assert.Equal(t, 0, instance.CreateAttempts, "CreateAttempts should be reset to 0 on success")
+}
+
+// TestCreateInstance_RunnerCreateError_RecordsReason simulates a runner
+// Create failure (the same shape as docker returning an error for an
+// unresolvable image / volume / etc.) and asserts the instance record
+// is updated in-place with the failure reason, NOT left at Pending
+// with no detail. The user-facing payoff: `rune get instance -o yaml`
+// now shows StatusMessage and FailureReason instead of an opaque
+// Pending.
+func TestCreateInstance_RunnerCreateError_RecordsReason(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	// Inject a runner-side create failure.
+	testRunner.ErrorToReturn = assert.AnError
+	_, err := controller.CreateInstance(ctx, service, "test-instance-0")
+	require.Error(t, err)
+
+	// The record must still exist (no leaking-blank-Pending), with
+	// StatusMessage + FailureReason populated and ContainerEverCreatedAt
+	// left nil so the reconciler treats it as stuck-in-create.
+	var stored []types.Instance
+	require.NoError(t, testStore.List(ctx, types.ResourceTypeInstance, "default", &stored))
+	require.Len(t, stored, 1, "Failed create must leave the record in place")
+	rec := stored[0]
+	assert.Equal(t, types.InstanceStatusFailed, rec.Status)
+	assert.NotEmpty(t, rec.StatusMessage, "StatusMessage must surface the failure to operators")
+	assert.NotEmpty(t, rec.FailureReason, "FailureReason must be set so it can be filtered/searched")
+	assert.Equal(t, 1, rec.CreateAttempts, "CreateAttempts must increment on failure")
+	assert.Nil(t, rec.ContainerEverCreatedAt, "ContainerEverCreatedAt must remain nil when Create never succeeded")
+	assert.Nil(t, rec.FailedAt, "FailedAt must remain nil — stuck-in-create is not a tombstone (would skew retention GC)")
+}
+
+// TestIsInstanceCompatibleWithService_StuckInCreateHoldsSlot is the
+// regression guard against the churn loop. A Failed record whose
+// container never came up (ContainerEverCreatedAt == nil) must report
+// as compatible so the reconciler does NOT tombstone+recreate-with-
+// new-UUID every tick. The slot is held in place until an operator
+// re-arms it via `rune restart instance`.
+func TestIsInstanceCompatibleWithService_StuckInCreateHoldsSlot(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	stuck := &types.Instance{
+		ID:                     "stuck-id",
+		Name:                   "stuck-0",
+		Namespace:              "default",
+		ServiceID:              service.ID,
+		ServiceName:            service.Name,
+		Status:                 types.InstanceStatusFailed,
+		StatusMessage:          "failed to resolve volume mount",
+		FailureReason:          "VolumeNotReady",
+		ContainerEverCreatedAt: nil, // never had a container
+		Metadata:               &types.InstanceMetadata{ServiceGeneration: 1},
+	}
+
+	ok, reason := controller.isInstanceCompatibleWithService(ctx, stuck, service)
+	assert.True(t, ok, "stuck-in-create record must claim its slot to break the churn loop")
+	assert.Empty(t, reason)
+}
+
+// TestIsInstanceCompatibleWithService_VanishedContainerStillTriggersRecreate
+// is the symmetrical regression guard: a record that WAS running
+// (ContainerEverCreatedAt set) but whose container is gone from the
+// runner (docker rm, host reboot, daemon crash) must still report
+// incompatible so the existing tombstone+recreate path runs. Without
+// this, real recovery scenarios silently stop working.
+func TestIsInstanceCompatibleWithService_VanishedContainerStillTriggersRecreate(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	created := time.Now().Add(-1 * time.Hour)
+	vanished := &types.Instance{
+		ID:                     "vanished-id",
+		Name:                   "vanished-0",
+		Namespace:              "default",
+		ServiceID:              service.ID,
+		ServiceName:            service.Name,
+		Runner:                 testRunner.Type(),
+		Status:                 types.InstanceStatusRunning,
+		ContainerEverCreatedAt: &created, // container did exist
+		Metadata:               &types.InstanceMetadata{ServiceGeneration: 1},
+	}
+	// Container is gone: runner.Status will return error.
+	testRunner.ErrorToReturn = assert.AnError
+
+	ok, reason := controller.isInstanceCompatibleWithService(ctx, vanished, service)
+	assert.False(t, ok, "vanished-container records must trigger recreate so the workload recovers")
+	assert.Contains(t, reason, "not found in runner")
+}
+
+// controllerTestStore is a tiny adapter to get the underlying TestStore
+// back from the interface-typed controller in tests that only carry the
+// InstanceController and need the store too. It avoids changing setup
+// helpers used by every other test in this file.
+func controllerTestStore(c InstanceController) *store.TestStore {
+	if cc, ok := c.(*instanceController); ok {
+		if ts, ok := cc.store.(*store.TestStore); ok {
+			return ts
+		}
+	}
+	return nil
+}
