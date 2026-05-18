@@ -170,6 +170,12 @@ func (r *TestRunner) Rename(ctx context.Context, instance *types.Instance, newNa
 	return nil
 }
 
+// RunDebug is unsupported by the test runner; included so it satisfies
+// the Runner interface. Returns ErrDebugNotSupported.
+func (r *TestRunner) RunDebug(ctx context.Context, instance *types.Instance, options ExecOptions) (ExecStream, error) {
+	return nil, ErrDebugNotSupported
+}
+
 // Remove tracks instance removal
 func (r *TestRunner) Remove(ctx context.Context, instance *types.Instance, force bool) error {
 	r.mu.Lock()

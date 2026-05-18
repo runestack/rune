@@ -48,6 +48,18 @@ type Runner interface {
 	// Returns an ExecStream for bidirectional communication.
 	Exec(ctx context.Context, instance *types.Instance, options ExecOptions) (ExecStream, error)
 
+	// RunDebug spawns an ephemeral inspection container ("sidecar") from
+	// the given (typically Failed) instance's image+env+mounts, with the
+	// entrypoint overridden to `sleep infinity` so the inner app does NOT
+	// re-run, then opens an exec session against the sidecar to run the
+	// caller's command. The sidecar is stopped and removed when the
+	// returned ExecStream is Closed (use defer). The original instance's
+	// container is never touched.
+	//
+	// Runners that don't support spawn-from-template return
+	// ErrDebugNotSupported.
+	RunDebug(ctx context.Context, instance *types.Instance, options ExecOptions) (ExecStream, error)
+
 	// Dial opens a TCP connection to the given port on the running
 	// instance. Used by the port-forward command (RUNE-122). The
 	// returned net.Conn is owned by the caller and must be Closed.
@@ -92,6 +104,19 @@ type errInitNotSupported struct{}
 
 func (errInitNotSupported) Error() string {
 	return "runner does not support init steps"
+}
+
+// ErrDebugNotSupported is returned by Runner.RunDebug implementations
+// that don't support spawning an ephemeral sidecar from an existing
+// instance's template (process runner, test runner). The exec service
+// surfaces this as FailedPrecondition with a clear "your runtime
+// doesn't support --debug" message instead of pretending it worked.
+var ErrDebugNotSupported = errDebugNotSupported{}
+
+type errDebugNotSupported struct{}
+
+func (errDebugNotSupported) Error() string {
+	return "runner does not support --debug inspection sidecars"
 }
 
 // RunnerProvider defines a simplified interface for getting runners

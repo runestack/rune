@@ -20,6 +20,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/google/uuid"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/runner/docker/registryauth"
@@ -600,6 +601,126 @@ func (r *DockerRunner) List(ctx context.Context, namespace string) ([]*runetypes
 	}
 
 	return instances, nil
+}
+
+// RunDebug spawns an ephemeral inspection sidecar from the given instance's
+// template (image, env, mounts, resources) with the entrypoint overridden to
+// `sleep infinity` so the failing app does not re-run. Opens an exec session
+// against the sidecar to run options.Command. The sidecar is torn down (stop
+// + remove) when the returned ExecStream is Closed.
+//
+// The caller's instance is treated as a TEMPLATE only — its container is not
+// touched. The sidecar gets its own container ID + labels so getContainerID
+// lookups never confuse the two.
+func (r *DockerRunner) RunDebug(ctx context.Context, instance *runetypes.Instance, options runner.ExecOptions) (runner.ExecStream, error) {
+	if instance == nil {
+		return nil, fmt.Errorf("invalid instance: nil pointer")
+	}
+	if len(options.Command) == 0 {
+		return nil, fmt.Errorf("debug exec requires a command")
+	}
+
+	cfg, hostCfg, err := r.instanceToContainerConfig(instance)
+	if err != nil {
+		return nil, fmt.Errorf("build sidecar config: %w", err)
+	}
+
+	// Replace the entrypoint so the failing app doesn't re-run when we
+	// start the container. `sleep infinity` keeps PID 1 alive long
+	// enough for the user's exec to attach and inspect state. Clear Cmd
+	// so it doesn't add args to sleep.
+	cfg.Entrypoint = []string{"sleep", "infinity"}
+	cfg.Cmd = nil
+
+	// Tag the sidecar with its own unique instance.id label so
+	// getContainerID label lookups never confuse it with the original
+	// tombstone (they share a parent instance.id otherwise).
+	sidecarID := uuid.New().String()
+	if cfg.Labels == nil {
+		cfg.Labels = map[string]string{}
+	}
+	cfg.Labels["rune.debug"] = "true"
+	cfg.Labels["rune.instance.id"] = sidecarID
+	cfg.Labels["rune.debug.parent"] = instance.ID
+
+	short := sidecarID
+	if len(short) >= 8 {
+		short = short[:8]
+	}
+	name := fmt.Sprintf("%s-debug-%s", instance.Name, short)
+
+	// Use missing-pull policy: the failed instance's image is almost
+	// certainly already cached locally (it was just running). Skipping
+	// "always" avoids a redundant network round-trip when starting a
+	// postmortem session.
+	if err := r.pullImage(ctx, cfg.Image, runetypes.ImagePullMissing); err != nil {
+		return nil, fmt.Errorf("pull sidecar image: %w", err)
+	}
+
+	resp, err := r.client.ContainerCreate(ctx, cfg, hostCfg, nil, nil, name)
+	if err != nil {
+		return nil, fmt.Errorf("create sidecar: %w", err)
+	}
+
+	// Track cleanup state so an early failure tears the sidecar down
+	// and a successful exec defers teardown until the session ends.
+	var (
+		started   bool
+		execOpen  bool
+		stopAndRm = func() {
+			rmCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if started {
+				timeoutSec := 2
+				_ = r.client.ContainerStop(rmCtx, resp.ID, container.StopOptions{Timeout: &timeoutSec})
+			}
+			_ = r.client.ContainerRemove(rmCtx, resp.ID, container.RemoveOptions{Force: true})
+		}
+	)
+	defer func() {
+		if !execOpen {
+			stopAndRm()
+		}
+	}()
+
+	if err := r.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return nil, fmt.Errorf("start sidecar: %w", err)
+	}
+	started = true
+
+	stream, err := NewDockerExecStream(ctx, r.client, resp.ID, sidecarID, options, r.logger)
+	if err != nil {
+		return nil, fmt.Errorf("exec into sidecar: %w", err)
+	}
+	execOpen = true
+
+	r.logger.Info("Spawned debug sidecar",
+		log.Str("parent_instance", instance.ID),
+		log.Str("sidecar_container", resp.ID),
+		log.Str("sidecar_name", name))
+
+	return &cleanupExecStream{ExecStream: stream, cleanup: func() {
+		stopAndRm()
+		r.logger.Info("Removed debug sidecar",
+			log.Str("parent_instance", instance.ID),
+			log.Str("sidecar_container", resp.ID))
+	}}, nil
+}
+
+// cleanupExecStream wraps an ExecStream so a teardown func runs exactly once
+// on Close. Used by RunDebug to remove the ephemeral sidecar when the user's
+// session ends (clean exit OR client disconnect — the exec service Closes the
+// stream in both paths).
+type cleanupExecStream struct {
+	runner.ExecStream
+	cleanup func()
+	once    sync.Once
+}
+
+func (c *cleanupExecStream) Close() error {
+	err := c.ExecStream.Close()
+	c.once.Do(c.cleanup)
+	return err
 }
 
 // Exec creates an interactive exec session with a running container.

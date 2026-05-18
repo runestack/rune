@@ -408,6 +408,19 @@ func (c *FakeInstanceController) Exec(ctx context.Context, instance *types.Insta
 	return runner.NewFakeExecStream(c.ExecStdout, c.ExecStderr, c.ExecExitCode), nil
 }
 
+// ExecDebug stubs the debug-sidecar path for tests. The fake doesn't
+// model the sidecar lifecycle (that's covered by the real docker runner
+// tests + manual e2e); we just return a fake stream so callers exercising
+// the orchestrator surface don't blow up.
+func (c *FakeInstanceController) ExecDebug(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ExecError != nil {
+		return nil, c.ExecError
+	}
+	return runner.NewFakeExecStream(c.ExecStdout, c.ExecStderr, c.ExecExitCode), nil
+}
+
 // RestartInstance records a call to restart an instance
 func (c *FakeInstanceController) RestartInstance(ctx context.Context, instance *types.Instance, reason InstanceRestartReason) error {
 	c.mu.Lock()
