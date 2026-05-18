@@ -163,13 +163,6 @@ func (r *TestRunner) Stop(ctx context.Context, instance *types.Instance, timeout
 	return nil
 }
 
-// Rename is a no-op for the test runner; included so it satisfies the
-// Runner interface alongside the docker runner where Rename is used
-// during failed-instance retention to free a container name.
-func (r *TestRunner) Rename(ctx context.Context, instance *types.Instance, newName string) error {
-	return nil
-}
-
 // RunDebug is unsupported by the test runner; included so it satisfies
 // the Runner interface. Returns ErrDebugNotSupported.
 func (r *TestRunner) RunDebug(ctx context.Context, instance *types.Instance, options ExecOptions) (ExecStream, error) {

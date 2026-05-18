@@ -112,17 +112,45 @@ func resolveTargetInstance(apiClient *client.Client, target string, namespace st
 	}
 
 	// Fallback: walk the namespace's instances and match by Name. Lets
-	// the user pass `gateway-0` or `gateway-0-failed-3af45bde` (the
-	// human-readable names from `rune get instances --show-failed`)
-	// rather than forcing them to copy a UUID. Cheap — one extra
-	// ListInstances per failed UUID lookup.
+	// the user pass the human-readable name (`gateway-0`) from
+	// `rune get instances` rather than copying a UUID.
+	//
+	// In the post-rename naming scheme, multiple records can share a
+	// Name within a namespace: at most one live instance (Status not
+	// Failed/Deleted) plus zero-or-more Failed tombstones from prior
+	// restart cycles. Disambiguate by preferring:
+	//   1. The live record (current container, what the user almost
+	//      always wants for `rune logs <name>` / `rune exec <name>`)
+	//   2. The most-recent Failed tombstone (so postmortem commands
+	//      against a fully-failed service still hit the latest crash)
 	insts, listErr := instanceClient.ListInstances(namespace, "", "", "")
 	if listErr != nil {
-		// Surface the original UUID-lookup error if list also fails; the
-		// list error is usually a permission/transport issue and obscures
-		// the real problem.
 		return nil, fmt.Errorf("instance not found by id or name: %s", target)
 	}
+	var live *types.Instance
+	var newestFailed *types.Instance
+	for _, inst := range insts {
+		if inst.Name != target {
+			continue
+		}
+		switch {
+		case inst.Status != types.InstanceStatusFailed && inst.Status != types.InstanceStatusDeleted:
+			live = inst
+		case inst.Status == types.InstanceStatusFailed && inst.FailedAt != nil:
+			if newestFailed == nil || inst.FailedAt.After(*newestFailed.FailedAt) {
+				newestFailed = inst
+			}
+		}
+	}
+	winner := live
+	if winner == nil {
+		winner = newestFailed
+	}
+	if winner != nil {
+		return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: winner.ID, namespace: namespace}, nil
+	}
+	// Keep the original by-name loop pattern as a no-op fallback so the
+	// shape below (continue/return) doesn't change syntactically.
 	for _, inst := range insts {
 		if inst.Name == target {
 			return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: inst.ID, namespace: namespace}, nil

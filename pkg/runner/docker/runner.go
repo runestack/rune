@@ -243,7 +243,22 @@ func verifyClientCompatibility(dockerClient *client.Client, clientVersion, fallb
 	return dockerClient, nil
 }
 
-// Create creates a new container but does not start it.
+// Create creates a new container but does not start it. The container name
+// is `<namespace>-<instance.Name>-<id_prefix>` where id_prefix starts at 8
+// hex chars of the instance UUID and extends only when docker reports a
+// name collision — git-style abbreviation. The UUID suffix:
+//
+//   - Eliminates cross-namespace collisions (the `landing-0` bug):
+//     prod-landing-0-<id> and dev-landing-0-<id> never collide.
+//   - Eliminates the tombstone-rename dance: a Failed instance keeps its
+//     container forever, and the freshly-created replacement gets its
+//     own UUID-suffixed name without colliding.
+//   - Stays human-readable: `docker ps` shows
+//     "prod-landing-0-5d68e677" which encodes ns/service/ordinal/id.
+//
+// Container lookups in this runner go through `getContainerID` which
+// prefers `instance.ContainerID` over labels, so dynamic-length names do
+// not complicate any code path.
 func (r *DockerRunner) Create(ctx context.Context, instance *runetypes.Instance) error {
 	if instance == nil {
 		return fmt.Errorf("invalid instance: nil pointer")
@@ -264,60 +279,50 @@ func (r *DockerRunner) Create(ctx context.Context, instance *runetypes.Instance)
 		return fmt.Errorf("failed to pull image %s: %w", containerConfig.Image, err)
 	}
 
-	// Create the container
-	resp, err := r.client.ContainerCreate(
-		ctx,
-		containerConfig,
-		hostConfig,
-		nil,           // No network config for now
-		nil,           // No platform config
-		instance.Name, // Use instance name as container name
-	)
-
+	resp, name, err := r.createContainerWithUniqueSuffix(ctx, containerConfig, hostConfig, instance)
 	if err != nil {
-		// Handle container name conflict by auto-cleaning safe, Rune-managed stale containers
-		if isNameConflictError(err) {
-			r.logger.Warn("Container name conflict detected; attempting safe cleanup",
-				log.Str("instance_name", instance.Name),
-				log.Str("service_id", instance.ServiceID),
-			)
-			removed, cleanErr := r.tryRemoveConflictingContainer(ctx, instance)
-			if cleanErr != nil {
-				return fmt.Errorf("container name conflict for %q; cleanup failed: %v (original: %w)", instance.Name, cleanErr, err)
-			}
-			if removed {
-				// Retry create once
-				resp, err = r.client.ContainerCreate(
-					ctx,
-					containerConfig,
-					hostConfig,
-					nil,
-					nil,
-					instance.Name,
-				)
-				if err == nil {
-					// Proceed after successful retry
-					instance.ContainerID = resp.ID
-					r.logger.Info("Created container after cleanup",
-						log.Str("container_id", resp.ID),
-						log.Str("instance_id", instance.ID))
-					return nil
-				}
-			}
-			// Not removed or retry failed; return conflict with guidance
-			return fmt.Errorf("container name conflict for %q; not safe to auto-remove (ensure no non-Rune container uses this name) : %w", instance.Name, err)
-		}
 		return fmt.Errorf("failed to create container: %w", err)
 	}
 
-	// Update instance with container ID
 	instance.ContainerID = resp.ID
 
 	r.logger.Info("Created container for instance",
 		log.Str("container_id", resp.ID),
+		log.Str("container_name", name),
 		log.Str("instance_id", instance.ID))
 
 	return nil
+}
+
+// createContainerWithUniqueSuffix builds a container name of the form
+// `<namespace>-<instance.Name>-<id_prefix>` and creates the container,
+// extending id_prefix from 8 to 32 hex chars on docker name-conflict. The
+// vast majority of calls succeed at 8 chars on the first attempt; only true
+// UUID-prefix collisions within the same ns/service/ordinal scope on the
+// same host force extension. Capped at 32 (full UUID, no dashes) for safety.
+//
+// Returns the create response and the final container name actually used.
+func (r *DockerRunner) createContainerWithUniqueSuffix(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, instance *runetypes.Instance) (container.CreateResponse, string, error) {
+	prefix := fmt.Sprintf("%s-%s-", instance.Namespace, instance.Name)
+	fullID := strings.ReplaceAll(instance.ID, "-", "") // 32 hex chars
+
+	const minSuffix = 8
+	for n := minSuffix; n <= len(fullID); n++ {
+		name := prefix + fullID[:n]
+		resp, err := r.client.ContainerCreate(ctx, cfg, hostCfg, nil, nil, name)
+		if err == nil {
+			return resp, name, nil
+		}
+		if !isNameConflictError(err) {
+			return container.CreateResponse{}, "", err
+		}
+		// Name collision — log once and extend the suffix on next iteration.
+		r.logger.Warn("Container name collision; extending suffix",
+			log.Str("attempted_name", name),
+			log.Str("instance_id", instance.ID),
+			log.Int("next_suffix_len", n+1))
+	}
+	return container.CreateResponse{}, "", fmt.Errorf("name suffix exhausted at %d chars for instance %s (?!)", len(fullID), instance.ID)
 }
 
 // isNameConflictError returns true if the error indicates a Docker name conflict
@@ -327,50 +332,6 @@ func isNameConflictError(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "is already in use by container") || strings.Contains(msg, "Conflict. The container name")
-}
-
-// tryRemoveConflictingContainer attempts to remove a conflicting container with the same name
-// only if it is clearly Rune-managed and matches the same instance/service/namespace context.
-// Returns (removedAny, error)
-func (r *DockerRunner) tryRemoveConflictingContainer(ctx context.Context, instance *runetypes.Instance) (bool, error) {
-	args := filters.NewArgs()
-	// Filter by name to narrow search; Docker requires the leading slash in names list, but filter handles plain
-	args.Add("name", instance.Name)
-	containers, err := r.client.ContainerList(ctx, container.ListOptions{All: true, Filters: args})
-	if err != nil {
-		return false, fmt.Errorf("failed to list containers for conflict check: %w", err)
-	}
-
-	removedAny := false
-	for _, c := range containers {
-		// Confirm exact name match
-		exactName := false
-		for _, n := range c.Names {
-			if n == "/"+instance.Name {
-				exactName = true
-				break
-			}
-		}
-		if !exactName {
-			continue
-		}
-		// Only remove if clearly Rune-managed and matches the same logical resource
-		if c.Labels["rune.managed"] == "true" {
-			sameInstance := c.Labels["rune.instance.id"] == instance.ID && instance.ID != ""
-			sameServiceCtx := c.Labels["rune.service.id"] == instance.ServiceID && c.Labels["rune.namespace"] == instance.Namespace
-			if sameInstance || sameServiceCtx {
-				r.logger.Warn("Removing stale conflicting container",
-					log.Str("container_id", c.ID),
-					log.Str("name", instance.Name))
-				// Force remove to ensure cleanup even if exited
-				if rmErr := r.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); rmErr != nil {
-					return removedAny, fmt.Errorf("failed to remove conflicting container %s: %w", c.ID, rmErr)
-				}
-				removedAny = true
-			}
-		}
-	}
-	return removedAny, nil
 }
 
 // Start starts an existing container.
@@ -425,26 +386,6 @@ func (r *DockerRunner) Stop(ctx context.Context, instance *runetypes.Instance, t
 		log.Str("container_id", containerID),
 		log.Str("instance_id", instance.ID))
 
-	return nil
-}
-
-// Rename changes the docker container's name. Used by the failed-instance
-// retention path so a tombstone container can be moved aside ("foo" →
-// "foo-failed-abcd1234") and a freshly-created replacement can take the
-// original name without colliding. No-op semantically — the container ID
-// and labels stay the same.
-func (r *DockerRunner) Rename(ctx context.Context, instance *runetypes.Instance, newName string) error {
-	containerID, err := r.getContainerID(ctx, instance)
-	if err != nil {
-		return fmt.Errorf("failed to get container ID: %w", err)
-	}
-	if err := r.client.ContainerRename(ctx, containerID, newName); err != nil {
-		return fmt.Errorf("failed to rename container: %w", err)
-	}
-	r.logger.Info("Renamed container for instance",
-		log.Str("container_id", containerID),
-		log.Str("instance_id", instance.ID),
-		log.Str("new_name", newName))
 	return nil
 }
 
