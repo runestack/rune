@@ -404,11 +404,14 @@ func TestRestartAfterHealthCheckFailure(t *testing.T) {
 	// Wait for multiple health checks to run and trigger a restart
 	time.Sleep(5 * time.Second)
 
-	// Verify that instance was restarted (use thread-safe getters)
+	// Verify the new tombstone+replace flow fired: the original instance
+	// was Stopped (preserved as tombstone) and *some* replacement was
+	// Started. The replacement has a fresh UUID, so we check by count
+	// rather than by ID equality.
 	stoppedInstances := testRunner.GetStoppedInstances()
 	startedInstances := testRunner.GetStartedInstances()
-	assert.Contains(t, stoppedInstances, instance.ID, "Instance should have been stopped")
-	assert.Contains(t, startedInstances, instance.ID, "Instance should have been started")
+	assert.Contains(t, stoppedInstances, instance.ID, "Original instance should have been stopped")
+	assert.NotEmpty(t, startedInstances, "A replacement instance should have been started")
 }
 
 // TestNoHealthCheckService tests adding an instance with no health check configured

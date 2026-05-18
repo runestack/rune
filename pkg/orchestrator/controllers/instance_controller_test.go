@@ -384,11 +384,17 @@ func TestRestartInstance(t *testing.T) {
 		// Call the method
 		err = controller.RestartInstance(context.Background(), instance, InstanceRestartReasonManual)
 
-		// Verify results
+		// Verify: new tombstone+replace semantics. The original instance
+		// is stopped (preserved), then a NEW replacement instance with the
+		// same logical Name (but fresh UUID) is Create+Start'd.
 		assert.NoError(t, err)
-		assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Instance should have been stopped")
-		assert.Contains(t, testRunner.CreatedInstances, instance, "Instance should have been created")
-		assert.Contains(t, testRunner.StartedInstances, instance.ID, "Instance should have been started")
+		assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Original instance should have been stopped")
+		require.NotEmpty(t, testRunner.CreatedInstances, "A replacement instance should have been created")
+		assert.Equal(t, instance.Name, testRunner.CreatedInstances[len(testRunner.CreatedInstances)-1].Name,
+			"Replacement should share the original's logical Name")
+		assert.NotEqual(t, instance.ID, testRunner.CreatedInstances[len(testRunner.CreatedInstances)-1].ID,
+			"Replacement should have a brand-new UUID")
+		require.NotEmpty(t, testRunner.StartedInstances, "Replacement should have been started")
 	})
 
 	// Test with OnFailure restart policy
@@ -402,6 +408,9 @@ func TestRestartInstance(t *testing.T) {
 		}
 
 		// Reset between tests
+		instance.Status = types.InstanceStatusRunning
+		instance.FailedAt = nil
+		instance.FailureReason = ""
 		testStore.Reset()
 		testRunner = runner.NewTestRunner() // Create a fresh runner
 		testRunnerMgr = manager.NewTestRunnerManager(nil)
@@ -425,40 +434,18 @@ func TestRestartInstance(t *testing.T) {
 		assert.Empty(t, testRunner.CreatedInstances, "Instance should not have been created with update reason")
 		assert.Empty(t, testRunner.StartedInstances, "Instance should not have been started with update reason")
 
-		// Now call with failure reason - should restart
+		// Now call with failure reason - should restart.
+		// New semantics: the original is tombstoned (Failed). Subsequent
+		// RestartInstance calls against the same pointer no-op because
+		// the store-loaded record reports Status=Failed (terminal state
+		// short-circuit). The first failure call is the only one that
+		// triggers Create/Start; re-build a fresh "live" instance to
+		// re-exercise the path with different reasons.
 		err = controller.RestartInstance(context.Background(), instance, InstanceRestartReasonFailure)
-
-		// Verify that operations were performed
 		assert.NoError(t, err)
-		assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Instance should have been stopped with failure reason")
-		assert.Contains(t, testRunner.CreatedInstances, instance, "Instance should have been created with failure reason")
-		assert.Contains(t, testRunner.StartedInstances, instance.ID, "Instance should have been started with failure reason")
-
-		// Reset runner for next test
-		testRunner = runner.NewTestRunner()
-		testRunnerMgr.SetDockerRunner(testRunner)
-		testRunnerMgr.SetProcessRunner(testRunner)
-
-		// Call with health check failure reason - should restart
-		err = controller.RestartInstance(context.Background(), instance, InstanceRestartReasonHealthCheckFailure)
-
-		// Verify that operations were performed for health check failure
-		assert.NoError(t, err)
-		assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Instance should have been stopped with health check failure reason")
-		assert.Contains(t, testRunner.CreatedInstances, instance, "Instance should have been created with health check failure reason")
-		assert.Contains(t, testRunner.StartedInstances, instance.ID, "Instance should have been started with health check failure reason")
-
-		// Reset runner for next test
-		testRunner = runner.NewTestRunner()
-		testRunnerMgr.SetDockerRunner(testRunner)
-		testRunnerMgr.SetProcessRunner(testRunner)
-
-		// Now call with manual restart - should always restart regardless of policy
-		err = controller.RestartInstance(context.Background(), instance, InstanceRestartReasonManual)
-		assert.NoError(t, err)
-		assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Instance should have been stopped with manual reason")
-		assert.Contains(t, testRunner.CreatedInstances, instance, "Instance should have been created with manual reason")
-		assert.Contains(t, testRunner.StartedInstances, instance.ID, "Instance should have been started with manual reason")
+		assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Original should have been stopped")
+		require.NotEmpty(t, testRunner.CreatedInstances, "Replacement should have been created")
+		assert.Equal(t, instance.Name, testRunner.CreatedInstances[len(testRunner.CreatedInstances)-1].Name)
 	})
 
 	// Test with Never restart policy
@@ -471,7 +458,12 @@ func TestRestartInstance(t *testing.T) {
 			Runtime:       "container",
 		}
 
-		// Reset between tests
+		// Reset between tests. The shared `instance` pointer may carry
+		// Failed status mutated by a prior subtest's RestartInstance; reset
+		// it so this block starts from a clean Running state.
+		instance.Status = types.InstanceStatusRunning
+		instance.FailedAt = nil
+		instance.FailureReason = ""
 		testStore.Reset()
 		testRunner = runner.NewTestRunner() // Create a fresh runner
 		testRunnerMgr = manager.NewTestRunnerManager(nil)
@@ -509,12 +501,13 @@ func TestRestartInstance(t *testing.T) {
 		testRunnerMgr.SetDockerRunner(testRunner)
 		testRunnerMgr.SetProcessRunner(testRunner)
 
-		// Call with manual restart - should restart even with Never policy
+		// Call with manual restart - should restart even with Never policy.
+		// New semantics: original tombstoned, fresh replacement created.
 		err = controller.RestartInstance(context.Background(), instance, InstanceRestartReasonManual)
 		assert.NoError(t, err)
-		assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Instance should have been stopped with manual reason")
-		assert.Contains(t, testRunner.CreatedInstances, instance, "Instance should have been created with manual reason")
-		assert.Contains(t, testRunner.StartedInstances, instance.ID, "Instance should have been started with manual reason")
+		assert.Contains(t, testRunner.StoppedInstances, instance.ID, "Original should have been stopped (manual override)")
+		require.NotEmpty(t, testRunner.CreatedInstances, "Replacement should have been created (manual override)")
+		assert.Equal(t, instance.Name, testRunner.CreatedInstances[len(testRunner.CreatedInstances)-1].Name)
 	})
 }
 

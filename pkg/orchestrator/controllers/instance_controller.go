@@ -372,8 +372,11 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	// container. Init steps carry their own SecurityContext.
 	instance.SecurityContext = service.SecurityContext
 
-	// Store the service generation in instance metadata
-	instance.Metadata.ServiceGeneration = service.Metadata.Generation
+	// Store the service generation in instance metadata. ServiceMetadata
+	// may be nil for hand-built services in tests; treat as generation 0.
+	if service.Metadata != nil {
+		instance.Metadata.ServiceGeneration = service.Metadata.Generation
+	}
 
 	// Propagate ports and expose spec for runner use and later status
 	if len(service.Ports) > 0 {
@@ -382,9 +385,11 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	if service.Expose != nil {
 		instance.Metadata.Expose = service.Expose
 	}
-	c.logger.Debug("Storing service generation in instance",
-		log.Str("instance", instanceName),
-		log.Int64("generation", service.Metadata.Generation))
+	if service.Metadata != nil {
+		c.logger.Debug("Storing service generation in instance",
+			log.Str("instance", instanceName),
+			log.Int64("generation", service.Metadata.Generation))
+	}
 
 	// Save instance to store
 	if err := c.store.Create(ctx, types.ResourceTypeInstance, service.Namespace, instance.ID, instance); err != nil {
@@ -664,79 +669,37 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 	return nil
 }
 
-// tombstoneFailingContainer preserves the stopped container of a failing
-// instance as a separate Failed tombstone record so operators can inspect
-// it postmortem (`rune logs <tombstone-id>`, `rune exec --debug
-// <tombstone-id>`). Called from RestartInstance just before the live
-// instance would otherwise have its container removed and recreated.
+// markInstanceFailedInPlace transitions a failing instance to its terminal
+// tombstone state — Status=Failed, FailedAt=now, FailureReason — while
+// LEAVING ITS CONTAINER ALONE. The container has already been Stopped by
+// the caller; we just don't remove it, so `rune logs <id>` and
+// `rune exec --debug <id>` can still address it for postmortem.
 //
-// Mechanics:
+// In the new naming scheme each container is named
+// `<namespace>-<service>-<ordinal>-<id_prefix>` where id_prefix is derived
+// from the instance UUID. That suffix means a freshly-created replacement
+// instance NEVER collides with this preserved container on the docker
+// side, so we don't need to rename or fork a separate "tombstone"
+// instance record (the rename + new-record dance of the previous design
+// is gone). The Failed instance record IS the tombstone.
 //
-//   - Renames the docker container from "<name>" to "<name>-failed-<short>"
-//     so the freshly recreated container can take the original name without
-//     a collision.
-//   - Writes a new Instance record (new UUID, derived name, Status=Failed,
-//     FailedAt=now, FailureReason from restart cause) that holds the
-//     renamed container's ID directly. Lookups in the docker runner prefer
-//     instance.ContainerID over labels (see DockerRunner.getContainerID),
-//     so the tombstone and the live instance never collide on the
-//     `rune.instance.id` label both still carry.
-//   - The reconciler's failed-instance GC pass (per-service cap + TTL)
-//     reaps tombstones later, removing the stopped container at that
-//     point.
-//
-// Caller is responsible for clearing the live instance's ContainerID
-// afterwards so runner.Create produces a fresh container.
-func (c *instanceController) tombstoneFailingContainer(ctx context.Context, runner runner.Runner, instance *types.Instance, restartReason InstanceRestartReason) error {
-	if instance.ContainerID == "" {
-		// No container to preserve (e.g. earlier Create failed before a
-		// container existed). Nothing useful to tombstone; signal to the
-		// caller that we couldn't preserve, and let it fall through to
-		// the destructive path.
-		return fmt.Errorf("no container to tombstone (instance has no ContainerID)")
-	}
-
-	short := uuid.New().String()
-	if len(short) >= 8 {
-		short = short[:8]
-	}
-	tombName := fmt.Sprintf("%s-failed-%s", instance.Name, short)
-
-	// Rename the underlying container first; if this fails we want to
-	// abort before forking the store record. The new container name only
-	// matters for human inspection (e.g. `docker ps`) — runner ops route
-	// via ContainerID after this point.
-	if err := runner.Rename(ctx, instance, tombName); err != nil {
-		return fmt.Errorf("rename failing container: %w", err)
-	}
-
+// The reconciler filters out Failed+FailedAt records when looking for a
+// live instance to occupy the service's name slot, so creating the
+// replacement next reconcile tick (or synchronously from RestartInstance)
+// will just work.
+func (c *instanceController) markInstanceFailedInPlace(ctx context.Context, instance *types.Instance, restartReason InstanceRestartReason) error {
 	now := time.Now()
-	tombstone := *instance // shallow copy carries metadata, mounts, env, etc.
-	tombstone.ID = uuid.New().String()
-	tombstone.Name = tombName
-	tombstone.Status = types.InstanceStatusFailed
-	tombstone.StatusMessage = fmt.Sprintf("Preserved for postmortem after %s", restartReason)
-	tombstone.FailedAt = &now
-	tombstone.FailureReason = string(restartReason)
-	tombstone.UpdatedAt = now
-	// ContainerID stays the same — that's the whole point: tombstone owns
-	// the original stopped container.
-
-	if err := c.store.Create(ctx, types.ResourceTypeInstance, tombstone.Namespace, tombstone.ID, &tombstone); err != nil {
-		// Best-effort rollback: rename the container back so the
-		// recreate path doesn't collide.
-		if rbErr := runner.Rename(ctx, &tombstone, instance.Name); rbErr != nil {
-			c.logger.Error("Failed to roll back tombstone rename after store error",
-				log.Str("instance", instance.ID),
-				log.Err(rbErr))
-		}
-		return fmt.Errorf("write tombstone instance record: %w", err)
+	instance.Status = types.InstanceStatusFailed
+	instance.StatusMessage = fmt.Sprintf("Preserved for postmortem after %s", restartReason)
+	instance.FailedAt = &now
+	instance.FailureReason = string(restartReason)
+	instance.UpdatedAt = now
+	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
+		return fmt.Errorf("mark instance failed: %w", err)
 	}
-
-	c.logger.Info("Tombstoned failing container for postmortem",
-		log.Str("live_instance", instance.ID),
-		log.Str("tombstone_instance", tombstone.ID),
-		log.Str("container_id", tombstone.ContainerID),
+	c.logger.Info("Marked instance Failed (tombstoned in-place)",
+		log.Str("instance", instance.ID),
+		log.Str("container_id", instance.ContainerID),
 		log.Str("reason", string(restartReason)))
 	return nil
 }
@@ -1020,93 +983,61 @@ func (c *instanceController) RestartInstance(ctx context.Context, instance *type
 		return fmt.Errorf("failed to get runner for restart: %w", err)
 	}
 
-	// Update instance status to restarting
-	instance.Status = types.InstanceStatusStarting
-	instance.StatusMessage = fmt.Sprintf("Restarting due to: %s", reason)
-	instance.UpdatedAt = time.Now()
-
-	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
-		c.logger.Error("Failed to update instance status before restart",
-			log.Str("instance", instance.ID),
-			log.Err(err))
-		// Continue anyway
-	}
-
-	// Stop the instance first
+	// Stop the failing container — but preserve it. The new container
+	// naming scheme (<namespace>-<service>-<ordinal>-<id_prefix>) means
+	// the replacement instance's container gets a fresh ID-suffixed name,
+	// so leaving this one stopped-but-present doesn't block anything.
 	stopTimeout := 10 * time.Second
 	if err := runner.Stop(ctx, instance, stopTimeout); err != nil {
-		c.logger.Warn("Failed to stop instance gracefully, will force restart",
+		c.logger.Warn("Failed to stop instance gracefully before tombstone; proceeding anyway",
 			log.Str("instance", instance.ID),
 			log.Err(err))
 	}
 
-	// Preserve the stopped container as a tombstone (failed-instance
-	// retention) before clearing the container ID. The tombstone holds the
-	// original ContainerID so `rune logs <tombstone-id>` and
-	// `rune exec --debug <tombstone-id>` keep working until the
-	// retention GC reaps it. The docker container is renamed so the new
-	// container can take the original name on Create below.
-	if err := c.tombstoneFailingContainer(ctx, runner, instance, reason); err != nil {
-		// Tombstoning is best-effort — if it fails we still want the
-		// restart to proceed. Operators lose postmortem visibility for
-		// this restart but the service keeps recovering.
-		c.logger.Warn("Failed to tombstone container for retention; proceeding with destructive restart",
+	// Mark the failing instance Failed in place. The instance record
+	// becomes its own tombstone — same UUID, same Name, container still
+	// addressable via instance.ContainerID. Postmortem (rune logs,
+	// rune exec --debug) keeps working until the retention GC sweeps it.
+	if err := c.markInstanceFailedInPlace(ctx, instance, reason); err != nil {
+		c.logger.Error("Failed to mark failing instance as Failed",
 			log.Str("instance", instance.ID),
 			log.Err(err))
-		if rmErr := runner.Remove(ctx, instance, true); rmErr != nil {
-			c.logger.Error("Failed to remove instance during restart fallback",
-				log.Str("instance", instance.ID),
-				log.Err(rmErr))
-		}
+		// Keep going — the replacement still needs to spawn.
 	}
 
-	// Clear the container ID to ensure a fresh container is created
-	instance.ContainerID = ""
-
-	// Create the instance again
-	if err := runner.Create(ctx, instance); err != nil {
-		instance.Status = types.InstanceStatusFailed
-		instance.StatusMessage = fmt.Sprintf("Failed to recreate: %v", err)
-		if updateErr := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); updateErr != nil {
-			c.logger.Error("Failed to update instance status after create failure",
-				log.Str("instance", instance.ID),
-				log.Err(updateErr))
-		}
-		return fmt.Errorf("failed to recreate instance: %w", err)
+	// Spawn a fresh replacement instance with the same logical Name
+	// (e.g. "landing-0") but a brand-new UUID. Reconciler's slot lookup
+	// filters Failed records, so it sees the slot as unfilled and our
+	// new record claims it. Same Name across the tombstone + the live
+	// replacement is fine — they're disambiguated by Status and ID.
+	// `service` was already loaded above for the restart-policy check.
+	replacement, err := c.CreateInstance(ctx, &service, instance.Name)
+	if err != nil {
+		return fmt.Errorf("failed to spawn replacement for %s: %w", instance.ID, err)
 	}
 
-	// Start the instance
-	if err := runner.Start(ctx, instance); err != nil {
-		instance.Status = types.InstanceStatusFailed
-		instance.StatusMessage = fmt.Sprintf("Failed to start: %v", err)
-		if updateErr := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); updateErr != nil {
-			c.logger.Error("Failed to update instance status after start failure",
-				log.Str("instance", instance.ID),
-				log.Err(updateErr))
-		}
-		return fmt.Errorf("failed to start instance: %w", err)
+	// Carry restart counters forward from the tombstone so operators
+	// can still see "this slot has restarted N times" — RestartCount
+	// lives on the live instance's metadata, not on the tombstone's.
+	if replacement.Metadata == nil {
+		replacement.Metadata = &types.InstanceMetadata{}
 	}
-
-	// Increment restart count in instance metadata
-	if instance.Metadata == nil {
-		instance.Metadata = &types.InstanceMetadata{}
+	priorRestarts := 0
+	if instance.Metadata != nil {
+		priorRestarts = instance.Metadata.RestartCount
 	}
-	instance.Metadata.RestartCount++
-
-	// Update instance with running status and restart count
-	instance.Status = types.InstanceStatusRunning
-	instance.StatusMessage = "Restarted successfully"
-	instance.UpdatedAt = time.Now()
-
-	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
-		c.logger.Error("Failed to update instance status after restart",
-			log.Str("instance", instance.ID),
+	replacement.Metadata.RestartCount = priorRestarts + 1
+	if err := c.store.Update(ctx, types.ResourceTypeInstance, replacement.Namespace, replacement.ID, replacement); err != nil {
+		c.logger.Warn("Failed to carry restart counter to replacement",
+			log.Str("replacement", replacement.ID),
 			log.Err(err))
 	}
 
-	c.logger.Info("Instance restarted successfully",
-		log.Str("instance", instance.ID),
-		log.Int("restart_count", instance.Metadata.RestartCount))
+	c.logger.Info("Restart complete: tombstoned + replaced",
+		log.Str("tombstone", instance.ID),
+		log.Str("replacement", replacement.ID),
+		log.Str("reason", string(reason)),
+		log.Int("restart_count", replacement.Metadata.RestartCount))
 
 	return nil
 }
