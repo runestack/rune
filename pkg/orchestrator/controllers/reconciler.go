@@ -1046,8 +1046,21 @@ func (r *reconciler) gcFailedInstances(ctx context.Context, instances []types.In
 	}
 
 	for key, tombs := range bySvc {
-		// Sort newest-first so the cap evicts the oldest first.
+		// Sort logs-bearing first, then newest-first within each
+		// group. The cap walks from index 0 and evicts beyond
+		// per-service-cap, so this preferentially KEEPS tombstones
+		// that have a captured stdout/stderr snapshot — exactly the
+		// ones operators want for postmortems. Live observation:
+		// prod/gateway's one informative crash (f67e328f, 14KB) was
+		// previously evicted by the same cap that swept 6 silent
+		// tombstones; with this ordering it survives until the TTL
+		// fires (which is still respected below as a hard ceiling).
 		sort.Slice(tombs, func(i, j int) bool {
+			ihas := len(tombs[i].LastLogs) > 0
+			jhas := len(tombs[j].LastLogs) > 0
+			if ihas != jhas {
+				return ihas
+			}
 			return tombs[i].FailedAt.After(*tombs[j].FailedAt)
 		})
 

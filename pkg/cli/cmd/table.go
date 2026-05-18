@@ -100,9 +100,25 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 		// Format status - use our colorizeStatus function
 		status := format.PTermStatusLabel(string(service.Status))
 
-		// Format ready count
+		// Format ready count.
+		//
+		// Prefer the truth from service.Instances when the server has
+		// inlined them (rune get service[s] both do this now). Counting
+		// Status==Running gives operators the real ready count instead
+		// of inferring scale from service.Status — important because
+		// service.Status==Running on a service with a readiness probe
+		// only flips to Running after the probe passes, but a service
+		// with NO readiness probe also reports Running and the old
+		// inference was equivalent. The fallback below preserves the
+		// old behaviour for paths that don't inline instances.
 		running := 0
-		if service.Status == types.ServiceStatusRunning {
+		if len(service.Instances) > 0 {
+			for i := range service.Instances {
+				if service.Instances[i].Status == types.InstanceStatusRunning {
+					running++
+				}
+			}
+		} else if service.Status == types.ServiceStatusRunning {
 			running = service.Scale
 		}
 		instances := fmt.Sprintf("%d/%d", running, service.Scale)

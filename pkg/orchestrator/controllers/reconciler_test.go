@@ -727,3 +727,59 @@ func TestCleanUpStoreOrphanInstances_LeavesKnownAndDeletedAlone(t *testing.T) {
 	assert.Len(t, instanceController.DeleteInstanceCalls, 0,
 		"neither live (service known) nor Deleted (already on the way out) instances should be touched")
 }
+
+// TestGCFailedInstancesPrefersToKeepTombstonesWithLastLogs is the
+// regression guard for the cap-prefers-with-logs change: when there
+// are more tombstones than the cap allows, the GC must preferentially
+// evict EMPTY ones (no LastLogs captured) before logs-bearing ones,
+// even when the logs-bearing tombstone is older. Live observation:
+// prod/gateway cycled fast — one informative crash with 14KB of
+// stdout (f67e328f) was the only tombstone with usable logs, but
+// it got evicted by the same cap that swept 6 newer silent
+// tombstones. After this change the informative one survives until
+// the TTL fires.
+func TestGCFailedInstancesPrefersToKeepTombstonesWithLastLogs(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	reconciler := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	now := time.Now()
+	cap := failedInstancePerServiceCap
+	// Mix: one informative tombstone slightly older than the silent
+	// ones, plus cap+2 newer silent ones. Keep "older" well within
+	// failedInstanceTTL so we're testing the cap path specifically,
+	// not the TTL hard ceiling.
+	oldWithLogs := time.Now().Add(-time.Duration(cap+5) * time.Minute)
+	informative := types.Instance{
+		ID: "informative", Name: "svc-0-failed-X",
+		ServiceName: "svc", Namespace: "default",
+		Status: types.InstanceStatusFailed, FailedAt: &oldWithLogs,
+		ContainerID: "ctr-info", LastLogs: []byte("real crash trace from the only useful container"),
+	}
+	tombs := []types.Instance{informative}
+	for i := 0; i < cap+2; i++ {
+		age := -time.Duration(i+1) * time.Minute
+		failedAt := now.Add(age)
+		tombs = append(tombs, types.Instance{
+			ID: fmt.Sprintf("silent-%d", i), Name: fmt.Sprintf("svc-0-failed-%d", i),
+			ServiceName: "svc", Namespace: "default",
+			Status: types.InstanceStatusFailed, FailedAt: &failedAt,
+			ContainerID: fmt.Sprintf("ctr-%d", i),
+			// LastLogs intentionally empty.
+		})
+	}
+
+	reconciler.gcFailedInstances(context.Background(), tombs)
+
+	evicted := map[string]bool{}
+	for _, call := range instanceController.DeleteInstanceCalls {
+		evicted[call.Instance.ID] = true
+	}
+	assert.False(t, evicted["informative"],
+		"the lone tombstone with captured LastLogs must survive cap eviction (even when older than the silent ones)")
+}
