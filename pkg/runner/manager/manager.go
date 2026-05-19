@@ -211,6 +211,27 @@ func (m *RunnerManager) GetProcessRunner() (runner.Runner, error) {
 }
 
 // Close closes all runners
+// SetDNSInjection forwards DNS server + search domain config to the
+// underlying docker runner so subsequent ContainerCreate calls bind
+// `hostConfig.DNS` to the agent's embedded resolver
+// (127.0.0.123:53 by default). Without this, containers inherit the
+// host's /etc/resolv.conf and cannot resolve
+// `<service>.<namespace>.rune` — every cross-service call via
+// Rune's service-discovery layer fails with NXDOMAIN. The process
+// runner doesn't need this; we silently skip.
+func (m *RunnerManager) SetDNSInjection(servers []string, search []string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if dr, ok := m.dockerRunner.(interface {
+		SetDNSInjection(servers []string, search []string)
+	}); ok && dr != nil {
+		dr.SetDNSInjection(servers, search)
+		m.logger.Info("DNS injection configured for docker runner",
+			log.Int("servers", len(servers)),
+			log.Int("search", len(search)))
+	}
+}
+
 func (m *RunnerManager) Close() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()

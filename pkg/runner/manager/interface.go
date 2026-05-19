@@ -22,6 +22,16 @@ type IRunnerManager interface {
 	// GetServiceRunner returns the appropriate runner for a service
 	GetServiceRunner(service *types.Service) (runner.Runner, error)
 
+	// SetDNSInjection configures the cluster DNS servers + search
+	// domains injected into every subsequently-created container.
+	// Containers without injection inherit the host's /etc/resolv.conf
+	// and therefore cannot resolve `<service>.<namespace>.rune` —
+	// the entire Rune service-discovery layer hinges on this call
+	// firing once after the agent's embedded DNS subsystem is up.
+	// No-op on runners that don't support DNS injection (process
+	// runner).
+	SetDNSInjection(servers []string, search []string)
+
 	// Close closes all runners
 	Close() error
 }

@@ -165,6 +165,17 @@ func (s *Subsystem) Name() string { return "dns" }
 // serving on at least one address.
 func (s *Subsystem) Ready() <-chan struct{} { return s.readyCh }
 
+// BindAddrs returns the resolved bind addresses (post-defaulting),
+// formatted as `host:port`. Used by the runed startup glue to wire
+// DNS injection: once this subsystem is Ready, we tell the docker
+// runner to inject these addresses into every subsequently-created
+// container so they can resolve `<service>.<namespace>.rune`.
+func (s *Subsystem) BindAddrs() []string {
+	out := make([]string, len(s.cfg.BindAddrs))
+	copy(out, s.cfg.BindAddrs)
+	return out
+}
+
 // Start binds the configured addresses on UDP+TCP and begins serving.
 // It blocks until at least one bind succeeds or all binds fail.
 func (s *Subsystem) Start(ctx context.Context) error {

@@ -614,6 +614,17 @@ func (s *APIServer) GetOrchestrator() orchestrator.Orchestrator {
 	return s.orchestrator
 }
 
+// GetRunnerManager returns the runner manager. Used by runed to
+// wire post-construction collaborators that need to talk to the
+// container runtime — notably DNS injection (RUNE-063): once the
+// agent's embedded DNS subsystem is up, runed calls
+// `runnerManager.SetDNSInjection([]string{"127.0.0.123"}, ...)`
+// so every subsequently-created container is told to ask Rune's
+// resolver for `<service>.<namespace>.rune` names.
+func (s *APIServer) GetRunnerManager() *manager.RunnerManager {
+	return s.runnerManager
+}
+
 // logStreamInterceptor returns a stream interceptor for logging.
 func (s *APIServer) logStreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
