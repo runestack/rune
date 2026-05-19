@@ -360,6 +360,11 @@ func (c *FakeInstanceController) isInstanceCompatibleWithService(ctx context.Con
 // SetEndpointPublisher is a no-op on the fake.
 func (c *FakeInstanceController) SetEndpointPublisher(_ EndpointPublisher, _ string) {}
 
+// RepublishServiceByInstance is a no-op on the fake. Tests that need
+// to observe republish calls should track them via a custom field.
+func (c *FakeInstanceController) RepublishServiceByInstance(_ context.Context, _ *types.Instance) {
+}
+
 // SetMountResolver is a no-op on the fake.
 func (c *FakeInstanceController) SetMountResolver(_ MountResolver) {}
 
