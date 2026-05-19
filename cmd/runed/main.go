@@ -30,6 +30,7 @@ import (
 	acmesvc "github.com/runestack/rune/pkg/networking/acme"
 	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/networking/vip"
+	"github.com/runestack/rune/pkg/runner/docker/bridges"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
@@ -567,14 +568,24 @@ func main() {
 		apiServer.GetOrchestrator().SetMountResolver(volSub)
 
 		// Embedded DNS subsystem (RUNE-063). Registers itself with
-		// the agent so it inherits supervised lifecycle. Bind list
-		// stays at the loopback default in MVP; bridge enumeration
-		// is done by the caller in a follow-up commit. The store-
-		// backed ZoneProvider answers <svc>.<ns>.rune; freshness is
-		// "always" until the data plane exposes a real accessor.
+		// the agent so it inherits supervised lifecycle. The
+		// store-backed ZoneProvider answers <svc>.<ns>.rune;
+		// freshness is "always" until the data plane exposes a
+		// real accessor.
+		//
+		// Bind on the loopback default AND every docker bridge
+		// gateway: containers see their bridge gateway IP as their
+		// default route, so binding the resolver there is what
+		// makes `nameserver 172.17.0.1` (injected below) actually
+		// reachable from inside a container. Without the bridge
+		// binds, containers get `Connection refused` on every
+		// lookup — the symptom we hit live on dev.85.
+		bindAddrs := []string{dnssub.DefaultBindAddr}
+		bindAddrs = append(bindAddrs, dnsBridgeBindAddrs(logger)...)
 		dnsSub, derr = dnssub.New(dnssub.Config{
 			Zone:             dnssub.NewStoreZone(stateStore, logger.WithComponent("dns-zone")),
 			UpstreamProvider: dnssub.ResolvConfUpstreams(),
+			BindAddrs:        bindAddrs,
 			Logger:           logger.WithComponent("dns"),
 		})
 		if derr != nil {
@@ -1086,6 +1097,43 @@ func applyDevModeStorageOverlay(s *config.Storage, logger log.Logger) {
 	logger.Info("Dev-mode storage overlay applied",
 		log.Str("dev_volume_root", devVolRoot),
 		log.Bool("allow_create_missing", true))
+}
+
+// dnsBridgeBindAddrs enumerates docker bridge gateways and returns
+// `<ip>:53` for each one. The DNS subsystem binds these alongside
+// the host loopback so containers on any docker bridge can reach
+// the resolver through their own gateway IP (containers cannot
+// reach the host's 127.0.0.123 from inside their network
+// namespace). Best-effort: a docker-daemon error is logged and
+// returns an empty slice — the agent still binds the loopback so
+// host-side tools keep working.
+func dnsBridgeBindAddrs(logger log.Logger) []string {
+	c, err := bridges.NewClient()
+	if err != nil {
+		logger.Warn("DNS bridge enumeration: docker client unavailable; container DNS may fail",
+			log.Err(err))
+		return nil
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	gws, err := bridges.EnumerateGateways(ctx, c)
+	if err != nil {
+		logger.Warn("DNS bridge enumeration failed; container DNS may fail",
+			log.Err(err))
+		return nil
+	}
+	out := make([]string, 0, len(gws))
+	for _, g := range gws {
+		out = append(out, net.JoinHostPort(g.IP.String(), "53"))
+	}
+	if len(out) == 0 {
+		logger.Warn("No docker bridge gateways found; container DNS will rely on loopback only")
+	} else {
+		logger.Info("DNS bridge gateways discovered",
+			log.Str("binds", strings.Join(out, ",")))
+	}
+	return out
 }
 
 // dnsServerIPs strips the :port suffix from each "host:port" bind
