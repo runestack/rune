@@ -501,22 +501,21 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 
 		wasReady := ih.readinessStatus
 		ih.readinessStatus = result.Success
-
 		// First successful readiness pass promotes the instance from
-		// Starting to Running. CreateInstance leaves freshly-started
-		// instances at Starting when a readiness probe is defined so
-		// that Status=Running can carry its conventional meaning of
-		// "ready to serve traffic". Best-effort: a store update
-		// failure leaves the instance at Starting, which the
-		// reconciler will surface as Pending in the service rollup
-		// (the bigger truth — "service isn't serving yet" — still
-		// reaches the operator).
+		// Starting to Running. Fire-and-forget so the store I/O
+		// doesn't block the c.mu we're currently holding (otherwise
+		// a slow store write would stall every other health update
+		// across the process). promoteToRunningOnReady is idempotent
+		// — it only flips when Status is still Starting — so a
+		// late-arriving goroutine is safe.
 		if result.Success && !wasReady {
-			if err := c.promoteToRunningOnReady(instanceID); err != nil {
-				c.logger.Warn("Failed to promote instance to Running on first readiness pass",
-					log.Str("instance", instanceID),
-					log.Err(err))
-			}
+			go func(id string) {
+				if err := c.promoteToRunningOnReady(id); err != nil {
+					c.logger.Warn("Failed to promote instance to Running on first readiness pass",
+						log.Str("instance", id),
+						log.Err(err))
+				}
+			}(instanceID)
 		}
 
 		if result.Success {
@@ -561,6 +560,12 @@ func (c *healthController) promoteToRunningOnReady(instanceID string) error {
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, current.Namespace, current.ID, current); err != nil {
 		return fmt.Errorf("update instance status: %w", err)
 	}
+	// Republish endpoints so the data plane (load balancer / DNS)
+	// picks up the now-Running instance. Without this, the instance
+	// is correctly marked Running but stays invisible to traffic
+	// until the next event that triggers a republish (e.g. service
+	// update). Nil-safe when no publisher is wired.
+	c.instanceController.RepublishServiceByInstance(ctx, current)
 	c.logger.Info("Instance promoted to Running on first readiness pass",
 		log.Str("instance", instanceID))
 	return nil

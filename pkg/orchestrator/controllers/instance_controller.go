@@ -106,6 +106,14 @@ type InstanceController interface {
 
 	// isInstanceCompatibleWithService checks if an instance is compatible with a service
 	isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string)
+
+	// RepublishServiceByInstance recomputes the data-plane endpoint set
+	// for the service owning the given instance. Exposed for callers
+	// outside instanceController that change instance reachability
+	// (e.g. the health controller promoting Starting→Running on the
+	// first readiness pass). Nil-safe when no endpoint publisher is
+	// wired; safe to call repeatedly.
+	RepublishServiceByInstance(ctx context.Context, instance *types.Instance)
 }
 
 // instanceController implements the InstanceController interface
@@ -254,6 +262,15 @@ func (c *instanceController) republishService(ctx context.Context, service *type
 			log.Str("service", service.Name),
 			log.Err(err))
 	}
+}
+
+// RepublishServiceByInstance is the exported entry point delegating to
+// the private republishServiceByInstance — see that function for the
+// full semantics. Used by external callers (e.g. the health controller)
+// that need to refresh the data-plane endpoint set after an instance
+// reachability change.
+func (c *instanceController) RepublishServiceByInstance(ctx context.Context, instance *types.Instance) {
+	c.republishServiceByInstance(ctx, instance)
 }
 
 // republishServiceByInstance is a convenience wrapper that loads the
