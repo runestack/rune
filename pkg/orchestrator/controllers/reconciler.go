@@ -235,8 +235,12 @@ func (r *reconciler) cleanUpStoreOrphanInstances(ctx context.Context, knownServi
 	for i := range instances {
 		inst := &instances[i]
 		// Already on the way out — let the existing deleted-instance
-		// retention path finish its job.
-		if inst.Status == types.InstanceStatusDeleted {
+		// retention path finish its job. Terminating means a
+		// teardown is mid-flight (runner.Stop/Remove in progress);
+		// hitting DeleteInstance again would just re-enter the same
+		// idempotent flow and clutter the audit trail.
+		if inst.Status == types.InstanceStatusDeleted ||
+			inst.Status == types.InstanceStatusTerminating {
 			continue
 		}
 		// ServiceName is the contract: the InstanceCleanupFinalizer,

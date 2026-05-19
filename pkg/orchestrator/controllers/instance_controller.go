@@ -988,6 +988,26 @@ func (c *instanceController) DeleteInstance(ctx context.Context, instance *types
 		log.Str("namespace", instance.Namespace),
 		log.Str("service", instance.ServiceName))
 
+	// Flip to Terminating immediately so `rune get instances` shows
+	// the truth ("this is being torn down") instead of Running during
+	// the runner.Stop graceful-shutdown window (up to 10s here).
+	// Best-effort; a store error doesn't block the teardown — the
+	// final Status=Deleted write below is the authoritative one. Only
+	// flip from non-terminal states (don't resurrect a Failed/Stalled
+	// tombstone into Terminating).
+	if instance.Status != types.InstanceStatusDeleted &&
+		instance.Status != types.InstanceStatusFailed &&
+		instance.Status != types.InstanceStatusStalled {
+		instance.Status = types.InstanceStatusTerminating
+		instance.StatusMessage = "Stopping and removing container"
+		instance.UpdatedAt = time.Now()
+		if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
+			c.logger.Warn("Failed to mark instance Terminating before teardown",
+				log.Str("instance", instance.ID),
+				log.Err(err))
+		}
+	}
+
 	// Snapshot the container's stdout/stderr before we tear it down,
 	// so `rune logs <id>` and the service-level tombstone fallback
 	// can serve them after the container is gone. Best-effort; no-op

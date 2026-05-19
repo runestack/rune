@@ -1576,3 +1576,78 @@ func TestCreateInstance_NoReadinessProbe_PromotesToRunningAsBefore(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, types.InstanceStatusRunning, instance.Status)
 }
+
+// TestDeleteInstance_FlipsToTerminatingBeforeRunnerStop is the
+// regression guard for the operator-visible UX gap reported live:
+// after `rune delete service`, the instance kept showing Running
+// for ~10s while runner.Stop's graceful-shutdown window elapsed.
+// DeleteInstance must persist Status=Terminating BEFORE entering
+// runner.Stop so `rune get instances` shows the truth immediately.
+func TestDeleteInstance_FlipsToTerminatingBeforeRunnerStop(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	live := &types.Instance{
+		ID:        "live-id",
+		Name:      "live-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusRunning,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", live.ID, live))
+
+	// Intercept the runner.Stop call to inspect the store mid-teardown.
+	// The store update to Terminating must have happened by the time
+	// the runner sees the Stop call.
+	var sawTerminating bool
+	testRunner.StopFunc = func(ctx context.Context, instance *types.Instance, _ time.Duration) error {
+		var current types.Instance
+		require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, "default", "live-id", &current))
+		if current.Status == types.InstanceStatusTerminating {
+			sawTerminating = true
+		}
+		return nil
+	}
+
+	require.NoError(t, controller.DeleteInstance(ctx, live))
+	assert.True(t, sawTerminating,
+		"Status=Terminating must be persisted BEFORE runner.Stop is invoked, not after")
+
+	// And after the teardown completes, the final state is Deleted.
+	var final types.Instance
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, "default", "live-id", &final))
+	assert.Equal(t, types.InstanceStatusDeleted, final.Status)
+}
+
+// TestDeleteInstance_DoesNotResurrectTerminalStateAsTerminating
+// guards against the symmetrical hazard: if an instance is already
+// Failed (a postmortem tombstone) or Stalled (retries exhausted),
+// the in-place Terminating flip must NOT overwrite that. Otherwise
+// `rune logs <tomb>` would lose the "Failed" signal mid-cleanup.
+func TestDeleteInstance_DoesNotResurrectTerminalStateAsTerminating(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	at := time.Now()
+	tomb := &types.Instance{
+		ID:        "failed-id",
+		Name:      "tomb-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusFailed,
+		FailedAt:  &at,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+
+	var seenStatusAtStop types.InstanceStatus
+	testRunner.StopFunc = func(ctx context.Context, instance *types.Instance, _ time.Duration) error {
+		var current types.Instance
+		_ = testStore.Get(ctx, types.ResourceTypeInstance, "default", "failed-id", &current)
+		seenStatusAtStop = current.Status
+		return nil
+	}
+
+	require.NoError(t, controller.DeleteInstance(ctx, tomb))
+	assert.Equal(t, types.InstanceStatusFailed, seenStatusAtStop,
+		"Failed tombstones must NOT be transitioned to Terminating during DeleteInstance — they preserve postmortem state")
+}
