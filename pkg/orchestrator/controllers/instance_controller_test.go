@@ -1371,3 +1371,283 @@ func TestRestartInstance_StuckInCreateReusesSameRecord(t *testing.T) {
 	assert.Equal(t, 0, got.CreateAttempts, "operator restart resets attempt counter")
 	assert.Equal(t, types.InstanceStatusRunning, got.Status, "successful retry promotes to Running")
 }
+
+// TestGetInstanceLogs_FallsBackToLastLogsWhenRunnerHasNoContainer is the
+// regression guard for bug RUNE-BUG-RUNE-LOGS-IGNORES-TOMBSTONE-LASTLOGS:
+// when the runner can't serve container logs (container removed by
+// retention GC, or the tombstone-recreate path took it down), the
+// LastLogs snapshot must be surfaced instead. Without this,
+// `rune logs <failed-id>` and `rune logs <service>` go dark right when
+// operators need them most.
+func TestGetInstanceLogs_FallsBackToLastLogsWhenRunnerHasNoContainer(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	tomb := &types.Instance{
+		ID:        "tomb-id",
+		Name:      "tomb-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusFailed,
+		LastLogs:  []byte("captured stderr from the failing container\n"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+	// Container is gone from the runner.
+	testRunner.ErrorToReturn = assert.AnError
+
+	rc, err := controller.GetInstanceLogs(ctx, tomb, types.LogOptions{})
+	require.NoError(t, err)
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, "captured stderr from the failing container\n", string(body),
+		"LastLogs snapshot must be served when the runner has no container")
+}
+
+// TestGetInstanceLogs_TerminalNoLogs_SynthesizesWhyLine asserts the
+// crashed-container-with-no-stdout UX: when an instance is in a
+// terminal state and has no LastLogs (common case: container PID 1
+// SIGKILL'd by a failed health check before printing anything),
+// `rune logs` returns a synthesized one-liner explaining the
+// failure rather than silent empty output. Without this, operators
+// see exit 0 / empty body from `rune logs <crashed-id>` and assume
+// the CLI is broken.
+func TestGetInstanceLogs_TerminalNoLogs_SynthesizesWhyLine(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	at := time.Now()
+	tomb := &types.Instance{
+		ID:            "empty-tomb",
+		Name:          "empty-0",
+		Namespace:     "default",
+		Runner:        testRunner.Type(),
+		Status:        types.InstanceStatusFailed,
+		FailureReason: "HealthCheckFailure",
+		StatusMessage: "Preserved for postmortem after health-check-failure",
+		FailedAt:      &at,
+		// LastLogs intentionally empty — container produced no output.
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+	testRunner.ErrorToReturn = assert.AnError
+
+	rc, err := controller.GetInstanceLogs(ctx, tomb, types.LogOptions{})
+	require.NoError(t, err, "terminal instances must yield SOMETHING from rune logs, not an error")
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	got := string(body)
+	assert.Contains(t, got, "empty-tomb", "synthesized line must identify the instance")
+	assert.Contains(t, got, "Failed", "synthesized line must include the terminal status")
+	assert.Contains(t, got, "HealthCheckFailure", "synthesized line must include FailureReason so operators know why")
+	assert.Contains(t, got, "no captured output", "synthesized line must say no logs were captured (vs. truncated)")
+}
+
+// TestDeleteInstance_SnapshotsLastLogsBeforeTearDown is the
+// regression guard that closes the loop on bug
+// RUNE-BUG-RUNE-LOGS-IGNORES-TOMBSTONE-LASTLOGS: the LastLogs field
+// existed in the type but was never populated, so the
+// service-level tombstone fallback (GetServiceLogs → most-recent
+// tombstone with LastLogs) had nothing to read. DeleteInstance is
+// the lifecycle moment that destroys the container; if we don't
+// snapshot here, the only postmortem trail (LastLogs) goes with it.
+func TestDeleteInstance_SnapshotsLastLogsBeforeTearDown(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	created := time.Now().Add(-1 * time.Hour)
+	rec := &types.Instance{
+		ID:                     "with-container",
+		Name:                   "doomed-0",
+		Namespace:              "default",
+		Runner:                 testRunner.Type(),
+		Status:                 types.InstanceStatusRunning,
+		ContainerEverCreatedAt: &created, // had a container
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+	testRunner.LogOutput = []byte("captured stderr from the dying container\n")
+
+	require.NoError(t, controller.DeleteInstance(ctx, rec))
+
+	var stored types.Instance
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, "default", rec.ID, &stored))
+	assert.Equal(t, types.InstanceStatusDeleted, stored.Status)
+	assert.NotEmpty(t, stored.LastLogs, "DeleteInstance must snapshot LastLogs before tearing the container down")
+	assert.Equal(t, "captured stderr from the dying container\n", string(stored.LastLogs))
+	require.NotNil(t, stored.LastLogsCapturedAt)
+}
+
+// TestSnapshotInstanceLogs_NoOpForNeverCreated guards the
+// optimisation that skips snapshotting when there was no container
+// in the first place (precondition-failed records). Without this
+// the snapshot would invoke the runner with no container to look
+// at, generating noise.
+func TestSnapshotInstanceLogs_NoOpForNeverCreated(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	rec := &types.Instance{
+		ID:                     "never-had-container",
+		Name:                   "stuck-0",
+		Namespace:              "default",
+		Runner:                 testRunner.Type(),
+		Status:                 types.InstanceStatusFailed,
+		ContainerEverCreatedAt: nil,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+	testRunner.LogOutput = []byte("should not be read")
+
+	cc := controller.(*instanceController)
+	cc.snapshotInstanceLogs(ctx, rec)
+
+	assert.Empty(t, rec.LastLogs, "stuck-in-create records (no container) must not trigger a runner.GetLogs call")
+}
+
+// TestGetInstanceLogs_LiveSilentContainer_FallsBackToLastLogs is the
+// per-instance counterpart of
+// TestGetServiceLogs_SilentLiveInstance_FallsBackToTombstone:
+// `rune logs <instance-id>` on a container that's running but
+// producing zero stdout/stderr must still surface the LastLogs
+// snapshot from the previous attempt. The bug originally manifested
+// at the service level on prod/gateway but the per-instance code
+// path had the same gap — a single zero-byte successful read from
+// the runner masked everything else.
+func TestGetInstanceLogs_LiveSilentContainer_FallsBackToLastLogs(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	rec := &types.Instance{
+		ID:        "silent-live",
+		Name:      "silent-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusRunning,
+		LastLogs:  []byte("previous-attempt-output\n"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
+	// Runner returns empty bytes successfully — the docker-quiet case.
+	testRunner.LogOutput = []byte("")
+
+	rc, err := controller.GetInstanceLogs(ctx, rec, types.LogOptions{})
+	require.NoError(t, err)
+	defer rc.Close()
+	body, _ := io.ReadAll(rc)
+	assert.Equal(t, "previous-attempt-output\n", string(body),
+		"silent live container must fall back to LastLogs, not return empty body")
+}
+
+// TestCreateInstance_WithReadinessProbe_StaysStartingUntilProbePasses
+// asserts the readiness gate added in this PR: when a service
+// defines a readiness probe, the freshly-created instance must NOT
+// flip to Running on runner.Start success — it stays Starting until
+// the health controller observes the first readiness pass. Without
+// this, prod/gateway showed Status=Running for ~30s before the
+// liveness probe killed it, even though the app was never ready to
+// serve traffic.
+func TestCreateInstance_WithReadinessProbe_StaysStartingUntilProbePasses(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+	service.Health = &types.HealthCheck{
+		Readiness: &types.Probe{Type: "http", Path: "/ready", Port: 8080},
+	}
+	// Persist the updated spec so prepareEnvVars / etc. see the same one.
+	require.NoError(t, testStore.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, service))
+
+	instance, err := controller.CreateInstance(ctx, service, "ready-gated-0")
+	require.NoError(t, err)
+	assert.Equal(t, types.InstanceStatusStarting, instance.Status,
+		"with a readiness probe defined, runner.Start must NOT promote to Running")
+	assert.Contains(t, instance.StatusMessage, "readiness probe",
+		"status message must signal what we're waiting on")
+}
+
+// TestCreateInstance_NoReadinessProbe_PromotesToRunningAsBefore
+// is the regression guard for the unchanged path: services WITHOUT
+// a readiness probe still flip to Running on runner.Start (no
+// probe = no signal = trust the runner). Tightening too far here
+// would surprise every service that omitted readiness (i.e. most
+// of them today).
+func TestCreateInstance_NoReadinessProbe_PromotesToRunningAsBefore(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+	// No service.Health → no readiness probe.
+
+	instance, err := controller.CreateInstance(ctx, service, "no-probe-0")
+	require.NoError(t, err)
+	assert.Equal(t, types.InstanceStatusRunning, instance.Status)
+}
+
+// TestDeleteInstance_FlipsToTerminatingBeforeRunnerStop is the
+// regression guard for the operator-visible UX gap reported live:
+// after `rune delete service`, the instance kept showing Running
+// for ~10s while runner.Stop's graceful-shutdown window elapsed.
+// DeleteInstance must persist Status=Terminating BEFORE entering
+// runner.Stop so `rune get instances` shows the truth immediately.
+func TestDeleteInstance_FlipsToTerminatingBeforeRunnerStop(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	live := &types.Instance{
+		ID:        "live-id",
+		Name:      "live-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusRunning,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", live.ID, live))
+
+	// Intercept the runner.Stop call to inspect the store mid-teardown.
+	// The store update to Terminating must have happened by the time
+	// the runner sees the Stop call.
+	var sawTerminating bool
+	testRunner.StopFunc = func(ctx context.Context, instance *types.Instance, _ time.Duration) error {
+		var current types.Instance
+		require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, "default", "live-id", &current))
+		if current.Status == types.InstanceStatusTerminating {
+			sawTerminating = true
+		}
+		return nil
+	}
+
+	require.NoError(t, controller.DeleteInstance(ctx, live))
+	assert.True(t, sawTerminating,
+		"Status=Terminating must be persisted BEFORE runner.Stop is invoked, not after")
+
+	// And after the teardown completes, the final state is Deleted.
+	var final types.Instance
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, "default", "live-id", &final))
+	assert.Equal(t, types.InstanceStatusDeleted, final.Status)
+}
+
+// TestDeleteInstance_DoesNotResurrectTerminalStateAsTerminating
+// guards against the symmetrical hazard: if an instance is already
+// Failed (a postmortem tombstone) or Stalled (retries exhausted),
+// the in-place Terminating flip must NOT overwrite that. Otherwise
+// `rune logs <tomb>` would lose the "Failed" signal mid-cleanup.
+func TestDeleteInstance_DoesNotResurrectTerminalStateAsTerminating(t *testing.T) {
+	ctx, testStore, testRunner, controller := setupTestController(t)
+	_ = instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	at := time.Now()
+	tomb := &types.Instance{
+		ID:        "failed-id",
+		Name:      "tomb-0",
+		Namespace: "default",
+		Runner:    testRunner.Type(),
+		Status:    types.InstanceStatusFailed,
+		FailedAt:  &at,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+
+	var seenStatusAtStop types.InstanceStatus
+	testRunner.StopFunc = func(ctx context.Context, instance *types.Instance, _ time.Duration) error {
+		var current types.Instance
+		_ = testStore.Get(ctx, types.ResourceTypeInstance, "default", "failed-id", &current)
+		seenStatusAtStop = current.Status
+		return nil
+	}
+
+	require.NoError(t, controller.DeleteInstance(ctx, tomb))
+	assert.Equal(t, types.InstanceStatusFailed, seenStatusAtStop,
+		"Failed tombstones must NOT be transitioned to Terminating during DeleteInstance — they preserve postmortem state")
+}

@@ -290,6 +290,15 @@ const (
 	// but is retained in the store for a period before garbage collection.
 	InstanceStatusDeleted InstanceStatus = "Deleted"
 
+	// InstanceStatusTerminating indicates the instance is actively being
+	// torn down — runner.Stop/Remove are in flight but haven't completed.
+	// Without this, an instance whose parent service has just been
+	// deleted (or which the reconciler is otherwise GC'ing) keeps
+	// reporting Running until the graceful-shutdown timeout finishes,
+	// giving operators a misleading "Running" view for ~10s.
+	// Mirrors K8s' Pod.Phase=Terminating.
+	InstanceStatusTerminating InstanceStatus = "Terminating"
+
 	// InstanceStatusStalled indicates create has failed too many times
 	// with a stable precondition error (StorageClassMissing, secret
 	// missing, image-pull error) and the reconciler has stopped

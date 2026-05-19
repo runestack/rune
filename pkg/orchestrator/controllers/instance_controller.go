@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -105,6 +106,14 @@ type InstanceController interface {
 
 	// isInstanceCompatibleWithService checks if an instance is compatible with a service
 	isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string)
+
+	// RepublishServiceByInstance recomputes the data-plane endpoint set
+	// for the service owning the given instance. Exposed for callers
+	// outside instanceController that change instance reachability
+	// (e.g. the health controller promoting Starting→Running on the
+	// first readiness pass). Nil-safe when no endpoint publisher is
+	// wired; safe to call repeatedly.
+	RepublishServiceByInstance(ctx context.Context, instance *types.Instance)
 }
 
 // instanceController implements the InstanceController interface
@@ -253,6 +262,15 @@ func (c *instanceController) republishService(ctx context.Context, service *type
 			log.Str("service", service.Name),
 			log.Err(err))
 	}
+}
+
+// RepublishServiceByInstance is the exported entry point delegating to
+// the private republishServiceByInstance — see that function for the
+// full semantics. Used by external callers (e.g. the health controller)
+// that need to refresh the data-plane endpoint set after an instance
+// reachability change.
+func (c *instanceController) RepublishServiceByInstance(ctx context.Context, instance *types.Instance) {
+	c.republishServiceByInstance(ctx, instance)
 }
 
 // republishServiceByInstance is a convenience wrapper that loads the
@@ -541,12 +559,27 @@ func (c *instanceController) runCreateAttempt(ctx context.Context, service *type
 		return wrapped
 	}
 
-	// Update instance with running status. Clear all retry bookkeeping
-	// so the record looks pristine — operators querying a healthy
-	// instance shouldn't see leftover attempt counts from earlier
-	// stuck-in-create retries.
-	instance.Status = types.InstanceStatusRunning
-	instance.StatusMessage = "Created successfully"
+	// Status transition after a successful container start.
+	//
+	// Without a readiness probe we promote straight to Running — that's
+	// what "the runtime accepted the container" means in the absence of
+	// any other signal.
+	//
+	// With a readiness probe we hold at Starting until the health
+	// controller observes the first readiness pass and promotes us. The
+	// previous behaviour (always flip to Running on runner.Start
+	// success) was operator-confusing on services like prod/gateway
+	// that show `Running` for ~30s while the app boots, then get
+	// SIGKILL'd by the liveness probe — the "Running" status was real
+	// but didn't mean "ready to serve traffic." Matches K8s semantics
+	// where Pod.Phase=Running ≠ Ready.
+	if service.Health != nil && service.Health.Readiness != nil {
+		instance.Status = types.InstanceStatusStarting
+		instance.StatusMessage = "Waiting for readiness probe"
+	} else {
+		instance.Status = types.InstanceStatusRunning
+		instance.StatusMessage = "Created successfully"
+	}
 	instance.CreateAttempts = 0
 	instance.NextCreateAttemptAt = nil
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, service.Namespace, instance.ID, instance); err != nil {
@@ -755,6 +788,11 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 // replacement next reconcile tick (or synchronously from RestartInstance)
 // will just work.
 func (c *instanceController) markInstanceFailedInPlace(ctx context.Context, instance *types.Instance, restartReason InstanceRestartReason) error {
+	// Capture the tail of the container's stdout/stderr before we
+	// freeze the record. Without this, `rune logs <id>` falls back
+	// to the LastLogs snapshot only to find the field empty —
+	// defeating the whole point of preserving the postmortem.
+	c.snapshotInstanceLogs(ctx, instance)
 	now := time.Now()
 	instance.Status = types.InstanceStatusFailed
 	instance.StatusMessage = fmt.Sprintf("Preserved for postmortem after %s", restartReason)
@@ -839,6 +877,74 @@ const (
 	createMaxBackoff  = 5 * time.Minute
 )
 
+// snapshotLogBytes caps the per-instance stdout/stderr snapshot
+// captured into Instance.LastLogs before the runner removes the
+// container. 200KB matches the runefile config comment and is
+// enough to carry the tail of a typical crash trace (a couple
+// hundred lines of stack), without bloating the store.
+const snapshotLogBytes = 200 * 1024
+
+// snapshotInstanceLogs reads the tail of an instance's runner logs
+// and stamps Instance.LastLogs / LastLogsCapturedAt / LastLogsTruncated
+// so `rune logs <id>` and the service-level tombstone fallback can
+// still serve them after the container is gone. Best-effort: if the
+// runner can't be reached or has no logs (the common cases where the
+// snapshot would have been empty anyway), this is a no-op.
+//
+// Designed to be called from DeleteInstance and markInstanceFailedInPlace
+// — i.e. exactly the lifecycle moments where we are ABOUT to lose
+// the container and therefore the live log stream.
+func (c *instanceController) snapshotInstanceLogs(ctx context.Context, instance *types.Instance) {
+	if instance == nil {
+		return
+	}
+	// Skip when there has never been a container — nothing to snapshot.
+	// Accept either ContainerEverCreatedAt (set by PR2) OR a non-empty
+	// ContainerID (covers legacy records created before PR2 where the
+	// new field is nil but a container existed). Without the
+	// ContainerID fallback, services that predate dev.75 never get
+	// LastLogs captured, so the GetServiceLogs fallback has nothing
+	// to serve.
+	if instance.ContainerEverCreatedAt == nil && instance.ContainerID == "" {
+		return
+	}
+	// Already snapshotted? Don't overwrite — keep the original
+	// crash output rather than replacing it with whatever the
+	// reconciler picks up later.
+	if len(instance.LastLogs) > 0 {
+		return
+	}
+	_runner, err := c.runnerManager.GetInstanceRunner(instance)
+	if err != nil {
+		return
+	}
+	rc, err := _runner.GetLogs(ctx, instance, runner.LogOptions{Tail: 0})
+	if err != nil || rc == nil {
+		return
+	}
+	defer rc.Close()
+	// Bounded read: at most snapshotLogBytes+1 so we can detect
+	// truncation cheaply.
+	limited := io.LimitReader(rc, int64(snapshotLogBytes)+1)
+	buf, err := io.ReadAll(limited)
+	if err != nil || len(buf) == 0 {
+		return
+	}
+	truncated := false
+	if len(buf) > snapshotLogBytes {
+		buf = buf[:snapshotLogBytes]
+		truncated = true
+	}
+	now := time.Now()
+	instance.LastLogs = buf
+	instance.LastLogsCapturedAt = &now
+	instance.LastLogsTruncated = truncated
+	c.logger.Debug("Captured LastLogs snapshot",
+		log.Str("instance", instance.ID),
+		log.Int("bytes", len(buf)),
+		log.Bool("truncated", truncated))
+}
+
 // createBackoffFor returns the delay to wait before the (attempt+1)-th
 // retry. Exponential with a cap at createMaxBackoff; attempt is
 // 1-based. Mirrors volumeController.backoffFor.
@@ -898,6 +1004,32 @@ func (c *instanceController) DeleteInstance(ctx context.Context, instance *types
 		log.Str("instance", instance.ID),
 		log.Str("namespace", instance.Namespace),
 		log.Str("service", instance.ServiceName))
+
+	// Flip to Terminating immediately so `rune get instances` shows
+	// the truth ("this is being torn down") instead of Running during
+	// the runner.Stop graceful-shutdown window (up to 10s here).
+	// Best-effort; a store error doesn't block the teardown — the
+	// final Status=Deleted write below is the authoritative one. Only
+	// flip from non-terminal states (don't resurrect a Failed/Stalled
+	// tombstone into Terminating).
+	if instance.Status != types.InstanceStatusDeleted &&
+		instance.Status != types.InstanceStatusFailed &&
+		instance.Status != types.InstanceStatusStalled {
+		instance.Status = types.InstanceStatusTerminating
+		instance.StatusMessage = "Stopping and removing container"
+		instance.UpdatedAt = time.Now()
+		if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
+			c.logger.Warn("Failed to mark instance Terminating before teardown",
+				log.Str("instance", instance.ID),
+				log.Err(err))
+		}
+	}
+
+	// Snapshot the container's stdout/stderr before we tear it down,
+	// so `rune logs <id>` and the service-level tombstone fallback
+	// can serve them after the container is gone. Best-effort; no-op
+	// for instances that never had a container.
+	c.snapshotInstanceLogs(ctx, instance)
 
 	// Get the runner for this instance
 	runner, err := c.runnerManager.GetInstanceRunner(instance)
@@ -999,26 +1131,120 @@ func (c *instanceController) GetInstanceStatus(ctx context.Context, instance *ty
 	}, nil
 }
 
-// GetInstanceLogs gets logs for an instance
+// GetInstanceLogs gets logs for an instance. When the live container is
+// unavailable (the runner has no record of it — usually because the
+// instance has been tombstoned and the container removed, or because
+// the host runner is down), fall back to the LastLogs snapshot
+// captured at tombstone/retention-GC time. This is what makes
+// `rune logs <failed-id>` and the service-level `rune logs <name>`
+// keep working after the container is gone — operators investigating
+// a failure do not have to race the retention GC.
 func (c *instanceController) GetInstanceLogs(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error) {
-	// Try to get logs from both runners and use the first one that succeeds
-	_runner, err := c.runnerManager.GetInstanceRunner(instance)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get runner for instance: %w", err)
+	_runner, runnerErr := c.runnerManager.GetInstanceRunner(instance)
+	if runnerErr == nil {
+		logs, err := _runner.GetLogs(ctx, instance, runner.LogOptions{
+			Follow:     opts.Follow,
+			Since:      opts.Since,
+			Until:      opts.Until,
+			Tail:       opts.Tail,
+			Timestamps: opts.Timestamps,
+		})
+		if err == nil {
+			// In follow mode we cannot peek (would block waiting for
+			// the first byte that may never come for a silent
+			// container). Hand the live stream through verbatim;
+			// operators reaching for --follow are accepting that
+			// "nothing right now" is a possible state.
+			if opts.Follow {
+				return logs, nil
+			}
+			// Non-follow: detect the silent-container case and prefer
+			// the LastLogs snapshot from a previous attempt over a
+			// zero-byte live stream. This is the load-bearing fix
+			// for prod/gateway, where docker logs returned 0 bytes
+			// for the current container while a prior attempt had
+			// real crash output. Without this, `rune logs <id>`
+			// against a silent container returns exit 0 + empty
+			// body and the operator sees nothing.
+			pr := newPeekingReader(logs)
+			if has, _ := pr.HasData(); has {
+				return pr, nil
+			}
+			// Live reader was empty. Close it (we're abandoning it)
+			// and fall through to LastLogs / synth path below.
+			_ = pr.Close()
+		}
+		// Runner is reachable but the container is gone (err != nil)
+		// or returned no data (handled above) — fall through to the
+		// LastLogs snapshot below.
 	}
 
-	logs, err := _runner.GetLogs(ctx, instance, runner.LogOptions{
-		Follow:     opts.Follow,
-		Since:      opts.Since,
-		Until:      opts.Until,
-		Tail:       opts.Tail,
-		Timestamps: opts.Timestamps,
-	})
-	if err == nil {
-		return logs, nil
+	if len(instance.LastLogs) > 0 {
+		c.logger.Debug("Serving LastLogs snapshot for instance",
+			log.Str("instance", instance.ID),
+			log.Int("bytes", len(instance.LastLogs)))
+		return io.NopCloser(bytes.NewReader(instance.LastLogs)), nil
 	}
 
-	return nil, fmt.Errorf("failed to get logs for instance %s: %w", instance.ID, err)
+	// Terminal-state instances with no captured stdout/stderr still
+	// deserve SOMETHING from `rune logs` rather than silent empty
+	// output. Synthesize a one-liner from the tombstone's
+	// FailureReason / StatusMessage so operators can at least see
+	// "instance died, here's why" instead of having to dig through
+	// `rune get instance -o yaml` separately. Common case:
+	// containers that crash before printing anything (PID 1
+	// SIGKILL'd by a failed health check, image entrypoint exits
+	// instantly, etc.).
+	if isTerminalInstanceStatus(instance.Status) {
+		return io.NopCloser(strings.NewReader(synthesizeNoLogsLine(instance))), nil
+	}
+
+	if runnerErr != nil {
+		return nil, fmt.Errorf("failed to get logs for instance %s: %w", instance.ID, runnerErr)
+	}
+	return nil, fmt.Errorf("failed to get logs for instance %s: container unavailable and no LastLogs snapshot", instance.ID)
+}
+
+// isTerminalInstanceStatus is true for statuses that mean the
+// instance is not running and not coming back without operator
+// action — so any "no logs" answer is final, not transient.
+func isTerminalInstanceStatus(s types.InstanceStatus) bool {
+	switch s {
+	case types.InstanceStatusFailed,
+		types.InstanceStatusStalled,
+		types.InstanceStatusDeleted,
+		types.InstanceStatusExited,
+		types.InstanceStatusUnknown:
+		return true
+	}
+	return false
+}
+
+// synthesizeNoLogsLine builds a single user-facing line explaining
+// why a terminal instance has nothing in its logs. Pulls everything
+// from the tombstone record itself so the answer travels with
+// `rune logs <id>` even after the container is gone.
+func synthesizeNoLogsLine(instance *types.Instance) string {
+	var b strings.Builder
+	b.WriteString("[rune] instance ")
+	b.WriteString(instance.ID)
+	b.WriteString(" (")
+	b.WriteString(string(instance.Status))
+	b.WriteString(") produced no captured output")
+	if instance.FailureReason != "" {
+		b.WriteString(" — reason: ")
+		b.WriteString(instance.FailureReason)
+	}
+	if instance.StatusMessage != "" {
+		b.WriteString("\n[rune] status: ")
+		b.WriteString(instance.StatusMessage)
+	}
+	if instance.FailedAt != nil {
+		b.WriteString("\n[rune] failed at: ")
+		b.WriteString(instance.FailedAt.UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // Exec executes a command in a running instance

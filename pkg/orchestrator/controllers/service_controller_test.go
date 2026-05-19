@@ -566,3 +566,187 @@ func (fes *fakeExecStream) Signal(signal string) error {
 func (fes *fakeExecStream) Stderr() io.Reader {
 	return strings.NewReader(string(fes.stderr))
 }
+
+// TestGetServiceLogs_FallsBackToFailedTombstoneSnapshot is the
+// service-level regression guard for bug
+// RUNE-BUG-RUNE-LOGS-IGNORES-TOMBSTONE-LASTLOGS: when a service has
+// no Running instances, `rune logs <service>` should fall back to the
+// most-recent Failed tombstone's LastLogs instead of returning
+// "no instances found" / "all marked as deleted". Operators
+// investigating a crashed service hit this all the time.
+func TestGetServiceLogs_FallsBackToFailedTombstoneSnapshot(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+
+	// Seed two Failed tombstones with snapshots, plus one Deleted (older).
+	older := time.Now().Add(-1 * time.Hour)
+	newer := time.Now().Add(-1 * time.Minute)
+	tombs := []*types.Instance{
+		{ID: "deleted-old", Name: "tomb-0", Namespace: "default", ServiceID: service.ID, ServiceName: service.Name,
+			Status: types.InstanceStatusDeleted, FailedAt: &older, LastLogs: []byte("deleted-old-logs")},
+		{ID: "failed-older", Name: "tomb-0", Namespace: "default", ServiceID: service.ID, ServiceName: service.Name,
+			Status: types.InstanceStatusFailed, FailedAt: &older, LastLogs: []byte("failed-older-logs")},
+		{ID: "failed-newer", Name: "tomb-0", Namespace: "default", ServiceID: service.ID, ServiceName: service.Name,
+			Status: types.InstanceStatusFailed, FailedAt: &newer, LastLogs: []byte("failed-newer-logs")},
+	}
+	for _, t2 := range tombs {
+		require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", t2.ID, t2))
+	}
+	// Stub the instance controller to surface LastLogs.
+	fakeInstanceController.GetLogsFunc = func(ctx context.Context, instance *types.Instance, _ types.LogOptions) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(string(instance.LastLogs))), nil
+	}
+
+	rc, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
+	require.NoError(t, err, "fallback must succeed when a tombstone has LastLogs")
+	body, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	rc.Close()
+	assert.Contains(t, string(body), "failed-newer-logs",
+		"fallback must pick the most-recent Failed tombstone by FailedAt")
+	assert.NotContains(t, string(body), "failed-older-logs",
+		"older Failed tombstone must not bleed into the fallback")
+	assert.NotContains(t, string(body), "deleted-old-logs",
+		"Failed tombstones must be preferred over Deleted ones")
+}
+
+// TestGetServiceLogs_FallsBackToDeletedWhenNoFailed covers the symmetric
+// fallback: no Failed tombstones, but a Deleted record still carries a
+// LastLogs snapshot. The fallback must use it rather than returning
+// "no logs available".
+func TestGetServiceLogs_FallsBackToDeletedWhenNoFailed(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+
+	at := time.Now().Add(-5 * time.Minute)
+	del := &types.Instance{
+		ID: "deleted-with-logs", Name: "tomb-0", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status: types.InstanceStatusDeleted, FailedAt: &at,
+		LastLogs: []byte("deleted-tombstone-says-hello"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", del.ID, del))
+	fakeInstanceController.GetLogsFunc = func(ctx context.Context, instance *types.Instance, _ types.LogOptions) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(string(instance.LastLogs))), nil
+	}
+
+	rc, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
+	require.NoError(t, err)
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	assert.Contains(t, string(body), "deleted-tombstone-says-hello")
+}
+
+// TestGetServiceLogs_NoCapturedOutput_SynthesizesWhyLine asserts the
+// service-level counterpart of the
+// TestGetInstanceLogs_TerminalNoLogs_SynthesizesWhyLine guarantee:
+// when no live instance has logs AND no tombstone has a snapshot,
+// the most-recent terminal tombstone's FailureReason / StatusMessage
+// is surfaced through `rune logs <service>` as a synthesized line.
+// Without this, `rune logs gateway` on a crashing-without-stdout
+// service silently returns nothing and operators have no signal.
+func TestGetServiceLogs_NoCapturedOutput_SynthesizesWhyLine(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+	at := time.Now()
+	tomb := &types.Instance{
+		ID: "no-snapshot", Name: "tomb-0", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status: types.InstanceStatusFailed, FailedAt: &at,
+		FailureReason: "HealthCheckFailure",
+		StatusMessage: "container exited with code 137 before binding port",
+		// LastLogs intentionally empty.
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+	// Stub the per-instance lookup so the service-level fallback
+	// can reach the synthesised-line path. The fake's default
+	// returns nil, nil — matching the real GetInstanceLogs return
+	// when an instance has no logs and no container — so a
+	// non-nil stub is required to exercise the synth path.
+	fakeInstanceController.GetLogsFunc = func(ctx context.Context, instance *types.Instance, _ types.LogOptions) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(synthesizeNoLogsLine(instance))), nil
+	}
+
+	rc, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
+	require.NoError(t, err)
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	got := string(body)
+	assert.Contains(t, got, "HealthCheckFailure")
+	assert.Contains(t, got, "no captured output")
+}
+
+// TestGetServiceLogs_SilentLiveInstance_FallsBackToTombstone is the
+// regression guard for the prod/gateway live observation: a Running
+// instance whose container is genuinely silent (docker logs = 0
+// bytes — the bun process started but the app never wrote to
+// stdout) used to mask the previous attempt's tombstone snapshot.
+// `rune logs gateway -n prod` would return exit 0 + empty body and
+// operators saw nothing, even though a previous container had 14KB
+// of real crash output. Fix: peek the live stream; if no data,
+// surface the previous tombstone's LastLogs.
+func TestGetServiceLogs_SilentLiveInstance_FallsBackToTombstone(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+
+	// Live, Running, but the container has zero stdout/stderr.
+	serviceControllerCreateTestInstance(ctx, t, testStore, service.Name, "live-silent", types.InstanceStatusRunning)
+	// Previous attempt's tombstone WITH a captured snapshot.
+	earlier := time.Now().Add(-2 * time.Minute)
+	tomb := &types.Instance{
+		ID: "tomb-with-logs", Name: "tomb-0", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status: types.InstanceStatusFailed, FailedAt: &earlier,
+		LastLogs: []byte("previous-attempt-crash-trace"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+
+	// Stub: live instance returns empty stream, tombstone returns its LastLogs.
+	fakeInstanceController.GetLogsFunc = func(ctx context.Context, instance *types.Instance, _ types.LogOptions) (io.ReadCloser, error) {
+		if instance.ID == "live-silent" {
+			return io.NopCloser(strings.NewReader("")), nil
+		}
+		return io.NopCloser(strings.NewReader(string(instance.LastLogs))), nil
+	}
+
+	rc, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
+	require.NoError(t, err)
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	assert.Contains(t, string(body), "previous-attempt-crash-trace",
+		"silent live container must trigger tombstone fallback, not silent empty output")
+}
+
+// TestGetServiceLogs_LiveHasContent_NoFallback asserts the negative:
+// when the live instance actually produces output, we don't append
+// the tombstone snapshot — that would just be noise for healthy
+// services.
+func TestGetServiceLogs_LiveHasContent_NoFallback(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+	serviceControllerCreateTestInstance(ctx, t, testStore, service.Name, "live-talking", types.InstanceStatusRunning)
+	earlier := time.Now().Add(-1 * time.Minute)
+	tomb := &types.Instance{
+		ID: "tomb-with-logs", Name: "tomb-0", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status: types.InstanceStatusFailed, FailedAt: &earlier,
+		LastLogs: []byte("OLD-LOGS-MUST-NOT-LEAK"),
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", tomb.ID, tomb))
+
+	fakeInstanceController.GetLogsFunc = func(ctx context.Context, instance *types.Instance, _ types.LogOptions) (io.ReadCloser, error) {
+		if instance.ID == "live-talking" {
+			return io.NopCloser(strings.NewReader("LIVE-CONTENT-HERE")), nil
+		}
+		return io.NopCloser(strings.NewReader(string(instance.LastLogs))), nil
+	}
+
+	rc, err := controller.GetServiceLogs(ctx, service.Namespace, service.Name, types.LogOptions{ShowLogs: true})
+	require.NoError(t, err)
+	body, _ := io.ReadAll(rc)
+	rc.Close()
+	got := string(body)
+	assert.Contains(t, got, "LIVE-CONTENT-HERE")
+	assert.NotContains(t, got, "OLD-LOGS-MUST-NOT-LEAK",
+		"tombstone fallback must NOT fire when live instance has content")
+}

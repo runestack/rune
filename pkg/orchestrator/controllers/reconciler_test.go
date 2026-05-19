@@ -655,3 +655,131 @@ func TestReconcileExistingInstance_Stalled_NoAutoRetry(t *testing.T) {
 	assert.Len(t, instanceController.UpdateInstanceCalls, 0,
 		"Stalled records must not flow into UpdateInstance either")
 }
+
+// TestCleanUpStoreOrphanInstances_DeletesInstanceWhenServiceMissing
+// is the regression guard for the orphan reported live: prod/tombstone-test
+// stayed up 13h after its service was deleted because the
+// InstanceCleanupFinalizer didn't sweep it. Without this safety net,
+// `rune get instances` shows ghosts that `rune delete <name>` can't
+// address because the parent service no longer exists.
+func TestCleanUpStoreOrphanInstances_DeletesInstanceWhenServiceMissing(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	logger := log.NewLogger()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             logger.WithComponent("reconciler"),
+	}
+
+	// Seed an orphan instance whose service name is unknown to the
+	// reconciler. Status=Running mirrors the prod/tombstone-test case
+	// — long-lived orphan still being healthchecked.
+	orphan := &types.Instance{
+		ID:          "orphan-id",
+		Name:        "ghost-0",
+		Namespace:   "default",
+		ServiceID:   "ghost-service",
+		ServiceName: "ghost-service",
+		Status:      types.InstanceStatusRunning,
+	}
+	require.NoError(t, testStore.Create(context.Background(), types.ResourceTypeInstance, "default", orphan.ID, orphan))
+
+	// Run the sweep against an empty knownServices slice — i.e. no
+	// service exists with that ServiceName.
+	r.cleanUpStoreOrphanInstances(context.Background(), nil, []types.Instance{*orphan})
+
+	require.Len(t, instanceController.DeleteInstanceCalls, 1,
+		"orphan whose service is missing must be DeleteInstance'd by the reconciler safety net")
+	assert.Equal(t, "orphan-id", instanceController.DeleteInstanceCalls[0].Instance.ID)
+}
+
+// TestCleanUpStoreOrphanInstances_LeavesKnownAndDeletedAlone asserts
+// the negative space: instances with a live parent service AND
+// already-Deleted records must NOT be re-deleted (would race the
+// retention GC path and either fail or double-evict).
+func TestCleanUpStoreOrphanInstances_LeavesKnownAndDeletedAlone(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	logger := log.NewLogger()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             logger.WithComponent("reconciler"),
+	}
+
+	live := &types.Instance{
+		ID: "live-id", Name: "alive-0", Namespace: "default",
+		ServiceName: "alive", Status: types.InstanceStatusRunning,
+	}
+	already := &types.Instance{
+		ID: "already-deleted", Name: "ghost-0", Namespace: "default",
+		ServiceName: "ghost-service", Status: types.InstanceStatusDeleted,
+	}
+	require.NoError(t, testStore.Create(context.Background(), types.ResourceTypeInstance, "default", live.ID, live))
+	require.NoError(t, testStore.Create(context.Background(), types.ResourceTypeInstance, "default", already.ID, already))
+
+	known := []types.Service{{Name: "alive", Namespace: "default"}}
+	r.cleanUpStoreOrphanInstances(context.Background(), known, []types.Instance{*live, *already})
+
+	assert.Len(t, instanceController.DeleteInstanceCalls, 0,
+		"neither live (service known) nor Deleted (already on the way out) instances should be touched")
+}
+
+// TestGCFailedInstancesPrefersToKeepTombstonesWithLastLogs is the
+// regression guard for the cap-prefers-with-logs change: when there
+// are more tombstones than the cap allows, the GC must preferentially
+// evict EMPTY ones (no LastLogs captured) before logs-bearing ones,
+// even when the logs-bearing tombstone is older. Live observation:
+// prod/gateway cycled fast — one informative crash with 14KB of
+// stdout (f67e328f) was the only tombstone with usable logs, but
+// it got evicted by the same cap that swept 6 newer silent
+// tombstones. After this change the informative one survives until
+// the TTL fires.
+func TestGCFailedInstancesPrefersToKeepTombstonesWithLastLogs(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	reconciler := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	now := time.Now()
+	cap := failedInstancePerServiceCap
+	// Mix: one informative tombstone slightly older than the silent
+	// ones, plus cap+2 newer silent ones. Keep "older" well within
+	// failedInstanceTTL so we're testing the cap path specifically,
+	// not the TTL hard ceiling.
+	oldWithLogs := time.Now().Add(-time.Duration(cap+5) * time.Minute)
+	informative := types.Instance{
+		ID: "informative", Name: "svc-0-failed-X",
+		ServiceName: "svc", Namespace: "default",
+		Status: types.InstanceStatusFailed, FailedAt: &oldWithLogs,
+		ContainerID: "ctr-info", LastLogs: []byte("real crash trace from the only useful container"),
+	}
+	tombs := []types.Instance{informative}
+	for i := 0; i < cap+2; i++ {
+		age := -time.Duration(i+1) * time.Minute
+		failedAt := now.Add(age)
+		tombs = append(tombs, types.Instance{
+			ID: fmt.Sprintf("silent-%d", i), Name: fmt.Sprintf("svc-0-failed-%d", i),
+			ServiceName: "svc", Namespace: "default",
+			Status: types.InstanceStatusFailed, FailedAt: &failedAt,
+			ContainerID: fmt.Sprintf("ctr-%d", i),
+			// LastLogs intentionally empty.
+		})
+	}
+
+	reconciler.gcFailedInstances(context.Background(), tombs)
+
+	evicted := map[string]bool{}
+	for _, call := range instanceController.DeleteInstanceCalls {
+		evicted[call.Instance.ID] = true
+	}
+	assert.False(t, evicted["informative"],
+		"the lone tombstone with captured LastLogs must survive cap eviction (even when older than the silent ones)")
+}

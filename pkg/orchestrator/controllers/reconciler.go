@@ -200,8 +200,73 @@ func (r *reconciler) reconcileServices(ctx context.Context) error {
 		r.logger.Error("Failed to clean up orphaned instances", log.Err(err))
 	}
 
+	// Sweep store-orphan instances: any instance whose parent service
+	// no longer exists in the store. The InstanceCleanupFinalizer
+	// handles cascade-delete on the happy path, but live experience
+	// (prod/tombstone-test-0 surviving 13h after its service was
+	// deleted) shows the finalizer can miss instances when it
+	// crashes mid-sweep, when the service was removed by a path that
+	// bypassed the finalizer, or when a new instance is created
+	// against a service ID that has since gone. This is the safety
+	// net so `rune delete <service>` never leaves a long-lived
+	// orphan that operators can't address — they show up in
+	// `rune get instances` with a serviceName pointing at nothing.
+	var allInstances []types.Instance
+	if err := r.store.ListAll(ctx, types.ResourceTypeInstance, &allInstances); err != nil {
+		r.logger.Error("Failed to list instances for orphan sweep", log.Err(err))
+	} else {
+		r.cleanUpStoreOrphanInstances(ctx, services, allInstances)
+	}
+
 	r.logger.Debug("Service reconciliation completed")
 	return nil
+}
+
+// cleanUpStoreOrphanInstances deletes instances whose parent service
+// (by namespace + name) is no longer in the store. Pure function over
+// the supplied snapshot of services + instances — the caller owns
+// the store I/O so this is straightforward to unit-test.
+func (r *reconciler) cleanUpStoreOrphanInstances(ctx context.Context, knownServices []types.Service, instances []types.Instance) {
+	known := make(map[string]struct{}, len(knownServices))
+	for i := range knownServices {
+		known[knownServices[i].Namespace+"/"+knownServices[i].Name] = struct{}{}
+	}
+
+	for i := range instances {
+		inst := &instances[i]
+		// Already on the way out — let the existing deleted-instance
+		// retention path finish its job. Terminating means a
+		// teardown is mid-flight (runner.Stop/Remove in progress);
+		// hitting DeleteInstance again would just re-enter the same
+		// idempotent flow and clutter the audit trail.
+		if inst.Status == types.InstanceStatusDeleted ||
+			inst.Status == types.InstanceStatusTerminating {
+			continue
+		}
+		// ServiceName is the contract: the InstanceCleanupFinalizer,
+		// reconciler slot lookup, and rune CLI all key off it. An
+		// empty value would be a separate bug; skip rather than mass-
+		// delete on the assumption that the finalizer would have
+		// caught real instances anyway.
+		if inst.ServiceName == "" {
+			continue
+		}
+		if _, ok := known[inst.Namespace+"/"+inst.ServiceName]; ok {
+			continue
+		}
+		r.logger.Info("Cleaning up store-orphan instance (parent service no longer exists)",
+			log.Str("instance", inst.ID),
+			log.Str("service", inst.ServiceName),
+			log.Str("namespace", inst.Namespace),
+			log.Str("status", string(inst.Status)))
+		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
+			// Log and continue; missing one orphan shouldn't block the
+			// rest of the sweep.
+			r.logger.Error("Failed to delete store-orphan instance",
+				log.Str("instance", inst.ID),
+				log.Err(err))
+		}
+	}
 }
 
 func (r *reconciler) cleanUpOrphanedInstances(ctx context.Context, orphanedInstances []*types.Instance) error {
@@ -744,7 +809,12 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 				}
 			case types.InstanceStatusRunning:
 				running++
-			case types.InstanceStatusFailed, types.InstanceStatusExited, types.InstanceStatusUnknown:
+			case types.InstanceStatusFailed, types.InstanceStatusExited, types.InstanceStatusUnknown, types.InstanceStatusStalled:
+				// Stalled is the PR2 terminal "create retries
+				// exhausted, operator must act" state. Roll it up as
+				// Failed so `rune get services` doesn't show
+				// misleading Pending for a slot that will never
+				// self-recover.
 				failed++
 				if worstFailed == nil {
 					worstFailed = instance
@@ -980,8 +1050,21 @@ func (r *reconciler) gcFailedInstances(ctx context.Context, instances []types.In
 	}
 
 	for key, tombs := range bySvc {
-		// Sort newest-first so the cap evicts the oldest first.
+		// Sort logs-bearing first, then newest-first within each
+		// group. The cap walks from index 0 and evicts beyond
+		// per-service-cap, so this preferentially KEEPS tombstones
+		// that have a captured stdout/stderr snapshot — exactly the
+		// ones operators want for postmortems. Live observation:
+		// prod/gateway's one informative crash (f67e328f, 14KB) was
+		// previously evicted by the same cap that swept 6 silent
+		// tombstones; with this ordering it survives until the TTL
+		// fires (which is still respected below as a hard ceiling).
 		sort.Slice(tombs, func(i, j int) bool {
+			ihas := len(tombs[i].LastLogs) > 0
+			jhas := len(tombs[j].LastLogs) > 0
+			if ihas != jhas {
+				return ihas
+			}
 			return tombs[i].FailedAt.After(*tombs[j].FailedAt)
 		})
 

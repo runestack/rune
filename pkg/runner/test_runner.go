@@ -38,6 +38,12 @@ type TestRunner struct {
 	DialCalls    []DialCall
 	LastDialPeer net.Conn
 
+	// StopFunc, if non-nil, replaces the default Stop behaviour.
+	// Tests use this to observe store state mid-teardown (e.g. assert
+	// the controller flipped Status=Terminating BEFORE invoking
+	// runner.Stop, not after).
+	StopFunc func(ctx context.Context, instance *types.Instance, timeout time.Duration) error
+
 	// Init step tracking (RUNE-121)
 	InitCalls    []InitCall
 	InitExitCode int
@@ -144,8 +150,14 @@ func (r *TestRunner) Start(ctx context.Context, instance *types.Instance) error 
 	return nil
 }
 
-// Stop tracks instance stopping
+// Stop tracks instance stopping. If StopFunc is set, it overrides the
+// default behaviour — useful for tests that need to inspect store /
+// runner state mid-teardown without racing the controller's own
+// goroutines.
 func (r *TestRunner) Stop(ctx context.Context, instance *types.Instance, timeout time.Duration) error {
+	if r.StopFunc != nil {
+		return r.StopFunc(ctx, instance, timeout)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
