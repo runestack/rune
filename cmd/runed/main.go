@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -696,6 +697,26 @@ func main() {
 		apiServer.GetOrchestrator().SetEndpointPublisher(pub, agentInst.Identity().NodeID)
 	}
 
+	// Tell the docker runner to inject Rune's embedded DNS server
+	// into every subsequently-created container (RUNE-063). Without
+	// this call, containers inherit the host's /etc/resolv.conf and
+	// cannot resolve `<service>.<namespace>.rune` — every
+	// cross-service hostname returns NXDOMAIN from upstream DNS.
+	// We strip the :port suffix because docker's --dns expects
+	// addresses only (it always queries on UDP/TCP 53), and the
+	// search domain ensures bare service names ("mongo") resolve
+	// inside the same namespace.
+	if dnsSub != nil {
+		dnsIPs := dnsServerIPs(dnsSub.BindAddrs())
+		if len(dnsIPs) > 0 {
+			apiServer.GetRunnerManager().SetDNSInjection(dnsIPs, []string{"rune."})
+			logger.Info("Container DNS injection enabled",
+				log.Str("servers", strings.Join(dnsIPs, ",")))
+		} else {
+			logger.Warn("DNS subsystem has no bind addresses; container DNS injection skipped")
+		}
+	}
+
 	// Optional: serve Prometheus metrics on a private address so
 	// scrapers can collect dataplane + future subsystem metrics.
 	var metricsServer *http.Server
@@ -1065,4 +1086,26 @@ func applyDevModeStorageOverlay(s *config.Storage, logger log.Logger) {
 	logger.Info("Dev-mode storage overlay applied",
 		log.Str("dev_volume_root", devVolRoot),
 		log.Bool("allow_create_missing", true))
+}
+
+// dnsServerIPs strips the :port suffix from each "host:port" bind
+// address and returns only the IPs in stable order. docker's --dns
+// flag wants addresses, not host:port pairs (it always queries on
+// 53). Drops any entry that fails ParseHostPort or that has an
+// empty host part — defensive against malformed config.
+func dnsServerIPs(bindAddrs []string) []string {
+	out := make([]string, 0, len(bindAddrs))
+	seen := make(map[string]struct{}, len(bindAddrs))
+	for _, addr := range bindAddrs {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil || host == "" {
+			continue
+		}
+		if _, dup := seen[host]; dup {
+			continue
+		}
+		seen[host] = struct{}{}
+		out = append(out, host)
+	}
+	return out
 }
