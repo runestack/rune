@@ -180,7 +180,7 @@ enum ProbeType {
   PROBE_TYPE_UNSPECIFIED = 0;
   PROBE_TYPE_HTTP = 1;
   PROBE_TYPE_TCP = 2;
-  PROBE_TYPE_COMMAND = 3;
+  PROBE_TYPE_EXEC = 3;
 }
 
 // Probe represents a health check probe configuration.

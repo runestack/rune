@@ -193,7 +193,7 @@ const (
 	ProbeType_PROBE_TYPE_UNSPECIFIED ProbeType = 0
 	ProbeType_PROBE_TYPE_HTTP        ProbeType = 1
 	ProbeType_PROBE_TYPE_TCP         ProbeType = 2
-	ProbeType_PROBE_TYPE_COMMAND     ProbeType = 3
+	ProbeType_PROBE_TYPE_EXEC        ProbeType = 3
 )
 
 // Enum value maps for ProbeType.
@@ -202,13 +202,13 @@ var (
 		0: "PROBE_TYPE_UNSPECIFIED",
 		1: "PROBE_TYPE_HTTP",
 		2: "PROBE_TYPE_TCP",
-		3: "PROBE_TYPE_COMMAND",
+		3: "PROBE_TYPE_EXEC",
 	}
 	ProbeType_value = map[string]int32{
 		"PROBE_TYPE_UNSPECIFIED": 0,
 		"PROBE_TYPE_HTTP":        1,
 		"PROBE_TYPE_TCP":         2,
-		"PROBE_TYPE_COMMAND":     3,
+		"PROBE_TYPE_EXEC":        3,
 	}
 )
 
@@ -1168,12 +1168,12 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\x1aRESTART_POLICY_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15RESTART_POLICY_ALWAYS\x10\x01\x12\x1d\n" +
 	"\x19RESTART_POLICY_ON_FAILURE\x10\x02\x12\x18\n" +
-	"\x14RESTART_POLICY_NEVER\x10\x03*h\n" +
+	"\x14RESTART_POLICY_NEVER\x10\x03*e\n" +
 	"\tProbeType\x12\x1a\n" +
 	"\x16PROBE_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPROBE_TYPE_HTTP\x10\x01\x12\x12\n" +
-	"\x0ePROBE_TYPE_TCP\x10\x02\x12\x16\n" +
-	"\x12PROBE_TYPE_COMMAND\x10\x03B-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\x0ePROBE_TYPE_TCP\x10\x02\x12\x13\n" +
+	"\x0fPROBE_TYPE_EXEC\x10\x03B-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_common_proto_rawDescOnce sync.Once

@@ -578,8 +578,8 @@ func ServiceToProto(service *types.Service) *generated.Service {
 			case "tcp":
 				protoService.Health.Liveness.Type = generated.ProbeType_PROBE_TYPE_TCP
 				protoService.Health.Liveness.Port = utils.ToInt32NonNegative(service.Health.Liveness.Port)
-			case "command":
-				protoService.Health.Liveness.Type = generated.ProbeType_PROBE_TYPE_COMMAND
+			case "exec":
+				protoService.Health.Liveness.Type = generated.ProbeType_PROBE_TYPE_EXEC
 				protoService.Health.Liveness.Command = service.Health.Liveness.Command
 			}
 		}
@@ -599,8 +599,8 @@ func ServiceToProto(service *types.Service) *generated.Service {
 			case "tcp":
 				protoService.Health.Readiness.Type = generated.ProbeType_PROBE_TYPE_TCP
 				protoService.Health.Readiness.Port = utils.ToInt32NonNegative(service.Health.Readiness.Port)
-			case "command":
-				protoService.Health.Readiness.Type = generated.ProbeType_PROBE_TYPE_COMMAND
+			case "exec":
+				protoService.Health.Readiness.Type = generated.ProbeType_PROBE_TYPE_EXEC
 				protoService.Health.Readiness.Command = service.Health.Readiness.Command
 			}
 		}
@@ -858,8 +858,8 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 			case generated.ProbeType_PROBE_TYPE_TCP:
 				service.Health.Liveness.Type = "tcp"
 				service.Health.Liveness.Port = int(proto.Health.Liveness.Port)
-			case generated.ProbeType_PROBE_TYPE_COMMAND:
-				service.Health.Liveness.Type = "command"
+			case generated.ProbeType_PROBE_TYPE_EXEC:
+				service.Health.Liveness.Type = "exec"
 				service.Health.Liveness.Command = proto.Health.Liveness.Command
 			}
 		}
@@ -879,8 +879,8 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 			case generated.ProbeType_PROBE_TYPE_TCP:
 				service.Health.Readiness.Type = "tcp"
 				service.Health.Readiness.Port = int(proto.Health.Readiness.Port)
-			case generated.ProbeType_PROBE_TYPE_COMMAND:
-				service.Health.Readiness.Type = "command"
+			case generated.ProbeType_PROBE_TYPE_EXEC:
+				service.Health.Readiness.Type = "exec"
 				service.Health.Readiness.Command = proto.Health.Readiness.Command
 			}
 		}
