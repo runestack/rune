@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -135,13 +136,60 @@ func TestDockerExecStreamExitCode(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
-func TestDockerExecStreamRunning(t *testing.T) {
+func TestDockerExecStreamRunningThenContextCancelled(t *testing.T) {
 	// Create a mock Docker client
 	mockClient := new(MockDockerClient)
 
-	// Set up the mock expectations for inspect - process is still running
+	// The process never finishes — every inspect reports it running.
 	mockClient.On("ContainerExecInspect", mock.Anything, "exec123").
 		Return(0, true, nil) // exit code 0, still running, no error
+
+	// Create a minimal exec stream for testing, without starting IO copying
+	r, w := io.Pipe()
+	defer r.Close()
+	defer w.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	stream := &DockerExecStream{
+		cli:           mockClient,
+		execID:        "exec123",
+		ctx:           ctx,
+		cancel:        cancel,
+		logger:        log.NewLogger(),
+		stdout:        &readWritePipe{reader: r, writer: w},
+		stderr:        &readWritePipe{reader: r, writer: w},
+		closed:        false,
+		mutex:         sync.Mutex{},
+		exitCodeMutex: sync.Mutex{},
+	}
+
+	// ExitCode blocks while the process runs; cancelling the context
+	// (as a probe timeout would) must unblock it with an error rather
+	// than hang forever.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	exitCode, err := stream.ExitCode()
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "did not complete")
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestDockerExecStreamRunningThenCompletes(t *testing.T) {
+	// Create a mock Docker client
+	mockClient := new(MockDockerClient)
+
+	// First inspect: still running. Subsequent inspects: completed.
+	// ExitCode must wait through the "running" phase and return the
+	// real exit code once the process finishes.
+	mockClient.On("ContainerExecInspect", mock.Anything, "exec123").
+		Return(0, true, nil).Once()
+	mockClient.On("ContainerExecInspect", mock.Anything, "exec123").
+		Return(0, false, nil)
 
 	// Create a minimal exec stream for testing, without starting IO copying
 	r, w := io.Pipe()
@@ -164,12 +212,9 @@ func TestDockerExecStreamRunning(t *testing.T) {
 		exitCodeMutex: sync.Mutex{},
 	}
 
-	// Get the exit code for a running process
 	exitCode, err := stream.ExitCode()
 
-	// Assert we get an error since it's still running
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "still running")
+	assert.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
 	// Verify mock was called
