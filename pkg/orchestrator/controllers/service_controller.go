@@ -125,6 +125,11 @@ func (sc *serviceController) Start(ctx context.Context) error {
 	sc.deletionWorkerPool.Start()
 	sc.logger.Info("Started deletion worker pool")
 
+	// Recover deletion operations interrupted by a crash/restart (mirrors scaling recovery).
+	if err := sc.recoverInProgressDeletions(ctx); err != nil {
+		sc.logger.Error("Error recovering in-progress deletion operations", log.Err(err))
+	}
+
 	// Start watching for service events
 	if err := sc.StartWatching(ctx); err != nil {
 		return fmt.Errorf("failed to start watching: %w", err)
@@ -1036,6 +1041,7 @@ func (sc *serviceController) handleRealDeletion(ctx context.Context, service *ty
 func (sc *serviceController) submitDeletionTask(ctx context.Context, taskID string, service *types.Service, request *types.DeletionRequest, finalizerTypes []types.FinalizerType, deletionOperation *types.DeletionOperation) error {
 	// Create deletion task
 	deletionTask := tasks.NewDeletionTask(
+		taskID,
 		service,
 		request,
 		finalizerTypes,
@@ -1059,6 +1065,66 @@ func (sc *serviceController) submitDeletionTask(ctx context.Context, taskID stri
 		log.Str("task_id", taskID),
 		log.Str("service", deletionOperation.ServiceName),
 		log.Str("namespace", deletionOperation.Namespace))
+	return nil
+}
+
+// recoverInProgressDeletions marks stale in-progress deletion operations as failed so
+// they do not block new delete requests after a runed crash or restart.
+func (sc *serviceController) recoverInProgressDeletions(ctx context.Context) error {
+	sc.logger.Info("Checking for in-progress deletion operations to recover")
+
+	var operations []types.DeletionOperation
+	if err := sc.store.List(ctx, types.ResourceTypeDeletionOperation, "", &operations); err != nil {
+		return fmt.Errorf("failed to list deletion operations: %w", err)
+	}
+
+	var recovered int
+	for _, op := range operations {
+		switch op.Status {
+		case types.DeletionOperationStatusInitializing,
+			types.DeletionOperationStatusDeletingInstances,
+			types.DeletionOperationStatusRunningFinalizers:
+			// fall through
+		default:
+			continue
+		}
+
+		age := time.Since(op.StartTime)
+		if age <= time.Minute {
+			// Recent — may still be running on this process.
+			continue
+		}
+
+		reason := "interrupted by server restart"
+		if age > time.Hour {
+			reason = "timed out during server recovery"
+		}
+
+		opCopy := op
+		opCopy.Status = types.DeletionOperationStatusFailed
+		opCopy.FailureReason = reason
+		now := time.Now()
+		opCopy.EndTime = &now
+
+		if err := sc.store.Update(ctx, types.ResourceTypeDeletionOperation, opCopy.Namespace, opCopy.ID, &opCopy); err != nil {
+			sc.logger.Error("Failed to mark stale deletion operation as failed",
+				log.Str("operation_id", op.ID),
+				log.Str("service", op.ServiceName),
+				log.Str("namespace", op.Namespace),
+				log.Err(err))
+			continue
+		}
+
+		sc.logger.Warn("Marked stale deletion operation as failed",
+			log.Str("operation_id", op.ID),
+			log.Str("service", op.ServiceName),
+			log.Str("namespace", op.Namespace),
+			log.Str("previous_status", string(op.Status)),
+			log.Duration("age", age))
+		recovered++
+	}
+
+	sc.logger.Info("Deletion operation recovery complete", log.Int("recovered", recovered))
 	return nil
 }
 
