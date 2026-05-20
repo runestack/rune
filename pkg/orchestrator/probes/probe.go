@@ -89,9 +89,21 @@ func (p *ExecProber) Execute(ctx *ProbeContext) ProbeResult {
 		}
 	}
 
+	// Bound the exec to the probe timeout. ExitCode() waits for the
+	// command to finish; without a deadline a slow-starting command
+	// (e.g. mongosh, a Node.js binary that needs ~1-2s to boot) would
+	// otherwise be checked once, found "still running", and scored a
+	// false failure. The context also caps ExitCode()'s wait loop.
+	timeout := time.Duration(ctx.ProbeConfig.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	execCtx, cancel := context.WithTimeout(ctx.Ctx, timeout)
+	defer cancel()
+
 	// Execute the command
 	execOpts := runner.GetExecOptions(ctx.ProbeConfig.Command, ctx.Instance)
-	execStream, err := _runner.Exec(ctx.Ctx, ctx.Instance, execOpts)
+	execStream, err := _runner.Exec(execCtx, ctx.Instance, execOpts)
 	if err != nil {
 		return ProbeResult{
 			Success:  false,
