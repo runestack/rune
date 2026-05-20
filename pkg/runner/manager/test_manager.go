@@ -16,12 +16,15 @@ type TestRunnerManager struct {
 	DefaultRunner     runner.Runner // Used when neither is specified
 
 	// Track calls for testing assertions
-	GetDockerCalled   bool
-	GetProcessCalled  bool
-	GetInstanceCalled bool
-	GetServiceCalled  bool
-	InitializeCalled  bool
-	CloseCalled       bool
+	GetDockerCalled       bool
+	GetProcessCalled      bool
+	GetInstanceCalled     bool
+	GetServiceCalled      bool
+	InitializeCalled      bool
+	CloseCalled           bool
+	SetDNSInjectionCalled bool
+	DNSInjectionServers   []string
+	DNSInjectionSearch    []string
 }
 
 // Initialize implements the RunnerManager interface
@@ -70,6 +73,15 @@ func (m *TestRunnerManager) GetServiceRunner(service *types.Service) (runner.Run
 func (m *TestRunnerManager) Close() error {
 	m.CloseCalled = true
 	return nil
+}
+
+// SetDNSInjection records the call for tests that want to assert
+// the wiring happened. No-op on the runners — the test runner doesn't
+// model docker --dns flags.
+func (m *TestRunnerManager) SetDNSInjection(servers []string, search []string) {
+	m.DNSInjectionServers = append([]string(nil), servers...)
+	m.DNSInjectionSearch = append([]string(nil), search...)
+	m.SetDNSInjectionCalled = true
 }
 
 // SetDockerRunner sets the Docker runner for testing
