@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -213,7 +214,15 @@ func (s *DockerExecStream) Signal(sigName string) error {
 	return fmt.Errorf("sending signal %s not supported for Docker exec", sigName)
 }
 
-// ExitCode returns the exit code after the process has completed.
+// execInspectPollInterval is how often ExitCode polls the Docker API
+// while waiting for an exec process to finish. The Docker API has no
+// blocking wait for exec instances, so polling is the only option.
+const execInspectPollInterval = 50 * time.Millisecond
+
+// ExitCode blocks until the exec process completes, then returns its
+// exit code. The wait is bounded by the stream's context (s.ctx) — a
+// probe timeout or Close() unblocks it — so a hung command surfaces as
+// an error rather than blocking forever.
 func (s *DockerExecStream) ExitCode() (int, error) {
 	s.exitCodeMutex.Lock()
 	defer s.exitCodeMutex.Unlock()
@@ -227,20 +236,27 @@ func (s *DockerExecStream) ExitCode() (int, error) {
 		return s.exitCode, nil
 	}
 
-	// Inspect the exec instance to get exit code
-	resp, err := s.cli.ContainerExecInspect(s.ctx, s.execID)
-	if err != nil {
-		s.exitErr = fmt.Errorf("failed to inspect exec: %w", err)
-		return 0, s.exitErr
-	}
+	for {
+		resp, err := s.cli.ContainerExecInspect(s.ctx, s.execID)
+		if err != nil {
+			s.exitErr = fmt.Errorf("failed to inspect exec: %w", err)
+			return 0, s.exitErr
+		}
 
-	// If the process is still running, return an error
-	if resp.Running {
-		return 0, fmt.Errorf("process is still running")
-	}
+		if !resp.Running {
+			s.exitCode = resp.ExitCode
+			return s.exitCode, nil
+		}
 
-	s.exitCode = resp.ExitCode
-	return s.exitCode, nil
+		// Process still running — wait briefly and retry, unless the
+		// context (probe timeout / Close) has fired.
+		select {
+		case <-s.ctx.Done():
+			s.exitErr = fmt.Errorf("exec did not complete: %w", s.ctx.Err())
+			return 0, s.exitErr
+		case <-time.After(execInspectPollInterval):
+		}
+	}
 }
 
 // Close terminates the exec session and releases resources.
