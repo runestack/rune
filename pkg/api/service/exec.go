@@ -495,12 +495,20 @@ func (s *ExecService) waitForCompletion(doneCh <-chan error, errorCh <-chan erro
 	case err := <-errorCh:
 		finalErr = err
 	case <-doneCh:
-		// Wait a bit longer for any remaining stdout to be processed
-		select {
-		case err := <-errorCh:
+		// stdin closed; stdout may still be draining
+	case <-ctx.Done():
+	}
+
+	// Allow stdout/stderr handlers to flush best-effort output before we
+	// send the exit code. Without this, a fast stdout EOF can race ahead
+	// of stderr and drop the stderr frame on the client.
+	select {
+	case err := <-errorCh:
+		if finalErr == nil {
 			finalErr = err
-		case <-time.After(500 * time.Millisecond):
 		}
+	case <-doneCh:
+	case <-time.After(500 * time.Millisecond):
 	case <-ctx.Done():
 	}
 
