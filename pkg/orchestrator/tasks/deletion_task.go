@@ -23,8 +23,10 @@ type DeletionTask struct {
 	logger            log.Logger
 }
 
-// NewDeletionTask creates a new deletion task
+// NewDeletionTask creates a new deletion task. When taskID is non-empty it must match
+// the DeletionOperation ID stored by the service controller.
 func NewDeletionTask(
+	taskID string,
 	service *types.Service,
 	request *types.DeletionRequest,
 	finalizerTypes []types.FinalizerType,
@@ -32,8 +34,11 @@ func NewDeletionTask(
 	store store.Store,
 	logger log.Logger,
 ) *DeletionTask {
+	if taskID == "" {
+		taskID = fmt.Sprintf("delete-%s-%s-%d", service.Namespace, service.Name, time.Now().Unix())
+	}
 	baseTask := &worker.BaseTask{
-		ID:       fmt.Sprintf("delete-%s-%s-%d", service.Namespace, service.Name, time.Now().Unix()),
+		ID:       taskID,
 		Type:     "service-deletion",
 		Priority: 0, // Normal priority
 		Timeout:  10 * time.Minute,
