@@ -1070,11 +1070,21 @@ func (sc *serviceController) submitDeletionTask(ctx context.Context, taskID stri
 
 // recoverInProgressDeletions marks stale in-progress deletion operations as failed so
 // they do not block new delete requests after a runed crash or restart.
+//
+// This runs from serviceController.Start, which the server invokes (via
+// orchestrator.Start) before the gRPC server is constructed — so no delete
+// request can be in flight here. Any operation still in a non-terminal status
+// is therefore orphaned by a dead process and safe to fail unconditionally.
+//
+// Recovery only unblocks retries: it does not resume the interrupted teardown.
+// The service and any instances/finalizers are left in their partial state and
+// the operation's progress counters are not corrected — the caller must
+// re-issue the delete to finish the job.
 func (sc *serviceController) recoverInProgressDeletions(ctx context.Context) error {
 	sc.logger.Info("Checking for in-progress deletion operations to recover")
 
 	var operations []types.DeletionOperation
-	if err := sc.store.List(ctx, types.ResourceTypeDeletionOperation, "", &operations); err != nil {
+	if err := sc.store.ListAll(ctx, types.ResourceTypeDeletionOperation, &operations); err != nil {
 		return fmt.Errorf("failed to list deletion operations: %w", err)
 	}
 
@@ -1090,11 +1100,6 @@ func (sc *serviceController) recoverInProgressDeletions(ctx context.Context) err
 		}
 
 		age := time.Since(op.StartTime)
-		if age <= time.Minute {
-			// Recent — may still be running on this process.
-			continue
-		}
-
 		reason := "interrupted by server restart"
 		if age > time.Hour {
 			reason = "timed out during server recovery"
