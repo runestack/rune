@@ -511,12 +511,15 @@ func (r *DockerRunner) List(ctx context.Context, namespace string) ([]*runetypes
 			continue
 		}
 
-		// Create instance object
+		// Create instance object. ServiceName is required for the
+		// reconciler's orphan detection to match a running container to
+		// its service; without it, replaced containers are never reaped.
 		instance := &runetypes.Instance{
 			ID:          instanceID,
 			ContainerID: c.ID,
 			Name:        c.Names[0][1:], // Remove leading slash from container name
 			ServiceID:   c.Labels["rune.service.id"],
+			ServiceName: c.Labels["rune.service.name"],
 			NodeID:      "local", // Assume local node for now
 		}
 
@@ -918,11 +921,16 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 	containerConfig := &container.Config{
 		Image: image,
 		Labels: map[string]string{
-			"rune.managed":      "true",
-			"rune.namespace":    instance.Namespace,
-			"rune.instance.id":  instance.ID,
-			"rune.service.id":   serviceID,
-			"rune.service.name": instance.Name,
+			"rune.managed":     "true",
+			"rune.namespace":   instance.Namespace,
+			"rune.instance.id": instance.ID,
+			"rune.service.id":  serviceID,
+			// Service name, NOT the instance name. The orphan reaper
+			// matches running containers to their service by this value
+			// (via Instance.ServiceName reconstructed in List); storing
+			// the instance name here left replaced containers unreapable.
+			"rune.service.name":  instance.ServiceName,
+			"rune.instance.name": instance.Name,
 		},
 		Env: formatEnvVars(instance.Environment),
 	}
