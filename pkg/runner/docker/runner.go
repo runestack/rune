@@ -346,16 +346,21 @@ func (r *DockerRunner) Start(ctx context.Context, instance *runetypes.Instance) 
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
-	// Best-effort: record the container's IP on its primary network so
-	// the agent can attribute incoming connections back to a service
-	// identity (RUNE-063 LocalInstances).
+	// Record the container's IP on its primary network. Endpoint
+	// publishing and VIP routing (RUNE-063) key off this — an empty
+	// ContainerIP means the service's VIP proxy has no backend and
+	// resets every connection. Docker assigns the bridge IP during
+	// start, but an inspect issued in the same instant can race ahead
+	// of it, so poll briefly rather than inspecting once.
 	if instance.Metadata == nil {
 		instance.Metadata = &runetypes.InstanceMetadata{}
 	}
-	if insp, err := r.client.ContainerInspect(ctx, containerID); err == nil && insp.NetworkSettings != nil {
-		if ip := pickContainerIP(insp.NetworkSettings); ip != "" {
-			instance.Metadata.ContainerIP = ip
-		}
+	if ip := r.waitContainerIP(ctx, containerID); ip != "" {
+		instance.Metadata.ContainerIP = ip
+	} else {
+		r.logger.Warn("Started container but could not determine its IP; endpoints/VIP routing will be degraded",
+			log.Str("container_id", containerID),
+			log.Str("instance_id", instance.ID))
 	}
 
 	r.logger.Info("Started container for instance",
@@ -1118,6 +1123,40 @@ func formatEnvVars(env map[string]string) []string {
 		result = append(result, fmt.Sprintf("%s=%s", k, v))
 	}
 	return result
+}
+
+// waitContainerIP polls the container inspect until its primary
+// network reports an IP, the container has exited, or the budget
+// expires. A single inspect issued right after ContainerStart can race
+// the bridge IP assignment and return "", which left instances with an
+// empty ContainerIP — breaking endpoint publishing and VIP routing.
+func (r *DockerRunner) waitContainerIP(ctx context.Context, containerID string) string {
+	const (
+		budget   = 5 * time.Second
+		interval = 100 * time.Millisecond
+	)
+	deadline := time.Now().Add(budget)
+	for {
+		if insp, err := r.client.ContainerInspect(ctx, containerID); err == nil {
+			if insp.NetworkSettings != nil {
+				if ip := pickContainerIP(insp.NetworkSettings); ip != "" {
+					return ip
+				}
+			}
+			// A container that has already exited will never get an IP.
+			if insp.State != nil && !insp.State.Running {
+				return ""
+			}
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(interval):
+		}
+	}
 }
 
 // pickContainerIP returns the container's primary IPv4 address from
