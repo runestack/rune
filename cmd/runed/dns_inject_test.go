@@ -6,11 +6,10 @@ import (
 )
 
 // TestDnsServerIPs documents the host:port → host transformation used
-// to feed docker's --dns flag, which expects bare IPs (or hostnames,
-// but Rune always emits IPs). The behaviour matters because a typo
-// here means containers silently fall back to upstream DNS and the
-// entire <service>.<namespace>.rune service-discovery layer breaks
-// with NXDOMAIN — the exact bug this PR fixes.
+// to feed docker's --dns flag. It returns only container-reachable IPs:
+// loopback binds are dropped (inside a container 127.x.x.x is the
+// container's own loopback, a dead resolver entry), and non-IP hosts
+// are dropped (docker --dns wants addresses; Rune always emits IPs).
 func TestDnsServerIPs(t *testing.T) {
 	cases := []struct {
 		name string
@@ -18,24 +17,29 @@ func TestDnsServerIPs(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "default loopback bind",
+			name: "loopback bind is dropped (unreachable from containers)",
 			in:   []string{"127.0.0.123:53"},
-			want: []string{"127.0.0.123"},
+			want: []string{},
 		},
 		{
-			name: "multiple binds preserve order and dedupe by host",
+			name: "loopback dropped, bridge gateway kept",
 			in:   []string{"127.0.0.123:53", "172.17.0.1:53", "127.0.0.123:53"},
-			want: []string{"127.0.0.123", "172.17.0.1"},
+			want: []string{"172.17.0.1"},
 		},
 		{
-			name: "ipv6 bracketed",
+			name: "ipv6 loopback is dropped",
 			in:   []string{"[::1]:53"},
-			want: []string{"::1"},
+			want: []string{},
 		},
 		{
-			name: "malformed entries are dropped",
-			in:   []string{"127.0.0.123:53", "no-port-here", ":53", "good:53"},
-			want: []string{"127.0.0.123", "good"},
+			name: "multiple bridge gateways preserve order and dedupe",
+			in:   []string{"172.17.0.1:53", "172.18.0.1:53", "172.17.0.1:53"},
+			want: []string{"172.17.0.1", "172.18.0.1"},
+		},
+		{
+			name: "malformed and non-IP entries are dropped",
+			in:   []string{"172.17.0.1:53", "no-port-here", ":53", "good:53"},
+			want: []string{"172.17.0.1"},
 		},
 		{
 			name: "empty input yields empty output",
