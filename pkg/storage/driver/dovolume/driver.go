@@ -89,6 +89,18 @@ func (d *doVolumeDriver) Provision(ctx context.Context, opctx driver.OpContext, 
 	}
 	vol, err := d.client.createVolume(ctx, in)
 	if err != nil {
+		if errors.Is(err, errDOConflict) {
+			// A DO volume with this name already exists in the region.
+			// This is expected when a prior Rune volume row was lost or
+			// the droplet was recreated: adopt the existing volume (and
+			// its data) instead of failing, so re-casting the service
+			// reuses it rather than dead-ending on ProvisionRetriesExhausted.
+			existing, lookupErr := d.client.volumeByName(ctx, doName, region)
+			if lookupErr != nil {
+				return "", fmt.Errorf("dovolume: createVolume conflict for %q; lookup of existing volume failed: %w", doName, lookupErr)
+			}
+			return driver.VolumeHandle(existing.ID), nil
+		}
 		return "", fmt.Errorf("dovolume: createVolume: %w", err)
 	}
 	return driver.VolumeHandle(vol.ID), nil

@@ -1936,6 +1936,48 @@ func (c *instanceController) resolveMounts(ctx context.Context, service *types.S
 	return nil
 }
 
+// volumeReadyPollInterval / volumeReadyTimeout bound waitForVolumeReady.
+// The timeout is deliberately modest: the reconcile loop is serial, so a
+// long block here stalls every other service. Provisioning a volume to
+// Available (a DO createVolume call + the VolumeController marking it)
+// normally completes in seconds; a volume that needs longer falls back
+// to the instance-create retry (recordCreateFailure / NextCreateAttemptAt).
+const (
+	volumeReadyPollInterval = 2 * time.Second
+	volumeReadyTimeout      = 60 * time.Second
+)
+
+// waitForVolumeReady polls the volume row until it is Available/Bound,
+// reaches a terminal-failure status, or the timeout / ctx fires. It
+// exists so an instance create racing ahead of asynchronous volume
+// provisioning waits briefly rather than failing on a still-Pending
+// volume.
+func (c *instanceController) waitForVolumeReady(ctx context.Context, ns, name string) (types.Volume, error) {
+	deadline := time.Now().Add(volumeReadyTimeout)
+	for {
+		var vol types.Volume
+		if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &vol); err != nil {
+			return types.Volume{}, fmt.Errorf("get volume %s/%s: %w", ns, name, err)
+		}
+		switch vol.Status {
+		case types.VolumeStatusAvailable, types.VolumeStatusBound:
+			return vol, nil
+		case types.VolumeStatusStalled, types.VolumeStatusFailed, types.VolumeStatusReleased:
+			// Terminal — provisioning will not recover on its own.
+			return types.Volume{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.Reason)
+		}
+		// Pending / Provisioning / "" — still coming up.
+		if time.Now().After(deadline) {
+			return types.Volume{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q): not Available after %s", ns, name, vol.Status, vol.Reason, volumeReadyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return types.Volume{}, ctx.Err()
+		case <-time.After(volumeReadyPollInterval):
+		}
+	}
+}
+
 // resolveVolumeMount converts a Service.VolumeMount into the runner-facing
 // ResolvedVolumeMount by looking up (or auto-provisioning, for the
 // ClaimTemplate form) the bound Volume and using its Handle as the
@@ -1969,13 +2011,14 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 		}
 	}
 
-	var vol types.Volume
-	if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &vol); err != nil {
-		return types.ResolvedVolumeMount{}, fmt.Errorf("get volume %s/%s: %w", ns, name, err)
-	}
-
-	if vol.Status != types.VolumeStatusAvailable && vol.Status != types.VolumeStatusBound {
-		return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.Reason)
+	// A claim-template volume is provisioned asynchronously by the
+	// VolumeController. Briefly wait for it rather than failing the
+	// instance create the instant it is still Pending — otherwise a
+	// fresh `rune cast` of a stateful service always reports
+	// LaunchFailed before provisioning has had a chance to finish.
+	vol, err := c.waitForVolumeReady(ctx, ns, name)
+	if err != nil {
+		return types.ResolvedVolumeMount{}, err
 	}
 
 	// Bind the volume to this node + consuming instance so the agent-

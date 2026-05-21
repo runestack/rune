@@ -92,6 +92,8 @@ func (f *fakeDO) handle(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == "POST" && r.URL.Path == "/v2/volumes":
 		f.handleCreateVolume(w, body)
+	case r.Method == "GET" && r.URL.Path == "/v2/volumes":
+		f.handleListVolumes(w, r.URL.Query().Get("name"), r.URL.Query().Get("region"))
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v2/volumes/") && !strings.Contains(r.URL.Path[len("/v2/volumes/"):], "/"):
 		id := strings.TrimPrefix(r.URL.Path, "/v2/volumes/")
 		f.handleGetVolume(w, id)
@@ -131,11 +133,38 @@ func (f *fakeDO) handleCreateVolume(w http.ResponseWriter, body []byte) {
 	if n, ok := in["name"].(string); ok {
 		name = n
 	}
+	// DO rejects a duplicate (name, region) with HTTP 409.
+	for _, ex := range f.volumes {
+		if ex.Name == name && ex.Region.Slug == region {
+			http.Error(w, `{"id":"conflict","message":"volume with this name already exists"}`, http.StatusConflict)
+			return
+		}
+	}
 	v := &doVolume{ID: id, Name: name, SizeGigabytes: size, Region: doSlug{Slug: region}}
 	f.volumes[id] = v
 	resp, _ := json.Marshal(map[string]any{"volume": v})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write(resp)
+}
+
+// handleListVolumes serves GET /v2/volumes?name=&region= — the lookup
+// Provision uses to adopt an existing volume after a 409.
+func (f *fakeDO) handleListVolumes(w http.ResponseWriter, name, region string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	matches := make([]*doVolume, 0)
+	for _, v := range f.volumes {
+		if name != "" && v.Name != name {
+			continue
+		}
+		if region != "" && v.Region.Slug != region {
+			continue
+		}
+		matches = append(matches, v)
+	}
+	resp, _ := json.Marshal(map[string]any{"volumes": matches})
+	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(resp)
 }
 
@@ -443,6 +472,38 @@ func TestProvision_HappyPath(t *testing.T) {
 		if !strings.HasPrefix(v.Name, "rune-default-data") {
 			t.Fatalf("unexpected DO volume name %q", v.Name)
 		}
+	}
+}
+
+// TestProvision_AdoptsExistingVolumeOnConflict covers re-casting a
+// service whose DO volume still exists: createVolume returns HTTP 409
+// and Provision must adopt the existing volume rather than fail.
+func TestProvision_AdoptsExistingVolumeOnConflict(t *testing.T) {
+	fake := newFakeDO(t)
+	ts := fake.server()
+	defer ts.Close()
+	d, _ := newTestDriver(t, fake, ts)
+	opctx := nyc3OpCtx(mkVolume("data"))
+	req := driver.ProvisionRequest{SizeBytes: 5 * 1_000_000_000}
+
+	first, err := d.Provision(context.Background(), opctx, req)
+	if err != nil {
+		t.Fatalf("first Provision: %v", err)
+	}
+
+	// Second Provision of the same volume: DO answers 409; the driver
+	// must adopt the existing volume and return the same handle.
+	second, err := d.Provision(context.Background(), opctx, req)
+	if err != nil {
+		t.Fatalf("second Provision (adopt): %v", err)
+	}
+	if second != first {
+		t.Fatalf("adopt returned handle %q, want existing %q", second, first)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.volumes) != 1 {
+		t.Fatalf("expected 1 DO volume after adopt, got %d", len(fake.volumes))
 	}
 }
 
