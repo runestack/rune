@@ -112,7 +112,7 @@ func (z *StoreZone) LookupA(ns, name string) ([]net.IP, bool) {
 	err := z.store.Get(context.Background(), types.ResourceTypeService, ns, name, &svc)
 	var ips []net.IP
 	ok := false
-	if err == nil && svc.Discovery.VIP != "" {
+	if err == nil && svc.Discovery != nil && svc.Discovery.VIP != "" {
 		if ip := net.ParseIP(svc.Discovery.VIP); ip != nil {
 			if v4 := ip.To4(); v4 != nil {
 				ips = []net.IP{v4}
