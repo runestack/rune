@@ -59,10 +59,12 @@ func (s *PortForwardService) StreamPortForward(stream generated.PortForwardServi
 		return err
 	}
 
-	// 2. Resolve target. The instance binding is fixed for the
-	//    lifetime of the stream — every subsequent Open frame dials
-	//    the same instance. This matches kubectl semantics and keeps
-	//    the model simple.
+	// 2. Resolve the target once for the Ready frame. The binding is
+	//    NOT pinned for the stream lifetime: every Open frame re-resolves
+	//    (see handleOpen). A long-lived forward must survive the target
+	//    instance being replaced by a health restart or reconcile — the
+	//    daemon keeps the stream open across those, so pinning here left
+	//    the forward dialing a dead instance forever.
 	instance, err := s.resolveTarget(ctx, initReq)
 	if err != nil {
 		return err
@@ -82,7 +84,7 @@ func (s *PortForwardService) StreamPortForward(stream generated.PortForwardServi
 	}
 
 	// 4. Run the session.
-	return s.runSession(ctx, stream, instance)
+	return s.runSession(ctx, stream, initReq)
 }
 
 // receiveInit reads the first frame off the stream and validates it.
@@ -137,6 +139,11 @@ func (s *PortForwardService) resolveTarget(ctx context.Context, init *generated.
 		return nil, status.Errorf(codes.Internal, "failed to list instances: %v", err)
 	}
 	pin := init.GetInstanceSelector()
+	// Prefer the newest running instance. After a health restart the
+	// store can briefly hold several Running instances for one service
+	// (the live one plus not-yet-reconciled stale records); the most
+	// recently created is the one whose container is actually up.
+	var best *types.Instance
 	for _, inst := range instances {
 		if inst.ServiceName != svc {
 			continue
@@ -144,7 +151,12 @@ func (s *PortForwardService) resolveTarget(ctx context.Context, init *generated.
 		if pin != "" && inst.ID != pin {
 			continue
 		}
-		return inst, nil
+		if best == nil || inst.CreatedAt.After(best.CreatedAt) {
+			best = inst
+		}
+	}
+	if best != nil {
+		return best, nil
 	}
 	if pin != "" {
 		return nil, status.Errorf(codes.NotFound, "instance %s not found (or not running) for service %s/%s", pin, namespace, svc)
@@ -153,7 +165,7 @@ func (s *PortForwardService) resolveTarget(ctx context.Context, init *generated.
 }
 
 // runSession owns the per-stream connection table and goroutines.
-func (s *PortForwardService) runSession(ctx context.Context, stream generated.PortForwardService_StreamPortForwardServer, instance *types.Instance) error {
+func (s *PortForwardService) runSession(ctx context.Context, stream generated.PortForwardService_StreamPortForwardServer, init *generated.PortForwardInit) error {
 	// Single goroutine serializes Send: gRPC stream.Send is not safe
 	// for concurrent use, so we funnel all outbound messages through
 	// a channel.
@@ -215,7 +227,7 @@ func (s *PortForwardService) runSession(ctx context.Context, stream generated.Po
 			if open == nil {
 				continue
 			}
-			s.handleOpen(ctx, instance, open, &mu, conns, &connsWG, out)
+			s.handleOpen(ctx, init, open, &mu, conns, &connsWG, out)
 
 		case *generated.PortForwardClientMessage_Data:
 			d := m.Data
@@ -252,7 +264,7 @@ func (s *PortForwardService) runSession(ctx context.Context, stream generated.Po
 
 		default:
 			// Unknown frame: log and continue.
-			s.logger.Debug("port-forward: unknown frame", log.Str("instance", instance.ID))
+			s.logger.Debug("port-forward: unknown frame")
 		}
 	}
 
@@ -266,9 +278,14 @@ func (s *PortForwardService) runSession(ctx context.Context, stream generated.Po
 }
 
 // handleOpen dials the requested port and spawns a reader goroutine.
+//
+// The target instance is re-resolved on every Open rather than pinned at
+// stream creation: a long-lived forward must survive its instance being
+// replaced (health restart, reconcile). Each new local connection picks
+// the currently-running instance.
 func (s *PortForwardService) handleOpen(
 	ctx context.Context,
-	instance *types.Instance,
+	init *generated.PortForwardInit,
 	open *generated.PortForwardOpen,
 	mu *sync.Mutex,
 	conns map[uint64]*pfConn,
@@ -287,6 +304,12 @@ func (s *PortForwardService) handleOpen(
 		return
 	}
 	mu.Unlock()
+
+	instance, err := s.resolveTarget(ctx, init)
+	if err != nil {
+		out <- closeMsg(open.ConnId, err.Error())
+		return
+	}
 
 	conn, _, err := s.orchestrator.DialInInstance(ctx, instance.Namespace, instance.ID, open.RemotePort)
 	if err != nil {

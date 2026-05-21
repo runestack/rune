@@ -243,6 +243,19 @@ func (d *Daemon) proxyConn(
 		return
 	}
 
+	// Close the local socket when the remote side closes the conn or
+	// the session ends. Without this, the local→remote loop below stays
+	// blocked in local.Read() — a server-sent Close would never reach
+	// it (a `break` inside a select breaks the select, not the loop),
+	// leaving the caller's connection hung open instead of closed.
+	go func() {
+		select {
+		case <-closeCh:
+		case <-ctx.Done():
+		}
+		_ = local.Close()
+	}()
+
 	// remote → local
 	pumpDone := make(chan struct{})
 	go func() {
@@ -263,7 +276,9 @@ func (d *Daemon) proxyConn(
 		}
 	}()
 
-	// local → remote
+	// local → remote. Exits on read/send error; the watcher goroutine
+	// above closes local on remote-close/ctx-done, which surfaces here
+	// as a read error.
 	buf := make([]byte, 16*1024)
 	for {
 		n, err := local.Read(buf)
@@ -277,13 +292,6 @@ func (d *Daemon) proxyConn(
 		if err != nil {
 			_ = sess.SendClose(connID, "")
 			break
-		}
-		select {
-		case <-closeCh:
-			break
-		case <-ctx.Done():
-			break
-		default:
 		}
 	}
 	<-pumpDone
