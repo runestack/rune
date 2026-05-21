@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type doClient interface {
 	createVolume(ctx context.Context, in createVolumeIn) (*doVolume, error)
 	createVolumeFromSnapshot(ctx context.Context, in restoreVolumeIn) (*doVolume, error)
 	getVolume(ctx context.Context, id string) (*doVolume, error)
+	volumeByName(ctx context.Context, name, region string) (*doVolume, error)
 	deleteVolume(ctx context.Context, id string) error
 	volumeAction(ctx context.Context, id string, body map[string]any) (*doAction, error)
 	getAction(ctx context.Context, id int64) (*doAction, error)
@@ -148,6 +150,9 @@ func (c *httpClient) doRequest(ctx context.Context, method, path string, body an
 	if resp.StatusCode == http.StatusNotFound {
 		return errDONotFound
 	}
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("%w: %s %s -> HTTP 409: %s", errDOConflict, method, path, strings.TrimSpace(string(respBody)))
+	}
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("dovolume: %s %s -> HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
@@ -162,6 +167,11 @@ func (c *httpClient) doRequest(ctx context.Context, method, path string, body an
 // errDONotFound is returned for HTTP 404 from the DO API. The driver
 // translates it into driver.ErrNotFound at the boundary.
 var errDONotFound = errors.New("dovolume: do resource not found")
+
+// errDOConflict is returned for HTTP 409 from the DO API — most
+// commonly "volume with this name already exists" on createVolume.
+// Provision treats it as a signal to adopt the existing volume.
+var errDOConflict = errors.New("dovolume: do resource conflict")
 
 // --- volume CRUD --------------------------------------------------------
 
@@ -189,6 +199,25 @@ func (c *httpClient) createVolumeFromSnapshot(ctx context.Context, in restoreVol
 		return nil, errors.New("dovolume: createVolumeFromSnapshot response missing volume")
 	}
 	return resp.Volume, nil
+}
+
+// volumeByName looks up a volume by its DO name within a region. DO
+// volume names are unique per region, so at most one matches. Returns
+// errDONotFound when there is no match.
+func (c *httpClient) volumeByName(ctx context.Context, name, region string) (*doVolume, error) {
+	var resp struct {
+		Volumes []*doVolume `json:"volumes"`
+	}
+	path := fmt.Sprintf("/v2/volumes?name=%s&region=%s", url.QueryEscape(name), url.QueryEscape(region))
+	if err := c.doRequest(ctx, "GET", path, nil, &resp); err != nil {
+		return nil, err
+	}
+	for _, v := range resp.Volumes {
+		if v != nil && v.Name == name {
+			return v, nil
+		}
+	}
+	return nil, errDONotFound
 }
 
 func (c *httpClient) getVolume(ctx context.Context, id string) (*doVolume, error) {
