@@ -221,6 +221,89 @@ func TestHTTPHealthCheck(t *testing.T) {
 	assert.True(t, status.Liveness, "HTTP health check should report instance as healthy")
 }
 
+// TestReadinessProbeStartsIndependentlyOfLivenessInitialDelay is a
+// regression test: the readiness monitoring goroutine must wait only on
+// its own InitialDelaySeconds, not also on the liveness probe's. A
+// previous bug spawned the readiness goroutine only after the liveness
+// initial-delay sleep completed, so the readiness probe's effective
+// initial delay was livenessInitialDelay + readinessInitialDelay. That
+// left instances stuck in Starting (readiness never promoted them) when
+// liveness failures restarted them before the delayed readiness probe
+// ever ran.
+func TestReadinessProbeStartsIndependentlyOfLivenessInitialDelay(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping test in short mode")
+	}
+
+	server, port := runTestHTTPHealthServer(t)
+	defer server.Close()
+
+	ctx, testStore, _, controller := setupHealthController(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	require.NoError(t, controller.Start(ctx))
+	defer controller.Stop()
+
+	// Liveness has a long initial delay; readiness has none. The
+	// readiness probe must run well before the liveness initial delay
+	// elapses.
+	service := &types.Service{
+		ID:        "readiness-delay-service",
+		Name:      "readiness-delay-service",
+		Namespace: "default",
+		Runtime:   "container",
+		Health: &types.HealthCheck{
+			Liveness: &types.Probe{
+				Type:                "http",
+				Path:                "/health",
+				Port:                port,
+				InitialDelaySeconds: 8, // long — must not gate readiness
+				IntervalSeconds:     1,
+				TimeoutSeconds:      1,
+				FailureThreshold:    1,
+				SuccessThreshold:    1,
+			},
+			Readiness: &types.Probe{
+				Type:                "http",
+				Path:                "/health",
+				Port:                port,
+				InitialDelaySeconds: 0,
+				IntervalSeconds:     1,
+				TimeoutSeconds:      1,
+				FailureThreshold:    1,
+				SuccessThreshold:    1,
+			},
+		},
+	}
+	require.NoError(t, testStore.CreateService(ctx, service))
+
+	instance := &types.Instance{
+		ID:          "readiness-delay-instance",
+		Name:        "readiness-delay-instance",
+		Namespace:   "default",
+		ServiceID:   service.ID,
+		ServiceName: service.Name,
+		Status:      types.InstanceStatusRunning,
+	}
+	require.NoError(t, testStore.CreateInstance(ctx, instance))
+	require.NoError(t, controller.AddInstance(service, instance))
+
+	// Within a few seconds (far less than the 8s liveness initial
+	// delay) the readiness probe should have run and passed.
+	require.Eventually(t, func() bool {
+		status, err := controller.GetHealthStatus(ctx, instance.ID)
+		return err == nil && status.Readiness
+	}, 5*time.Second, 100*time.Millisecond,
+		"readiness probe should run despite the long liveness initial delay")
+
+	// Liveness should still be waiting on its own initial delay.
+	status, err := controller.GetHealthStatus(ctx, instance.ID)
+	require.NoError(t, err)
+	assert.False(t, status.Liveness,
+		"liveness probe should not have run yet (still in initial delay)")
+}
+
 // TestTCPHealthCheck tests the TCP health check functionality
 func TestTCPHealthCheck(t *testing.T) {
 	// Skip this test in CI environments where port binding might be limited

@@ -295,20 +295,23 @@ func (c *healthController) monitorInstance(instanceID string) {
 		readinessInitialDelay = time.Duration(readinessProbe.InitialDelaySeconds) * time.Second
 	}
 
-	// Create tickers for each probe type
-	var livenessTicker, readinessTicker *time.Ticker
-
-	// Wait for initial delays before starting checks
-	time.Sleep(livenessInitialDelay)
-	livenessTicker = time.NewTicker(livenessInterval)
-
+	// Start the readiness monitoring goroutine BEFORE waiting on the
+	// liveness initial delay. Each probe owns its own initial-delay
+	// sleep, and they must run concurrently. Previously this goroutine
+	// was spawned only after the liveness time.Sleep below, which made
+	// the readiness probe's effective initial delay
+	// livenessInitialDelay + readinessInitialDelay. With equal delays
+	// (e.g. both 120s) the readiness probe did not start for 240s, so
+	// any instance whose liveness probe failed it within that window
+	// was restarted before its readiness probe ever ran — leaving the
+	// instance stuck in Starting (readiness never promotes it).
 	if readinessProbe != nil {
 		// Create a goroutine for readiness checks
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
 			time.Sleep(readinessInitialDelay)
-			readinessTicker = time.NewTicker(readinessInterval)
+			readinessTicker := time.NewTicker(readinessInterval)
 			defer readinessTicker.Stop()
 
 			for {
@@ -335,7 +338,10 @@ func (c *healthController) monitorInstance(instanceID string) {
 		}()
 	}
 
-	// Main goroutine for liveness checks
+	// Main goroutine for liveness checks. Wait for the liveness
+	// initial delay before starting checks.
+	time.Sleep(livenessInitialDelay)
+	livenessTicker := time.NewTicker(livenessInterval)
 	defer livenessTicker.Stop()
 	for {
 		// Check if context is nil before using it
