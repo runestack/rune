@@ -397,7 +397,7 @@ func TestServiceSpec_ToService(t *testing.T) {
 				Name:  "test-service",
 				Image: "nginx:latest",
 				Scale: 1,
-				Discovery: &ServiceDiscovery{
+				Discovery: &ServiceDiscoverySpec{
 					Mode: "load-balanced",
 				},
 			},

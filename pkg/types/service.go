@@ -254,7 +254,15 @@ func (t *ExposeServiceTLS) IsACME() bool {
 	return t.Auto && t.Mode == ""
 }
 
-// ServiceDiscovery defines how a service is discovered by other services.
+// ServiceDiscoverySpec is the operator-facing discovery block in cast
+// YAML. It intentionally has no VIP field — the control plane assigns
+// a stable cluster VIP at service create time (RUNE-040).
+type ServiceDiscoverySpec struct {
+	Mode               string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	LocalityPreference string `json:"localityPreference,omitempty" yaml:"localityPreference,omitempty"`
+}
+
+// ServiceDiscovery is the persisted service discovery state (API/store).
 type ServiceDiscovery struct {
 	// Discovery mode (load-balanced or headless)
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`

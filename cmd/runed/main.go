@@ -583,7 +583,9 @@ func main() {
 		bindAddrs := []string{dnssub.DefaultBindAddr}
 		bindAddrs = append(bindAddrs, dnsBridgeBindAddrs(logger)...)
 		dnsSub, derr = dnssub.New(dnssub.Config{
-			Zone:             dnssub.NewStoreZone(stateStore, logger.WithComponent("dns-zone")),
+			Zone: dnssub.NewStoreZone(stateStore, dnssub.FuncVIPSource{Fn: func(ctx context.Context, serviceID string) (net.IP, error) {
+				return vipAllocator.Allocate(ctx, serviceID)
+			}}, logger.WithComponent("dns-zone")),
 			UpstreamProvider: dnssub.ResolvConfUpstreams(),
 			BindAddrs:        bindAddrs,
 			Logger:           logger.WithComponent("dns"),
