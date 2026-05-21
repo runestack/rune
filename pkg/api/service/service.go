@@ -371,6 +371,14 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 	updatedService.Metadata = existingService.Metadata
 	updatedService.Metadata.UpdatedAt = time.Now()
 
+	// Cast/update payloads never carry VIP; merge operator discovery
+	// fields with the persisted control-plane VIP.
+	updatedService.Discovery = mergeServiceDiscovery(existingService.Discovery, updatedService.Discovery)
+	if err := s.ensureServiceDiscoveryVIP(ctx, updatedService); err != nil {
+		s.logger.Error("Failed to ensure service VIP", log.Err(err))
+		return nil, status.Errorf(codes.Internal, "failed to ensure service VIP: %v", err)
+	}
+
 	// Determine if we need to increment the generation
 	needsGenUpdate := req.Force // Force flag forces generation update
 
@@ -1147,4 +1155,48 @@ func (s *ServiceService) isScalingComplete(service *types.Service, instances []*
 		log.Int("running_instances", runningCount),
 		log.Bool("complete", isComplete))
 	return isComplete, targetScale
+}
+
+// mergeServiceDiscovery applies operator discovery fields from updated
+// onto the persisted record, always keeping the control-plane VIP.
+func mergeServiceDiscovery(existing, updated *types.ServiceDiscovery) *types.ServiceDiscovery {
+	if existing == nil && updated == nil {
+		return nil
+	}
+	out := &types.ServiceDiscovery{}
+	if existing != nil {
+		*out = *existing
+	}
+	if updated != nil {
+		if updated.Mode != "" {
+			out.Mode = updated.Mode
+		}
+		if updated.LocalityPreference != "" {
+			out.LocalityPreference = updated.LocalityPreference
+		}
+	}
+	if out.Mode == "" && out.LocalityPreference == "" && out.VIP == "" {
+		return nil
+	}
+	return out
+}
+
+// ensureServiceDiscoveryVIP assigns Service.Discovery.VIP from the cluster
+// allocator on every create/update. Idempotent per service ID.
+func (s *ServiceService) ensureServiceDiscoveryVIP(ctx context.Context, svc *types.Service) error {
+	if s.vipAllocator == nil || svc == nil || svc.ID == "" {
+		return nil
+	}
+	if svc.Discovery != nil && svc.Discovery.VIP != "" {
+		return nil
+	}
+	vip, err := s.vipAllocator.Allocate(ctx, svc.ID)
+	if err != nil {
+		return fmt.Errorf("allocate VIP for %s/%s: %w", svc.Namespace, svc.Name, err)
+	}
+	if svc.Discovery == nil {
+		svc.Discovery = &types.ServiceDiscovery{}
+	}
+	svc.Discovery.VIP = vip.String()
+	return nil
 }

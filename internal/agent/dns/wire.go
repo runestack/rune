@@ -67,14 +67,36 @@ func (p *EndpointPublisher) PublishLocalInstances(ctx context.Context, nodeID st
 	return p.localInstances.Update(ctx, nodeID, table)
 }
 
+// FuncVIPSource adapts a lookup function to ServiceVIPSource.
+type FuncVIPSource struct {
+	Fn func(ctx context.Context, serviceID string) (net.IP, error)
+}
+
+func (f FuncVIPSource) VIPForService(ctx context.Context, serviceID string) (net.IP, error) {
+	if f.Fn == nil {
+		return nil, fmt.Errorf("dns: nil VIP source")
+	}
+	return f.Fn(ctx, serviceID)
+}
+
+// ServiceVIPSource resolves the stable cluster VIP for a service ID.
+// The VIP allocator implements this; DNS uses it when the service
+// row is missing Service.Discovery.VIP (legacy drift).
+type ServiceVIPSource interface {
+	VIPForService(ctx context.Context, serviceID string) (net.IP, error)
+}
+
 // StoreZone is a ZoneProvider that resolves <svc>.<ns>.rune queries
-// against the agent's store.Store. The VIP for a service is read
-// from Service.Discovery.VIP (populated by RUNE-040).
+// against the agent's store.Store. The VIP is read from
+// Service.Discovery.VIP when present; otherwise ServiceVIPSource
+// (the cluster allocator) is consulted so DNS never depends on
+// operators hand-setting discovery.vip in cast YAML.
 //
 // Lookups are memoized for a short TTL to avoid hammering the store
 // on bursts of repeated DNS queries from a single client.
 type StoreZone struct {
 	store  store.Store
+	vips   ServiceVIPSource
 	mu     sync.RWMutex
 	cache  map[string]storeZoneCacheEntry
 	ttl    time.Duration
@@ -88,9 +110,11 @@ type storeZoneCacheEntry struct {
 }
 
 // NewStoreZone constructs a StoreZone with a 1s lookup cache.
-func NewStoreZone(s store.Store, logger log.Logger) *StoreZone {
+// vip may be nil (store-only lookups).
+func NewStoreZone(s store.Store, vip ServiceVIPSource, logger log.Logger) *StoreZone {
 	return &StoreZone{
 		store:  s,
+		vips:   vip,
 		cache:  map[string]storeZoneCacheEntry{},
 		ttl:    1 * time.Second,
 		logger: logger,
@@ -112,11 +136,16 @@ func (z *StoreZone) LookupA(ns, name string) ([]net.IP, bool) {
 	err := z.store.Get(context.Background(), types.ResourceTypeService, ns, name, &svc)
 	var ips []net.IP
 	ok := false
-	if err == nil && svc.Discovery != nil && svc.Discovery.VIP != "" {
-		if ip := net.ParseIP(svc.Discovery.VIP); ip != nil {
-			if v4 := ip.To4(); v4 != nil {
-				ips = []net.IP{v4}
-				ok = true
+	if err == nil {
+		if vip := discoveryVIP(&svc); vip != nil {
+			ips = []net.IP{vip}
+			ok = true
+		} else if z.vips != nil && svc.ID != "" {
+			if ip, vipErr := z.vips.VIPForService(context.Background(), svc.ID); vipErr == nil && ip != nil {
+				if v4 := ip.To4(); v4 != nil {
+					ips = []net.IP{v4}
+					ok = true
+				}
 			}
 		}
 	}
@@ -124,6 +153,17 @@ func (z *StoreZone) LookupA(ns, name string) ([]net.IP, bool) {
 	z.cache[key] = storeZoneCacheEntry{ips: ips, ok: ok, expires: now.Add(z.ttl)}
 	z.mu.Unlock()
 	return ips, ok
+}
+
+func discoveryVIP(svc *types.Service) net.IP {
+	if svc == nil || svc.Discovery == nil || svc.Discovery.VIP == "" {
+		return nil
+	}
+	ip := net.ParseIP(svc.Discovery.VIP)
+	if ip == nil {
+		return nil
+	}
+	return ip.To4()
 }
 
 // FreshnessFromDataplane builds a Freshness implementation from any

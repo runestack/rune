@@ -120,10 +120,14 @@ LimitNOFILE=65536
 #     Cheap, inert when the operator hasn't opted in, and the
 #     alternative is "every operator who flips on fsUser hits an
 #     EPERM the first time".
+#   - CAP_NET_ADMIN — netlink AddrAdd to host each service's cluster
+#     VIP as a /32 on loopback (internal/agent/dataplane). Without it
+#     the dataplane cannot bind VIP listeners and service-to-service
+#     traffic (e.g. gateway → mongo.shared.rune) has no delivery path.
 # Installed via the systemd unit (not file caps) so the caps travel
 # with the unit and survive upgrade-server.sh binary swaps.
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER CAP_NET_ADMIN
 
 [Install]
 WantedBy=multi-user.target

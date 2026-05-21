@@ -381,6 +381,31 @@ func (c *healthController) performHealthCheck(instanceID string, probe *types.Pr
 	}
 	c.mu.RUnlock()
 
+	// Refresh from store so we stop probing tombstones / deleted
+	// records that still have a monitor goroutine attached. Done
+	// outside c.mu: store.Get does I/O, and the refreshed instance is
+	// written back to ih.instance under the write lock — mutating it
+	// under the read lock would race concurrent liveness/readiness
+	// probes for the same instance.
+	if c.store != nil {
+		c.ctxMu.RLock()
+		ctx := c.ctx
+		c.ctxMu.RUnlock()
+		if ctx != nil {
+			var fresh types.Instance
+			if err := c.store.Get(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh); err == nil {
+				if healthMonitoringTerminal(fresh.Status) {
+					_ = c.RemoveInstance(instanceID)
+					return
+				}
+				c.mu.Lock()
+				ih.instance = &fresh
+				c.mu.Unlock()
+				instance = &fresh
+			}
+		}
+	}
+
 	// Create a prober for this probe type
 	prober, err := probes.NewProber(probe.Type)
 	if err != nil {
@@ -617,6 +642,14 @@ func (c *healthController) restartInstanceWithBackoff(instanceID string, ih *ins
 		return fmt.Errorf("failed to restart instance: %w", err)
 	}
 
+	// The failing record is now a Failed tombstone (or restart was
+	// skipped because it was already terminal). Drop it from the
+	// monitor map inline — caller (updateHealthStatus) holds c.mu,
+	// so we must not call RemoveInstance (would deadlock).
+	delete(c.instances, instanceID)
+	c.logger.Info("Removing instance from health monitoring",
+		log.Str("instance", instanceID))
+
 	// Update health restart metrics
 	ih.healthRestartCount++
 	ih.lastRestartTime = now
@@ -627,4 +660,18 @@ func (c *healthController) restartInstanceWithBackoff(instanceID string, ih *ins
 		log.Int("health_restart_count", ih.healthRestartCount))
 
 	return nil
+}
+
+// healthMonitoringTerminal is true for instance statuses that must not
+// receive further liveness/readiness probes.
+func healthMonitoringTerminal(s types.InstanceStatus) bool {
+	switch s {
+	case types.InstanceStatusFailed,
+		types.InstanceStatusDeleted,
+		types.InstanceStatusStalled,
+		types.InstanceStatusExited:
+		return true
+	default:
+		return false
+	}
 }
