@@ -303,6 +303,10 @@ func (s *Subsystem) Start(ctx context.Context) error {
 
 	close(s.readyCh)
 
+	if s.cfg.Mode == ModeProduction {
+		ensureNonLocalBind(s.log)
+	}
+
 	if s.cfg.Store != nil {
 		if err := s.reconcileServicesFromStore(ctx); err != nil {
 			s.log.Warn("Dataplane initial service reconcile had errors", log.Err(err))

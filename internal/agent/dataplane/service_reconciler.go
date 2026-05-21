@@ -135,7 +135,11 @@ func (s *Subsystem) registerServiceDataplane(svc *types.Service) error {
 			return fmt.Errorf("dataplane: invalid VIP %q for %s/%s", newVIP, svc.Namespace, svc.Name)
 		}
 		if err := s.vipHost.add(ip); err != nil {
-			return fmt.Errorf("dataplane: add loopback VIP %s: %w", newVIP, err)
+			// Non-fatal when net.ipv4.ip_nonlocal_bind=1 is set (see
+			// ensureNonLocalBind) or when the unit has CAP_NET_ADMIN.
+			s.log.Warn("Loopback VIP add failed; relying on nonlocal bind",
+				log.Str("vip", newVIP),
+				log.Err(err))
 		}
 	}
 
