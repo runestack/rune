@@ -46,14 +46,19 @@ func NewEndpointPublisher(olog orderedlog.OrderedLog, logger log.Logger) (*Endpo
 }
 
 // PublishService implements controllers.EndpointPublisher.
+//
+// Endpoint sets are keyed by service ID — that is the contract of the
+// endpoints package, of the dataplane Cache, and of the VIP proxy
+// listener (which looks up by svc.ID). Keying by service.Name here
+// meant every VIP lookup missed and the proxy reset the connection.
 func (p *EndpointPublisher) PublishService(ctx context.Context, service *types.Service, eps []types.Endpoint) error {
-	if service == nil {
+	if service == nil || service.ID == "" {
 		return nil
 	}
 	if len(eps) == 0 {
-		return p.endpoints.Delete(ctx, service.Name)
+		return p.endpoints.Delete(ctx, service.ID)
 	}
-	return p.endpoints.Update(ctx, service.Name, eps)
+	return p.endpoints.Update(ctx, service.ID, eps)
 }
 
 // PublishLocalInstances implements controllers.EndpointPublisher.
