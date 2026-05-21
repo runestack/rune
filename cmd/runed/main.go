@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -515,15 +516,23 @@ func main() {
 		if *devMode {
 			dpMode = dataplane.ModeDev
 		}
+		// On an edge node the ingress owns :80/:443; the dataplane must
+		// not open VIP listeners there or it collides with the ingress
+		// wildcard bind and fails the whole ingress subsystem.
+		var reservedPorts []int
+		if types.IsEdgeNode(a.Identity().Labels) {
+			reservedPorts = ingressReservedPorts(*ingressHTTP, *ingressHTTPS, *devMode)
+		}
 		dp, derr := dataplane.New(dataplane.Config{
-			OrderedLog:  olog,
-			Store:       stateStore,
+			OrderedLog: olog,
+			Store:      stateStore,
 			VIPResolver: dataplane.FuncVIPResolver{Fn: func(ctx context.Context, serviceID string) (net.IP, error) {
 				return vipAllocator.Allocate(ctx, serviceID)
 			}},
-			Node:   dataplane.StaticNodeID(a.Identity().NodeID),
-			Mode:   dpMode,
-			Logger: logger,
+			Node:              dataplane.StaticNodeID(a.Identity().NodeID),
+			Mode:              dpMode,
+			ReservedHostPorts: reservedPorts,
+			Logger:            logger,
 		})
 		if derr != nil {
 			return fmt.Errorf("dataplane: %w", derr)
@@ -1162,4 +1171,35 @@ func dnsServerIPs(bindAddrs []string) []string {
 		out = append(out, host)
 	}
 	return out
+}
+
+// ingressReservedPorts returns the host ports the edge ingress binds
+// (HTTP + HTTPS). The dataplane must not open VIP listeners on them —
+// see dataplane.Config.ReservedHostPorts.
+func ingressReservedPorts(httpAddr, httpsAddr string, dev bool) []int {
+	httpDefault, httpsDefault := 80, 443
+	if dev {
+		httpDefault, httpsDefault = 8080, 8443
+	}
+	return []int{
+		addrPortOr(httpAddr, httpDefault),
+		addrPortOr(httpsAddr, httpsDefault),
+	}
+}
+
+// addrPortOr extracts the port from a "host:port" bind address,
+// falling back to def when addr is empty or unparseable.
+func addrPortOr(addr string, def int) int {
+	if addr == "" {
+		return def
+	}
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return def
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
