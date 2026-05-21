@@ -304,6 +304,68 @@ func TestReadinessProbeStartsIndependentlyOfLivenessInitialDelay(t *testing.T) {
 		"liveness probe should not have run yet (still in initial delay)")
 }
 
+// TestReadinessPassPromotesInstanceToRunning is a regression test: a
+// passing readiness probe must move the instance from Starting to
+// Running via promoteToRunningOnReady. The promotion path looks the
+// instance up with store.GetInstanceByID, which requires the instance's
+// namespace — a previous bug passed an empty namespace, so the lookup
+// missed (key "instance//<id>") and the instance stayed wedged in
+// Starting forever. Using a non-default namespace here exercises that.
+func TestReadinessPassPromotesInstanceToRunning(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping test in short mode")
+	}
+
+	server, port := runTestHTTPHealthServer(t)
+	defer server.Close()
+
+	ctx, testStore, _, controller := setupHealthController(t)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	require.NoError(t, controller.Start(ctx))
+	defer controller.Stop()
+
+	const namespace = "prod"
+	service := &types.Service{
+		ID:        "readiness-promote-service",
+		Name:      "readiness-promote-service",
+		Namespace: namespace,
+		Runtime:   "container",
+		Health: &types.HealthCheck{
+			Readiness: &types.Probe{
+				Type:             "http",
+				Path:             "/health",
+				Port:             port,
+				IntervalSeconds:  1,
+				TimeoutSeconds:   1,
+				FailureThreshold: 1,
+				SuccessThreshold: 1,
+			},
+		},
+	}
+	require.NoError(t, testStore.CreateService(ctx, service))
+
+	instance := &types.Instance{
+		ID:          "readiness-promote-instance",
+		Name:        "readiness-promote-instance",
+		Namespace:   namespace,
+		ServiceID:   service.ID,
+		ServiceName: service.Name,
+		Status:      types.InstanceStatusStarting,
+	}
+	require.NoError(t, testStore.CreateInstance(ctx, instance))
+	require.NoError(t, controller.AddInstance(service, instance))
+
+	// Once the readiness probe passes, the instance must be promoted
+	// from Starting to Running in the store.
+	require.Eventually(t, func() bool {
+		got, err := testStore.GetInstanceByID(ctx, namespace, instance.ID)
+		return err == nil && got.Status == types.InstanceStatusRunning
+	}, 6*time.Second, 100*time.Millisecond,
+		"a passing readiness probe should promote the instance to Running")
+}
+
 // TestTCPHealthCheck tests the TCP health check functionality
 func TestTCPHealthCheck(t *testing.T) {
 	// Skip this test in CI environments where port binding might be limited
