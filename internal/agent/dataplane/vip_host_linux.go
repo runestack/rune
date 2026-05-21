@@ -3,9 +3,11 @@
 package dataplane
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
+	"syscall"
 
 	"github.com/vishvananda/netlink"
 )
@@ -92,23 +94,15 @@ func removeLoopbackVIP(ip net.IP) error {
 	return nil
 }
 
+// isAddrExists reports whether err is the kernel's "address already
+// assigned" response to AddrAdd. netlink surfaces the raw errno, so we
+// match on it rather than on error text.
 func isAddrExists(err error) bool {
-	return err != nil && containsAny(err.Error(), "file exists", "address already assigned", "EEXIST")
+	return errors.Is(err, syscall.EEXIST)
 }
 
+// isAddrNotPresent reports whether err is the kernel's "no such
+// address" response to AddrDel.
 func isAddrNotPresent(err error) bool {
-	return err != nil && containsAny(err.Error(), "cannot assign", "not found", "no such process")
-}
-
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if sub != "" && len(s) >= len(sub) {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.ENODEV)
 }

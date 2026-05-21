@@ -4,15 +4,15 @@ package dataplane
 
 import (
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/runestack/rune/pkg/log"
 )
 
-// ensureNonLocalBind enables binding to cluster VIPs without adding
-// each address to loopback (requires host sysctl or CAP_NET_ADMIN for
-// the loopback path in vip_host_linux.go).
+// ensureNonLocalBind enables binding to cluster VIPs before their /32
+// is on loopback. It is belt-and-suspenders against a bind/listen race
+// only — it does NOT route inbound VIP traffic. Delivery still depends
+// on the loopback /32 added by vip_host_linux.go.
 func ensureNonLocalBind(logger log.Logger) {
 	const path = "/proc/sys/net/ipv4/ip_nonlocal_bind"
 	data, err := os.ReadFile(path)
@@ -29,13 +29,4 @@ func ensureNonLocalBind(logger log.Logger) {
 		return
 	}
 	logger.Info("dataplane: enabled net.ipv4.ip_nonlocal_bind for cluster VIP listeners")
-}
-
-func readNonLocalBind() bool {
-	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_nonlocal_bind")
-	if err != nil {
-		return false
-	}
-	v, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-	return v == 1
 }

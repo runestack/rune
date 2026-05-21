@@ -74,7 +74,7 @@ type FuncVIPSource struct {
 
 func (f FuncVIPSource) VIPForService(ctx context.Context, serviceID string) (net.IP, error) {
 	if f.Fn == nil {
-		return nil, nil
+		return nil, fmt.Errorf("dns: nil VIP source")
 	}
 	return f.Fn(ctx, serviceID)
 }
