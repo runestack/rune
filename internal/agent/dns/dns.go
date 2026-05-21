@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -117,6 +118,7 @@ type Subsystem struct {
 	upstreams []string
 
 	servers  []*dns.Server
+	conns    []io.Closer // underlying UDP/TCP conns; closed by Stop
 	startMu  sync.Mutex
 	started  bool
 	stopped  bool
@@ -195,23 +197,42 @@ func (s *Subsystem) Start(ctx context.Context) error {
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", s.handle)
 
+	// Bind every listener synchronously and hand the live conn to the
+	// dns.Server via ActivateAndServe. Binding inside the serve
+	// goroutine (ListenAndServe) raced Stop: a ShutdownContext that
+	// landed before the goroutine marked the server "started" was a
+	// silent no-op in miekg/dns, so the listener served forever and
+	// Stop's closeWG.Wait() deadlocked. Owning the conn lets Stop
+	// terminate the serve loop by closing it directly.
 	var ok bool
 	for _, addr := range s.cfg.BindAddrs {
-		for _, net := range []string{"udp", "tcp"} {
-			srv := &dns.Server{Addr: addr, Net: net, Handler: mux}
+		udpConn, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			s.log.Warn("dns: udp bind failed", log.Str("addr", addr), log.Err(err))
+			continue
+		}
+		tcpLn, err := net.Listen("tcp", addr)
+		if err != nil {
+			_ = udpConn.Close()
+			s.log.Warn("dns: tcp bind failed", log.Str("addr", addr), log.Err(err))
+			continue
+		}
+		s.conns = append(s.conns, udpConn, tcpLn)
+		for _, srv := range []*dns.Server{
+			{PacketConn: udpConn, Handler: mux},
+			{Listener: tcpLn, Handler: mux},
+		} {
+			srv := srv
 			s.servers = append(s.servers, srv)
 			s.closeWG.Add(1)
-			go func(srv *dns.Server) {
+			go func() {
 				defer s.closeWG.Done()
-				if err := srv.ListenAndServe(); err != nil {
-					s.log.Warn("dns listener stopped",
-						log.Str("addr", srv.Addr),
-						log.Str("net", srv.Net),
-						log.Err(err))
+				if err := srv.ActivateAndServe(); err != nil {
+					s.log.Warn("dns listener stopped", log.Str("addr", addr), log.Err(err))
 				}
-			}(srv)
-			ok = true
+			}()
 		}
+		ok = true
 	}
 	if !ok {
 		return errors.New("dns: no bind addresses")
@@ -224,25 +245,33 @@ func (s *Subsystem) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop shuts down all listeners.
-func (s *Subsystem) Stop(ctx context.Context) error {
+// Stop shuts down all listeners. Closing each underlying conn always
+// unblocks its ActivateAndServe loop — unlike dns.Server.Shutdown,
+// which silently no-ops when it races a not-yet-"started" server and
+// leaves the listener (and this wait) hung forever. The wait is also
+// bounded so a stuck listener can never wedge agent shutdown/rollback.
+func (s *Subsystem) Stop(_ context.Context) error {
 	s.startMu.Lock()
 	if s.stopped {
 		s.startMu.Unlock()
 		return nil
 	}
 	s.stopped = true
-	servers := s.servers
+	conns := s.conns
 	s.startMu.Unlock()
 
-	var firstErr error
-	for _, srv := range servers {
-		if err := srv.ShutdownContext(ctx); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	for _, c := range conns {
+		_ = c.Close()
 	}
-	s.closeWG.Wait()
-	return firstErr
+
+	done := make(chan struct{})
+	go func() { s.closeWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		s.log.Warn("dns: listeners did not exit within 5s; continuing shutdown")
+	}
+	return nil
 }
 
 // Refresh re-reads /etc/resolv.conf for upstream resolvers. Wire this
