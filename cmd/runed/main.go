@@ -516,10 +516,14 @@ func main() {
 			dpMode = dataplane.ModeDev
 		}
 		dp, derr := dataplane.New(dataplane.Config{
-			OrderedLog: olog,
-			Node:       dataplane.StaticNodeID(a.Identity().NodeID),
-			Mode:       dpMode,
-			Logger:     logger,
+			OrderedLog:  olog,
+			Store:       stateStore,
+			VIPResolver: dataplane.FuncVIPResolver{Fn: func(ctx context.Context, serviceID string) (net.IP, error) {
+				return vipAllocator.Allocate(ctx, serviceID)
+			}},
+			Node:   dataplane.StaticNodeID(a.Identity().NodeID),
+			Mode:   dpMode,
+			Logger: logger,
 		})
 		if derr != nil {
 			return fmt.Errorf("dataplane: %w", derr)

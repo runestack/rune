@@ -66,8 +66,7 @@ func (s *InstanceService) GetInstance(ctx context.Context, req *generated.GetIns
 		s.logger.Warn("Failed to get instance status", log.Str("id", req.Id), log.Err(statusErr))
 		// We'll continue with the stored status, just log the error
 	} else {
-		// Update the instance status in our response
-		instance.Status = status
+		instance.Status = mergeInstanceStatus(instance.Status, status)
 	}
 
 	// Convert to protobuf message
@@ -146,8 +145,7 @@ func (s *InstanceService) ListInstances(ctx context.Context, req *generated.List
 		status, statusErr = runnerToUse.Status(ctx, instance)
 
 		if statusErr == nil {
-			// Update the instance status
-			instance.Status = status
+			instance.Status = mergeInstanceStatus(instance.Status, status)
 		}
 
 		protoInstance, err := s.instanceModelToProto(instance)
@@ -448,5 +446,44 @@ func (s *InstanceService) instanceStatusToProto(status types.InstanceStatus) gen
 		return generated.InstanceStatus_INSTANCE_STATUS_DELETED
 	default:
 		return generated.InstanceStatus_INSTANCE_STATUS_UNSPECIFIED
+	}
+}
+
+// mergeInstanceStatus combines the orchestrator store status with a runtime
+// runner observation (e.g. Docker container.State.Running). Store-owned
+// transitional states must not be collapsed to Running just because the
+// container process is up — readiness-gated instances stay Starting until
+// the health controller promotes them.
+func mergeInstanceStatus(stored, observed types.InstanceStatus) types.InstanceStatus {
+	if stored == "" {
+		return observed
+	}
+	if observed == "" {
+		return stored
+	}
+	if instanceStatusStoreAuthoritative(stored) {
+		// Container died while the store still reflects boot/teardown.
+		switch observed {
+		case types.InstanceStatusFailed, types.InstanceStatusStopped, types.InstanceStatusExited:
+			return observed
+		}
+		return stored
+	}
+	return observed
+}
+
+func instanceStatusStoreAuthoritative(stored types.InstanceStatus) bool {
+	switch stored {
+	case types.InstanceStatusStarting,
+		types.InstanceStatusPending,
+		types.InstanceStatusCreated,
+		types.InstanceStatusTerminating,
+		types.InstanceStatusStalled,
+		types.InstanceStatusDeleted,
+		types.InstanceStatusFailed,
+		types.InstanceStatusStopped:
+		return true
+	default:
+		return false
 	}
 }

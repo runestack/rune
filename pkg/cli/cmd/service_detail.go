@@ -168,7 +168,8 @@ func renderInstanceLine(w io.Writer, inst *types.Instance) {
 	if inst.StatusMessage != "" &&
 		(inst.Status == types.InstanceStatusFailed ||
 			inst.Status == types.InstanceStatusExited ||
-			inst.Status == types.InstanceStatusUnknown) {
+			inst.Status == types.InstanceStatusUnknown ||
+			inst.Status == types.InstanceStatusStarting) {
 		fmt.Fprintf(w, "        %s\n", inst.StatusMessage)
 	}
 }
