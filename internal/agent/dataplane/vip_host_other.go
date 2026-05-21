@@ -9,5 +9,5 @@ type localVIPHost struct{}
 
 func newLocalVIPHost() *localVIPHost { return &localVIPHost{} }
 
-func (h *localVIPHost) add(net.IP) error  { return nil }
+func (h *localVIPHost) add(net.IP) error { return nil }
 func (h *localVIPHost) remove(net.IP)    {}

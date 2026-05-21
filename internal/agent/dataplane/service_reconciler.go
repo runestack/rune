@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
@@ -43,18 +44,44 @@ func (s *Subsystem) runServiceWatch(ctx context.Context, initial <-chan store.Wa
 			return
 		case ev, ok := <-ch:
 			if !ok {
-				var err error
-				ch, err = s.cfg.Store.Watch(ctx, types.ResourceTypeService, "")
+				// Channel closed — reconnect with backoff. Without the
+				// backoff a persistent Watch failure spins this loop:
+				// the closed ch keeps yielding ok=false immediately.
+				newCh, err := s.watchServicesWithBackoff(ctx)
 				if err != nil {
-					if errors.Is(err, context.Canceled) {
-						return
-					}
-					s.log.Warn("Service watch reconnect failed", log.Err(err))
-					continue
+					return // ctx cancelled
 				}
+				ch = newCh
 				continue
 			}
 			s.handleServiceWatchEvent(ctx, ev)
+		}
+	}
+}
+
+// watchServicesWithBackoff re-establishes the service Watch, retrying
+// with capped exponential backoff. Returns an error only when ctx is
+// cancelled — callers treat that as "stop the watch loop".
+func (s *Subsystem) watchServicesWithBackoff(ctx context.Context) (<-chan store.WatchEvent, error) {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	for {
+		ch, err := s.cfg.Store.Watch(ctx, types.ResourceTypeService, "")
+		if err == nil {
+			return ch, nil
+		}
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		s.log.Warn("Service watch reconnect failed; retrying",
+			log.Duration("backoff", backoff), log.Err(err))
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 }
@@ -127,7 +154,12 @@ func (s *Subsystem) registerServiceDataplane(svc *types.Service) error {
 	}
 	s.svcRegMu.Unlock()
 
-	// Loopback VIP must exist before net.Listen on the VIP address.
+	// The VIP's /32 must be on loopback before net.Listen on the VIP
+	// address. This is also load-bearing for *delivery*: it is the only
+	// thing that makes the host accept packets addressed to the VIP and
+	// hand them to the local proxy. ip_nonlocal_bind only relaxes
+	// bind(2) — it does not route inbound VIP traffic to the socket.
+	// So a failed add means an unreachable service: fail loudly.
 	needVIPAdd := !wasRegistered || oldVIP != newVIP
 	if needVIPAdd && s.cfg.Mode == ModeProduction && newVIP != "" {
 		ip := net.ParseIP(newVIP)
@@ -135,11 +167,7 @@ func (s *Subsystem) registerServiceDataplane(svc *types.Service) error {
 			return fmt.Errorf("dataplane: invalid VIP %q for %s/%s", newVIP, svc.Namespace, svc.Name)
 		}
 		if err := s.vipHost.add(ip); err != nil {
-			// Non-fatal when net.ipv4.ip_nonlocal_bind=1 is set (see
-			// ensureNonLocalBind) or when the unit has CAP_NET_ADMIN.
-			s.log.Warn("Loopback VIP add failed; relying on nonlocal bind",
-				log.Str("vip", newVIP),
-				log.Err(err))
+			return fmt.Errorf("dataplane: add loopback VIP %s for %s/%s: %w", newVIP, svc.Namespace, svc.Name, err)
 		}
 	}
 
