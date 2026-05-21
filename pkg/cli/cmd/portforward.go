@@ -255,6 +255,17 @@ func handleLocalConn(
 		return
 	}
 
+	// Close the local socket when the remote side closes the conn or
+	// the session ends, so the local→remote loop below unblocks from
+	// local.Read() instead of hanging until the caller times out.
+	go func() {
+		select {
+		case <-closeCh:
+		case <-ctx.Done():
+		}
+		_ = local.Close()
+	}()
+
 	// remote → local pump
 	go func() {
 		for {
@@ -287,13 +298,6 @@ func handleLocalConn(
 		if err != nil {
 			_ = sess.SendClose(connID, "")
 			return
-		}
-		select {
-		case <-closeCh:
-			return
-		case <-ctx.Done():
-			return
-		default:
 		}
 	}
 }
