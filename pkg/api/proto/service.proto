@@ -118,6 +118,21 @@ message Service {
   // healthy backing instances. Always read-only on the wire — values
   // here are ignored by Create/Update.
   repeated Instance instances = 29;
+
+  // Cluster discovery state (VIP, locality). VIP is assigned by the
+  // control plane on create and is read-only for operators. Populated
+  // on Get/List; ignored by Create/Update (server merges from store).
+  ServiceDiscovery discovery = 30;
+}
+
+// ServiceDiscovery is persisted cluster discovery state for a service.
+message ServiceDiscovery {
+  // Stable cluster virtual IP (e.g. "10.96.0.10"). Assigned at create.
+  string vip = 1;
+  // Discovery mode (e.g. load-balanced or headless). Operator-set.
+  string mode = 2;
+  // Endpoint locality preference for the data-plane proxy.
+  string locality_preference = 3;
 }
 
 // RunIfSpec encodes the predicate that decides whether an InitStep

@@ -31,6 +31,7 @@ import (
 	"github.com/runestack/rune/pkg/networking/endpoints"
 	"github.com/runestack/rune/pkg/networking/localinstances"
 	"github.com/runestack/rune/pkg/networking/policy"
+	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -93,9 +94,17 @@ type Config struct {
 	OrderedLog orderedlog.OrderedLog
 
 	// Services lets the dataplane look up VIP + ports for a service
-	// referenced by an endpoints update. Required for production.
-	// In tests, callers commonly use a MapServiceProvider.
+	// referenced by an endpoints update. Optional; service registration
+	// is driven by Store watch when set.
 	Services ServiceProvider
+
+	// Store watches service rows and opens per-VIP listeners. Required
+	// for production cluster networking on single-node runed.
+	Store store.Store
+
+	// VIPResolver supplies cluster VIPs when a service row is missing
+	// discovery.vip (legacy drift). Typically the VIP allocator.
+	VIPResolver VIPResolver
 
 	// Node identifies this node for localityPreference. Required for
 	// "prefer-local" / "local-only" semantics; in its absence those
@@ -145,6 +154,12 @@ type Subsystem struct {
 	// this to decide when to start failing closed.
 	lastEventMu sync.RWMutex
 	lastEvent   time.Time
+
+	// Service VIP listener bookkeeping (production mode).
+	vipHost       *localVIPHost
+	svcRegMu      sync.Mutex
+	svcRegistered map[string]string // serviceID -> VIP
+	svcWg         sync.WaitGroup
 }
 
 // New constructs a Subsystem. It registers the endpoints op types
@@ -186,6 +201,8 @@ func New(cfg Config) (*Subsystem, error) {
 		readyCh:        make(chan struct{}),
 		policies:       make(map[string]*policy.Compiled),
 		localInstances: policy.NewLocalInstancesTable(nodeID),
+		vipHost:        newLocalVIPHost(),
+		svcRegistered:  make(map[string]string),
 	}
 	s.proxy = newProxyManager(cfg, cache, m, s.fresh, s.evaluatePolicy)
 	return s, nil
@@ -286,6 +303,18 @@ func (s *Subsystem) Start(ctx context.Context) error {
 
 	close(s.readyCh)
 
+	if s.cfg.Store != nil {
+		if err := s.reconcileServicesFromStore(ctx); err != nil {
+			s.log.Warn("Dataplane initial service reconcile had errors", log.Err(err))
+		}
+		watchCh, werr := s.cfg.Store.Watch(runCtx, types.ResourceTypeService, "")
+		if werr != nil {
+			return fmt.Errorf("dataplane: service watch: %w", werr)
+		}
+		s.svcWg.Add(1)
+		go s.runServiceWatch(runCtx, watchCh)
+	}
+
 	s.wg.Add(1)
 	go s.watchLoop(runCtx, startSeq)
 
@@ -312,11 +341,16 @@ func (s *Subsystem) Stop(ctx context.Context) error {
 	if cancel != nil {
 		cancel()
 	}
+	s.teardownServiceVIPs()
 	s.proxy.Shutdown(ctx)
 	s.nfm.Close()
 
 	done := make(chan struct{})
-	go func() { s.wg.Wait(); close(done) }()
+	go func() {
+		s.wg.Wait()
+		s.svcWg.Wait()
+		close(done)
+	}()
 	select {
 	case <-done:
 	case <-ctx.Done():

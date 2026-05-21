@@ -641,6 +641,14 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		}
 	}
 
+	if service.Discovery != nil {
+		protoService.Discovery = &generated.ServiceDiscovery{
+			Vip:                service.Discovery.VIP,
+			Mode:               service.Discovery.Mode,
+			LocalityPreference: service.Discovery.LocalityPreference,
+		}
+	}
+
 	return protoService
 }
 
@@ -908,6 +916,14 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 	}
 	if proto.SecurityContext != nil {
 		service.SecurityContext = securityContextFromProto(proto.SecurityContext)
+	}
+
+	if proto.Discovery != nil {
+		service.Discovery = &types.ServiceDiscovery{
+			VIP:                proto.Discovery.Vip,
+			Mode:               proto.Discovery.Mode,
+			LocalityPreference: proto.Discovery.LocalityPreference,
+		}
 	}
 
 	if len(proto.Instances) > 0 {
