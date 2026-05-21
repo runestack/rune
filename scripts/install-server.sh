@@ -364,8 +364,11 @@ LimitNOFILE=65536
 #     /var/lib/rune/mounts/. Without it, /bin/mount fails with
 #     "must be superuser to use mount" and every cloud volume gets
 #     stuck post-Attach.
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER
+#   - CAP_NET_ADMIN        — netlink AddrAdd to host each service's
+#     cluster VIP as a /32 on loopback (dataplane). Without it VIP
+#     listeners cannot bind and service-to-service traffic has no path.
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_FOWNER CAP_NET_ADMIN
 
 [Install]
 WantedBy=multi-user.target
