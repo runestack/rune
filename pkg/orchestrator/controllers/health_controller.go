@@ -83,6 +83,7 @@ type instanceHealth struct {
 	readinessResults    []types.HealthCheckResult
 	livenessStatus      bool
 	readinessStatus     bool
+	promoted            bool // true once promoteToRunningOnReady has succeeded
 	lastCheck           time.Time
 	consecutiveFailures int
 	healthRestartCount  int // Separate count for health check restarts (backoff calculation)
@@ -530,23 +531,38 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 			ih.readinessResults = ih.readinessResults[1:]
 		}
 
-		wasReady := ih.readinessStatus
 		ih.readinessStatus = result.Success
-		// First successful readiness pass promotes the instance from
+		// A successful readiness pass promotes the instance from
 		// Starting to Running. Fire-and-forget so the store I/O
 		// doesn't block the c.mu we're currently holding (otherwise
 		// a slow store write would stall every other health update
 		// across the process). promoteToRunningOnReady is idempotent
 		// — it only flips when Status is still Starting — so a
 		// late-arriving goroutine is safe.
-		if result.Success && !wasReady {
-			go func(id string) {
-				if err := c.promoteToRunningOnReady(id); err != nil {
-					c.logger.Warn("Failed to promote instance to Running on first readiness pass",
+		//
+		// We retry on every readiness pass until promotion actually
+		// succeeds (ih.promoted), rather than firing only on the
+		// first pass: a single transient failure (store contention,
+		// the record briefly absent) must not leave the instance
+		// wedged in Starting forever.
+		if result.Success && !ih.promoted {
+			ih.promoted = true // optimistic; reset below if it fails
+			namespace := ""
+			if ih.instance != nil {
+				namespace = ih.instance.Namespace
+			}
+			go func(ns, id string) {
+				if err := c.promoteToRunningOnReady(ns, id); err != nil {
+					c.mu.Lock()
+					if ih2, ok := c.instances[id]; ok {
+						ih2.promoted = false // allow the next readiness pass to retry
+					}
+					c.mu.Unlock()
+					c.logger.Warn("Failed to promote instance to Running on readiness pass",
 						log.Str("instance", id),
 						log.Err(err))
 				}
-			}(instanceID)
+			}(namespace, instanceID)
 		}
 
 		if result.Success {
@@ -572,11 +588,11 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 // already moved it (Failed, Stopped, Deleted) and we have no business
 // resurrecting it. Best-effort; called under the instanceHealth lock
 // but operates on the store independently.
-func (c *healthController) promoteToRunningOnReady(instanceID string) error {
+func (c *healthController) promoteToRunningOnReady(namespace, instanceID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	current, err := c.store.GetInstanceByID(ctx, "", instanceID)
+	current, err := c.store.GetInstanceByID(ctx, namespace, instanceID)
 	if err != nil {
 		return fmt.Errorf("get instance: %w", err)
 	}
