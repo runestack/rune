@@ -127,21 +127,23 @@ func (s *Subsystem) registerServiceDataplane(svc *types.Service) error {
 	}
 	s.svcRegMu.Unlock()
 
-	if err := s.RegisterService(svc); err != nil {
-		return err
-	}
-
+	// Loopback VIP must exist before net.Listen on the VIP address.
 	needVIPAdd := !wasRegistered || oldVIP != newVIP
 	if needVIPAdd && s.cfg.Mode == ModeProduction && newVIP != "" {
 		ip := net.ParseIP(newVIP)
-		if ip != nil {
-			if err := s.vipHost.add(ip); err != nil {
-				s.log.Warn("Failed to add service VIP on loopback",
-					log.Str("service", svc.Name),
-					log.Str("vip", newVIP),
-					log.Err(err))
-			}
+		if ip == nil {
+			return fmt.Errorf("dataplane: invalid VIP %q for %s/%s", newVIP, svc.Namespace, svc.Name)
 		}
+		if err := s.vipHost.add(ip); err != nil {
+			return fmt.Errorf("dataplane: add loopback VIP %s: %w", newVIP, err)
+		}
+	}
+
+	if err := s.RegisterService(svc); err != nil {
+		if needVIPAdd && newVIP != "" {
+			s.vipHost.remove(net.ParseIP(newVIP))
+		}
+		return err
 	}
 
 	s.svcRegMu.Lock()
