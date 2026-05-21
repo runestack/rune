@@ -64,6 +64,17 @@ func newProxyManager(cfg Config, cache *Cache, m *Metrics, fresh freshFn, eval p
 	}
 }
 
+// portReserved reports whether port is in the dataplane's reserved set
+// (ingress-owned ports on an edge node).
+func portReserved(reserved []int, port int) bool {
+	for _, r := range reserved {
+		if r == port {
+			return true
+		}
+	}
+	return false
+}
+
 // Register reconciles listeners for svc. Adds new listeners for new
 // ports, removes listeners for removed ports, leaves unchanged ones
 // alone. Returns the first failure if any port couldn't bind.
@@ -85,6 +96,13 @@ func (pm *ProxyManager) Register(svc *types.Service) error {
 
 	wantKeys := map[listenerKey]struct{}{}
 	for _, p := range svc.Ports {
+		// Skip ports the ingress owns on an edge node — a <vip>:80
+		// listener collides with the ingress 0.0.0.0:80 wildcard bind.
+		if portReserved(pm.cfg.ReservedHostPorts, p.Port) {
+			pm.cfg.Logger.Debug("dataplane: skipping VIP listener on ingress-reserved port",
+				log.Str("service", svc.Name), log.Int("port", p.Port))
+			continue
+		}
 		proto := normalizeProtocol(p.Protocol)
 		key := listenerKey{serviceID: svc.ID, port: p.Port, protocol: proto}
 		wantKeys[key] = struct{}{}

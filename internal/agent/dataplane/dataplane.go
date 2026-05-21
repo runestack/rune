@@ -115,6 +115,13 @@ type Config struct {
 	// and listens on 127.0.0.1 instead of the real VIP.
 	Mode Mode
 
+	// ReservedHostPorts are host ports the dataplane must NOT open VIP
+	// listeners on. On an edge node the ingress owns :80/:443 with a
+	// 0.0.0.0 wildcard bind; a <vip>:80 listener collides with it and
+	// fails the whole ingress subsystem. Services exposed on these
+	// ports are reached via the ingress, not the VIP.
+	ReservedHostPorts []int
+
 	// Logger; defaults to the global logger with component "dataplane".
 	Logger log.Logger
 
