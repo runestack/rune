@@ -73,8 +73,8 @@ type ServiceSpec struct {
 	// into a per-instance Volume.
 	Volumes []VolumeMount `json:"volumes,omitempty" yaml:"volumes,omitempty"`
 
-	// Service discovery configuration
-	Discovery *ServiceDiscovery `json:"discovery,omitempty" yaml:"discovery,omitempty"`
+	// Service discovery configuration (operator-facing; no VIP field).
+	Discovery *ServiceDiscoverySpec `json:"discovery,omitempty" yaml:"discovery,omitempty"`
 
 	// Named registry selector for pulling the image (optional)
 	ImageRegistry string `json:"imageRegistry,omitempty" yaml:"imageRegistry,omitempty"`
@@ -578,6 +578,18 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 			if fieldKey.Value == "initSteps" && fieldVal.Kind == yaml.SequenceNode {
 				collectInitStepsErrors(fieldVal, &errors)
 			}
+			if fieldKey.Value == "discovery" && fieldVal.Kind == yaml.MappingNode {
+				validDiscoveryFields := map[string]bool{
+					"mode":               true,
+					"localityPreference": true,
+				}
+				for j := 0; j+1 < len(fieldVal.Content); j += 2 {
+					k := fieldVal.Content[j]
+					if !validDiscoveryFields[k.Value] {
+						errors = append(errors, fmt.Sprintf("unknown field '%s' in discovery at line %d (cluster VIP is assigned by Rune)", k.Value, k.Line))
+					}
+				}
+			}
 		}
 	}
 
@@ -663,13 +675,27 @@ func (s *ServiceSpec) ToService() (*Service, error) {
 		SecretMounts:    s.SecretMounts,
 		ConfigmapMounts: s.ConfigmapMounts,
 		Volumes:         s.Volumes,
-		Discovery:       s.Discovery,
+		Discovery:       serviceDiscoveryFromSpec(s.Discovery),
 		Dependencies:    deps,
 		InitSteps:       s.InitSteps,
 		SecurityContext: s.SecurityContext,
 		Status:          ServiceStatusPending,
 		Metadata:        &ServiceMetadata{CreatedAt: now, UpdatedAt: now},
 	}, nil
+}
+
+func serviceDiscoveryFromSpec(d *ServiceDiscoverySpec) *ServiceDiscovery {
+	if d == nil {
+		return nil
+	}
+	out := &ServiceDiscovery{
+		Mode:               d.Mode,
+		LocalityPreference: d.LocalityPreference,
+	}
+	if out.Mode == "" && out.LocalityPreference == "" {
+		return nil
+	}
+	return out
 }
 
 // ServiceDependency is the spec-facing dependency format.
