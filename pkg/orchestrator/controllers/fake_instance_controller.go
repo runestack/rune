@@ -365,6 +365,10 @@ func (c *FakeInstanceController) SetEndpointPublisher(_ EndpointPublisher, _ str
 func (c *FakeInstanceController) RepublishServiceByInstance(_ context.Context, _ *types.Instance) {
 }
 
+// RepublishService is a no-op on the fake.
+func (c *FakeInstanceController) RepublishService(_ context.Context, _ *types.Service) {
+}
+
 // SetMountResolver is a no-op on the fake.
 func (c *FakeInstanceController) SetMountResolver(_ MountResolver) {}
 

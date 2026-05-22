@@ -23,6 +23,11 @@ type Cache struct {
 }
 
 func newCache() *Cache {
+	return NewCache()
+}
+
+// NewCache returns an empty endpoint cache.
+func NewCache() *Cache {
 	return &Cache{endpoints: make(map[string][]types.Endpoint)}
 }
 

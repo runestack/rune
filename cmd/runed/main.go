@@ -662,13 +662,14 @@ func main() {
 			// dataplane endpoint cache. Without this, the route
 			// table stays empty and inbound requests 404.
 			ictl := ingressctl.New(ingressctl.Config{
-				Router:  router,
-				Store:   stateStore,
-				Cache:   dpRef.Cache(),
-				ACME:    orch,
-				Secrets: repos.NewSecretRepo(stateStore),
-				Certs:   acmeCertStoreWithReload{store: certStore, loader: loader},
-				Logger:  logger.WithComponent("ingressctl"),
+				Router:            router,
+				Store:             stateStore,
+				Cache:             dpRef.Cache(),
+				ACME:              orch,
+				Secrets:           repos.NewSecretRepo(stateStore),
+				Certs:             acmeCertStoreWithReload{store: certStore, loader: loader},
+				Logger:            logger.WithComponent("ingressctl"),
+				ReservedHostPorts: ingressReservedPorts(httpAddr, httpsAddr, *devMode),
 			})
 
 			isub, ierr := ingress.New(ingress.Config{
