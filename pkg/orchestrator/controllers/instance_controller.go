@@ -114,6 +114,11 @@ type InstanceController interface {
 	// first readiness pass). Nil-safe when no endpoint publisher is
 	// wired; safe to call repeatedly.
 	RepublishServiceByInstance(ctx context.Context, instance *types.Instance)
+
+	// RepublishService refreshes the dataplane endpoint set from
+	// current store state (including live container IPs). Safe to
+	// call on every reconcile tick.
+	RepublishService(ctx context.Context, service *types.Service)
 }
 
 // instanceController implements the InstanceController interface
@@ -202,6 +207,43 @@ func (c *instanceController) SetMountResolver(resolver MountResolver) {
 	c.mountResolver = resolver
 }
 
+// instanceEndpointIP returns the routable IP for endpoint publishing.
+// It prefers persisted metadata, then asks the runner (Docker inspect)
+// and backfills metadata when discovered.
+func (c *instanceController) instanceEndpointIP(ctx context.Context, inst *types.Instance) string {
+	if inst == nil {
+		return ""
+	}
+	if inst.Metadata != nil && inst.Metadata.ContainerIP != "" {
+		return inst.Metadata.ContainerIP
+	}
+	r, err := c.runnerManager.GetInstanceRunner(inst)
+	if err != nil {
+		return ""
+	}
+	p, ok := r.(runner.IPProvider)
+	if !ok {
+		return ""
+	}
+	ip, err := p.InstanceIP(ctx, inst)
+	if err != nil || ip == "" {
+		return ""
+	}
+	if inst.Metadata == nil {
+		inst.Metadata = &types.InstanceMetadata{}
+	}
+	if inst.Metadata.ContainerIP == ip {
+		return ip
+	}
+	inst.Metadata.ContainerIP = ip
+	if err := c.store.Update(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, inst); err != nil {
+		c.logger.Debug("instanceEndpointIP: persist containerIp failed",
+			log.Str("instance", inst.Name),
+			log.Err(err))
+	}
+	return ip
+}
+
 // republishService recomputes the endpoint set for a service from
 // the current store contents and publishes it. Best-effort: errors
 // are logged but never surfaced because a failure to publish must
@@ -237,10 +279,7 @@ func (c *instanceController) republishService(ctx context.Context, service *type
 		if inst.Status != types.InstanceStatusRunning {
 			continue
 		}
-		ip := ""
-		if inst.Metadata != nil {
-			ip = inst.Metadata.ContainerIP
-		}
+		ip := c.instanceEndpointIP(ctx, inst)
 		if ip == "" {
 			continue
 		}
@@ -271,6 +310,11 @@ func (c *instanceController) republishService(ctx context.Context, service *type
 // reachability change.
 func (c *instanceController) RepublishServiceByInstance(ctx context.Context, instance *types.Instance) {
 	c.republishServiceByInstance(ctx, instance)
+}
+
+// RepublishService implements InstanceController.
+func (c *instanceController) RepublishService(ctx context.Context, service *types.Service) {
+	c.republishService(ctx, service)
 }
 
 // republishServiceByInstance is a convenience wrapper that loads the
@@ -308,10 +352,7 @@ func (c *instanceController) republishLocalInstances(ctx context.Context) {
 		if ri == nil || ri.Instance == nil {
 			continue
 		}
-		ip := ""
-		if ri.Instance.Metadata != nil {
-			ip = ri.Instance.Metadata.ContainerIP
-		}
+		ip := c.instanceEndpointIP(ctx, ri.Instance)
 		if ip == "" {
 			continue
 		}

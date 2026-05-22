@@ -52,6 +52,11 @@ type Config struct {
 	// ReconcilePeriod is how often the controller rebuilds the
 	// route table from the store as a safety net. Defaults to 2s.
 	ReconcilePeriod time.Duration
+	// ReservedHostPorts are host ports owned by the edge ingress
+	// listener (typically 80/443). The dataplane does not open VIP
+	// listeners on these ports, so Resolve must dial container
+	// endpoints from the cache instead of the service VIP.
+	ReservedHostPorts []int
 }
 
 // Controller reconciles ingress routes from the service store and
@@ -100,18 +105,26 @@ func New(cfg Config) *Controller {
 	}
 }
 
-// Resolve implements ingress.UpstreamResolver. It returns the first
-// healthy endpoint for the named service from the dataplane cache,
-// dialable as "ip:port". The dataplane Cache is keyed by service
-// name today (see internal/agent/dns/wire.go EndpointPublisher),
-// so namespace is accepted for interface compatibility but unused.
-// The port argument is used as a fallback when the cached endpoint
-// has no recorded port.
+// Resolve implements ingress.UpstreamResolver. It prefers the service
+// cluster VIP (dataplane proxy) so ingress does not dial stale
+// container IPs after restarts. The dataplane cache is keyed by
+// service ID; when no VIP is assigned yet, it falls back to the first
+// healthy cached endpoint for that ID.
 func (c *Controller) Resolve(namespace, service string, port int) (string, bool) {
-	if c.cfg.Cache == nil || service == "" {
+	if service == "" || port == 0 {
 		return "", false
 	}
-	eps, ok := c.cfg.Cache.Healthy(service)
+	svc, ok := c.lookupService(namespace, service)
+	if !ok {
+		return "", false
+	}
+	if vip := serviceVIP(svc); vip != "" && !portReserved(c.cfg.ReservedHostPorts, port) {
+		return net.JoinHostPort(vip, strconv.Itoa(port)), true
+	}
+	if c.cfg.Cache == nil || svc.ID == "" {
+		return "", false
+	}
+	eps, ok := c.cfg.Cache.Healthy(svc.ID)
 	if !ok || len(eps) == 0 {
 		return "", false
 	}
@@ -124,6 +137,24 @@ func (c *Controller) Resolve(namespace, service string, port int) (string, bool)
 		return "", false
 	}
 	return net.JoinHostPort(ep.IP, strconv.Itoa(dialPort)), true
+}
+
+func (c *Controller) lookupService(namespace, name string) (*types.Service, bool) {
+	if c.cfg.Store == nil || name == "" {
+		return nil, false
+	}
+	var svc types.Service
+	if err := c.cfg.Store.Get(context.Background(), types.ResourceTypeService, namespace, name, &svc); err != nil {
+		return nil, false
+	}
+	return &svc, true
+}
+
+func serviceVIP(svc *types.Service) string {
+	if svc == nil || svc.Discovery == nil {
+		return ""
+	}
+	return svc.Discovery.VIP
 }
 
 // Run blocks until ctx is done, periodically rebuilding the route
@@ -345,4 +376,13 @@ func keys(m map[string]struct{}) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func portReserved(reserved []int, port int) bool {
+	for _, p := range reserved {
+		if p == port {
+			return true
+		}
+	}
+	return false
 }

@@ -87,6 +87,12 @@ type Runner interface {
 	RunInit(ctx context.Context, instance *types.Instance, step types.InitStep) (exitCode int, err error)
 }
 
+// IPProvider is implemented by runners that can resolve a running
+// instance's primary routable IP for endpoint publishing.
+type IPProvider interface {
+	InstanceIP(ctx context.Context, instance *types.Instance) (string, error)
+}
+
 // ErrInitNotSupported is returned by Runner.RunInit implementations
 // that do not (yet) support init steps. The instance controller
 // surfaces this as a fatal scheduling error so operators get a clear
