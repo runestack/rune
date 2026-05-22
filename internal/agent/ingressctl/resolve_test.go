@@ -65,6 +65,26 @@ func TestResolve_ReservedPort80UsesCacheNotVIP(t *testing.T) {
 	assert.Equal(t, "172.17.0.2:80", target)
 }
 
+func TestResolve_RejectsZeroPort(t *testing.T) {
+	st := store.NewTestStore()
+	seedService(t, st, types.Service{
+		ID:        "svc-1",
+		Namespace: "prod",
+		Name:      "docs",
+		Discovery: &types.ServiceDiscovery{VIP: "10.96.0.14"},
+	})
+	c := New(Config{Store: st, Cache: dataplane.NewCache()})
+	_, ok := c.Resolve("prod", "docs", 0)
+	assert.False(t, ok, "port 0 must not resolve")
+}
+
+func TestResolve_ServiceNotFound(t *testing.T) {
+	st := store.NewTestStore()
+	c := New(Config{Store: st, Cache: dataplane.NewCache()})
+	_, ok := c.Resolve("prod", "missing", 3000)
+	assert.False(t, ok, "unknown service must not resolve")
+}
+
 func TestResolve_IgnoresStaleNameKeyedCache(t *testing.T) {
 	st := store.NewTestStore()
 	seedService(t, st, types.Service{
