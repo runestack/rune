@@ -77,6 +77,8 @@ func init() {
 	rootCmd.AddCommand(newServiceCmd())
 	// Secret management (get, list, reveal, update, versions, rollback)
 	rootCmd.AddCommand(newSecretCmd())
+	// One-shot resource diagnostics (RUNE-126)
+	rootCmd.AddCommand(newDescribeCmd())
 	// Storage management noun-trees (RUNE-072)
 	rootCmd.AddCommand(newStorageClassCmd())
 	rootCmd.AddCommand(newVolumeCmd())
