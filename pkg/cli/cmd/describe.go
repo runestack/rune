@@ -13,10 +13,22 @@ import (
 	"os"
 	"strings"
 
+	"github.com/fatih/color"
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+)
+
+// Shared CLI colour helpers. Centralised here so the describe renderer
+// and any other command keep a consistent palette without dragging
+// pterm into every file.
+var (
+	red    = color.New(color.FgRed).SprintFunc()
+	green  = color.New(color.FgGreen).SprintFunc()
+	yellow = color.New(color.FgYellow).SprintFunc()
+	dim    = color.New(color.Faint).SprintFunc()
+	bold   = color.New(color.Bold).SprintFunc()
 )
 
 type describeOptions struct {

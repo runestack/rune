@@ -365,21 +365,14 @@ func handleServiceGet(cmd *cobra.Command, opts *getOptions, resourceName string)
 		return watchServices(cmd.Context(), serviceClient, resourceName, opts)
 	}
 
-	// If a specific service name is provided, get that service
+	// If a specific service name is provided, get that service.
+	// `rune get service <name>` renders the same one-row table as the
+	// list view; the deep "why is it stuck" view is `rune describe`
+	// (RUNE-126).
 	if resourceName != "" {
 		service, err := serviceClient.GetService(opts.namespace, resourceName)
 		if err != nil {
 			return fmt.Errorf("failed to get service %s: %w", resourceName, err)
-		}
-
-		// Default human view: render the detail paragraph (with
-		// instance breakdown + failure "why") instead of a one-row
-		// table. Keeps `rune get service <name>` self-contained: no
-		// describe, no second command. JSON/YAML still take the
-		// structured path.
-		if opts.outputFormat == "" || opts.outputFormat == "table" {
-			instClient := client.NewInstanceClient(apiClient)
-			return renderServiceDetail(os.Stdout, service, instClient)
 		}
 		return outputResource([]*types.Service{service}, opts)
 	}
