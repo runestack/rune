@@ -117,6 +117,32 @@ func TestDescribe_Instance_VolumeMountUnresolved(t *testing.T) {
 	assert.Contains(t, volRef.Detail, "unresolved")
 }
 
+// When a slot has both a Deleted tombstone and a live record, describe
+// must pick the live one.
+func TestDescribe_Instance_PrefersLiveOverTombstone(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putInstance(t, st, &types.Instance{
+		ID: "i-old", Name: "flo-0", Namespace: "shared", ServiceName: "flo",
+		Status: types.InstanceStatusDeleted, StatusMessage: "Marked for deletion",
+		UpdatedAt: time.Now().Add(-time.Hour),
+	})
+	putInstance(t, st, &types.Instance{
+		ID: "i-live", Name: "flo-0", Namespace: "shared", ServiceName: "flo",
+		Status: types.InstanceStatusRunning, UpdatedAt: time.Now(),
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{
+		Kind: "instance", Name: "flo-0", Namespace: "shared",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Running", resp.Result.Status)
+	for _, kv := range resp.Result.Identity {
+		if kv.Key == "ID" {
+			assert.Equal(t, "i-live", kv.Value)
+		}
+	}
+}
+
 func TestDescribe_Instance_NotFound(t *testing.T) {
 	svc, _ := newDescribeTestService(t)
 	_, err := svc.Describe(context.Background(), &generated.DescribeRequest{
@@ -135,6 +161,9 @@ func TestDescribe_Service_ReplicaRollup(t *testing.T) {
 		ServiceName: "flo", Status: types.InstanceStatusRunning})
 	putInstance(t, st, &types.Instance{ID: "i-2", Name: "flo-1", Namespace: "shared",
 		ServiceName: "flo", Status: types.InstanceStatusPending, StatusReason: "VolumeNotReady"})
+	// A Deleted tombstone for the slot must not inflate the rollup.
+	putInstance(t, st, &types.Instance{ID: "i-old", Name: "flo-0", Namespace: "shared",
+		ServiceName: "flo", Status: types.InstanceStatusDeleted})
 
 	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{
 		Kind: "service", Name: "flo", Namespace: "shared",

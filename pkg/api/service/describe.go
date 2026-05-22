@@ -93,11 +93,17 @@ func (s *DescribeService) describeInstance(ctx context.Context, ns, name string)
 	if err := s.store.List(ctx, types.ResourceTypeInstance, ns, &instances); err != nil {
 		return nil, err
 	}
+	// A logical instance slot (e.g. "flo-0") can have several records:
+	// the live one plus Deleted tombstones from prior incarnations.
+	// Describe the live record; fall back to the most recent tombstone
+	// only when no live record exists.
 	var inst *types.Instance
 	for i := range instances {
-		if instances[i].Name == name {
+		if instances[i].Name != name {
+			continue
+		}
+		if inst == nil || betterDescribeInstance(&instances[i], inst) {
 			inst = &instances[i]
-			break
 		}
 	}
 	if inst == nil {
@@ -217,9 +223,12 @@ func (s *DescribeService) describeService(ctx context.Context, ns, name string) 
 	if err := s.store.List(ctx, types.ResourceTypeInstance, ns, &instances); err != nil {
 		return nil, err
 	}
+	// Exclude Deleted tombstones — they are GC'd prior incarnations,
+	// not part of the service's live replica set. Failed/Stalled
+	// records are kept: they are debugging signal.
 	mine := make([]types.Instance, 0, len(instances))
 	for _, in := range instances {
-		if in.ServiceName == svc.Name {
+		if in.ServiceName == svc.Name && in.Status != types.InstanceStatusDeleted {
 			mine = append(mine, in)
 		}
 	}
@@ -338,6 +347,19 @@ func (s *DescribeService) resolveSecretRefMark(ctx context.Context, ns, value st
 // --- small helpers -------------------------------------------------------
 
 func kv(k, v string) *generated.DescribeKV { return &generated.DescribeKV{Key: k, Value: v} }
+
+// betterDescribeInstance reports whether instance a is the better
+// describe target than b for the same logical slot: a live record
+// beats a Deleted tombstone, and among equals the most recently
+// updated wins.
+func betterDescribeInstance(a, b *types.Instance) bool {
+	liveA := a.Status != types.InstanceStatusDeleted
+	liveB := b.Status != types.InstanceStatusDeleted
+	if liveA != liveB {
+		return liveA
+	}
+	return a.UpdatedAt.After(b.UpdatedAt)
+}
 
 func emptyDashStr(s string) string {
 	if s == "" {
