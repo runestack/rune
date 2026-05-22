@@ -1076,6 +1076,13 @@ func classifyCreateError(err error) string {
 		return "VolumeProvisionStalled"
 	case strings.Contains(msg, "volume ") && strings.Contains(msg, "is not ready"):
 		return "VolumeNotReady"
+	// Volume-mount resolution failures travel inside the generic
+	// "failed to resolve secret and config mounts:" wrapper, so they
+	// must be classified before the "resolve secret" case below —
+	// otherwise a volume-not-mounted error is mislabelled SecretNotFound.
+	case strings.Contains(msg, "resolve volume mount"),
+		strings.Contains(msg, "not yet mounted"):
+		return "VolumeNotReady"
 	case strings.Contains(msg, "resolve secret"):
 		return "SecretNotFound"
 	case strings.Contains(msg, "resolve config"):
