@@ -1,10 +1,11 @@
 name: Rune CI
 
 on:
+  # push on default branches only; PR updates use pull_request (avoids double runs)
   push:
-    branches: [ "**" ]
+    branches: [ main, master, dev ]
   pull_request:
-    branches: [ "**" ]
+    branches: [ main, master, dev ]
   workflow_dispatch:
 
 jobs:

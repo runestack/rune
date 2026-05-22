@@ -243,21 +243,32 @@ func (d *Daemon) proxyConn(
 		return
 	}
 
+	// remote → local
+	pumpDone := make(chan struct{})
+
 	// Close the local socket when the remote side closes the conn or
 	// the session ends. Without this, the local→remote loop below stays
 	// blocked in local.Read() — a server-sent Close would never reach
 	// it (a `break` inside a select breaks the select, not the loop),
 	// leaving the caller's connection hung open instead of closed.
+	//
+	// On remote-close we must wait for the remote→local pump to finish
+	// first: the server sends the response Data frame and the Close
+	// frame back-to-back (e.g. an HTTP "Connection: close" reply), so
+	// closing local the instant closeCh fires races the pump and drops
+	// the still-buffered response — the caller then sees an empty
+	// reply. pumpDone is closed only once dataCh is fully drained, so
+	// waiting on it guarantees the response is written first. ctx.Done
+	// (session teardown) closes immediately — best effort.
 	go func() {
 		select {
 		case <-closeCh:
+			<-pumpDone
 		case <-ctx.Done():
 		}
 		_ = local.Close()
 	}()
 
-	// remote → local
-	pumpDone := make(chan struct{})
 	go func() {
 		defer close(pumpDone)
 		for {
