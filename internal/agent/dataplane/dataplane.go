@@ -434,6 +434,9 @@ func (s *Subsystem) watchLoop(ctx context.Context, fromSeq uint64) {
 			continue
 		}
 		delay.reset()
+		// The subscription is live; mark fresh immediately so there
+		// is no stale gap before consume's first heartbeat tick.
+		s.markFresh()
 		stop := s.consume(ctx, ch, &cur)
 		if stop {
 			return
@@ -444,11 +447,31 @@ func (s *Subsystem) watchLoop(ctx context.Context, fromSeq uint64) {
 
 // consume drains ch, applying mutations to the cache and updating
 // the freshness clock. Returns true when ctx is done.
+//
+// A heartbeat ticker refreshes the freshness clock even when no
+// events arrive. A connected-but-idle watch — a quiet cluster with no
+// endpoint or instance changes for a while — is still perfectly
+// healthy, and the proxy must not fail closed just because nothing
+// has changed recently. Only a real watch disconnect should age the
+// freshness clock out: that closes ch (or errors the subscribe),
+// ends this function, and drops watchLoop into staleSleep backoff
+// where markFresh is deliberately NOT called — so fresh() correctly
+// trips false past StaleBudget there.
 func (s *Subsystem) consume(ctx context.Context, ch <-chan orderedlog.Event, cur *uint64) bool {
+	heartbeat := s.cfg.StaleBudget / 3
+	if heartbeat <= 0 {
+		heartbeat = DefaultStaleBudget / 3
+	}
+	tick := time.NewTicker(heartbeat)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return true
+		case <-tick.C:
+			// ch still open => the watch is connected and healthy
+			// even if idle. Keep the dataplane fresh.
+			s.markFresh()
 		case ev, ok := <-ch:
 			if !ok {
 				return false
