@@ -67,6 +67,12 @@ type Controller struct {
 	mu        sync.RWMutex
 	lastHosts map[string]struct{} // for log noise control
 
+	// svcSnapshot is the service set from the most recent reconcile,
+	// keyed by "<namespace>/<name>". Resolve runs on every inbound
+	// ingress request, so it reads this in-memory snapshot rather than
+	// hitting the store per request. Rebuilt every ReconcilePeriod.
+	svcSnapshot map[string]*types.Service
+
 	// manualPushed tracks the (host, secret-version) pair last pushed
 	// to the cert store via manual-mode handling. Lets the per-tick
 	// reconcile re-push when the underlying secret changes (so secret
@@ -102,6 +108,7 @@ func New(cfg Config) *Controller {
 		lastHosts:    map[string]struct{}{},
 		manualPushed: map[string]int{},
 		manualLogged: map[string]time.Time{},
+		svcSnapshot:  map[string]*types.Service{},
 	}
 }
 
@@ -118,7 +125,13 @@ func (c *Controller) Resolve(namespace, service string, port int) (string, bool)
 	if !ok {
 		return "", false
 	}
-	if vip := serviceVIP(svc); vip != "" && !portReserved(c.cfg.ReservedHostPorts, port) {
+	// Prefer the cluster VIP: the dataplane proxy owns it and tracks
+	// healthy endpoints, so ingress never dials a stale container IP.
+	// We return vip:port without confirming the dataplane listener is
+	// already open — at worst there's a brief connection-refused
+	// window right after startup until the dataplane binds it, which
+	// is self-correcting on the client retry.
+	if vip := serviceVIP(svc); vip != "" && !dataplane.PortReserved(c.cfg.ReservedHostPorts, port) {
 		return net.JoinHostPort(vip, strconv.Itoa(port)), true
 	}
 	if c.cfg.Cache == nil || svc.ID == "" {
@@ -139,15 +152,31 @@ func (c *Controller) Resolve(namespace, service string, port int) (string, bool)
 	return net.JoinHostPort(ep.IP, strconv.Itoa(dialPort)), true
 }
 
+// lookupService resolves a service by namespace+name. It serves the
+// in-memory snapshot built by the reconcile loop so Resolve stays off
+// the store on the request hot path; before the first reconcile (or
+// for a service not yet snapshotted) it falls back to a single
+// time-bounded store Get.
 func (c *Controller) lookupService(namespace, name string) (*types.Service, bool) {
-	if c.cfg.Store == nil || name == "" {
+	if name == "" {
 		return nil, false
 	}
-	var svc types.Service
-	if err := c.cfg.Store.Get(context.Background(), types.ResourceTypeService, namespace, name, &svc); err != nil {
+	c.mu.RLock()
+	svc, ok := c.svcSnapshot[namespace+"/"+name]
+	c.mu.RUnlock()
+	if ok {
+		return svc, true
+	}
+	if c.cfg.Store == nil {
 		return nil, false
 	}
-	return &svc, true
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var fresh types.Service
+	if err := c.cfg.Store.Get(ctx, types.ResourceTypeService, namespace, name, &fresh); err != nil {
+		return nil, false
+	}
+	return &fresh, true
 }
 
 func serviceVIP(svc *types.Service) string {
@@ -179,6 +208,16 @@ func (c *Controller) reconcile(ctx context.Context) {
 		c.cfg.Logger.Warn("reconcile: list services failed", log.Err(err))
 		return
 	}
+	// Refresh the service snapshot Resolve reads on the request path.
+	snapshot := make(map[string]*types.Service, len(svcs))
+	for i := range svcs {
+		s := &svcs[i]
+		snapshot[s.Namespace+"/"+s.Name] = s
+	}
+	c.mu.Lock()
+	c.svcSnapshot = snapshot
+	c.mu.Unlock()
+
 	routes := make([]ingress.Route, 0)
 	hosts := make(map[string]struct{})
 	for i := range svcs {
@@ -376,13 +415,4 @@ func keys(m map[string]struct{}) []string {
 		out = append(out, k)
 	}
 	return out
-}
-
-func portReserved(reserved []int, port int) bool {
-	for _, p := range reserved {
-		if p == port {
-			return true
-		}
-	}
-	return false
 }

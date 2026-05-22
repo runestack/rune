@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -139,6 +141,14 @@ type instanceController struct {
 	endpointPublisher EndpointPublisher
 	nodeID            string
 
+	// publishedMu guards lastPublished, a service-ID -> last-published
+	// endpoint-set signature map. republishService is now called every
+	// reconcile tick; without this dedup every service would append a
+	// no-op endpoint mutation to the OrderedLog every tick, growing the
+	// log indefinitely for a cluster that isn't changing.
+	publishedMu   sync.Mutex
+	lastPublished map[string]string
+
 	// mountResolver, when non-nil, lets resolveVolumeMount consult
 	// the agent-side volumes Subsystem (RUNE-069 Slice 4) for the
 	// per-node mount target before falling back to Volume.Handle.
@@ -184,6 +194,7 @@ func NewInstanceController(store store.Store, runnerManager manager.IRunnerManag
 		logger:        logger.WithComponent("instance-controller"),
 		secretRepo:    repos.NewSecretRepo(store),
 		configRepo:    repos.NewConfigRepo(store),
+		lastPublished: map[string]string{},
 	}
 }
 
@@ -229,18 +240,32 @@ func (c *instanceController) instanceEndpointIP(ctx context.Context, inst *types
 	if err != nil || ip == "" {
 		return ""
 	}
+	// Backfill ContainerIP onto a freshly-loaded copy. The in-hand
+	// `inst` was listed earlier in the republish pass; writing it back
+	// whole would clobber any concurrent status update from the
+	// reconciler or health controller (the store has no CAS). Re-Get,
+	// mutate only the metadata field, write that — same load-modify-
+	// write discipline promoteToRunningOnReady uses.
+	var fresh types.Instance
+	if err := c.store.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh); err == nil {
+		if fresh.Metadata == nil {
+			fresh.Metadata = &types.InstanceMetadata{}
+		}
+		if fresh.Metadata.ContainerIP != ip {
+			fresh.Metadata.ContainerIP = ip
+			if err := c.store.Update(ctx, types.ResourceTypeInstance, fresh.Namespace, fresh.ID, &fresh); err != nil {
+				c.logger.Debug("instanceEndpointIP: persist containerIp failed",
+					log.Str("instance", inst.Name),
+					log.Err(err))
+			}
+		}
+	}
+	// Keep the caller's in-hand copy consistent for the rest of this
+	// republish pass even if the store write above was skipped/failed.
 	if inst.Metadata == nil {
 		inst.Metadata = &types.InstanceMetadata{}
 	}
-	if inst.Metadata.ContainerIP == ip {
-		return ip
-	}
 	inst.Metadata.ContainerIP = ip
-	if err := c.store.Update(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, inst); err != nil {
-		c.logger.Debug("instanceEndpointIP: persist containerIp failed",
-			log.Str("instance", inst.Name),
-			log.Err(err))
-	}
 	return ip
 }
 
@@ -260,6 +285,12 @@ func (c *instanceController) republishService(ctx context.Context, service *type
 			log.Err(err))
 		return
 	}
+	// The endpoint set carries only the service's primary (first)
+	// port. That is sufficient because each dataplane VIP listener
+	// derives its own target port from the service spec (see
+	// openListener) rather than from the endpoint — the endpoint just
+	// needs to advertise the container IP. Multi-port services are
+	// therefore routed correctly without per-port endpoint entries.
 	primaryPort := 0
 	primaryProto := "TCP"
 	if len(service.Ports) > 0 {
@@ -296,11 +327,42 @@ func (c *instanceController) republishService(ctx context.Context, service *type
 			Healthy:    true,
 		})
 	}
+	// Skip the publish when the endpoint set is byte-identical to the
+	// last one we published for this service. reconcileService calls
+	// republishService every tick; without this a steady-state cluster
+	// would still append a no-op mutation to the OrderedLog per service
+	// per tick. The signature is recorded only after a successful
+	// publish so a failed publish is retried on the next tick.
+	sig := endpointsSignature(eps)
+	c.publishedMu.Lock()
+	prev, seen := c.lastPublished[service.ID]
+	c.publishedMu.Unlock()
+	if seen && prev == sig {
+		return
+	}
 	if err := c.endpointPublisher.PublishService(ctx, service, eps); err != nil {
 		c.logger.Warn("republishService: publish failed",
 			log.Str("service", service.Name),
 			log.Err(err))
+		return
 	}
+	c.publishedMu.Lock()
+	c.lastPublished[service.ID] = sig
+	c.publishedMu.Unlock()
+}
+
+// endpointsSignature returns a deterministic, order-independent string
+// identifying an endpoint set, used by republishService to dedup
+// no-op publishes. Endpoints are sorted because republishService
+// builds them from a store List whose order is not guaranteed stable.
+func endpointsSignature(eps []types.Endpoint) string {
+	parts := make([]string, 0, len(eps))
+	for _, ep := range eps {
+		parts = append(parts, fmt.Sprintf("%s|%s|%d|%s|%t",
+			ep.InstanceID, ep.IP, ep.Port, ep.Protocol, ep.Healthy))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
 
 // RepublishServiceByInstance is the exported entry point delegating to
