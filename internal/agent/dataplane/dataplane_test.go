@@ -294,10 +294,20 @@ func TestProxyFailsClosedWhenStale(t *testing.T) {
 		t.Fatalf("RegisterService: %v", err)
 	}
 
-	// Force the dataplane stale by overwriting lastEvent to long ago.
-	dp.lastEventMu.Lock()
-	dp.lastEvent = time.Now().Add(-time.Hour)
-	dp.lastEventMu.Unlock()
+	// Genuinely sever the watch by closing the OrderedLog backend.
+	// watchLoop can no longer resubscribe, so the freshness clock
+	// ages out past StaleBudget — the one legitimate path to stale.
+	// (A connected-but-idle watch must NOT go stale; see
+	// TestProxyStaysFreshWhileWatchIdle.)
+	_ = ol.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && dp.fresh() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if dp.fresh() {
+		t.Fatal("dataplane still fresh after watch disconnect")
+	}
 
 	// New connection should be accepted-then-closed without forwarding.
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoa(proxyPort)), 1*time.Second)
@@ -312,6 +322,97 @@ func TestProxyFailsClosedWhenStale(t *testing.T) {
 	n, err := conn.Read(buf)
 	if err == nil && n > 0 {
 		t.Fatalf("stale proxy returned data: %q", buf[:n])
+	}
+}
+
+// TestProxyStaysFreshWhileWatchIdle is a regression test: a
+// connected watch that simply receives no events for longer than
+// StaleBudget (a quiet cluster — nothing scaling, no health flips)
+// must NOT be treated as stale. A previous bug advanced the
+// freshness clock only on event arrival, so an idle-but-healthy
+// watch made the proxy fail closed and reject all VIP traffic.
+func TestProxyStaysFreshWhileWatchIdle(t *testing.T) {
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("echo listen: %v", err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				_, _ = io.Copy(conn, conn)
+			}(c)
+		}
+	}()
+	echoAddr := echo.Addr().(*net.TCPAddr)
+
+	ol := newTestOlog(t)
+	if err := endpoints.Register(ol); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	staleBudget := 150 * time.Millisecond
+	dp, err := New(Config{OrderedLog: ol, Mode: ModeDev, StaleBudget: staleBudget})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := dp.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		stopCtx, c := context.WithTimeout(context.Background(), 2*time.Second)
+		defer c()
+		_ = dp.Stop(stopCtx)
+	}()
+
+	proxyPort := mustFreePort(t)
+	svc := &types.Service{
+		ID:        "svc-idle",
+		Ports:     []types.ServicePort{{Port: proxyPort, TargetPort: echoAddr.Port, Protocol: "tcp"}},
+		Discovery: &types.ServiceDiscovery{VIP: "ignored-in-dev"},
+	}
+	if err := dp.RegisterService(svc); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+	pub := endpoints.NewPublisher(ol)
+	if err := pub.Update(ctx, "svc-idle", []types.Endpoint{{
+		IP: "127.0.0.1", Port: echoAddr.Port, Healthy: true,
+	}}); err != nil {
+		t.Fatalf("publish endpoints: %v", err)
+	}
+	if !waitForCache(dp, "svc-idle", 1, 2*time.Second) {
+		t.Fatal("cache did not learn endpoints")
+	}
+
+	// Stay idle — publish nothing — for well over StaleBudget.
+	time.Sleep(4 * staleBudget)
+
+	if !dp.fresh() {
+		t.Fatal("dataplane went stale while the watch was connected but idle")
+	}
+
+	// The proxy must still forward.
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoa(proxyPort)), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	conn.(*net.TCPConn).CloseWrite()
+	got, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "ping" {
+		t.Fatalf("expected ping echoed back, got %q", got)
 	}
 }
 

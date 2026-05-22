@@ -361,13 +361,18 @@ func (b *BadgerBackend) Watch(ctx context.Context, fromSeq uint64) (<-chan Event
 
 func (b *BadgerBackend) removeSub(s *subscription) {
 	b.subsMu.Lock()
+	defer b.subsMu.Unlock()
 	if b.subs != nil {
-		if _, ok := b.subs[s]; ok {
-			delete(b.subs, s)
-			close(s.ch)
-		}
+		delete(b.subs, s)
 	}
-	b.subsMu.Unlock()
+	// Always close the channel — including when b.subs has already
+	// been nilled by a concurrent Close(). Each subscription has
+	// exactly one goroutine that calls removeSub exactly once, so
+	// this never double-closes. The old behaviour skipped the close
+	// when b.subs == nil, which left every Watch consumer ranging
+	// over a channel that never closed — they hung forever on
+	// backend shutdown instead of seeing the watch end and reacting.
+	close(s.ch)
 }
 
 // backfill drains events strictly greater than sub.from up to the
