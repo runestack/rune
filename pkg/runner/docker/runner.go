@@ -1159,6 +1159,22 @@ func (r *DockerRunner) waitContainerIP(ctx context.Context, containerID string) 
 	}
 }
 
+// InstanceIP implements runner.IPProvider for endpoint publishing.
+func (r *DockerRunner) InstanceIP(ctx context.Context, instance *runetypes.Instance) (string, error) {
+	containerID, err := r.getContainerID(ctx, instance)
+	if err != nil {
+		return "", err
+	}
+	insp, err := r.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", fmt.Errorf("inspect container: %w", err)
+	}
+	if ip := pickContainerIP(insp.NetworkSettings); ip != "" {
+		return ip, nil
+	}
+	return "", fmt.Errorf("container has no IPv4 address")
+}
+
 // pickContainerIP returns the container's primary IPv4 address from
 // an inspect result. Prefers the per-network EndpointSettings.IPAddress
 // (works for user-defined networks too), and falls back to the legacy

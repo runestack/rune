@@ -324,6 +324,12 @@ func (r *reconciler) reconcileService(ctx context.Context, service *types.Servic
 			log.Err(err))
 	}
 
+	// Keep dataplane endpoint sets fresh (container IP backfill, VIP proxy,
+	// ingress upstream via service VIP).
+	if len(service.Ports) > 0 {
+		r.instanceController.RepublishService(ctx, service)
+	}
+
 	return nil
 }
 

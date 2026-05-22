@@ -64,9 +64,11 @@ func newProxyManager(cfg Config, cache *Cache, m *Metrics, fresh freshFn, eval p
 	}
 }
 
-// portReserved reports whether port is in the dataplane's reserved set
-// (ingress-owned ports on an edge node).
-func portReserved(reserved []int, port int) bool {
+// PortReserved reports whether port is in the dataplane's reserved set
+// (ingress-owned ports on an edge node, typically 80/443). Exported so
+// the ingress controller shares one definition of "reserved port"
+// rather than carrying its own copy.
+func PortReserved(reserved []int, port int) bool {
 	for _, r := range reserved {
 		if r == port {
 			return true
@@ -98,7 +100,7 @@ func (pm *ProxyManager) Register(svc *types.Service) error {
 	for _, p := range svc.Ports {
 		// Skip ports the ingress owns on an edge node — a <vip>:80
 		// listener collides with the ingress 0.0.0.0:80 wildcard bind.
-		if portReserved(pm.cfg.ReservedHostPorts, p.Port) {
+		if PortReserved(pm.cfg.ReservedHostPorts, p.Port) {
 			pm.cfg.Logger.Debug("dataplane: skipping VIP listener on ingress-reserved port",
 				log.Str("service", svc.Name), log.Int("port", p.Port))
 			continue
@@ -178,11 +180,12 @@ func (pm *ProxyManager) Snapshot() []ListenerSummary {
 	out := make([]ListenerSummary, 0, len(pm.listeners))
 	for k, ln := range pm.listeners {
 		out = append(out, ListenerSummary{
-			ServiceID: k.serviceID,
-			Port:      k.port,
-			Protocol:  k.protocol,
-			Addr:      ln.addr,
-			Active:    ln.activeConns(),
+			ServiceID:  k.serviceID,
+			Port:       k.port,
+			TargetPort: ln.targetPort,
+			Protocol:   k.protocol,
+			Addr:       ln.addr,
+			Active:     ln.activeConns(),
 		})
 	}
 	return out
@@ -192,9 +195,12 @@ func (pm *ProxyManager) Snapshot() []ListenerSummary {
 type ListenerSummary struct {
 	ServiceID string
 	Port      int
-	Protocol  string
-	Addr      string
-	Active    int64
+	// TargetPort is the upstream container port this listener dials.
+	// Defaults to Port when the service spec leaves TargetPort unset.
+	TargetPort int
+	Protocol   string
+	Addr       string
+	Active     int64
 }
 
 // bindIPFor returns the local interface IP the listener should bind.
@@ -225,12 +231,23 @@ func (pm *ProxyManager) openListener(svc *types.Service, p types.ServicePort, pr
 		localNode = pm.cfg.Node.NodeID()
 	}
 
+	// An unset TargetPort means "same as the service port" (Kubernetes
+	// semantics). Without this default a multi-port service whose
+	// ports omit targetPort left every listener with targetPort 0, so
+	// endpointPort() fell through to the endpoint's single advertised
+	// port (the primary) — e.g. flo's 9001/9002 VIP listeners all
+	// dialled the container's 9000.
+	targetPort := p.TargetPort
+	if targetPort == 0 {
+		targetPort = p.Port
+	}
+
 	l := &listener{
 		key:         listenerKey{serviceID: svc.ID, port: p.Port, protocol: proto},
 		serviceID:   svc.ID,
 		namespace:   svc.Namespace,
 		servicePort: p.Port,
-		targetPort:  p.TargetPort,
+		targetPort:  targetPort,
 		addr:        addr,
 		log:         pm.cfg.Logger.WithComponent("proxy"),
 		cache:       pm.cache,

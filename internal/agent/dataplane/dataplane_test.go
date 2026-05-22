@@ -416,6 +416,61 @@ func TestProxyStaysFreshWhileWatchIdle(t *testing.T) {
 	}
 }
 
+// TestRegisterDefaultsTargetPortToServicePort is a regression test:
+// a service port that omits TargetPort must route to the matching
+// container port, not to the endpoint's single advertised port. A
+// previous bug left such listeners with targetPort 0, so every VIP
+// port of a multi-port service (e.g. flo 9000/9001/9002) dialled the
+// primary container port.
+func TestRegisterDefaultsTargetPortToServicePort(t *testing.T) {
+	ol := newTestOlog(t)
+	if err := endpoints.Register(ol); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	dp, err := New(Config{OrderedLog: ol, Mode: ModeDev})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := dp.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		stopCtx, c := context.WithTimeout(context.Background(), 2*time.Second)
+		defer c()
+		_ = dp.Stop(stopCtx)
+	}()
+
+	portUnset := mustFreePort(t)
+	portExplicit := mustFreePort(t)
+	svc := &types.Service{
+		ID: "svc-multiport",
+		Ports: []types.ServicePort{
+			{Name: "a", Port: portUnset, Protocol: "tcp"},                      // TargetPort omitted
+			{Name: "b", Port: portExplicit, TargetPort: 1234, Protocol: "tcp"}, // TargetPort explicit
+		},
+		Discovery: &types.ServiceDiscovery{VIP: "ignored-in-dev"},
+	}
+	if err := dp.RegisterService(svc); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+
+	target := map[int]int{}
+	for _, ls := range dp.proxy.Snapshot() {
+		if ls.ServiceID == "svc-multiport" {
+			target[ls.Port] = ls.TargetPort
+		}
+	}
+	if target[portUnset] != portUnset {
+		t.Fatalf("omitted TargetPort should default to the service port %d, got %d",
+			portUnset, target[portUnset])
+	}
+	if target[portExplicit] != 1234 {
+		t.Fatalf("explicit TargetPort should be preserved (1234), got %d", target[portExplicit])
+	}
+}
+
 // helpers ---------------------------------------------------------------
 
 func waitForCache(dp *Subsystem, svc string, want int, d time.Duration) bool {
