@@ -126,9 +126,11 @@ type Volume struct {
 	// Status is the lifecycle phase. Controller-managed.
 	Status VolumeStatus `json:"status" yaml:"status"`
 
-	// Reason is a short machine-readable code explaining the status (e.g.
-	// "HostPathMissing", "ProvisionTimeout").
-	Reason string `json:"reason,omitempty" yaml:"reason,omitempty"`
+	// StatusReason is a short machine-readable code explaining the status
+	// (e.g. "HostPathMissing", "ProvisionTimeout"). Named to match
+	// Service/Instance/Node StatusReason so `rune describe` reads one
+	// field across every resource type.
+	StatusReason string `json:"statusReason,omitempty" yaml:"statusReason,omitempty"`
 
 	// Message is a human-readable description of the status.
 	Message string `json:"message,omitempty" yaml:"message,omitempty"`

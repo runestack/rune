@@ -143,7 +143,7 @@ func TestVolumeController_FailsOnMissingStorageClass(t *testing.T) {
 	})
 
 	got := loadVolume(t, ts, vol.Namespace, vol.Name)
-	assert.Equal(t, "StorageClassMissing", got.Reason)
+	assert.Equal(t, "StorageClassMissing", got.StatusReason)
 	assert.NotEmpty(t, got.Message)
 	assert.Empty(t, got.Handle, "no handle when class lookup failed")
 }

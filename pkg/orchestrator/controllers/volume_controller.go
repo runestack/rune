@@ -859,7 +859,7 @@ func (c *volumeController) driverFor(name string) (driver.Driver, error) {
 
 func (c *volumeController) updateStatus(ctx context.Context, vol *types.Volume, status types.VolumeStatus, reason, message string) error {
 	vol.Status = status
-	vol.Reason = reason
+	vol.StatusReason = reason
 	vol.Message = message
 	vol.UpdatedAt = time.Now().UTC()
 	c.markSelfUpdate(vol)
