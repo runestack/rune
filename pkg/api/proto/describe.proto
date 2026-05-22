@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package rune.api;
+
+import "pkg/api/proto/common.proto";
+
+option go_package = "github.com/runestack/rune/pkg/api/generated";
+
+// DescribeService assembles a one-shot diagnostic view of a single
+// resource — its status with a real reason, the related resources it
+// depends on, and (RUNE-126 Phase 2) a time-ordered event trail.
+//
+// The walk and reference resolution happen server-side so the result
+// is a single consistent snapshot taken under one read pass, with one
+// authz check. See _docs/designs/RUNE-126-Describe-Command.md §4.2.
+service DescribeService {
+  // Describe returns the assembled diagnostic view for one resource.
+  // Per-reference resolution failures are captured inside the result
+  // (DescribeReference.unresolved); the RPC only errors when the
+  // target resource itself cannot be found.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+}
+
+// DescribeRequest names the resource to describe.
+message DescribeRequest {
+  // Canonical resource kind: "instance" | "service" | "volume" | "node".
+  string kind = 1;
+  // Resource name (instance/service/volume) or node name.
+  string name = 2;
+  // Namespace; empty for cluster-scoped kinds (node).
+  string namespace = 3;
+}
+
+// DescribeKV is an ordered label/value pair for the identity and
+// timestamp blocks. Ordering is meaningful — the server emits these
+// in display order.
+message DescribeKV {
+  string key = 1;
+  string value = 2;
+}
+
+// DescribeSection is a titled block of pre-rendered lines (e.g.
+// "Resources", "Volume mounts", "Instances"). The server owns the
+// per-kind layout; the CLI only prints.
+message DescribeSection {
+  string title = 1;
+  repeated string lines = 2;
+}
+
+// DescribeReference is one resolved (or unresolvable) related resource
+// reached by the one-level reference walk.
+message DescribeReference {
+  // Relation label, e.g. "volumeMount", "service", "node",
+  // "storageClass", "secret".
+  string relation = 1;
+  // Target resource kind.
+  string kind = 2;
+  string name = 3;
+  string namespace = 4;
+  // Target's current status and reason slug; empty when unresolved.
+  string status = 5;
+  string status_reason = 6;
+  // Free-form detail (mount path, driver param value, or the
+  // "[unresolved: <err>]" text when unresolved is true).
+  string detail = 7;
+  // True when the reference could not be resolved; status/reason are
+  // then empty and detail carries the error.
+  bool unresolved = 8;
+}
+
+// DescribeEvent is one entry in the event trail. Empty in Phase 1;
+// populated once RUNE-126 Phase 2 ships the event store.
+message DescribeEvent {
+  string timestamp = 1;  // RFC 3339
+  string level = 2;      // INFO | WARN | ERR
+  string message = 3;
+}
+
+// DescribeResult is the full assembled view, shared verbatim by the
+// human renderer and `-o json|yaml`.
+message DescribeResult {
+  string kind = 1;
+  string name = 2;
+  string namespace = 3;
+  // Identity block: ID, Service, Node, Generation, …
+  repeated DescribeKV identity = 4;
+  string status = 5;
+  string reason = 6;
+  string message = 7;
+  // Created / LastTransition / LastUpdated, in display order.
+  repeated DescribeKV timestamps = 8;
+  repeated DescribeSection sections = 9;
+  repeated DescribeReference references = 10;
+  repeated DescribeEvent events = 11;
+  // Suggested next commands.
+  repeated string hints = 12;
+}
+
+// DescribeResponse wraps the result with a transport status.
+message DescribeResponse {
+  DescribeResult result = 1;
+  Status status = 2;
+}

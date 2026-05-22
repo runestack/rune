@@ -550,11 +550,8 @@ func (c *instanceController) RetryCreateInstance(ctx context.Context, service *t
 		log.Str("id", instance.ID),
 		log.Int("attempt", instance.CreateAttempts+1))
 
-	now := time.Now()
-	instance.Status = types.InstanceStatusPending
-	instance.StatusMessage = ""
+	applyInstanceStatus(instance, types.InstanceStatusPending, "", "")
 	instance.NextCreateAttemptAt = nil
-	instance.UpdatedAt = now
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
 		return fmt.Errorf("reset instance for retry: %w", err)
 	}
@@ -677,11 +674,9 @@ func (c *instanceController) runCreateAttempt(ctx context.Context, service *type
 	// but didn't mean "ready to serve traffic." Matches K8s semantics
 	// where Pod.Phase=Running ≠ Ready.
 	if service.Health != nil && service.Health.Readiness != nil {
-		instance.Status = types.InstanceStatusStarting
-		instance.StatusMessage = "Waiting for readiness probe"
+		applyInstanceStatus(instance, types.InstanceStatusStarting, "", "Waiting for readiness probe")
 	} else {
-		instance.Status = types.InstanceStatusRunning
-		instance.StatusMessage = "Created successfully"
+		applyInstanceStatus(instance, types.InstanceStatusRunning, "", "Created successfully")
 	}
 	instance.CreateAttempts = 0
 	instance.NextCreateAttemptAt = nil
@@ -930,9 +925,7 @@ func (c *instanceController) recordCreateFailure(ctx context.Context, instance *
 	}
 	now := time.Now()
 	instance.CreateAttempts++
-	instance.StatusMessage = err.Error()
 	instance.FailureReason = reason
-	instance.UpdatedAt = now
 
 	// Flip to Stalled when retries are exhausted so operators get a
 	// clear "stop waiting, take action" signal in `rune get instance`.
@@ -941,14 +934,14 @@ func (c *instanceController) recordCreateFailure(ctx context.Context, instance *
 	// never auto-retries; only `rune restart instance` or `rune cast`
 	// (new generation) re-arms the slot.
 	if instance.CreateAttempts >= maxCreateAttempts {
-		instance.Status = types.InstanceStatusStalled
+		applyInstanceStatus(instance, types.InstanceStatusStalled, reason, err.Error())
 		instance.NextCreateAttemptAt = nil
 		c.logger.Warn("Instance create retries exhausted; marking Stalled",
 			log.Str("instance", instance.ID),
 			log.Str("reason", reason),
 			log.Int("attempts", instance.CreateAttempts))
 	} else {
-		instance.Status = types.InstanceStatusFailed
+		applyInstanceStatus(instance, types.InstanceStatusFailed, reason, err.Error())
 		next := now.Add(createBackoffFor(instance.CreateAttempts))
 		instance.NextCreateAttemptAt = &next
 	}
@@ -1099,6 +1092,23 @@ func classifyCreateError(err error) string {
 		return "RunnerStartError"
 	}
 	return "CreateFailed"
+}
+
+// applyInstanceStatus sets the instance's lifecycle status, its
+// machine-readable reason slug and its human-readable message in one
+// place, advancing LastTransitionAt only when the Status value
+// actually changes. Every reconciler status write should go through
+// here so `rune describe` always sees a populated reason and an
+// accurate "<status> for <duration>". Pass reason="" for Running.
+func applyInstanceStatus(instance *types.Instance, status types.InstanceStatus, reason, message string) {
+	now := time.Now()
+	if instance.Status != status || instance.LastTransitionAt == nil {
+		instance.LastTransitionAt = &now
+	}
+	instance.Status = status
+	instance.StatusReason = reason
+	instance.StatusMessage = message
+	instance.UpdatedAt = now
 }
 
 // DeleteInstance marks an instance for deletion and cleans up runner resources
@@ -2067,11 +2077,11 @@ func (c *instanceController) waitForVolumeReady(ctx context.Context, ns, name st
 			return vol, nil
 		case types.VolumeStatusStalled, types.VolumeStatusFailed, types.VolumeStatusReleased:
 			// Terminal — provisioning will not recover on its own.
-			return types.Volume{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.Reason)
+			return types.Volume{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q)", ns, name, vol.Status, vol.StatusReason)
 		}
 		// Pending / Provisioning / "" — still coming up.
 		if time.Now().After(deadline) {
-			return types.Volume{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q): not Available after %s", ns, name, vol.Status, vol.Reason, volumeReadyTimeout)
+			return types.Volume{}, fmt.Errorf("volume %s/%s is not ready (status=%s, reason=%q): not Available after %s", ns, name, vol.Status, vol.StatusReason, volumeReadyTimeout)
 		}
 		select {
 		case <-ctx.Done():

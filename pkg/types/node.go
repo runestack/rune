@@ -24,6 +24,16 @@ type Node struct {
 	// Status of the node
 	Status NodeStatus `json:"status" yaml:"status"`
 
+	// StatusReason is a short, machine-friendly slug explaining the
+	// current Status (e.g. "HeartbeatTimeout", "DrainRequested").
+	// Mirrors Service/Instance/Volume StatusReason. Empty when the
+	// node is Ready.
+	StatusReason string `json:"statusReason,omitempty" yaml:"statusReason,omitempty"`
+
+	// StatusMessage is a human-readable sentence explaining StatusReason,
+	// surfaced by `rune describe node`.
+	StatusMessage string `json:"statusMessage,omitempty" yaml:"statusMessage,omitempty"`
+
 	// Creation timestamp
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt"`
 
