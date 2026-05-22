@@ -121,6 +121,13 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.SnapshotService/RestoreVolume"):
 		return "volumes", "create"
 
+	case strings.HasPrefix(method, "/rune.api.DescribeService/Describe"):
+		// RUNE-126. A polymorphic diagnostic read across kinds; the
+		// method string can't carry the target kind, so it maps to a
+		// generic read. Describe never reveals secret *data* — only
+		// whether a referenced resource resolved. Any reader token
+		// (readonly/readwrite/root) carries get on resource "*".
+		return "*", "get"
 	case strings.HasPrefix(method, "/rune.api.AuthService/WhoAmI"):
 		return "auth", "get"
 	case strings.HasPrefix(method, "/rune.api.AdminService/"):
