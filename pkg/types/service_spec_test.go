@@ -357,3 +357,56 @@ service:
 		t.Errorf("error should locate the init step's securityContext block; got: %v", err)
 	}
 }
+
+func TestServiceSpec_ConfigmapMounts_Unmarshal(t *testing.T) {
+	t.Parallel()
+
+	cf, err := ParseCastFileFromBytes([]byte(`
+service:
+  name: api
+  image: nginx:alpine
+  scale: 1
+  configmapMounts:
+    - name: cfg
+      mountPath: /etc/app
+      configmapName: app-settings
+`), "default")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(cf.Services) != 1 {
+		t.Fatalf("services: %d", len(cf.Services))
+	}
+	s := cf.Services[0]
+	if err := s.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if len(s.ConfigmapMounts) != 1 || s.ConfigmapMounts[0].ConfigmapName != "app-settings" {
+		t.Fatalf("configmapMounts: %+v", s.ConfigmapMounts)
+	}
+}
+
+func TestServiceSpec_RejectsConfigMountsAlias(t *testing.T) {
+	t.Parallel()
+
+	cf, err := ParseCastFileFromBytes([]byte(`
+service:
+  name: api
+  image: nginx:alpine
+  scale: 1
+  configMounts:
+    - name: cfg
+      mountPath: /etc/app
+      configmapName: app-settings
+`), "default")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	err = cf.Services[0].Validate()
+	if err == nil {
+		t.Fatal("expected validation error for unknown field configMounts")
+	}
+	if !strings.Contains(err.Error(), "unknown field 'configMounts'") {
+		t.Fatalf("got: %v", err)
+	}
+}

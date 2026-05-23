@@ -55,10 +55,10 @@ service:
     - name: db-secret
       mountPath: /etc/secrets/db
       secretName: db-credentials
-  configMounts:
+  configmapMounts:
     - name: app-config
       mountPath: /etc/config
-      configName: app-settings 
+      configmapName: app-settings
 
 
 service:
