@@ -100,10 +100,10 @@ services:
       - name: db-creds
         mountPath: /etc/secret/db
         secretName: db-credentials
-    configMounts:
+    configmapMounts:
       - name: api-config
         mountPath: /etc/config
-        configName: api-settings
+        configmapName: api-settings
 
   - name: db
     namespace: default
@@ -139,7 +139,7 @@ services:
       - name: postgres-creds
         mountPath: /etc/secrets/postgres
         secretName: db-credentials
-    configMounts:
+    configmapMounts:
       - name: db-config
         mountPath: /etc/config
-        configName: db-config 
+        configmapName: db-config 

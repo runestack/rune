@@ -522,7 +522,7 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 		"affinity":        true,
 		"autoscale":       true,
 		"secretMounts":    true,
-		"configMounts":    true,
+		"configmapMounts": true,
 		"volumes":         true,
 		"discovery":       true,
 		"imageRegistry":   true,
