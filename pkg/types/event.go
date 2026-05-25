@@ -60,9 +60,3 @@ type Event struct {
 	// Count is how many times the folded event has occurred (>=1).
 	Count int `json:"count" yaml:"count"`
 }
-
-// foldKey is the identity used to decide whether a new event folds
-// into the most recent one for the same resource.
-func (e Event) foldKey() string {
-	return e.UID + "\x00" + e.Reason + "\x00" + e.Message
-}
