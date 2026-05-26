@@ -163,7 +163,7 @@ func VolumeToProto(v *types.Volume) *generated.Volume {
 		BoundNode:        v.BoundNode,
 		BoundClaim:       v.BoundClaim,
 		Status:           string(v.Status),
-		Reason:           v.StatusReason,
+		StatusReason:     v.StatusReason,
 		Message:          v.Message,
 		CreatedAt:        v.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:        v.UpdatedAt.Format(time.RFC3339),
@@ -203,7 +203,7 @@ func ProtoToVolume(p *generated.Volume) *types.Volume {
 		BoundNode:        p.BoundNode,
 		BoundClaim:       p.BoundClaim,
 		Status:           types.VolumeStatus(p.Status),
-		StatusReason:     p.Reason,
+		StatusReason:     p.StatusReason,
 		Message:          p.Message,
 	}
 	if t, err := time.Parse(time.RFC3339, p.CreatedAt); err == nil {
