@@ -593,21 +593,35 @@ func main() {
 		// reachable from inside a container. Without the bridge
 		// binds, containers get `Connection refused` on every
 		// lookup — the symptom we hit live on dev.85.
-		bindAddrs := []string{dnssub.DefaultBindAddr}
-		bindAddrs = append(bindAddrs, dnsBridgeBindAddrs(logger)...)
-		dnsSub, derr = dnssub.New(dnssub.Config{
-			Zone: dnssub.NewStoreZone(stateStore, dnssub.FuncVIPSource{Fn: func(ctx context.Context, serviceID string) (net.IP, error) {
-				return vipAllocator.Allocate(ctx, serviceID)
-			}}, logger.WithComponent("dns-zone")),
-			UpstreamProvider: dnssub.ResolvConfUpstreams(),
-			BindAddrs:        bindAddrs,
-			Logger:           logger.WithComponent("dns"),
-		})
-		if derr != nil {
-			return fmt.Errorf("dns: %w", derr)
-		}
-		if err := a.Register(dnsSub); err != nil {
-			return err
+		//
+		// FilterBindable drops addresses the host cannot listen on
+		// (macOS lacks 127.0.0.123 on loopback; Docker Desktop reports
+		// bridge gateways that are not host-bindable). In dev mode we
+		// also try a non-privileged loopback port and skip DNS entirely
+		// if nothing binds — laptop dev still works via dataplane.
+		bindAddrs := dnsBindCandidates(*devMode, logger)
+		bindAddrs = dnssub.FilterBindable(bindAddrs, logger)
+		if len(bindAddrs) == 0 {
+			if *devMode {
+				logger.Warn("DNS subsystem skipped: no bindable addresses on this host (common on macOS/Docker Desktop); use dataplane on 127.0.0.1 for host access")
+			} else {
+				return fmt.Errorf("dns: no bindable addresses")
+			}
+		} else {
+			dnsSub, derr = dnssub.New(dnssub.Config{
+				Zone: dnssub.NewStoreZone(stateStore, dnssub.FuncVIPSource{Fn: func(ctx context.Context, serviceID string) (net.IP, error) {
+					return vipAllocator.Allocate(ctx, serviceID)
+				}}, logger.WithComponent("dns-zone")),
+				UpstreamProvider: dnssub.ResolvConfUpstreams(),
+				BindAddrs:        bindAddrs,
+				Logger:           logger.WithComponent("dns"),
+			})
+			if derr != nil {
+				return fmt.Errorf("dns: %w", derr)
+			}
+			if err := a.Register(dnsSub); err != nil {
+				return err
+			}
 		}
 
 		// Ingress controller + ACME orchestrator (RUNE-066).
@@ -800,9 +814,17 @@ func main() {
 		agentStop()
 	}
 
-	// Gracefully stop the API server
-	if err := apiServer.Stop(); err != nil {
-		logger.Error("Failed to stop API server", log.Err(err))
+	// Gracefully stop the API server (bounded so Ctrl+C does not hang).
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- apiServer.Stop() }()
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			logger.Error("Failed to stop API server", log.Err(err))
+		}
+	case <-time.After(20 * time.Second):
+		logger.Error("API server stop timed out after 20s; exiting anyway")
+		os.Exit(1)
 	}
 
 	logger.Info("Rune server stopped")
@@ -836,12 +858,15 @@ func buildLogger(levelStr, formatStr string, pretty, debug bool) log.Logger {
 
 func setupSignalContext(logger log.Logger) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	sigCh := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
-		logger.Info("Received signal", log.Str("signal", sig.String()))
+		logger.Info("Received signal, shutting down (press Ctrl+C again to force quit)", log.Str("signal", sig.String()))
 		cancel()
+		sig = <-sigCh
+		logger.Warn("Received second signal, forcing exit", log.Str("signal", sig.String()))
+		os.Exit(1)
 	}()
 	return ctx, cancel
 }
@@ -1113,6 +1138,17 @@ func applyDevModeStorageOverlay(s *config.Storage, logger log.Logger) {
 	logger.Info("Dev-mode storage overlay applied",
 		log.Str("dev_volume_root", devVolRoot),
 		log.Bool("allow_create_missing", true))
+}
+
+// dnsBindCandidates returns the DNS listen addresses to probe before
+// starting the embedded resolver.
+func dnsBindCandidates(devMode bool, logger log.Logger) []string {
+	out := []string{dnssub.DefaultBindAddr}
+	if devMode {
+		out = append([]string{dnssub.DevDefaultBindAddr}, out...)
+	}
+	out = append(out, dnsBridgeBindAddrs(logger)...)
+	return out
 }
 
 // dnsBridgeBindAddrs enumerates docker bridge gateways and returns

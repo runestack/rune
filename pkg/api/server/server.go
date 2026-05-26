@@ -5,11 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
@@ -72,6 +69,10 @@ type APIServer struct {
 
 	// Wait group for server goroutines
 	wg sync.WaitGroup
+
+	// Ensures Stop is idempotent (signal handler + main may both call it).
+	stopOnce sync.Once
+	stopErr  error
 
 	// Runner manager
 	runnerManager *manager.RunnerManager
@@ -201,8 +202,10 @@ func (s *APIServer) Start() error {
 		return fmt.Errorf("failed to start gRPC server: %w", err)
 	}
 
-	// Handle signals for graceful shutdown
-	go s.handleSignals()
+	// SIGINT/SIGTERM are handled by cmd/runed (setupSignalContext) which
+	// calls Stop() after ctx cancellation. Do not register a second
+	// handler here — duplicate handlers race on GracefulStop and appear
+	// to hang on Ctrl+C.
 
 	return nil
 }
@@ -526,6 +529,13 @@ func (s *APIServer) evaluatePolicies(ctx context.Context, subjectID, resource, v
 
 // Stop stops the API server gracefully.
 func (s *APIServer) Stop() error {
+	s.stopOnce.Do(func() {
+		s.stopErr = s.stop()
+	})
+	return s.stopErr
+}
+
+func (s *APIServer) stop() error {
 	s.logger.Info("Stopping Rune Server")
 
 	// Stop the orchestrator first
@@ -544,10 +554,20 @@ func (s *APIServer) Stop() error {
 		close(s.shutdownCh)
 	}
 
-	// Stop gRPC server
+	// Stop gRPC server (GracefulStop can block forever on open streams).
 	if s.grpcServer != nil {
 		s.logger.Info("Stopping gRPC server")
-		s.grpcServer.GracefulStop()
+		stopped := make(chan struct{})
+		go func() {
+			s.grpcServer.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			s.logger.Warn("gRPC graceful stop timed out; forcing stop")
+			s.grpcServer.Stop()
+		}
 	}
 
 	// Stop HTTP server
@@ -565,20 +585,6 @@ func (s *APIServer) Stop() error {
 	s.logger.Info("Rune Server stopped")
 
 	return nil
-}
-
-// handleSignals handles OS signals for graceful shutdown.
-func (s *APIServer) handleSignals() {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case sig := <-sigCh:
-		s.logger.Info("Received signal", log.Str("signal", sig.String()))
-		_ = s.Stop()
-	case <-s.shutdownCh:
-		return
-	}
 }
 
 // logUnaryInterceptor returns a unary interceptor for logging.

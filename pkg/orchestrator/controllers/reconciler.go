@@ -691,6 +691,16 @@ func (r *reconciler) reconcileExistingInstance(ctx context.Context, service *typ
 		}
 	}
 
+	// Health monitoring must attach even when in-place update is not
+	// yet possible (instance still Starting while the container boots).
+	if service.Health != nil {
+		if err := r.healthController.AddInstance(service, instance); err != nil {
+			r.logger.Error("Failed to add instance to health monitoring",
+				log.Str("instance", instance.ID),
+				log.Err(err))
+		}
+	}
+
 	// Try to update the instance in-place
 	if err := r.instanceController.UpdateInstance(ctx, service, instance); err != nil {
 		// Check if the error indicates that recreation is needed
@@ -699,18 +709,6 @@ func (r *reconciler) reconcileExistingInstance(ctx context.Context, service *typ
 		}
 		// Some other update error occurred
 		return fmt.Errorf("failed to update instance: %w", err)
-	}
-
-	// Add instance to health monitoring if needed
-	if service.Health != nil {
-		if err := r.healthController.AddInstance(service, instance); err != nil {
-			r.logger.Error("Failed to add instance to health monitoring",
-				log.Str("instance", instance.ID),
-				log.Err(err))
-		}
-		r.logger.Info("Added instance to health monitoring",
-			log.Str("instance", instance.Name),
-			log.Str("service", service.Name))
 	}
 
 	return nil

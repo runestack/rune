@@ -127,6 +127,11 @@ message ServicePort {
   
   // Protocol (default: TCP)
   string protocol = 4;
+
+  // HostPort, when > 0, publishes the container port on 127.0.0.1:<host_port>.
+  // Dev-mode escape hatch for platforms where the cluster dataplane cannot
+  // reach the container bridge IP from the host (e.g. macOS Docker Desktop).
+  int32 host_port = 5;
 }
 
 // ServiceExpose defines simple external exposure configuration for a service
@@ -211,6 +216,12 @@ message Probe {
   
   // How many consecutive failures are needed to be considered unhealthy
   int32 failure_threshold = 9;
+
+  // Host overrides the default probe target. Empty falls back to the
+  // instance's container IP (production) or localhost (dev fallback).
+  // Set this when targeting a published hostPort on macOS Docker
+  // Desktop, e.g. "127.0.0.1".
+  string host = 10;
 }
 
 // HealthCheck represents health check configuration for a service.

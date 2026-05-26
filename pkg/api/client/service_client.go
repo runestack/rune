@@ -440,6 +440,7 @@ func ServiceToProto(service *types.Service) *generated.Service {
 				Port:       utils.ToInt32NonNegative(port.Port),
 				TargetPort: utils.ToInt32NonNegative(port.TargetPort),
 				Protocol:   port.Protocol,
+				HostPort:   utils.ToInt32NonNegative(port.HostPort),
 			}
 		}
 	}
@@ -568,6 +569,7 @@ func ServiceToProto(service *types.Service) *generated.Service {
 				InitialDelaySeconds: utils.ToInt32NonNegative(service.Health.Liveness.InitialDelaySeconds),
 				PeriodSeconds:       utils.ToInt32NonNegative(service.Health.Liveness.IntervalSeconds),
 				TimeoutSeconds:      utils.ToInt32NonNegative(service.Health.Liveness.TimeoutSeconds),
+				Host:                service.Health.Liveness.Host,
 			}
 
 			switch service.Health.Liveness.Type {
@@ -589,6 +591,7 @@ func ServiceToProto(service *types.Service) *generated.Service {
 				InitialDelaySeconds: utils.ToInt32NonNegative(service.Health.Readiness.InitialDelaySeconds),
 				PeriodSeconds:       utils.ToInt32NonNegative(service.Health.Readiness.IntervalSeconds),
 				TimeoutSeconds:      utils.ToInt32NonNegative(service.Health.Readiness.TimeoutSeconds),
+				Host:                service.Health.Readiness.Host,
 			}
 
 			switch service.Health.Readiness.Type {
@@ -728,6 +731,7 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 				Port:       int(port.Port),
 				TargetPort: int(port.TargetPort),
 				Protocol:   port.Protocol,
+				HostPort:   int(port.HostPort),
 			}
 		}
 	}
@@ -856,6 +860,7 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 				InitialDelaySeconds: int(proto.Health.Liveness.InitialDelaySeconds),
 				IntervalSeconds:     int(proto.Health.Liveness.PeriodSeconds),
 				TimeoutSeconds:      int(proto.Health.Liveness.TimeoutSeconds),
+				Host:                proto.Health.Liveness.Host,
 			}
 
 			switch proto.Health.Liveness.Type {
@@ -877,6 +882,7 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 				InitialDelaySeconds: int(proto.Health.Readiness.InitialDelaySeconds),
 				IntervalSeconds:     int(proto.Health.Readiness.PeriodSeconds),
 				TimeoutSeconds:      int(proto.Health.Readiness.TimeoutSeconds),
+				Host:                proto.Health.Readiness.Host,
 			}
 
 			switch proto.Health.Readiness.Type {
