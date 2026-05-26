@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/types"
@@ -371,6 +372,9 @@ func (c *FakeInstanceController) RepublishService(_ context.Context, _ *types.Se
 
 // SetMountResolver is a no-op on the fake.
 func (c *FakeInstanceController) SetMountResolver(_ MountResolver) {}
+
+// SetEventLog is a no-op on the fake.
+func (c *FakeInstanceController) SetEventLog(_ events.EventLog) {}
 
 func (c *FakeInstanceController) collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error) {
 	instances := make(map[string]*RunningInstance)

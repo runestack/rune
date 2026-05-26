@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/storage/driverparams"
@@ -34,6 +35,10 @@ import (
 type VolumeController interface {
 	Start(ctx context.Context) error
 	Stop() error
+
+	// SetEventLog wires the persisted event log (RUNE-126 Phase 2)
+	// so volume status transitions surface in `rune describe`. Nil-safe.
+	SetEventLog(eventLog events.EventLog)
 }
 
 // VolumeControllerOptions configures the controller. DriverConfigs is the
@@ -90,6 +95,10 @@ type volumeController struct {
 	logger        log.Logger
 	driverConfigs map[string]map[string]any
 	secretLookup  driverparams.SecretLookup
+
+	// events is the optional persisted event log (RUNE-126 Phase 2).
+	// Set after construction via SetEventLog; nil-safe.
+	events events.EventLog
 
 	// Operator-supplied [storage] knobs.
 	defaultStorageClass *string
@@ -858,6 +867,7 @@ func (c *volumeController) driverFor(name string) (driver.Driver, error) {
 }
 
 func (c *volumeController) updateStatus(ctx context.Context, vol *types.Volume, status types.VolumeStatus, reason, message string) error {
+	prev := vol.Status
 	vol.Status = status
 	vol.StatusReason = reason
 	vol.Message = message
@@ -866,7 +876,48 @@ func (c *volumeController) updateStatus(ctx context.Context, vol *types.Volume, 
 	if err := c.store.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol); err != nil {
 		return fmt.Errorf("update volume %s/%s: %w", vol.Namespace, vol.Name, err)
 	}
+	// Emit an event when the lifecycle phase actually changes —
+	// no-op transitions (re-asserting the same status) shouldn't
+	// flood the event log, and the recorder's fold would collapse
+	// them anyway. RUNE-126 Phase 2.
+	if prev != status {
+		c.emit(eventLevelForVolumeStatus(status), vol, reason, message)
+	}
 	return nil
+}
+
+// SetEventLog wires the persisted event log (RUNE-126 Phase 2). Nil-safe.
+func (c *volumeController) SetEventLog(eventLog events.EventLog) {
+	c.events = eventLog
+}
+
+// emit records one event for the volume. Fire-and-forget.
+func (c *volumeController) emit(level types.EventLevel, vol *types.Volume, reason, message string) {
+	if c.events == nil || vol == nil {
+		return
+	}
+	if err := c.events.Emit(context.Background(), types.Event{
+		Namespace: vol.Namespace,
+		Kind:      "Volume",
+		Name:      vol.Name,
+		UID:       vol.ID,
+		Level:     level,
+		Reason:    reason,
+		Message:   message,
+	}); err != nil {
+		c.logger.Warn("Failed to emit volume event",
+			log.Str("volume", vol.Name), log.Err(err))
+	}
+}
+
+// eventLevelForVolumeStatus maps the new lifecycle phase to an event
+// severity: terminal failures are ERR, normal lifecycle is INFO.
+func eventLevelForVolumeStatus(s types.VolumeStatus) types.EventLevel {
+	switch s {
+	case types.VolumeStatusFailed, types.VolumeStatusStalled:
+		return types.EventLevelError
+	}
+	return types.EventLevelInfo
 }
 
 // markFailed transitions a volume to Failed. Distinct from updateStatus

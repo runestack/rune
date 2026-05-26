@@ -146,7 +146,8 @@ func (s *APIServer) Start() error {
 			s.options.StorageDefaultStorageClass != nil ||
 			s.options.StoragePreserveOnDelete ||
 			s.options.StorageSecretLookup != nil ||
-			s.options.InitialMountResolver != nil {
+			s.options.InitialMountResolver != nil ||
+			s.options.EventLog != nil {
 			s.orchestrator, err = orchestrator.NewOrchestrator(orchestrator.OrchestratorOptions{
 				Store:                   s.store,
 				Logger:                  s.logger,
@@ -156,6 +157,7 @@ func (s *APIServer) Start() error {
 				StoragePreserveOnDelete: s.options.StoragePreserveOnDelete,
 				StorageSecretLookup:     s.options.StorageSecretLookup,
 				InitialMountResolver:    s.options.InitialMountResolver,
+				EventLog:                s.options.EventLog,
 			})
 		} else {
 			s.orchestrator, err = orchestrator.NewDefaultOrchestrator(s.store, s.logger, s.runnerManager)

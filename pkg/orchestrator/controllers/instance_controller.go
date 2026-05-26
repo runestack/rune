@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/runner/manager"
@@ -103,6 +104,10 @@ type InstanceController interface {
 	// Volume.Handle.
 	SetMountResolver(resolver MountResolver)
 
+	// SetEventLog wires the persisted event log (RUNE-126 Phase 2)
+	// so status transitions surface in `rune describe`. Nil-safe.
+	SetEventLog(eventLog events.EventLog)
+
 	// collectRunningInstances gathers all running instances from all runners
 	collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error)
 
@@ -130,6 +135,11 @@ type instanceController struct {
 	logger        log.Logger
 	secretRepo    *repos.SecretRepo
 	configRepo    *repos.ConfigmapRepo
+
+	// events is the optional persisted event log (RUNE-126 Phase 2).
+	// Set after construction via SetEventLog; nil-safe (emit is a
+	// no-op) so unit tests don't need to wire one.
+	events events.EventLog
 
 	// endpointPublisher and nodeID power the RUNE-063 networking
 	// data plane. When non-nil, every successful instance lifecycle
@@ -675,8 +685,10 @@ func (c *instanceController) runCreateAttempt(ctx context.Context, service *type
 	// where Pod.Phase=Running ≠ Ready.
 	if service.Health != nil && service.Health.Readiness != nil {
 		applyInstanceStatus(instance, types.InstanceStatusStarting, "", "Waiting for readiness probe")
+		c.emit(types.EventLevelInfo, instance, "", "Container started; waiting for readiness probe")
 	} else {
 		applyInstanceStatus(instance, types.InstanceStatusRunning, "", "Created successfully")
+		c.emit(types.EventLevelInfo, instance, "", "Instance running")
 	}
 	instance.CreateAttempts = 0
 	instance.NextCreateAttemptAt = nil
@@ -940,10 +952,12 @@ func (c *instanceController) recordCreateFailure(ctx context.Context, instance *
 			log.Str("instance", instance.ID),
 			log.Str("reason", reason),
 			log.Int("attempts", instance.CreateAttempts))
+		c.emit(types.EventLevelError, instance, reason, err.Error())
 	} else {
 		applyInstanceStatus(instance, types.InstanceStatusFailed, reason, err.Error())
 		next := now.Add(createBackoffFor(instance.CreateAttempts))
 		instance.NextCreateAttemptAt = &next
+		c.emit(types.EventLevelError, instance, reason, err.Error())
 	}
 
 	// Deliberately do NOT set FailedAt here. FailedAt marks a *tombstone*
@@ -1099,6 +1113,34 @@ func classifyCreateError(err error) string {
 		return "RunnerStartError"
 	}
 	return "CreateFailed"
+}
+
+// SetEventLog wires the persisted event log (RUNE-126 Phase 2). Nil
+// is accepted and turns emit into a no-op so unit tests and callers
+// that don't want events keep working unchanged.
+func (c *instanceController) SetEventLog(eventLog events.EventLog) {
+	c.events = eventLog
+}
+
+// emit records one event for the instance. Fire-and-forget — emission
+// failures are logged but never surfaced to the caller (events are
+// observability, never on a correctness path).
+func (c *instanceController) emit(level types.EventLevel, instance *types.Instance, reason, message string) {
+	if c.events == nil || instance == nil {
+		return
+	}
+	if err := c.events.Emit(context.Background(), types.Event{
+		Namespace: instance.Namespace,
+		Kind:      "Instance",
+		Name:      instance.Name,
+		UID:       instance.ID,
+		Level:     level,
+		Reason:    reason,
+		Message:   message,
+	}); err != nil {
+		c.logger.Warn("Failed to emit instance event",
+			log.Str("instance", instance.Name), log.Err(err))
+	}
 }
 
 // applyInstanceStatus sets the instance's lifecycle status, its

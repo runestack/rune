@@ -5,6 +5,7 @@ import (
 
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/api/service"
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/orchestrator/controllers"
@@ -89,6 +90,12 @@ type Options struct {
 	// real resolver returns transient "not yet mounted" errors instead
 	// of falling back to Volume.Handle.
 	InitialMountResolver controllers.MountResolver
+
+	// EventLog is the persisted resource event log (RUNE-126 Phase 2).
+	// When set, the orchestrator wires it into the instance and volume
+	// controllers so status transitions surface in `rune describe`.
+	// Nil disables emission.
+	EventLog events.EventLog
 }
 
 // Option is a function that configures options.
@@ -247,5 +254,14 @@ func WithStorageSecretLookup(lookup driverparams.SecretLookup) Option {
 func WithInitialMountResolver(resolver controllers.MountResolver) Option {
 	return func(opts *Options) {
 		opts.InitialMountResolver = resolver
+	}
+}
+
+// WithEventLog wires the persisted resource event log (RUNE-126 Phase 2)
+// so the orchestrator's controllers emit status-transition events that
+// `rune describe` surfaces. Nil disables emission.
+func WithEventLog(eventLog events.EventLog) Option {
+	return func(opts *Options) {
+		opts.EventLog = eventLog
 	}
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/runestack/rune/pkg/runner/docker/bridges"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/storage/driverparams"
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/types"
@@ -484,8 +485,17 @@ func main() {
 		pb.RegisterWatchServiceServer(reg, watchServer)
 	}
 
+	// Construct the persisted event log (RUNE-126 Phase 2). Sits on the
+	// shared Badger handle under its own `events/...` keyspace — no
+	// OrderedLog/Raft coupling; events are observability, not consensus.
+	eventLog, err := events.NewRecorder(bs.DB(), logger, events.Options{})
+	if err != nil {
+		logger.Error("Failed to construct event log", log.Err(err))
+		os.Exit(1)
+	}
+
 	// Create and start API server (with WatchService registered).
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, watchRegistrar)...)
+	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, eventLog, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)
@@ -952,12 +962,15 @@ func makeAgentDriverLookup(st store.Store, driverConfigs map[string]map[string]a
 	}
 }
 
-func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, eventLog events.EventLog, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
 	opts := []server.Option{
 		server.WithGRPCAddr(grpcAddress),
 		server.WithHTTPAddr(httpAddress),
 		server.WithStore(st),
 		server.WithLogger(logger),
+	}
+	if eventLog != nil {
+		opts = append(opts, server.WithEventLog(eventLog))
 	}
 	// Token-based auth (MVP)
 	opts = append(opts, server.WithAuth(nil))

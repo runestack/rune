@@ -41,6 +41,17 @@ const (
 	bySeqPrefix       = "eventseq/"
 )
 
+// EventLog is the contract controllers and consumers depend on. It
+// matches the surface in RUNE-126 §5.6 verbatim. *Recorder is the
+// production implementation; tests may inject fakes.
+type EventLog interface {
+	Emit(ctx context.Context, e types.Event) error
+	ListByResource(ctx context.Context, namespace, kind, name string, limit int) ([]types.Event, error)
+	ListSince(ctx context.Context, cursor int64, limit int) ([]types.Event, error)
+	LoadCursor(ctx context.Context, consumerID string) (int64, error)
+	SaveCursor(ctx context.Context, consumerID string, seq int64) error
+}
+
 // Options configures a Recorder.
 type Options struct {
 	// TTL is the Badger per-entry TTL applied to event records. Zero
