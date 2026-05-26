@@ -566,21 +566,72 @@ message WatchScalingRequest {
 message ScalingStatusResponse {
   // The current scale
   int32 current_scale = 1;
-  
+
   // The target scale
   int32 target_scale = 2;
-  
+
   // The number of running instances
   int32 running_instances = 3;
-  
+
   // The number of pending instances
   int32 pending_instances = 4;
-  
+
   // Whether the scaling operation is complete
   bool complete = 5;
-  
+
   // Status message
   Status status = 6;
+
+  // Number of instances in a Failed terminal state. Non-zero means at
+  // least one instance crashed, OOMKilled, or failed a health-driven
+  // restart limit. The reason slugs are surfaced in `problems`.
+  int32 failed_instances = 7;
+
+  // Number of instances in the Stalled terminal state — the reconciler
+  // has stopped auto-retrying create (e.g. ImagePullFailed,
+  // StorageClassMissing). A non-zero count means waiting for the
+  // operation to converge is pointless without operator intervention;
+  // the CLI hard-fails on this.
+  int32 stalled_instances = 8;
+
+  // Number of instances actively being torn down (Terminating). Tracked
+  // so drain waits can surface "stuck on Terminating" without conflating
+  // it with healthy pending state.
+  int32 terminating_instances = 9;
+
+  // Bounded list (up to 3) of the most actionable problem instances
+  // — Failed/Stalled first, then Starting-with-restarts. The client
+  // uses this to print a focused summary on detach instead of dumping
+  // every instance.
+  repeated InstanceProblem problems = 10;
+}
+
+// InstanceProblem is a compact per-instance progress record used in
+// ScalingStatusResponse.problems. Mirrors fields already present on
+// types.Instance — keeping it self-contained so the client doesn't
+// need to round-trip another RPC to render the detach summary.
+message InstanceProblem {
+  // Human-friendly instance name (e.g. "api-0").
+  string name = 1;
+
+  // Current InstanceStatus value as a string (e.g. "Failed", "Stalled",
+  // "Starting", "Terminating"). String — not an enum — because the set
+  // is intentionally open to status additions without proto churn.
+  string status = 2;
+
+  // Machine-friendly reason slug (FailureReason for Failed/Stalled
+  // instances; StatusReason otherwise). Empty when the instance is
+  // healthy or the reason hasn't been classified yet.
+  string reason = 3;
+
+  // Free-form status detail surfaced by the reconciler. Bounded by
+  // the server so the watch stream stays small.
+  string message = 4;
+
+  // Health-driven restart count. Non-zero on an instance still in
+  // Starting/Running signals "the container booted but keeps failing
+  // its probes" — the most common cause of a hanging scale-up.
+  int32 restart_count = 5;
 }
 
 // ScalingMode defines how the scaling operation should be performed.

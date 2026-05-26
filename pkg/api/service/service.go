@@ -1026,29 +1026,6 @@ func (s *ServiceService) getServiceInstances(ctx context.Context, namespace, ser
 	return instances, nil
 }
 
-// countInstanceStatus counts running and pending instances
-func (s *ServiceService) countInstanceStatus(instances []*types.Instance, instanceCache map[string]types.InstanceStatus) (running, pending int) {
-	for _, inst := range instances {
-		previousStatus, exists := instanceCache[inst.ID]
-
-		// Only log status changes for debugging
-		if !exists || previousStatus != inst.Status {
-			instanceCache[inst.ID] = inst.Status
-			s.logger.Debug("Instance status",
-				log.Str("id", inst.ID),
-				log.Str("status", string(inst.Status)))
-		}
-
-		switch inst.Status {
-		case types.InstanceStatusRunning:
-			running++
-		case types.InstanceStatusPending, types.InstanceStatusStarting, types.InstanceStatusCreated:
-			pending++
-		}
-	}
-	return running, pending
-}
-
 // WatchScaling watches a service for scaling status changes and streams updates to the client.
 func (s *ServiceService) WatchScaling(req *generated.WatchScalingRequest, stream generated.ServiceService_WatchScalingServer) error {
 	s.logger.Debug("WatchScaling called",
@@ -1096,18 +1073,22 @@ func (s *ServiceService) WatchScaling(req *generated.WatchScalingRequest, stream
 				return status.Errorf(codes.Internal, "failed to get service instances: %v", err)
 			}
 
-			runningCount, pendingCount := s.countInstanceStatus(instances, make(map[string]types.InstanceStatus))
+			summary := summarizeInstances(instances)
 
 			// Determine if scaling is complete
-			isComplete, targetScale := s.isScalingComplete(service, instances, runningCount, req.TargetScale)
+			isComplete, targetScale := s.isScalingComplete(service, instances, summary, req.TargetScale)
 
 			// Create and send response
 			response := &generated.ScalingStatusResponse{
-				CurrentScale:     utils.ToInt32NonNegative(service.Scale),
-				TargetScale:      targetScale,
-				RunningInstances: utils.ToInt32NonNegative(runningCount),
-				PendingInstances: utils.ToInt32NonNegative(pendingCount),
-				Complete:         isComplete,
+				CurrentScale:         utils.ToInt32NonNegative(service.Scale),
+				TargetScale:          targetScale,
+				RunningInstances:     utils.ToInt32NonNegative(summary.running),
+				PendingInstances:     utils.ToInt32NonNegative(summary.pending),
+				FailedInstances:      utils.ToInt32NonNegative(summary.failed),
+				StalledInstances:     utils.ToInt32NonNegative(summary.stalled),
+				TerminatingInstances: utils.ToInt32NonNegative(summary.terminating),
+				Problems:             summary.problems,
+				Complete:             isComplete,
 				Status: &generated.Status{
 					Code:    int32(codes.OK),
 					Message: fmt.Sprintf("Service '%s' scaling progress", req.ServiceName),
@@ -1136,25 +1117,140 @@ func (s *ServiceService) WatchScaling(req *generated.WatchScalingRequest, stream
 	}
 }
 
-// isScalingComplete determines if scaling is complete based on service state and target
-func (s *ServiceService) isScalingComplete(service *types.Service, instances []*types.Instance, runningCount int, targetScale int32) (bool, int32) {
-	// For immediate scaling, the operation is completed immediately, so we just check if we've reached the target
-	// Check if service scale and running instances match the target
+// isScalingComplete determines if scaling is complete based on service state and target.
+//
+// Scale-to-0 used to require len(instances)==0, which made drain wait on
+// retention-GC to delete Stopped/Failed records — a 10m hang in practice.
+// We now treat drain as complete when no instance is "live" (Pending,
+// Created, Starting, Running). Terminal records (Stopped, Failed, Exited)
+// can linger; the operator's intent (no live capacity) has been met.
+func (s *ServiceService) isScalingComplete(service *types.Service, instances []*types.Instance, summary instanceSummary, targetScale int32) (bool, int32) {
 	if targetScale == 0 {
-		// Scale to zero: complete when no instances exist
-		isComplete := len(instances) == 0
-		s.logger.Debug("Scale to zero check", log.Int("instances", len(instances)), log.Bool("complete", isComplete))
+		isComplete := summary.live == 0
+		s.logger.Debug("Scale to zero check",
+			log.Int("live", summary.live),
+			log.Int("terminating", summary.terminating),
+			log.Int("total", len(instances)),
+			log.Bool("complete", isComplete))
 		return isComplete, 0
 	}
 
-	// Scale up/down: complete when service scale and running instances match target
-	isComplete := service.Scale == int(targetScale) && runningCount == int(targetScale)
+	// Scale up/down: complete when service scale and running instances match target.
+	isComplete := service.Scale == int(targetScale) && summary.running == int(targetScale)
 	s.logger.Debug("Scale up/down check",
 		log.Int("service_scale", service.Scale),
 		log.Int("target_scale", int(targetScale)),
-		log.Int("running_instances", runningCount),
+		log.Int("running_instances", summary.running),
+		log.Int("failed", summary.failed),
+		log.Int("stalled", summary.stalled),
 		log.Bool("complete", isComplete))
 	return isComplete, targetScale
+}
+
+// instanceSummary captures the counts and bounded problem list that
+// WatchScaling streams to the client. Kept package-local so additions
+// don't ripple through the codebase.
+type instanceSummary struct {
+	running     int
+	pending     int
+	failed      int
+	stalled     int
+	terminating int
+	// live = running + pending + terminating-ish-startup states. The
+	// drain (target=0) is "complete" precisely when live==0; Stopped
+	// or Failed instances awaiting GC do not block completion.
+	live     int
+	problems []*generated.InstanceProblem
+}
+
+// maxProblemsInStream bounds the per-tick problems slice so a service
+// with 50 failing instances doesn't bloat the watch stream. The CLI
+// prints these verbatim — 3 is enough to be actionable.
+const maxProblemsInStream = 3
+
+// summarizeInstances classifies instances into the counts and bounded
+// problem list emitted on each WatchScaling tick. Priority for the
+// problems slot: Stalled (terminal, reconciler gave up) > Failed >
+// Terminating-stuck > Starting-with-restarts. We stop appending once
+// maxProblemsInStream is reached.
+func summarizeInstances(instances []*types.Instance) instanceSummary {
+	var out instanceSummary
+	// Pass 1: counts. We split the priority pass into a second loop so
+	// the problems slice is ordered by severity, not iteration order.
+	for _, inst := range instances {
+		switch inst.Status {
+		case types.InstanceStatusRunning:
+			out.running++
+			out.live++
+		case types.InstanceStatusPending,
+			types.InstanceStatusStarting,
+			types.InstanceStatusCreated:
+			out.pending++
+			out.live++
+		case types.InstanceStatusFailed:
+			out.failed++
+		case types.InstanceStatusStalled:
+			out.stalled++
+		case types.InstanceStatusTerminating:
+			// Terminating instances are still consuming resources; drain
+			// is not actually done until they hit a terminal status. The
+			// client surfaces the stuck-Terminating case with a dedicated
+			// detach reason rather than completing prematurely.
+			out.terminating++
+			out.live++
+		}
+	}
+
+	appendProblem := func(inst *types.Instance) {
+		if len(out.problems) >= maxProblemsInStream {
+			return
+		}
+		reason := inst.FailureReason
+		if reason == "" {
+			reason = inst.StatusReason
+		}
+		var restartCount int
+		if inst.Metadata != nil {
+			restartCount = inst.Metadata.RestartCount
+		}
+		out.problems = append(out.problems, &generated.InstanceProblem{
+			Name:         inst.Name,
+			Status:       string(inst.Status),
+			Reason:       reason,
+			Message:      inst.StatusMessage,
+			RestartCount: utils.ToInt32NonNegative(restartCount),
+		})
+	}
+
+	// Severity pass: Stalled first, then Failed, then Terminating,
+	// then Starting/Pending with non-zero restart count.
+	for _, inst := range instances {
+		if inst.Status == types.InstanceStatusStalled {
+			appendProblem(inst)
+		}
+	}
+	for _, inst := range instances {
+		if inst.Status == types.InstanceStatusFailed {
+			appendProblem(inst)
+		}
+	}
+	for _, inst := range instances {
+		if inst.Status == types.InstanceStatusTerminating {
+			appendProblem(inst)
+		}
+	}
+	for _, inst := range instances {
+		switch inst.Status {
+		case types.InstanceStatusStarting,
+			types.InstanceStatusPending,
+			types.InstanceStatusCreated:
+			if inst.Metadata != nil && inst.Metadata.RestartCount > 0 {
+				appendProblem(inst)
+			}
+		}
+	}
+
+	return out
 }
 
 // mergeServiceDiscovery applies operator discovery fields from updated
