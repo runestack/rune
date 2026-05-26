@@ -45,18 +45,25 @@ type Prober interface {
 	Execute(ctx *ProbeContext) ProbeResult
 }
 
-// probeHost returns the address to dial for network probes against
-// the given instance. Container instances expose a per-container IP
-// on the Docker bridge (recorded by the runner on Start as
-// Metadata.ContainerIP); we must dial that directly so the probe
-// hits the container instead of the host's loopback. Process
-// instances run on the host, so localhost is correct.
+// probeHost returns the host to dial for a network probe.
 //
-// Probing through localhost on edge nodes would otherwise hit the
-// runed ingress listener on :80 / :443 and 404 (no Host header
-// match), causing healthy containers to look unhealthy and
-// restart-loop forever.
-func probeHost(instance *types.Instance) string {
+// Resolution order:
+//
+//  1. If the probe explicitly sets Host, use it verbatim. This is the
+//     declarative escape hatch for setups where the default doesn't
+//     apply — e.g. on macOS Docker Desktop, where the container bridge
+//     IP is not routable from the host, the operator sets
+//     `host: 127.0.0.1` and points port at a published hostPort.
+//  2. Otherwise use Metadata.ContainerIP if present (production: runed
+//     and the container share a network namespace on the node, so the
+//     bridge IP is the right target and bypasses the host's ingress
+//     listener on :80/:443 which would otherwise 404).
+//  3. Otherwise fall back to localhost (process runner, or pre-IP-record
+//     race window).
+func probeHost(probe *types.Probe, instance *types.Instance) string {
+	if probe != nil && probe.Host != "" {
+		return probe.Host
+	}
 	if instance != nil && instance.Metadata != nil && instance.Metadata.ContainerIP != "" {
 		return instance.Metadata.ContainerIP
 	}

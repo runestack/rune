@@ -14,8 +14,9 @@ func (p *TCPProber) Execute(ctx *ProbeContext) ProbeResult {
 	start := time.Now()
 
 	// Container instances are dialled by their container IP so the
-	// probe bypasses the host's ingress listener; see probeHost.
-	host := probeHost(ctx.Instance)
+	// probe bypasses the host's ingress listener. An explicit `host:`
+	// on the probe overrides that — see probeHost.
+	host := probeHost(ctx.ProbeConfig, ctx.Instance)
 
 	// Attempt to establish TCP connection
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, ctx.ProbeConfig.Port), 5*time.Second)

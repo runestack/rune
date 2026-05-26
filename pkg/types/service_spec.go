@@ -541,6 +541,7 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 	validProbeFields := map[string]bool{
 		"type":                true,
 		"path":                true,
+		"host":                true,
 		"port":                true,
 		"command":             true,
 		"initialDelaySeconds": true,
@@ -554,6 +555,7 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 		"port":       true,
 		"targetPort": true,
 		"protocol":   true,
+		"hostPort":   true,
 	}
 
 	var errors []string

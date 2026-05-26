@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,13 +96,16 @@ func TestResolveVolumeMount_VolumeNotReady(t *testing.T) {
 	putVolume(t, ts, "default", "pending", "", types.VolumeStatusPending)
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := ic.resolveVolumeMount(ctx, svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "x",
 		MountPath: "/x",
 		Claim:     &types.VolumeClaim{Name: "pending"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not ready")
+	assert.True(t, errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "not ready"),
+		"unexpected error: %v", err)
 }
 
 func TestResolveVolumeMount_AvailableButNoHandle(t *testing.T) {
@@ -136,7 +141,9 @@ func TestResolveVolumeMount_ClaimTemplateAutoProvisions(t *testing.T) {
 	// stamped with the expected ownership/binding metadata.
 	ts, ic := newInstanceControllerForVolumeTests(t)
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := ic.resolveVolumeMount(ctx, svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "data",
 		MountPath: "/data",
 		ClaimTemplate: &types.VolumeClaimTemplate{
@@ -147,7 +154,8 @@ func TestResolveVolumeMount_ClaimTemplateAutoProvisions(t *testing.T) {
 		},
 	})
 	require.Error(t, err, "first call returns 'not ready' so reconciler retries")
-	assert.Contains(t, err.Error(), "not ready")
+	assert.True(t, errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "not ready"),
+		"unexpected error: %v", err)
 
 	var v types.Volume
 	require.NoError(t, ts.Get(context.Background(), types.ResourceTypeVolume, "default", "data-api-0", &v))
@@ -344,13 +352,17 @@ func TestResolveVolumeMount_ResolverMissReturnsTransientError(t *testing.T) {
 	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{}})
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := ic.resolveVolumeMount(ctx, svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
 		Name:      "data",
 		MountPath: "/data",
 		Claim:     &types.VolumeClaim{Name: "data"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet mounted")
+	// Short ctx: returns deadline exceeded; full timeout: "not yet mounted".
+	assert.True(t, errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "not yet mounted"),
+		"unexpected error: %v", err)
 }
 
 // With no MountResolver wired (dev/standalone, tests), Volume.Handle

@@ -2065,6 +2065,13 @@ func (c *instanceController) resolveMounts(ctx context.Context, service *types.S
 const (
 	volumeReadyPollInterval = 2 * time.Second
 	volumeReadyTimeout      = 60 * time.Second
+
+	// mountTargetPollInterval / mountTargetTimeout bound waitForMountTarget.
+	// After stamping BoundNode the agent volumes Subsystem still needs a
+	// watch/reconcile tick to Attach+Mount and record the target; without
+	// this wait a fresh cast always races into LaunchFailed/VolumeNotReady.
+	mountTargetPollInterval = 500 * time.Millisecond
+	mountTargetTimeout      = 45 * time.Second
 )
 
 // waitForVolumeReady polls the volume row until it is Available/Bound,
@@ -2094,6 +2101,35 @@ func (c *instanceController) waitForVolumeReady(ctx context.Context, ns, name st
 		case <-ctx.Done():
 			return types.Volume{}, ctx.Err()
 		case <-time.After(volumeReadyPollInterval):
+		}
+	}
+}
+
+// volumeMountKey matches the tracking key used by the agent volumes
+// Subsystem (see internal/agent/volumes reconcile).
+func volumeMountKey(vol types.Volume) string {
+	if vol.ID != "" {
+		return vol.ID
+	}
+	return vol.Namespace + "/" + vol.Name
+}
+
+// waitForMountTarget polls the agent MountResolver until the volume is
+// mounted on this node or the timeout fires.
+func (c *instanceController) waitForMountTarget(ctx context.Context, vol types.Volume, ns, name string) (string, error) {
+	key := volumeMountKey(vol)
+	deadline := time.Now().Add(mountTargetTimeout)
+	for {
+		if target, ok := c.mountResolver.MountTargetFor(key); ok && target != "" {
+			return target, nil
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("volume %s/%s not yet mounted on node %s (will retry)", ns, name, c.nodeID)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(mountTargetPollInterval):
 		}
 	}
 }
@@ -2174,9 +2210,9 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 	// path.
 	var source string
 	if c.mountResolver != nil {
-		target, ok := c.mountResolver.MountTargetFor(vol.ID)
-		if !ok {
-			return types.ResolvedVolumeMount{}, fmt.Errorf("volume %s/%s not yet mounted on node %s (will retry)", ns, name, c.nodeID)
+		target, err := c.waitForMountTarget(ctx, vol, ns, name)
+		if err != nil {
+			return types.ResolvedVolumeMount{}, err
 		}
 		source = target
 	} else {

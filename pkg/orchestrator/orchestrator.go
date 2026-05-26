@@ -268,14 +268,17 @@ func (o *orchestrator) Start(ctx context.Context) error {
 	// Create context for background operations
 	o.ctx, o.cancel = context.WithCancel(ctx)
 
-	// Start controllers
-	if err := o.serviceController.Start(o.ctx); err != nil {
-		return fmt.Errorf("failed to start service controller: %w", err)
-	}
-
-	// Start health controller
+	// Health controller must be up before the service controller's first
+	// reconcile tick — otherwise AddInstance spawns a monitor goroutine
+	// while c.ctx is still nil, the goroutine exits immediately, and
+	// later AddInstance calls see "already monitored" and never restart
+	// it, leaving instances wedged in Starting forever.
 	if err := o.healthController.Start(o.ctx); err != nil {
 		return fmt.Errorf("failed to start health controller: %w", err)
+	}
+
+	if err := o.serviceController.Start(o.ctx); err != nil {
+		return fmt.Errorf("failed to start service controller: %w", err)
 	}
 
 	// Start scaling controller

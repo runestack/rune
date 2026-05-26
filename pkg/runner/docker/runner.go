@@ -1108,6 +1108,38 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 		}
 	}
 
+	// Publish any port with hostPort > 0 to 127.0.0.1:<hostPort> on the
+	// host. Dev-mode escape hatch for platforms where the cluster
+	// dataplane cannot reach container bridge IPs from the host
+	// (macOS Docker Desktop). Production services should reach each
+	// other via the cluster VIP / ingress instead.
+	if instance.Metadata != nil && len(instance.Metadata.Ports) > 0 {
+		for _, p := range instance.Metadata.Ports {
+			if p.HostPort <= 0 {
+				continue
+			}
+			proto := strings.ToLower(strings.TrimSpace(p.Protocol))
+			if proto == "" {
+				proto = "tcp"
+			}
+			cport, err := nat.NewPort(proto, strconv.Itoa(p.Port))
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid container port %d/%s: %w", p.Port, proto, err)
+			}
+			if containerConfig.ExposedPorts == nil {
+				containerConfig.ExposedPorts = nat.PortSet{}
+			}
+			containerConfig.ExposedPorts[cport] = struct{}{}
+			if hostConfig.PortBindings == nil {
+				hostConfig.PortBindings = nat.PortMap{}
+			}
+			hostConfig.PortBindings[cport] = append(hostConfig.PortBindings[cport], nat.PortBinding{
+				HostIP:   "127.0.0.1",
+				HostPort: strconv.Itoa(p.HostPort),
+			})
+		}
+	}
+
 	// Apply optional security context (seccomp / capabilities /
 	// privileged). Privileged and seccomp=unconfined are gated
 	// server-side; the runner only enforces structural correctness.
