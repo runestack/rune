@@ -13,10 +13,12 @@ import (
 )
 
 var (
-	restartNamespace  string
-	restartDetach     bool
-	restartTimeout    time.Duration
-	restartClientAddr string
+	restartNamespace         string
+	restartDetach            bool
+	restartTimeout           time.Duration
+	restartDrainTimeout      time.Duration
+	restartNoProgressTimeout time.Duration
+	restartClientAddr        string
 )
 
 // restartCmd represents the restart command (service bounce).
@@ -32,7 +34,9 @@ func init() {
 
 	restartCmd.Flags().StringVarP(&restartNamespace, "namespace", "n", "default", "Namespace of the service")
 	restartCmd.Flags().BoolVarP(&restartDetach, "detach", "d", false, "Don't wait for the restart to complete (fire-and-forget)")
-	restartCmd.Flags().DurationVar(&restartTimeout, "timeout", 10*time.Minute, "Timeout for the restart operation")
+	restartCmd.Flags().DurationVar(&restartTimeout, "timeout", 10*time.Minute, "Whole-operation budget. Drain gets up to 30% (capped by --drain-timeout); the rest goes to the start-up wait. A stuck drain can no longer burn the full timeout.")
+	restartCmd.Flags().DurationVar(&restartDrainTimeout, "drain-timeout", 0, "Explicit cap on the drain (scale-to-0) phase. Default 0 means derive from --timeout (30%).")
+	restartCmd.Flags().DurationVar(&restartNoProgressTimeout, "no-progress-timeout", 0, "If >0, detach the start-up wait when running/pending/failed counts have not changed for this long AND at least one instance is Failed. Default off.")
 	restartCmd.Flags().StringVar(&restartClientAddr, "api-server", "", "Address of the API server")
 }
 
@@ -131,6 +135,13 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
+	// Split the --timeout budget between the two phases. The original
+	// code gave each phase the full --timeout, so a stuck drain could
+	// burn 2× the user-facing budget before failing. Cap drain at
+	// --drain-timeout (or 30% of --timeout if unset) and give the
+	// remainder to the start-up wait.
+	drainBudget, startBudget := splitRestartBudget(restartTimeout, restartDrainTimeout)
+
 	// Phase 1: drain.
 	downReq := &generated.ScaleServiceRequest{
 		Name:      serviceName,
@@ -142,10 +153,10 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to scale down service: %w", err)
 	}
 	{
-		ctx, cancel := context.WithTimeout(context.Background(), restartTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), drainBudget)
 		defer cancel()
 		renderer := newPhaseRenderer("Draining", 0)
-		if err := waitForScalingComplete(apiClient, ctx, serviceName, restartNamespace, 0, renderer); err != nil {
+		if err := waitForScalingComplete(apiClient, ctx, serviceName, restartNamespace, 0, renderer, waitOptions{}); err != nil {
 			return err
 		}
 	}
@@ -162,10 +173,12 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	}
 	scaleUpQueued = true // server has the desired scale; deferred restore is a no-op now.
 	{
-		ctx, cancel := context.WithTimeout(context.Background(), restartTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), startBudget)
 		defer cancel()
 		renderer := newPhaseRenderer("Starting", current)
-		if err := waitForScalingComplete(apiClient, ctx, serviceName, restartNamespace, current, renderer); err != nil {
+		if err := waitForScalingComplete(apiClient, ctx, serviceName, restartNamespace, current, renderer, waitOptions{
+			noProgressTimeout: restartNoProgressTimeout,
+		}); err != nil {
 			return err
 		}
 	}
@@ -197,5 +210,39 @@ func doScale(apiClient *client.Client, svcClient *client.ServiceClient, name, na
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	renderer := newPhaseRenderer(label, target)
-	return waitForScalingComplete(apiClient, ctx, name, namespace, target, renderer)
+	return waitForScalingComplete(apiClient, ctx, name, namespace, target, renderer, waitOptions{
+		noProgressTimeout: restartNoProgressTimeout,
+	})
+}
+
+// splitRestartBudget divides the whole-operation timeout between the
+// drain phase and the start-up wait. Behavior:
+//   - drainOverride > 0: that's the drain cap; start gets total - drain
+//     (clamped to a 10s minimum so the start phase always gets a chance).
+//   - drainOverride == 0: drain gets 30% of total, start gets 70%.
+//
+// 30/70 isn't sacred — it matches the empirical observation that drains
+// usually finish quickly (a few seconds for a healthy stop, ~30s if the
+// runner has to SIGKILL) while start-ups can legitimately take longer
+// (image pull, health probe initial delays).
+func splitRestartBudget(total, drainOverride time.Duration) (drain, start time.Duration) {
+	if drainOverride > 0 {
+		drain = drainOverride
+	} else {
+		drain = total * 3 / 10
+	}
+	if drain >= total {
+		// Pathological --drain-timeout >= --timeout. Give start a 10s
+		// floor so the user still sees a problem summary if the start
+		// phase has its own issues.
+		drain = total - 10*time.Second
+		if drain < 0 {
+			drain = total / 2
+		}
+	}
+	start = total - drain
+	if start < 10*time.Second {
+		start = 10 * time.Second
+	}
+	return drain, start
 }

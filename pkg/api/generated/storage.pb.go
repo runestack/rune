@@ -674,10 +674,7 @@ type Volume struct {
 	BoundClaim       string            `protobuf:"bytes,14,opt,name=bound_claim,json=boundClaim,proto3" json:"bound_claim,omitempty"`
 	// Status is one of: Pending, Provisioning, Available, Bound, Released,
 	// Stalled, Failed.
-	Status string `protobuf:"bytes,15,opt,name=status,proto3" json:"status,omitempty"`
-	// status_reason mirrors the Go Volume.StatusReason field (RUNE-126).
-	// Wire-compatible with the previous `reason` name — field number 16
-	// is unchanged.
+	Status        string `protobuf:"bytes,15,opt,name=status,proto3" json:"status,omitempty"`
 	StatusReason  string `protobuf:"bytes,16,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"`
 	Message       string `protobuf:"bytes,17,opt,name=message,proto3" json:"message,omitempty"`
 	CreatedAt     string `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`

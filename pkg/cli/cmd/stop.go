@@ -75,5 +75,5 @@ func runStop(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 	defer cancel()
 	renderer := newPhaseRenderer("Stopping", 0)
-	return waitForScalingComplete(apiClient, ctx, serviceName, stopNamespace, 0, renderer)
+	return waitForScalingComplete(apiClient, ctx, serviceName, stopNamespace, 0, renderer, waitOptions{})
 }
