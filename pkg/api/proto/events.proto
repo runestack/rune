@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package rune.api;
+
+import "pkg/api/proto/common.proto";
+
+option go_package = "github.com/runestack/rune/pkg/api/generated";
+
+// EventService exposes the persisted, per-resource event log (RUNE-126
+// Phase 2). The same store is folded into `DescribeService.Describe`'s
+// Events field and read here by `rune get events`.
+service EventService {
+  // ListEvents returns the most-recent events for a resource (when
+  // For is set) or every recent event in the namespace (when For is
+  // empty). Newest first.
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+}
+
+// Event mirrors pkg/types.Event. Wire form — see pkg/types/event.go
+// for field semantics.
+message Event {
+  string id = 1;
+  int64 seq = 2;
+  string namespace = 3;
+  string kind = 4;
+  string name = 5;
+  string uid = 6;
+  // Level is one of: INFO, WARN, ERR.
+  string level = 7;
+  string reason = 8;
+  string message = 9;
+  // Timestamps are RFC 3339 strings.
+  string first_seen = 10;
+  string last_seen = 11;
+  int32 count = 12;
+}
+
+message ListEventsRequest {
+  // Namespace is required for namespaced reads; empty namespace +
+  // empty For currently returns the most recent events seen by the
+  // node, capped at Limit (intended for `rune get events -A`).
+  string namespace = 1;
+  // For optionally narrows to a specific resource: "<kind>/<name>".
+  // Empty returns events across all resources in the namespace.
+  string for = 2;
+  // Limit caps the number of events returned. 0 uses a server default.
+  int32 limit = 3;
+}
+
+message ListEventsResponse {
+  repeated Event events = 1;
+  Status status = 2;
+}

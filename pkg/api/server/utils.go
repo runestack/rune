@@ -121,6 +121,10 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.SnapshotService/RestoreVolume"):
 		return "volumes", "create"
 
+	case strings.HasPrefix(method, "/rune.api.EventService/"):
+		// RUNE-126 Phase 2. Reading the event log is the same privilege
+		// shape as describe — both are diagnostic reads across kinds.
+		return "*", "get"
 	case strings.HasPrefix(method, "/rune.api.DescribeService/Describe"):
 		// RUNE-126. A polymorphic diagnostic read across kinds; the
 		// method string can't carry the target kind, so it maps to a
