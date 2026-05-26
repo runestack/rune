@@ -55,7 +55,7 @@ func (s *EventService) ListEvents(ctx context.Context, req *generated.ListEvents
 		if !ok {
 			return nil, status.Errorf(codes.InvalidArgument, "for must be <kind>/<name>, got %q", req.For)
 		}
-		out, err = s.log.ListByResource(ctx, req.Namespace, kind, name, limit)
+		out, err = s.log.ListByResource(ctx, req.Namespace, canonicalEventKind(kind), name, limit)
 	} else {
 		// Namespace-wide view: scan the cursor index and filter. Cheap
 		// for typical TTL windows (~1h of state-transition events).
@@ -78,6 +78,28 @@ func (s *EventService) ListEvents(ctx context.Context, req *generated.ListEvents
 		Events: protoEvents(out),
 		Status: &generated.Status{Code: int32(codes.OK)},
 	}, nil
+}
+
+// canonicalEventKind normalises a user-supplied kind ("instance",
+// "INSTANCE", "Instance" …) to the form controllers store under
+// (capitalised: "Instance" / "Service" / "Volume" / "Node"). Anything
+// else is title-cased best-effort so previously-unknown kinds still
+// match if a future emitter writes them with a different case.
+func canonicalEventKind(k string) string {
+	switch strings.ToLower(k) {
+	case "instance", "instances", "inst":
+		return "Instance"
+	case "service", "services", "svc":
+		return "Service"
+	case "volume", "volumes", "vol":
+		return "Volume"
+	case "node", "nodes":
+		return "Node"
+	}
+	if k == "" {
+		return ""
+	}
+	return strings.ToUpper(k[:1]) + strings.ToLower(k[1:])
 }
 
 // splitKindName parses "<kind>/<name>" — kind/name must be non-empty
