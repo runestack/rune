@@ -674,8 +674,11 @@ type Volume struct {
 	BoundClaim       string            `protobuf:"bytes,14,opt,name=bound_claim,json=boundClaim,proto3" json:"bound_claim,omitempty"`
 	// Status is one of: Pending, Provisioning, Available, Bound, Released,
 	// Stalled, Failed.
-	Status        string `protobuf:"bytes,15,opt,name=status,proto3" json:"status,omitempty"`
-	Reason        string `protobuf:"bytes,16,opt,name=reason,proto3" json:"reason,omitempty"`
+	Status string `protobuf:"bytes,15,opt,name=status,proto3" json:"status,omitempty"`
+	// status_reason mirrors the Go Volume.StatusReason field (RUNE-126).
+	// Wire-compatible with the previous `reason` name — field number 16
+	// is unchanged.
+	StatusReason  string `protobuf:"bytes,16,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"`
 	Message       string `protobuf:"bytes,17,opt,name=message,proto3" json:"message,omitempty"`
 	CreatedAt     string `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt     string `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
@@ -818,9 +821,9 @@ func (x *Volume) GetStatus() string {
 	return ""
 }
 
-func (x *Volume) GetReason() string {
+func (x *Volume) GetStatusReason() string {
 	if x != nil {
-		return x.Reason
+		return x.StatusReason
 	}
 	return ""
 }
@@ -1965,7 +1968,7 @@ const file_pkg_api_proto_storage_proto_rawDesc = "" +
 	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"D\n" +
 	"\x10SnapshotSchedule\x12\x12\n" +
 	"\x04cron\x18\x01 \x01(\tR\x04cron\x12\x1c\n" +
-	"\tretention\x18\x02 \x01(\x05R\tretention\"\x94\x06\n" +
+	"\tretention\x18\x02 \x01(\x05R\tretention\"\xa1\x06\n" +
 	"\x06Volume\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -1987,8 +1990,8 @@ const file_pkg_api_proto_storage_proto_rawDesc = "" +
 	"bound_node\x18\r \x01(\tR\tboundNode\x12\x1f\n" +
 	"\vbound_claim\x18\x0e \x01(\tR\n" +
 	"boundClaim\x12\x16\n" +
-	"\x06status\x18\x0f \x01(\tR\x06status\x12\x16\n" +
-	"\x06reason\x18\x10 \x01(\tR\x06reason\x12\x18\n" +
+	"\x06status\x18\x0f \x01(\tR\x06status\x12#\n" +
+	"\rstatus_reason\x18\x10 \x01(\tR\fstatusReason\x12\x18\n" +
 	"\amessage\x18\x11 \x01(\tR\amessage\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x12 \x01(\tR\tcreatedAt\x12\x1d\n" +
