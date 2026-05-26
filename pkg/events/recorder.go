@@ -335,8 +335,11 @@ func seqKey(seq int64) []byte {
 }
 
 func encodeSeq(s int64) []byte {
+	if s < 0 {
+		s = 0
+	}
 	b := make([]byte, 8)
-	binary.BigEndian.PutUint64(b, uint64(s))
+	binary.BigEndian.PutUint64(b, uint64(s)) //nolint:gosec // bounded non-negative above
 	return b
 }
 
@@ -344,7 +347,11 @@ func decodeSeq(b []byte) int64 {
 	if len(b) < 8 {
 		return 0
 	}
-	return int64(binary.BigEndian.Uint64(b[:8]))
+	u := binary.BigEndian.Uint64(b[:8])
+	if u > uint64(1)<<63-1 {
+		return 0
+	}
+	return int64(u) //nolint:gosec // bounded above
 }
 
 // sameFoldKey compares the dedup-identity fields. UID is included so

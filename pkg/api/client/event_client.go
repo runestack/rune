@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
@@ -30,9 +31,14 @@ func NewEventClient(c *Client) *EventClient {
 func (e *EventClient) ListEvents(namespace, forKind, forName string, limit int) ([]*generated.Event, error) {
 	ctx, cancel := e.client.Context()
 	defer cancel()
+	if limit < 0 {
+		limit = 0
+	} else if limit > math.MaxInt32 {
+		limit = math.MaxInt32
+	}
 	req := &generated.ListEventsRequest{
 		Namespace: namespace,
-		Limit:     int32(limit),
+		Limit:     int32(limit), //nolint:gosec // bounded above
 	}
 	if forKind != "" && forName != "" {
 		req.For = forKind + "/" + forName

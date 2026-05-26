@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"strings"
 	"time"
 
@@ -119,6 +120,12 @@ func protoEvents(in []types.Event) []*generated.Event {
 	}
 	out := make([]*generated.Event, 0, len(in))
 	for _, e := range in {
+		count := e.Count
+		if count < 0 {
+			count = 0
+		} else if count > math.MaxInt32 {
+			count = math.MaxInt32
+		}
 		out = append(out, &generated.Event{
 			Id:        e.ID,
 			Seq:       e.Seq,
@@ -131,7 +138,7 @@ func protoEvents(in []types.Event) []*generated.Event {
 			Message:   e.Message,
 			FirstSeen: e.FirstSeen.UTC().Format(time.RFC3339),
 			LastSeen:  e.LastSeen.UTC().Format(time.RFC3339),
-			Count:     int32(e.Count),
+			Count:     int32(count), //nolint:gosec // bounded above
 		})
 	}
 	return out
