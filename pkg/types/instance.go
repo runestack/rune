@@ -39,6 +39,17 @@ type Instance struct {
 	// Status of the instance
 	Status InstanceStatus `json:"status" yaml:"status"`
 
+	// StatusReason is a short, machine-friendly slug for the current
+	// Status, regardless of whether Status is a terminal failure state.
+	// Mirrors Service.StatusReason / Volume.StatusReason. Set by the
+	// reconciler on every status transition — including non-terminal
+	// states such as Pending while a precondition (volume, secret,
+	// image) is still unmet. Empty only when Status is Running.
+	// Vocabulary is the slug set produced by classifyCreateError
+	// (e.g. "VolumeNotReady", "StorageClassMissing", "SecretNotFound").
+	// On a Failed/Stalled instance this converges with FailureReason.
+	StatusReason string `json:"statusReason,omitempty" yaml:"statusReason,omitempty"`
+
 	// Detailed status information
 	StatusMessage string `json:"statusMessage,omitempty" yaml:"statusMessage,omitempty"`
 
@@ -53,6 +64,13 @@ type Instance struct {
 
 	// Last update timestamp
 	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt"`
+
+	// LastTransitionAt is when Status last changed value. Drives the
+	// "Pending for 5m" age in `rune describe` and lets the reconciler
+	// distinguish a genuinely-stuck resource from a freshly-updated
+	// one. Distinct from UpdatedAt, which moves on any field write.
+	// nil until the first reconciler-observed transition.
+	LastTransitionAt *time.Time `json:"lastTransitionAt,omitempty" yaml:"lastTransitionAt,omitempty"`
 
 	// Process-specific configuration for process runner
 	Process *ProcessSpec `json:"process,omitempty" yaml:"process,omitempty"`

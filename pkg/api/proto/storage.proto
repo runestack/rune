@@ -116,7 +116,7 @@ message Volume {
   // Status is one of: Pending, Provisioning, Available, Bound, Released,
   // Stalled, Failed.
   string status = 15;
-  string reason = 16;
+  string status_reason = 16;
   string message = 17;
   string created_at = 18;
   string updated_at = 19;

@@ -205,7 +205,7 @@ func volumeToProto(v *types.Volume) *generated.Volume {
 		BoundNode:        v.BoundNode,
 		BoundClaim:       v.BoundClaim,
 		Status:           string(v.Status),
-		Reason:           v.Reason,
+		StatusReason:     v.StatusReason,
 		Message:          v.Message,
 		CreatedAt:        v.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:        v.UpdatedAt.Format(time.RFC3339),
@@ -244,7 +244,7 @@ func protoToVolume(p *generated.Volume) (*types.Volume, error) {
 		BoundNode:        p.BoundNode,
 		BoundClaim:       p.BoundClaim,
 		Status:           types.VolumeStatus(p.Status),
-		Reason:           p.Reason,
+		StatusReason:     p.StatusReason,
 		Message:          p.Message,
 	}
 	if p.SnapshotSchedule != nil {
@@ -279,7 +279,7 @@ func (s *VolumeService) RetryProvisionVolume(ctx context.Context, req *generated
 			v.Namespace, v.Name, v.Status)
 	}
 	v.Status = types.VolumeStatusPending
-	v.Reason = ""
+	v.StatusReason = ""
 	v.Message = ""
 	if err := s.repo.Update(ctx, v, store.WithSource(store.EventSourceAPI)); err != nil {
 		s.logger.Error("retry-provision update failed", log.Err(err), log.Str("ns", v.Namespace), log.Str("name", v.Name))
@@ -327,7 +327,7 @@ func (s *VolumeService) DetachVolume(ctx context.Context, req *generated.DetachV
 	} else {
 		v.Status = types.VolumeStatusPending
 	}
-	v.Reason = ""
+	v.StatusReason = ""
 	v.Message = ""
 	if err := s.repo.Update(ctx, v, store.WithSource(store.EventSourceAPI)); err != nil {
 		s.logger.Error("detach update failed", log.Err(err), log.Str("ns", v.Namespace), log.Str("name", v.Name))

@@ -325,8 +325,8 @@ func renderVolume(v *types.Volume, format string) error {
 		fmt.Fprintf(w, "AccessMode:\t%s\n", emptyDash(string(v.AccessMode)))
 		fmt.Fprintf(w, "ReclaimPolicy:\t%s\n", emptyDash(string(v.ReclaimPolicy)))
 		fmt.Fprintf(w, "Status:\t%s\n", v.Status)
-		if v.Reason != "" {
-			fmt.Fprintf(w, "Reason:\t%s\n", v.Reason)
+		if v.StatusReason != "" {
+			fmt.Fprintf(w, "Reason:\t%s\n", v.StatusReason)
 		}
 		if v.Message != "" {
 			fmt.Fprintf(w, "Message:\t%s\n", v.Message)

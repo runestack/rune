@@ -280,13 +280,13 @@ func TestVolumeE2E_LocalHostMissingPathFailsCleanly(t *testing.T) {
 	waitFor(t, 3*time.Second, func() error {
 		got := loadVolume(t, ts, vol.Namespace, vol.Name)
 		if got.Status != types.VolumeStatusStalled {
-			return fmt.Errorf("not yet stalled: status=%s reason=%q", got.Status, got.Reason)
+			return fmt.Errorf("not yet stalled: status=%s reason=%q", got.Status, got.StatusReason)
 		}
 		return nil
 	})
 
 	got := loadVolume(t, ts, vol.Namespace, vol.Name)
-	assert.Equal(t, "ProvisionRetriesExhausted", got.Reason)
+	assert.Equal(t, "ProvisionRetriesExhausted", got.StatusReason)
 	assert.NotEmpty(t, got.Message)
 	assert.Contains(t, got.Message, "does-not-exist",
 		"failure message should reference the offending host path")
