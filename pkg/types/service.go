@@ -192,6 +192,14 @@ type ServicePort struct {
 
 	// Protocol (default: TCP)
 	Protocol string `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+
+	// HostPort, when > 0, publishes the container's port to the host on
+	// 127.0.0.1:<HostPort>. Intended as a dev-mode escape hatch on
+	// platforms where the cluster dataplane cannot reach the container
+	// bridge IP from the host (notably macOS Docker Desktop). Production
+	// services should reach services through the cluster VIP or ingress,
+	// not via a published host port.
+	HostPort int `json:"hostPort,omitempty" yaml:"hostPort,omitempty"`
 }
 
 // ServiceExpose defines how a service is exposed externally.
@@ -472,6 +480,12 @@ type Probe struct {
 
 	// HTTP path for http probe
 	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+
+	// Host overrides the default probe target. Empty means use the
+	// instance's container IP (production) or localhost (process
+	// runner / dev fallback). Set this to "127.0.0.1" when targeting
+	// a hostPort published by the service on macOS Docker Desktop.
+	Host string `json:"host,omitempty" yaml:"host,omitempty"`
 
 	// Port to connect to
 	Port int `json:"port" yaml:"port"`

@@ -1,0 +1,33 @@
+# Local dev config. Run from the repo:
+#
+#   ./bin/runed --dev-mode --config=examples/runefile.dev.toml
+#
+# Bootstrap (separate terminal):
+#   rune admin bootstrap > ~/rune_bootstrap_token.txt
+#   rune login local --server localhost:7863 --token-file ~/rune_bootstrap_token.txt
+
+data_dir = "/var/lib/rune"
+
+[server]
+grpc_address = ":7863"
+http_address = ":7861"
+
+[log]
+level  = "debug"
+format = "text"
+
+# macOS / Docker Desktop: skip nftables, ingress on 8080/8443, *.rune → 127.0.0.1
+[networking]
+cluster_cidr = "10.96.0.0/16"
+dev_mode     = true
+
+[telemetry]
+metrics_addr = "127.0.0.1:9100"
+
+# Simpler first-run: no KEK file to manage (enable for prod-like secret tests)
+[secret.encryption]
+enabled = false
+
+[docker]
+fallback_api_version        = "1.43"
+negotiation_timeout_seconds = 3

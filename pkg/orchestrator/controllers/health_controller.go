@@ -84,6 +84,7 @@ type instanceHealth struct {
 	livenessStatus      bool
 	readinessStatus     bool
 	promoted            bool // true once promoteToRunningOnReady has succeeded
+	monitoring          bool // true while monitorInstance goroutine is running
 	lastCheck           time.Time
 	consecutiveFailures int
 	healthRestartCount  int // Separate count for health check restarts (backoff calculation)
@@ -128,8 +129,18 @@ func (c *healthController) Stop() error {
 	}
 	c.ctxMu.Unlock()
 
-	// Wait for all goroutines to finish
-	c.wg.Wait()
+	// Wait for monitor goroutines; cap wait so Ctrl+C does not hang on
+	// a stuck docker exec probe.
+	done := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		c.logger.Warn("Health controller stop timed out; probe goroutines may still be exiting")
+	}
 
 	return nil
 }
@@ -143,9 +154,20 @@ func (c *healthController) AddInstance(service *types.Service, instance *types.I
 		log.Str("instance", instance.ID))
 
 	// Check if instance is already being monitored
-	if _, exists := c.instances[instance.ID]; exists {
-		c.logger.Debug("Instance already being monitored",
+	if ih, exists := c.instances[instance.ID]; exists {
+		// Refresh the service spec (probe type/command can change on
+		// cast). Restart the monitor if a prior goroutine exited early
+		// (e.g. health controller context was not ready yet).
+		ih.service = service
+		ih.instance = instance
+		if ih.monitoring {
+			c.logger.Debug("Instance already being monitored (refreshed service spec)",
+				log.Str("instance", instance.ID))
+			return nil
+		}
+		c.logger.Info("Restarting health monitor for instance (previous monitor exited)",
 			log.Str("instance", instance.ID))
+		c.startMonitorLocked(ih, instance.ID)
 		return nil
 	}
 
@@ -183,14 +205,28 @@ func (c *healthController) AddInstance(service *types.Service, instance *types.I
 	// Add instance to monitored instances
 	c.instances[instance.ID] = healthState
 
-	// Start monitoring goroutine for this instance
+	c.startMonitorLocked(healthState, instance.ID)
+	return nil
+}
+
+// startMonitorLocked spawns monitorInstance. Caller must hold c.mu.
+func (c *healthController) startMonitorLocked(ih *instanceHealth, instanceID string) {
+	if ih.monitoring {
+		return
+	}
+	ih.monitoring = true
 	c.wg.Add(1)
 	go func() {
-		defer c.wg.Done()
-		c.monitorInstance(instance.ID)
+		defer func() {
+			c.mu.Lock()
+			if cur, ok := c.instances[instanceID]; ok {
+				cur.monitoring = false
+			}
+			c.mu.Unlock()
+			c.wg.Done()
+		}()
+		c.monitorInstance(instanceID)
 	}()
-
-	return nil
 }
 
 // RemoveInstance removes an instance from monitoring
@@ -306,12 +342,28 @@ func (c *healthController) monitorInstance(instanceID string) {
 	// any instance whose liveness probe failed it within that window
 	// was restarted before its readiness probe ever ran — leaving the
 	// instance stuck in Starting (readiness never promotes it).
+	// Wait briefly for Start() to install the controller context. A
+	// reconcile tick can call AddInstance before Start() finishes if
+	// controllers start in the wrong order (fixed in orchestrator, but
+	// keep this guard for tests and mis-ordered wiring).
+	monitorCtx := c.waitForMonitorContext(30 * time.Second)
+	if monitorCtx == nil {
+		c.logger.Warn("Health monitor exiting: controller context never became ready",
+			log.Str("instance", instanceID))
+		return
+	}
+
 	if readinessProbe != nil {
 		// Create a goroutine for readiness checks
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			time.Sleep(readinessInitialDelay)
+			if !sleepUntilDone(monitorCtx, readinessInitialDelay) {
+				return
+			}
+			// First probe right after the initial delay — don't wait an
+			// extra interval (ticker's first fire is one period later).
+			c.performHealthCheck(instanceID, readinessProbe, "readiness")
 			readinessTicker := time.NewTicker(readinessInterval)
 			defer readinessTicker.Stop()
 
@@ -341,7 +393,12 @@ func (c *healthController) monitorInstance(instanceID string) {
 
 	// Main goroutine for liveness checks. Wait for the liveness
 	// initial delay before starting checks.
-	time.Sleep(livenessInitialDelay)
+	if !sleepUntilDone(monitorCtx, livenessInitialDelay) {
+		return
+	}
+	if livenessProbe != nil {
+		c.performHealthCheck(instanceID, livenessProbe, "liveness")
+	}
 	livenessTicker := time.NewTicker(livenessInterval)
 	defer livenessTicker.Stop()
 	for {
@@ -686,6 +743,36 @@ func (c *healthController) restartInstanceWithBackoff(instanceID string, ih *ins
 
 // healthMonitoringTerminal is true for instance statuses that must not
 // receive further liveness/readiness probes.
+func (c *healthController) waitForMonitorContext(maxWait time.Duration) context.Context {
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		c.ctxMu.RLock()
+		ctx := c.ctx
+		c.ctxMu.RUnlock()
+		if ctx != nil {
+			return ctx
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
+
+// sleepUntilDone waits for d unless the health controller context is
+// cancelled (Ctrl+C / Stop). Returns false when shutdown was requested.
+func sleepUntilDone(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 func healthMonitoringTerminal(s types.InstanceStatus) bool {
 	switch s {
 	case types.InstanceStatusFailed,

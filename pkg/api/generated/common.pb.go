@@ -688,7 +688,11 @@ type ServicePort struct {
 	// Target port (if different from port)
 	TargetPort int32 `protobuf:"varint,3,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
 	// Protocol (default: TCP)
-	Protocol      string `protobuf:"bytes,4,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Protocol string `protobuf:"bytes,4,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	// HostPort, when > 0, publishes the container port on 127.0.0.1:<host_port>.
+	// Dev-mode escape hatch for platforms where the cluster dataplane cannot
+	// reach the container bridge IP from the host (e.g. macOS Docker Desktop).
+	HostPort      int32 `protobuf:"varint,5,opt,name=host_port,json=hostPort,proto3" json:"host_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -749,6 +753,13 @@ func (x *ServicePort) GetProtocol() string {
 		return x.Protocol
 	}
 	return ""
+}
+
+func (x *ServicePort) GetHostPort() int32 {
+	if x != nil {
+		return x.HostPort
+	}
+	return 0
 }
 
 // ServiceExpose defines simple external exposure configuration for a service
@@ -937,8 +948,13 @@ type Probe struct {
 	SuccessThreshold int32 `protobuf:"varint,8,opt,name=success_threshold,json=successThreshold,proto3" json:"success_threshold,omitempty"`
 	// How many consecutive failures are needed to be considered unhealthy
 	FailureThreshold int32 `protobuf:"varint,9,opt,name=failure_threshold,json=failureThreshold,proto3" json:"failure_threshold,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Host overrides the default probe target. Empty falls back to the
+	// instance's container IP (production) or localhost (dev fallback).
+	// Set this when targeting a published hostPort on macOS Docker
+	// Desktop, e.g. "127.0.0.1".
+	Host          string `protobuf:"bytes,10,opt,name=host,proto3" json:"host,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Probe) Reset() {
@@ -1034,6 +1050,13 @@ func (x *Probe) GetFailureThreshold() int32 {
 	return 0
 }
 
+func (x *Probe) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
 // HealthCheck represents health check configuration for a service.
 type HealthCheck struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1122,13 +1145,14 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"readOnlyFs\x12\"\n" +
 	"\fcapabilities\x18\x04 \x03(\tR\fcapabilities\x12)\n" +
 	"\x10allowed_syscalls\x18\x05 \x03(\tR\x0fallowedSyscalls\x12'\n" +
-	"\x0fdenied_syscalls\x18\x06 \x03(\tR\x0edeniedSyscalls\"r\n" +
+	"\x0fdenied_syscalls\x18\x06 \x03(\tR\x0edeniedSyscalls\"\x8f\x01\n" +
 	"\vServicePort\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\x12\x1f\n" +
 	"\vtarget_port\x18\x03 \x01(\x05R\n" +
 	"targetPort\x12\x1a\n" +
-	"\bprotocol\x18\x04 \x01(\tR\bprotocol\"\x9a\x01\n" +
+	"\bprotocol\x18\x04 \x01(\tR\bprotocol\x12\x1b\n" +
+	"\thost_port\x18\x05 \x01(\x05R\bhostPort\"\x9a\x01\n" +
 	"\rServiceExpose\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\tR\x04port\x12\x12\n" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12\x1f\n" +
@@ -1138,7 +1162,7 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\x10ExposeServiceTLS\x12\x16\n" +
 	"\x06secret\x18\x01 \x01(\tR\x06secret\x12\x12\n" +
 	"\x04auto\x18\x02 \x01(\bR\x04auto\x12\x12\n" +
-	"\x04mode\x18\x03 \x01(\tR\x04mode\"\xd0\x02\n" +
+	"\x04mode\x18\x03 \x01(\tR\x04mode\"\xe4\x02\n" +
 	"\x05Probe\x12'\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x13.rune.api.ProbeTypeR\x04type\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
@@ -1148,7 +1172,9 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\x0eperiod_seconds\x18\x06 \x01(\x05R\rperiodSeconds\x12'\n" +
 	"\x0ftimeout_seconds\x18\a \x01(\x05R\x0etimeoutSeconds\x12+\n" +
 	"\x11success_threshold\x18\b \x01(\x05R\x10successThreshold\x12+\n" +
-	"\x11failure_threshold\x18\t \x01(\x05R\x10failureThreshold\"i\n" +
+	"\x11failure_threshold\x18\t \x01(\x05R\x10failureThreshold\x12\x12\n" +
+	"\x04host\x18\n" +
+	" \x01(\tR\x04host\"i\n" +
 	"\vHealthCheck\x12+\n" +
 	"\bliveness\x18\x01 \x01(\v2\x0f.rune.api.ProbeR\bliveness\x12-\n" +
 	"\treadiness\x18\x02 \x01(\v2\x0f.rune.api.ProbeR\treadiness*\xb0\x01\n" +
