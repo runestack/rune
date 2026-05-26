@@ -116,9 +116,6 @@ message Volume {
   // Status is one of: Pending, Provisioning, Available, Bound, Released,
   // Stalled, Failed.
   string status = 15;
-  // status_reason mirrors the Go Volume.StatusReason field.
-  // Wire-compatible with the previous `reason` name — field number 16
-  // is unchanged.
   string status_reason = 16;
   string message = 17;
   string created_at = 18;
