@@ -622,7 +622,7 @@ func main() {
 				Zone: dnssub.NewStoreZone(stateStore, dnssub.FuncVIPSource{Fn: func(ctx context.Context, serviceID string) (net.IP, error) {
 					return vipAllocator.Allocate(ctx, serviceID)
 				}}, logger.WithComponent("dns-zone")),
-				UpstreamProvider: dnssub.ResolvConfUpstreams(),
+				UpstreamProvider: dnssub.ResolvConfUpstreams(bindAddrs...),
 				BindAddrs:        bindAddrs,
 				Logger:           logger.WithComponent("dns"),
 			})
