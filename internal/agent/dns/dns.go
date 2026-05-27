@@ -287,7 +287,7 @@ func (s *Subsystem) refreshUpstreams() error {
 		ups = s.cfg.UpstreamProvider()
 	} else {
 		var err error
-		ups, err = parseResolvConf(resolvConfPath)
+		ups, err = parseResolvConf(resolvConfPath, bindIPSet(s.cfg.BindAddrs))
 		if err != nil {
 			return err
 		}
@@ -421,20 +421,44 @@ func splitName(name string) (svc, ns string, ok bool) {
 }
 
 // parseResolvConf reads /etc/resolv.conf and returns the configured
-// nameservers as host:53 strings. Skips loopback addresses to avoid
-// forwarding to ourselves.
-func parseResolvConf(path string) ([]string, error) {
+// nameservers as host:53 strings. Skips entries whose IP exactly
+// matches one of the agent's own bind IPs — forwarding to ourselves
+// would loop. Other loopback addresses (notably systemd-resolved's
+// 127.0.0.53 stub, which is the *only* nameserver in /etc/resolv.conf
+// on stock Ubuntu) are kept: they're distinct services and the agent
+// must forward to them or external DNS breaks.
+func parseResolvConf(path string, skipIPs map[string]struct{}) ([]string, error) {
 	cc, err := dns.ClientConfigFromFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("dns: parse %s: %w", path, err)
 	}
 	out := make([]string, 0, len(cc.Servers))
 	for _, srv := range cc.Servers {
-		ip := net.ParseIP(srv)
-		if ip != nil && ip.IsLoopback() {
-			continue
+		if ip := net.ParseIP(srv); ip != nil {
+			if _, skip := skipIPs[ip.String()]; skip {
+				continue
+			}
 		}
 		out = append(out, net.JoinHostPort(srv, cc.Port))
 	}
 	return out, nil
+}
+
+// bindIPSet extracts the IP portion of each host:port address and
+// returns a set, used by parseResolvConf to avoid registering the
+// agent itself as an upstream. Bridge-gateway binds added dynamically
+// aren't included, but they also never appear in /etc/resolv.conf —
+// the filter is for the loopback bind only.
+func bindIPSet(addrs []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(addrs))
+	for _, addr := range addrs {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			out[ip.String()] = struct{}{}
+		}
+	}
+	return out
 }
