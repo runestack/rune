@@ -188,11 +188,16 @@ type funcFreshness func() bool
 func (f funcFreshness) IsFresh() bool { return f() }
 
 // ResolvConfUpstreams returns an UpstreamProvider that re-reads
-// /etc/resolv.conf on every call. Loopback servers (e.g. systemd-resolved)
-// are filtered to avoid forwarding loops back into our own bind.
-func ResolvConfUpstreams() func() []string {
+// /etc/resolv.conf on every call. The agent's own bind addresses
+// (typically 127.0.0.123:53) are filtered out so we never register
+// ourselves as an upstream — anything else, including other loopback
+// services like systemd-resolved's 127.0.0.53 stub, is kept. On stock
+// Ubuntu that stub is the only nameserver in /etc/resolv.conf, so
+// skipping it strands the agent without forwarders.
+func ResolvConfUpstreams(ownBindAddrs ...string) func() []string {
+	skip := bindIPSet(ownBindAddrs)
 	return func() []string {
-		ups, err := parseResolvConf(resolvConfPath)
+		ups, err := parseResolvConf(resolvConfPath, skip)
 		if err != nil {
 			return nil
 		}
