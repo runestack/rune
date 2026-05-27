@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	badger "github.com/dgraph-io/badger/v4"
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
@@ -18,7 +20,7 @@ import (
 func newDescribeTestService(t *testing.T) (*DescribeService, *store.TestStore) {
 	t.Helper()
 	st := store.NewTestStore()
-	return NewDescribeService(st, log.GetDefaultLogger()), st
+	return NewDescribeService(st, nil, log.GetDefaultLogger()), st
 }
 
 func putInstance(t *testing.T, st *store.TestStore, in *types.Instance) {
@@ -220,6 +222,42 @@ func TestDescribe_Node_Unimplemented(t *testing.T) {
 	_, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "local"})
 	require.Error(t, err)
 	assert.Equal(t, codes.Unimplemented, status.Code(err))
+}
+
+// When a real EventLog is wired, describe folds the resource's recent
+// events into result.Events. End-to-end check of the Phase 2 glue.
+func TestDescribe_FoldsEventsWhenEventLogWired(t *testing.T) {
+	st := store.NewTestStore()
+	db, err := badger.Open(badger.DefaultOptions("").WithInMemory(true).WithLogger(nil))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	rec, err := events.NewRecorder(db, log.GetDefaultLogger(), events.Options{})
+	require.NoError(t, err)
+
+	putInstance(t, st, &types.Instance{
+		ID: "i-1", Name: "flo-0", Namespace: "shared", ServiceName: "flo",
+		Status: types.InstanceStatusStalled, StatusReason: "VolumeNotReady",
+		StatusMessage: "volume not ready",
+	})
+	require.NoError(t, rec.Emit(context.Background(), types.Event{
+		Namespace: "shared", Kind: "Instance", Name: "flo-0", UID: "i-1",
+		Level: types.EventLevelError, Reason: "VolumeNotReady",
+		Message: "first failure",
+	}))
+	require.NoError(t, rec.Emit(context.Background(), types.Event{
+		Namespace: "shared", Kind: "Instance", Name: "flo-0", UID: "i-1",
+		Level: types.EventLevelError, Reason: "VolumeNotReady",
+		Message: "first failure",
+	}))
+
+	svc := NewDescribeService(st, rec, log.GetDefaultLogger())
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{
+		Kind: "instance", Name: "flo-0", Namespace: "shared",
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Result.Events, 1, "identical emits fold into one")
+	assert.Contains(t, resp.Result.Events[0].Message, "×2",
+		"folded count surfaces in the rendered message")
 }
 
 func TestDescribe_BadKind(t *testing.T) {

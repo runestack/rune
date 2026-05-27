@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/controllers"
 	"github.com/runestack/rune/pkg/runner/manager"
@@ -153,6 +154,12 @@ type OrchestratorOptions struct {
 	// in-process tests, wrong for production where the agent is racing
 	// to come up.
 	InitialMountResolver controllers.MountResolver
+
+	// EventLog is the persisted event log (RUNE-126 Phase 2). When set,
+	// the instance and volume controllers emit status-transition events
+	// for `rune describe`. Nil disables emission; controllers and tests
+	// keep working unchanged.
+	EventLog events.EventLog
 }
 
 // NewDefaultOrchestrator creates a new orchestrator with default options
@@ -228,6 +235,13 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create volume controller: %w", err)
+	}
+
+	// Wire the persisted event log (RUNE-126 Phase 2) into the
+	// controllers that emit status-transition events. Nil-safe.
+	if options.EventLog != nil {
+		instanceController.SetEventLog(options.EventLog)
+		volumeController.SetEventLog(options.EventLog)
 	}
 
 	// SnapshotController owns the Snapshot CRUD reconciliation loop.

@@ -51,6 +51,7 @@ type APIServer struct {
 	volumeService       *service.VolumeService
 	snapshotService     *service.SnapshotService
 	describeService     *service.DescribeService
+	eventService        *service.EventService
 
 	// gRPC server
 	grpcServer *grpc.Server
@@ -146,7 +147,8 @@ func (s *APIServer) Start() error {
 			s.options.StorageDefaultStorageClass != nil ||
 			s.options.StoragePreserveOnDelete ||
 			s.options.StorageSecretLookup != nil ||
-			s.options.InitialMountResolver != nil {
+			s.options.InitialMountResolver != nil ||
+			s.options.EventLog != nil {
 			s.orchestrator, err = orchestrator.NewOrchestrator(orchestrator.OrchestratorOptions{
 				Store:                   s.store,
 				Logger:                  s.logger,
@@ -156,6 +158,7 @@ func (s *APIServer) Start() error {
 				StoragePreserveOnDelete: s.options.StoragePreserveOnDelete,
 				StorageSecretLookup:     s.options.StorageSecretLookup,
 				InitialMountResolver:    s.options.InitialMountResolver,
+				EventLog:                s.options.EventLog,
 			})
 		} else {
 			s.orchestrator, err = orchestrator.NewDefaultOrchestrator(s.store, s.logger, s.runnerManager)
@@ -188,7 +191,8 @@ func (s *APIServer) Start() error {
 		service.WithDriverConfigs(s.options.StorageDriverConfigs))
 	s.snapshotService = service.NewSnapshotService(s.store, s.logger,
 		service.WithSnapshotDriverConfigs(s.options.StorageDriverConfigs))
-	s.describeService = service.NewDescribeService(s.store, s.logger)
+	s.describeService = service.NewDescribeService(s.store, s.options.EventLog, s.logger)
+	s.eventService = service.NewEventService(s.options.EventLog, s.logger)
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
@@ -268,6 +272,7 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterVolumeServiceServer(s.grpcServer, s.volumeService)
 	generated.RegisterSnapshotServiceServer(s.grpcServer, s.snapshotService)
 	generated.RegisterDescribeServiceServer(s.grpcServer, s.describeService)
+	generated.RegisterEventServiceServer(s.grpcServer, s.eventService)
 
 	// Extra registrars (e.g. WatchService wired by runed for RUNE-028).
 	for _, reg := range s.options.ExtraGRPCRegistrars {

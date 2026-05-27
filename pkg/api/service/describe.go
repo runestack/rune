@@ -9,12 +9,16 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// defaultDescribeEventLimit caps the Events block on a describe result.
+const defaultDescribeEventLimit = 20
 
 // errDescribeNotFound is the sentinel a per-kind collector returns when
 // the target resource itself does not exist. The Describe RPC maps it
@@ -32,15 +36,20 @@ var errDescribeNotFound = errors.New("describe target not found")
 type DescribeService struct {
 	generated.UnimplementedDescribeServiceServer
 
-	store  store.Store
-	logger log.Logger
+	store    store.Store
+	eventLog events.EventLog
+	logger   log.Logger
 }
 
 // NewDescribeService constructs a DescribeService over the given store.
-func NewDescribeService(st store.Store, logger log.Logger) *DescribeService {
+// eventLog is optional (nil-safe): when set, describe folds the most
+// recent events for the target resource into the result (RUNE-126
+// Phase 2). Tests that don't care about events pass nil.
+func NewDescribeService(st store.Store, eventLog events.EventLog, logger log.Logger) *DescribeService {
 	return &DescribeService{
-		store:  st,
-		logger: logger.WithComponent("describe-service"),
+		store:    st,
+		eventLog: eventLog,
+		logger:   logger.WithComponent("describe-service"),
 	}
 }
 
@@ -190,6 +199,7 @@ func (s *DescribeService) describeInstance(ctx context.Context, ns, name string)
 	}
 
 	res.Hints = []string{fmt.Sprintf("rune logs %s -n %s --tail=50", inst.Name, inst.Namespace)}
+	s.attachEvents(ctx, res, inst.Namespace, "Instance", inst.Name)
 	return res, nil
 }
 
@@ -254,6 +264,7 @@ func (s *DescribeService) describeService(ctx context.Context, ns, name string) 
 	}
 
 	res.Hints = []string{fmt.Sprintf("rune logs %s -n %s --tail=50", svc.Name, svc.Namespace)}
+	s.attachEvents(ctx, res, svc.Namespace, "Service", svc.Name)
 	return res, nil
 }
 
@@ -319,7 +330,44 @@ func (s *DescribeService) describeVolume(ctx context.Context, ns, name string) (
 	}
 
 	res.Hints = []string{fmt.Sprintf("rune get volume %s -n %s -o yaml", vol.Name, vol.Namespace)}
+	s.attachEvents(ctx, res, vol.Namespace, "Volume", vol.Name)
 	return res, nil
+}
+
+// attachEvents folds the most recent events for the target into
+// result.Events. Nil-safe (skips when no EventLog is wired); fold
+// failures are logged and dropped — events are observability, never
+// on the correctness path.
+func (s *DescribeService) attachEvents(ctx context.Context, res *generated.DescribeResult, ns, kind, name string) {
+	if s.eventLog == nil {
+		return
+	}
+	evs, err := s.eventLog.ListByResource(ctx, ns, kind, name, defaultDescribeEventLimit)
+	if err != nil {
+		s.logger.Warn("describe: list events failed",
+			log.Str("kind", kind), log.Str("name", name), log.Err(err))
+		return
+	}
+	for _, e := range evs {
+		res.Events = append(res.Events, &generated.DescribeEvent{
+			Timestamp: e.LastSeen.UTC().Format(time.RFC3339),
+			Level:     string(e.Level),
+			Message:   formatEventMessage(e),
+		})
+	}
+}
+
+// formatEventMessage builds the human-facing line for a describe
+// event — includes the fold count when >1 so an operator sees the
+// retry rate at a glance.
+func formatEventMessage(e types.Event) string {
+	if e.Count > 1 {
+		return fmt.Sprintf("%s (×%d) %s", e.Reason, e.Count, e.Message)
+	}
+	if e.Reason != "" {
+		return e.Reason + " — " + e.Message
+	}
+	return e.Message
 }
 
 // resolveSecretRefMark returns a " ✓ resolved" / " ✗ missing" suffix when

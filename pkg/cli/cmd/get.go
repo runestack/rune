@@ -34,6 +34,11 @@ type getOptions struct {
 	// instances` output. They're hidden by default so the listing only
 	// shows the live instance set.
 	showFailed bool
+
+	// forResource narrows `rune get events` to a single resource
+	// expressed as "<kind>/<name>". Empty (the default) lists every
+	// recent event in the namespace.
+	forResource string
 }
 
 // Resource type abbreviations
@@ -76,6 +81,10 @@ var resourceAliases = map[string]string{
 	"snapshot":       "snapshot",
 	"snapshots":      "snapshot",
 	"snap":           "snapshot",
+	// Observability resources (RUNE-126 Phase 2)
+	"event":  "event",
+	"events": "event",
+	"ev":     "event",
 }
 
 // getCmd represents the get command
@@ -129,6 +138,7 @@ func newGetCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.watchTimeout, "timeout", "", "Timeout for watch operations (e.g., 30s, 5m, 1h) - default is no timeout")
 	cmd.Flags().BoolVar(&opts.showFailed, "show-failed", false, "Include Failed-instance tombstones (preserved containers awaiting retention GC) in `rune get instances` output")
 	cmd.Flags().StringVar(&opts.serviceName, "service-name", "", "Filter instances by service name")
+	cmd.Flags().StringVar(&opts.forResource, "for", "", "For `rune get events`: narrow to one resource, e.g. instance/flo-0")
 
 	// Remove api-key flag; token comes from config/env
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "Address of the API server")
@@ -185,6 +195,8 @@ func runGet(cmd *cobra.Command, args []string, opts *getOptions) error {
 		return handleStorageClassGet(cmd, opts, resourceName)
 	case "snapshot":
 		return handleSnapshotGet(cmd, opts, resourceName)
+	case "event":
+		return handleEventsGet(opts)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", args[0])
 	}
