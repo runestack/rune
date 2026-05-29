@@ -300,3 +300,46 @@ func TestStatusJSONClusterRunnersStore(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatBytes(t *testing.T) {
+	cases := map[int64]string{
+		0:                      "0 B",
+		512:                    "512 B",
+		2048:                   "2.0 KiB",
+		6 * 1024 * 1024 * 1024: "6.0 GiB",
+	}
+	for in, want := range cases {
+		if got := formatBytes(in); got != want {
+			t.Errorf("formatBytes(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestFormatNodeUsage(t *testing.T) {
+	// Full: CPU% + cores + mem.
+	full := formatNodeUsage(&nodeUsageBrief{CPUCores: 8, CPUUsedPercent: 38, MemUsedBytes: 6 * 1024 * 1024 * 1024, MemTotalBytes: 16 * 1024 * 1024 * 1024})
+	if !strings.Contains(full, "CPU 38%") || !strings.Contains(full, "8 cores") || !strings.Contains(full, "Mem 6.0 GiB / 16.0 GiB") {
+		t.Errorf("full = %q", full)
+	}
+	// CPU unavailable (-1): omit CPU%, keep mem.
+	noCPU := formatNodeUsage(&nodeUsageBrief{CPUCores: 8, CPUUsedPercent: -1, MemTotalBytes: 16 * 1024 * 1024 * 1024})
+	if strings.Contains(noCPU, "CPU 38%") || strings.Contains(noCPU, "%") || !strings.Contains(noCPU, "Mem") {
+		t.Errorf("noCPU = %q, want no percent, with Mem", noCPU)
+	}
+}
+
+func TestStatusJSONNodeUsage(t *testing.T) {
+	report := &statusReport{
+		Cluster: &clusterReport{
+			NodeUsage: &nodeUsageBrief{CPUCores: 8, CPUUsedPercent: 38.5, MemUsedBytes: 100, MemTotalBytes: 200},
+		},
+		Namespaces: []namespaceReport{},
+	}
+	b, _ := json.Marshal(report)
+	s := string(b)
+	for _, want := range []string{`"nodeUsage"`, `"cpuUsedPercent":38.5`, `"memTotalBytes":200`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("json missing %s\nfull: %s", want, s)
+		}
+	}
+}

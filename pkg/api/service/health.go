@@ -181,6 +181,131 @@ func (s *HealthService) readSysctlMemsize() (int64, bool) {
 	return n, true
 }
 
+// detectNodeUsage returns live CPU usage as a percentage of capacity
+// (-1 when it can't be sampled, e.g. macOS) and memory used in bytes
+// (working set; 0 when unavailable). Linux-focused, mirroring the cgroup
+// /proc basis used for capacity detection so the two pair up.
+func (s *HealthService) detectNodeUsage() (cpuPercent float64, memUsedBytes int64) {
+	return s.detectCPUUsedPercent(), s.detectMemoryUsedBytes()
+}
+
+func (s *HealthService) detectMemoryUsedBytes() int64 {
+	// cgroup v2 working set = memory.current - inactive_file (matches how
+	// kubelet computes "used", excluding reclaimable page cache).
+	if cur, ok := s.readInt64File("/sys/fs/cgroup/memory.current"); ok && cur > 0 {
+		inactive := s.readCgroupStatField("/sys/fs/cgroup/memory.stat", "inactive_file")
+		if ws := cur - inactive; ws > 0 {
+			return ws
+		}
+		return cur
+	}
+	// Host basis: MemTotal - MemAvailable (excludes reclaimable cache).
+	if used, ok := s.readProcMeminfoUsed("/proc/meminfo"); ok {
+		return used
+	}
+	return 0
+}
+
+func (s *HealthService) detectCPUUsedPercent() float64 {
+	cores := s.capacityCPU
+	if cores <= 0 {
+		cores = float64(runtime.NumCPU())
+	}
+	// cgroup v2: cpu.stat usage_usec is cumulative CPU-time (microseconds)
+	// summed across cores. Sample twice; the delta over the wall interval
+	// is the average cores used, normalized to % of capacity.
+	if u0, ok := s.readCgroupCPUUsageUsec("/sys/fs/cgroup/cpu.stat"); ok {
+		start := time.Now()
+		time.Sleep(150 * time.Millisecond)
+		if u1, ok2 := s.readCgroupCPUUsageUsec("/sys/fs/cgroup/cpu.stat"); ok2 && u1 >= u0 {
+			wallUsec := float64(time.Since(start).Microseconds())
+			if wallUsec > 0 && cores > 0 {
+				return clampPercent((float64(u1-u0) / wallUsec) / cores * 100)
+			}
+		}
+	}
+	return -1
+}
+
+func clampPercent(p float64) float64 {
+	if p < 0 {
+		return 0
+	}
+	if p > 100 {
+		return 100
+	}
+	return p
+}
+
+// readInt64File reads a file containing a single integer (e.g. cgroup
+// memory.current). "max" or parse errors return ok=false.
+func (s *HealthService) readInt64File(path string) (int64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	v := strings.TrimSpace(string(data))
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// readCgroupStatField returns the value of a "key value" line in a cgroup
+// stat file (memory.stat / cpu.stat), or 0 if absent.
+func (s *HealthService) readCgroupStatField(path, key string) int64 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == key {
+			if n, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func (s *HealthService) readCgroupCPUUsageUsec(path string) (int64, bool) {
+	if v := s.readCgroupStatField(path, "usage_usec"); v > 0 {
+		return v, true
+	}
+	return 0, false
+}
+
+func (s *HealthService) readProcMeminfoUsed(path string) (int64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	var total, avail int64
+	haveTotal, haveAvail := false, false
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		kb, perr := strconv.ParseInt(fields[1], 10, 64)
+		if perr != nil {
+			continue
+		}
+		switch fields[0] {
+		case "MemTotal:":
+			total, haveTotal = kb*1024, true
+		case "MemAvailable:":
+			avail, haveAvail = kb*1024, true
+		}
+	}
+	if haveTotal && haveAvail && total >= avail {
+		return total - avail, true
+	}
+	return 0, false
+}
+
 func (s *HealthService) formatMemory(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -488,6 +613,15 @@ func (s *HealthService) getNodeHealth(ctx context.Context, req *generated.GetHea
 		Status:        status,
 		Message:       msg,
 		Timestamp:     time.Now().Format(time.RFC3339),
+	}
+	// Structured capacity + live usage. cpu_used_percent = -1 signals the
+	// usage probe couldn't run (e.g. macOS); the CLI then omits the CPU part.
+	cpuPct, memUsed := s.detectNodeUsage()
+	comp.Resources = &generated.NodeResources{
+		CpuCores:       s.capacityCPU,
+		MemTotalBytes:  s.capacityMem,
+		CpuUsedPercent: cpuPct,
+		MemUsedBytes:   memUsed,
 	}
 	if req.IncludeChecks && s.hasCapacity {
 		comp.CheckResults = []*generated.HealthCheckResult{
