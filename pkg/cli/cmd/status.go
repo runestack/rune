@@ -138,15 +138,17 @@ type statusReport struct {
 	Namespaces     []namespaceReport `json:"namespaces" yaml:"namespaces"`
 }
 
-// clusterReport is the global cluster section. Sourced from real RPCs only:
-// server version (GetServerVersion), networking (admin NetworkStatus), and
-// registry auth (admin RegistriesStatus). There is no per-runner or store
-// health RPC — api-server health is liveness-only — so we don't fabricate
-// "Runners: ready" / "Store: healthy"; server reachability stands in.
+// clusterReport is the global cluster section. Sourced from real RPCs:
+// server version (GetServerVersion), runner readiness + store health
+// (GetHealth), networking (admin NetworkStatus), and registry auth (admin
+// RegistriesStatus). Each field is best-effort and independently omitted
+// when its probe is unavailable/denied.
 type clusterReport struct {
-	ServerVersion string           `json:"serverVersion,omitempty" yaml:"serverVersion,omitempty"`
-	Network       *networkBrief    `json:"network,omitempty" yaml:"network,omitempty"`
-	Registries    *registriesBrief `json:"registries,omitempty" yaml:"registries,omitempty"`
+	ServerVersion string            `json:"serverVersion,omitempty" yaml:"serverVersion,omitempty"`
+	Runners       map[string]string `json:"runners,omitempty" yaml:"runners,omitempty"`
+	Store         string            `json:"store,omitempty" yaml:"store,omitempty"`
+	Network       *networkBrief     `json:"network,omitempty" yaml:"network,omitempty"`
+	Registries    *registriesBrief  `json:"registries,omitempty" yaml:"registries,omitempty"`
 }
 
 type networkBrief struct {
@@ -292,6 +294,24 @@ func collectCluster(api *client.Client) *clusterReport {
 		}
 		cancel()
 	}
+	// Runner readiness (docker daemon ping etc.) — the high-value signal:
+	// server up + store fine but Docker down means nothing can deploy.
+	if ctx, cancel := api.Context(); true {
+		if resp, err := hc.GetHealth(ctx, &generated.GetHealthRequest{ComponentType: "runner"}); err == nil && resp != nil && len(resp.Components) > 0 {
+			m := map[string]string{}
+			for _, c := range resp.Components {
+				m[c.Name] = healthWord(c.Status, c.Message)
+			}
+			cr.Runners = m
+		}
+		cancel()
+	}
+	if ctx, cancel := api.Context(); true {
+		if resp, err := hc.GetHealth(ctx, &generated.GetHealthRequest{ComponentType: "store"}); err == nil && resp != nil && len(resp.Components) > 0 {
+			cr.Store = healthWord(resp.Components[0].Status, resp.Components[0].Message)
+		}
+		cancel()
+	}
 
 	ac := generated.NewAdminServiceClient(api.Conn())
 	if ctx, cancel := api.Context(); true {
@@ -319,10 +339,27 @@ func collectCluster(api *client.Client) *clusterReport {
 		cancel()
 	}
 
-	if cr.ServerVersion == "" && cr.Network == nil && cr.Registries == nil {
+	if cr.ServerVersion == "" && len(cr.Runners) == 0 && cr.Store == "" && cr.Network == nil && cr.Registries == nil {
 		return nil
 	}
 	return cr
+}
+
+// healthWord maps a GetHealth component status into a short display word.
+// HEALTHY → "ready"; otherwise the server's message (e.g. "unreachable:
+// <docker error>") so the operator sees the actual reason, falling back to
+// a generic word when the message is empty.
+func healthWord(st generated.HealthStatus, message string) string {
+	if st == generated.HealthStatus_HEALTH_STATUS_HEALTHY {
+		if message != "" && message != "ok" {
+			return message
+		}
+		return "ready"
+	}
+	if message != "" {
+		return message
+	}
+	return "unhealthy"
 }
 
 // collectRecentActivity returns WARN/ERR events within opts.since, newest
@@ -550,6 +587,22 @@ func renderCluster(w *os.File, c *clusterReport) {
 	fmt.Fprintln(w, format.Highlight("Cluster"))
 	if c.ServerVersion != "" {
 		fmt.Fprintf(w, "  %-11s %s\n", "Server:", c.ServerVersion)
+	}
+	if len(c.Runners) > 0 {
+		// Stable order so --watch output doesn't jitter.
+		names := make([]string, 0, len(c.Runners))
+		for n := range c.Runners {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		parts := make([]string, 0, len(names))
+		for _, n := range names {
+			parts = append(parts, fmt.Sprintf("%s=%s", n, c.Runners[n]))
+		}
+		fmt.Fprintf(w, "  %-11s %s\n", "Runners:", strings.Join(parts, ", "))
+	}
+	if c.Store != "" {
+		fmt.Fprintf(w, "  %-11s %s\n", "Store:", c.Store)
 	}
 	if c.Network != nil {
 		extra := ""

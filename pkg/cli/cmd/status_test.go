@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/cli/format"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -254,5 +255,48 @@ func TestHumanizeEventAge(t *testing.T) {
 	}
 	if got := humanizeEventAge(""); got != "" {
 		t.Errorf("empty = %q, want empty", got)
+	}
+}
+
+// healthWord maps a GetHealth component status to the display word: HEALTHY
+// → "ready" (or a non-"ok"/"healthy" message verbatim), else the message or
+// a generic fallback.
+func TestHealthWord(t *testing.T) {
+	H := generated.HealthStatus_HEALTH_STATUS_HEALTHY
+	U := generated.HealthStatus_HEALTH_STATUS_UNHEALTHY
+	cases := []struct {
+		st   generated.HealthStatus
+		msg  string
+		want string
+	}{
+		{H, "ready", "ready"},
+		{H, "ok", "ready"},
+		{H, "healthy", "healthy"},
+		{U, "unreachable: connection refused", "unreachable: connection refused"},
+		{U, "", "unhealthy"},
+	}
+	for _, c := range cases {
+		if got := healthWord(c.st, c.msg); got != c.want {
+			t.Errorf("healthWord(%v, %q) = %q, want %q", c.st, c.msg, got, c.want)
+		}
+	}
+}
+
+// Cluster runners/store serialize into the JSON cluster block.
+func TestStatusJSONClusterRunnersStore(t *testing.T) {
+	report := &statusReport{
+		Cluster: &clusterReport{
+			ServerVersion: "v0.0.1-dev.112",
+			Runners:       map[string]string{"docker": "unreachable: x", "process": "ready"},
+			Store:         "healthy",
+		},
+		Namespaces: []namespaceReport{},
+	}
+	b, _ := json.Marshal(report)
+	s := string(b)
+	for _, want := range []string{`"runners"`, `"docker":"unreachable: x"`, `"store":"healthy"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("json missing %s\nfull: %s", want, s)
+		}
 	}
 }

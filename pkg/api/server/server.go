@@ -180,7 +180,7 @@ func (s *APIServer) Start() error {
 	s.logService = service.NewLogService(s.store, s.logger, s.orchestrator)
 	s.execService = service.NewExecService(s.logger, s.orchestrator)
 	s.portForwardService = service.NewPortForwardService(s.logger, s.orchestrator)
-	s.healthService = service.NewHealthService(s.store, s.logger)
+	s.healthService = service.NewHealthService(s.store, s.runnerManager, s.logger)
 	s.secretService = service.NewSecretService(s.store, s.logger)
 	s.configService = service.NewConfigmapService(s.store, s.logger)
 	s.authService = service.NewAuthService(s.store, s.logger)
