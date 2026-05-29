@@ -12,6 +12,7 @@ import (
 
 	"github.com/pterm/pterm"
 	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/cli/format"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
@@ -34,9 +35,10 @@ type statusOptions struct {
 	allNamespaces bool
 	watch         bool
 	watchInterval time.Duration
-	outputFormat  string // "" (text), "json", "yaml"
-	detail        bool   // expand each namespace into per-service rows
-	noRollUp      bool   // skip the roll-up header (useful when piping text)
+	outputFormat  string        // "" (text), "json", "yaml"
+	detail        bool          // expand each namespace into per-service rows
+	noRollUp      bool          // skip the roll-up header (useful when piping text)
+	since         time.Duration // recent-activity window (P3)
 
 	// global is the resolved scope: true => roll up every namespace (the
 	// default for a bare `rune status`); false => focus the single namespace
@@ -85,6 +87,7 @@ Examples:
 	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", "", "Output format: '' (text), 'json', 'yaml'")
 	cmd.Flags().BoolVar(&opts.detail, "detail", false, "In the global view, include the per-service table for each namespace")
 	cmd.Flags().BoolVar(&opts.noRollUp, "no-roll-up", false, "Hide the roll-up header (useful when piping)")
+	cmd.Flags().DurationVar(&opts.since, "since", 15*time.Minute, "Recent-activity window: show WARN/ERR events from the last N (0 disables the feed)")
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "Address of the API server")
 
 	return cmd
@@ -121,9 +124,54 @@ func runStatus(cmd *cobra.Command, args []string, opts *statusOptions) error {
 type statusReport struct {
 	// Server / Context identify which cluster this summary is about. Read
 	// from the active CLI context (no extra RPC). Empty when unconfigured.
-	Server     string            `json:"server,omitempty" yaml:"server,omitempty"`
-	Context    string            `json:"context,omitempty" yaml:"context,omitempty"`
-	Namespaces []namespaceReport `json:"namespaces" yaml:"namespaces"`
+	Server  string `json:"server,omitempty" yaml:"server,omitempty"`
+	Context string `json:"context,omitempty" yaml:"context,omitempty"`
+	// Cluster is the global cluster section (P2). Collected only for the
+	// global view; nil when focused (-n) or when unavailable. Each field
+	// is independently best-effort — admin-only RPCs (network/registries)
+	// stay nil for non-admin callers rather than failing the command.
+	Cluster *clusterReport `json:"cluster,omitempty" yaml:"cluster,omitempty"`
+	// RecentActivity is the WARN/ERR event feed (P3) within --since. Spans
+	// all namespaces in the global view; one namespace under -n. Each brief
+	// carries its namespace so the global renderer can prefix it.
+	RecentActivity []activityBrief   `json:"recentActivity,omitempty" yaml:"recentActivity,omitempty"`
+	Namespaces     []namespaceReport `json:"namespaces" yaml:"namespaces"`
+}
+
+// clusterReport is the global cluster section. Sourced from real RPCs only:
+// server version (GetServerVersion), networking (admin NetworkStatus), and
+// registry auth (admin RegistriesStatus). There is no per-runner or store
+// health RPC — api-server health is liveness-only — so we don't fabricate
+// "Runners: ready" / "Store: healthy"; server reachability stands in.
+type clusterReport struct {
+	ServerVersion string           `json:"serverVersion,omitempty" yaml:"serverVersion,omitempty"`
+	Network       *networkBrief    `json:"network,omitempty" yaml:"network,omitempty"`
+	Registries    *registriesBrief `json:"registries,omitempty" yaml:"registries,omitempty"`
+}
+
+type networkBrief struct {
+	CIDR          string `json:"cidr" yaml:"cidr"`
+	VIPsAllocated int    `json:"vipsAllocated" yaml:"vipsAllocated"`
+	Capacity      int    `json:"capacity" yaml:"capacity"`
+}
+
+type registriesBrief struct {
+	Total   int `json:"total" yaml:"total"`
+	OK      int `json:"ok" yaml:"ok"`
+	Failing int `json:"failing" yaml:"failing"`
+}
+
+// activityBrief is a projection of a WARN/ERR Event for the recent-activity
+// feed. LastSeen is humanized (e.g. "5m") at collection time.
+type activityBrief struct {
+	Namespace string `json:"namespace" yaml:"namespace"`
+	Kind      string `json:"kind" yaml:"kind"`
+	Name      string `json:"name" yaml:"name"`
+	Level     string `json:"level" yaml:"level"`
+	Reason    string `json:"reason,omitempty" yaml:"reason,omitempty"`
+	Message   string `json:"message,omitempty" yaml:"message,omitempty"`
+	Count     int    `json:"count" yaml:"count"`
+	LastSeen  string `json:"lastSeen,omitempty" yaml:"lastSeen,omitempty"`
 }
 
 type namespaceReport struct {
@@ -146,6 +194,9 @@ type statusSummary struct {
 	// InstanceStates breaks the total down by instance status. Added
 	// alongside Instances (kept for back-compat) rather than replacing it.
 	InstanceStates instanceStateCounts `json:"instanceStates" yaml:"instanceStates"`
+	// Secrets / Configmaps counts (P2). Best-effort; 0 if the list failed.
+	Secrets    int `json:"secrets" yaml:"secrets"`
+	Configmaps int `json:"configmaps" yaml:"configmaps"`
 }
 
 // instanceStateCounts buckets non-deleted instances by status for the
@@ -178,6 +229,8 @@ type serviceReport struct {
 func collectStatus(api *client.Client, opts *statusOptions) (*statusReport, error) {
 	sc := client.NewServiceClient(api)
 	ic := client.NewInstanceClient(api)
+	sec := client.NewSecretClient(api)
+	cm := client.NewConfigmapClient(api)
 
 	var namespaces []string
 	if opts.global {
@@ -200,7 +253,7 @@ func collectStatus(api *client.Client, opts *statusOptions) (*statusReport, erro
 		report.Server = opts.addressOverride
 	}
 	for _, ns := range namespaces {
-		nr, err := collectNamespace(sc, ic, ns)
+		nr, err := collectNamespace(sc, ic, sec, cm, ns)
 		if err != nil {
 			// Best-effort: include the error in the report rather than
 			// failing the whole command — `-A` should still show
@@ -214,7 +267,120 @@ func collectStatus(api *client.Client, opts *statusOptions) (*statusReport, erro
 		}
 		report.Namespaces = append(report.Namespaces, *nr)
 	}
+
+	// P2: cluster section is global-only (the focused -n view omits it).
+	if opts.global {
+		report.Cluster = collectCluster(api)
+	}
+	// P3: recent activity feed (best-effort).
+	report.RecentActivity = collectRecentActivity(api, opts)
+
 	return report, nil
+}
+
+// collectCluster assembles the global cluster section. Every probe is
+// independent and best-effort: a nil sub-field (e.g. non-admin caller
+// denied NetworkStatus) degrades that line, never the command. Returns
+// nil only if nothing at all could be gathered.
+func collectCluster(api *client.Client) *clusterReport {
+	cr := &clusterReport{}
+
+	hc := generated.NewHealthServiceClient(api.Conn())
+	if ctx, cancel := api.Context(); true {
+		if v, err := hc.GetServerVersion(ctx, &generated.GetServerVersionRequest{}); err == nil && v != nil {
+			cr.ServerVersion = v.Version
+		}
+		cancel()
+	}
+
+	ac := generated.NewAdminServiceClient(api.Conn())
+	if ctx, cancel := api.Context(); true {
+		if ns, err := ac.NetworkStatus(ctx, &generated.NetworkStatusRequest{}); err == nil && ns != nil && ns.Cidr != "" {
+			cr.Network = &networkBrief{
+				CIDR:          ns.Cidr,
+				VIPsAllocated: len(ns.Allocations),
+				Capacity:      int(ns.Capacity),
+			}
+		}
+		cancel()
+	}
+	if ctx, cancel := api.Context(); true {
+		if rs, err := ac.RegistriesStatus(ctx, &generated.RegistriesStatusRequest{}); err == nil && rs != nil {
+			rb := &registriesBrief{Total: len(rs.Registries)}
+			for _, r := range rs.Registries {
+				if r.LastError == "" {
+					rb.OK++
+				} else {
+					rb.Failing++
+				}
+			}
+			cr.Registries = rb
+		}
+		cancel()
+	}
+
+	if cr.ServerVersion == "" && cr.Network == nil && cr.Registries == nil {
+		return nil
+	}
+	return cr
+}
+
+// collectRecentActivity returns WARN/ERR events within opts.since, newest
+// first, capped. Global (no -n) spans all namespaces; focused reads one.
+// Best-effort: returns nil if the event service is unavailable or disabled.
+func collectRecentActivity(api *client.Client, opts *statusOptions) []activityBrief {
+	if opts.since <= 0 {
+		return nil
+	}
+	const maxItems = 20
+	ns := ""
+	if !opts.global {
+		ns = opts.namespace
+	}
+	evs, err := client.NewEventClient(api).ListEvents(ns, "", "", maxItems*4)
+	if err != nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-opts.since)
+	var out []activityBrief
+	for _, e := range evs {
+		if e == nil {
+			continue
+		}
+		lvl := strings.ToUpper(e.Level)
+		if lvl != "WARN" && lvl != "ERR" && lvl != "ERROR" {
+			continue
+		}
+		// LastSeen is RFC3339; skip events outside the window. Parse
+		// failures fall through (better to show than silently drop).
+		if ts, perr := time.Parse(time.RFC3339, e.LastSeen); perr == nil && ts.Before(cutoff) {
+			continue
+		}
+		out = append(out, activityBrief{
+			Namespace: e.Namespace,
+			Kind:      strings.ToLower(e.Kind),
+			Name:      e.Name,
+			Level:     lvl,
+			Reason:    e.Reason,
+			Message:   e.Message,
+			Count:     int(e.Count),
+			LastSeen:  humanizeEventAge(e.LastSeen),
+		})
+		if len(out) >= maxItems {
+			break
+		}
+	}
+	return out
+}
+
+// humanizeEventAge renders an RFC3339 timestamp as a compact age ("5m").
+// Falls back to the raw string when it can't be parsed.
+func humanizeEventAge(rfc3339 string) string {
+	t, err := time.Parse(time.RFC3339, rfc3339)
+	if err != nil {
+		return rfc3339
+	}
+	return formatAge(t)
 }
 
 // activeContext returns the configured server address and current context
@@ -232,7 +398,7 @@ func activeContext() (server, contextName string) {
 	return server, contextName
 }
 
-func collectNamespace(sc *client.ServiceClient, ic *client.InstanceClient, namespace string) (*namespaceReport, error) {
+func collectNamespace(sc *client.ServiceClient, ic *client.InstanceClient, sec *client.SecretClient, cm *client.ConfigmapClient, namespace string) (*namespaceReport, error) {
 	services, err := sc.ListServices(types.NS(namespace), "", "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list services in %s: %w", namespace, err)
@@ -292,6 +458,14 @@ func collectNamespace(sc *client.ServiceClient, ic *client.InstanceClient, names
 	nr.Summary.Instances = totalInstances
 	nr.Summary.InstanceStates = states
 
+	// Secrets / configmaps counts (best-effort; a list failure leaves 0).
+	if secs, err := sec.ListSecrets(namespace, "", ""); err == nil {
+		nr.Summary.Secrets = len(secs)
+	}
+	if cms, err := cm.ListConfigmaps(namespace, "", ""); err == nil {
+		nr.Summary.Configmaps = len(cms)
+	}
+
 	// Stable sort: needs-attention statuses bubble up, ties broken by name.
 	sort.SliceStable(nr.Services, func(i, j int) bool {
 		if pi, pj := statusPriority(nr.Services[i].Status), statusPriority(nr.Services[j].Status); pi != pj {
@@ -348,7 +522,12 @@ func renderStatus(w *os.File, report *statusReport, opts *statusOptions) error {
 func renderStatusText(w *os.File, report *statusReport, opts *statusOptions) error {
 	renderStatusBanner(w, report, opts.noRollUp)
 	if opts.global {
-		return renderAllNamespaces(w, report, opts)
+		renderCluster(w, report.Cluster)
+		if err := renderAllNamespaces(w, report, opts); err != nil {
+			return err
+		}
+		renderRecentActivity(w, report.RecentActivity, true)
+		return nil
 	}
 	if len(report.Namespaces) == 0 {
 		fmt.Fprintln(w, "No namespaces found")
@@ -357,7 +536,63 @@ func renderStatusText(w *os.File, report *statusReport, opts *statusOptions) err
 	nr := report.Namespaces[0]
 	renderHeader(w, nr, opts.noRollUp)
 	renderServiceTable(w, nr.Services)
+	renderRecentActivity(w, report.RecentActivity, false)
 	return nil
+}
+
+// renderCluster prints the global cluster section. Lines are emitted only
+// for signals that were actually gathered, so a non-admin caller (no
+// network/registries access) just sees the server line. nil => no section.
+func renderCluster(w *os.File, c *clusterReport) {
+	if c == nil {
+		return
+	}
+	fmt.Fprintln(w, format.Highlight("Cluster"))
+	if c.ServerVersion != "" {
+		fmt.Fprintf(w, "  %-11s %s\n", "Server:", c.ServerVersion)
+	}
+	if c.Network != nil {
+		extra := ""
+		if c.Network.Capacity > 0 {
+			extra = fmt.Sprintf(", capacity %d", c.Network.Capacity)
+		}
+		fmt.Fprintf(w, "  %-11s cidr=%s, vips=%d%s\n", "Network:", c.Network.CIDR, c.Network.VIPsAllocated, extra)
+	}
+	if c.Registries != nil {
+		r := c.Registries
+		line := fmt.Sprintf("%d (ok %d", r.Total, r.OK)
+		if r.Failing > 0 {
+			line += fmt.Sprintf(", failing %d", r.Failing)
+		}
+		line += ")"
+		fmt.Fprintf(w, "  %-11s %s\n", "Registries:", line)
+	}
+	fmt.Fprintln(w)
+}
+
+// renderRecentActivity prints the WARN/ERR feed. global=true prefixes each
+// line with its namespace (the feed spans the cluster). Nothing prints when
+// the feed is empty — a quiet cluster shouldn't grow a blank section.
+func renderRecentActivity(w *os.File, items []activityBrief, global bool) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintln(w, format.Highlight("Recent activity"))
+	for _, a := range items {
+		target := fmt.Sprintf("%s/%s", a.Kind, a.Name)
+		if global && a.Namespace != "" {
+			target = fmt.Sprintf("%s/%s", a.Namespace, target)
+		}
+		line := fmt.Sprintf("  %-5s %s %s", a.LastSeen, format.PTermEventLevelLabel(a.Level), target)
+		if a.Reason != "" {
+			line += "  " + a.Reason
+		}
+		if a.Count > 1 {
+			line += fmt.Sprintf("  ×%d", a.Count)
+		}
+		fmt.Fprintln(w, line)
+	}
+	fmt.Fprintln(w)
 }
 
 // renderStatusBanner prints the "server / context" line that identifies
@@ -446,8 +681,9 @@ func instancesCell(s statusSummary) string {
 // present — e.g. a healthy namespace just shows "✓ Running 12", not five
 // rows of zeros.
 func renderHeader(w *os.File, nr namespaceReport, hideRollUp bool) {
-	fmt.Fprintf(w, "Namespace: %s   ·   %d services   ·   %d instances\n",
-		format.Highlight("%s", nr.Namespace), nr.Summary.Total, nr.Summary.Instances)
+	fmt.Fprintf(w, "Namespace: %s   ·   %d services   ·   %d instances   ·   %d secrets   ·   %d configmaps\n",
+		format.Highlight("%s", nr.Namespace), nr.Summary.Total, nr.Summary.Instances,
+		nr.Summary.Secrets, nr.Summary.Configmaps)
 	if hideRollUp {
 		fmt.Fprintln(w)
 		return

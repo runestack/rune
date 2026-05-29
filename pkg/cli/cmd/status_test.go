@@ -199,3 +199,60 @@ func TestStatusJSONInstanceStates(t *testing.T) {
 		}
 	}
 }
+
+// P2/P3 additive JSON: cluster section, recent activity, and secrets/
+// configmaps counts serialize without disturbing the existing keys.
+func TestStatusJSONClusterAndActivity(t *testing.T) {
+	report := &statusReport{
+		Server:  "prod:7863",
+		Context: "default",
+		Cluster: &clusterReport{
+			ServerVersion: "v0.0.1-dev.111",
+			Network:       &networkBrief{CIDR: "10.96.0.0/16", VIPsAllocated: 12, Capacity: 65534},
+			Registries:    &registriesBrief{Total: 2, OK: 2},
+		},
+		RecentActivity: []activityBrief{
+			{Namespace: "stg", Kind: "instance", Name: "payments-2", Level: "ERR", Reason: "CrashLoopBackOff", Count: 2, LastSeen: "5m"},
+		},
+		Namespaces: []namespaceReport{{
+			Namespace: "stg",
+			Summary:   statusSummary{Total: 1, Running: 1, Instances: 2, Secrets: 9, Configmaps: 7},
+			Services:  []serviceReport{{Name: "api", Status: "Running"}},
+		}},
+	}
+	b, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		`"cluster"`, `"serverVersion":"v0.0.1-dev.111"`, `"cidr":"10.96.0.0/16"`, `"vipsAllocated":12`,
+		`"recentActivity"`, `"reason":"CrashLoopBackOff"`,
+		`"secrets":9`, `"configmaps":7`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("json missing %s\nfull: %s", want, s)
+		}
+	}
+}
+
+// A nil cluster / empty activity must omit those keys (omitempty), so a
+// focused or non-admin run doesn't emit empty scaffolding.
+func TestStatusJSONOmitsAbsentClusterAndActivity(t *testing.T) {
+	report := &statusReport{Namespaces: []namespaceReport{}}
+	b, _ := json.Marshal(report)
+	s := string(b)
+	if strings.Contains(s, "cluster") || strings.Contains(s, "recentActivity") {
+		t.Errorf("expected cluster/recentActivity omitted, got: %s", s)
+	}
+}
+
+func TestHumanizeEventAge(t *testing.T) {
+	// Parseable RFC3339 → an age string; unparseable → returned verbatim.
+	if got := humanizeEventAge("not-a-time"); got != "not-a-time" {
+		t.Errorf("fallback = %q, want verbatim", got)
+	}
+	if got := humanizeEventAge(""); got != "" {
+		t.Errorf("empty = %q, want empty", got)
+	}
+}
