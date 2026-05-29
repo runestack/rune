@@ -549,6 +549,11 @@ func accessModeSupported(m runetypes.AccessMode) bool {
 	return m == "" || m == runetypes.AccessModeRWO
 }
 
+// maxEBSGiB is the largest EBS volume size (64 TiB, io2 Block Express).
+// Sizes above this are rejected — they can't be provisioned and the
+// bound also keeps the int64→int32 conversion below provably safe.
+const maxEBSGiB = 64 * 1024
+
 // bytesToGiB rounds up to the next whole binary gibibyte (EBS sizes are
 // in GiB) with a 1 GiB floor — EBS's minimum volume size.
 func bytesToGiB(b int64) (int32, error) {
@@ -560,7 +565,10 @@ func bytesToGiB(b int64) (int32, error) {
 	if g < 1 {
 		g = 1
 	}
-	return int32(g), nil
+	if g > maxEBSGiB {
+		return 0, fmt.Errorf("awsebs: size %d bytes (%d GiB) exceeds the maximum EBS volume size of %d GiB", b, g, maxEBSGiB)
+	}
+	return int32(g), nil //nolint:gosec // G115: bounded above by maxEBSGiB
 }
 
 // parseQuantity is a minimal Kubernetes-style storage quantity parser

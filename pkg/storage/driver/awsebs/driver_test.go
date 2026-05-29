@@ -649,6 +649,10 @@ func TestBytesToGiB(t *testing.T) {
 	if _, err := bytesToGiB(0); err == nil {
 		t.Fatal("expected error for 0 bytes")
 	}
+	// Above the EBS max (64 TiB) -> error, not an overflowed int32.
+	if _, err := bytesToGiB((maxEBSGiB + 1) * (1 << 30)); err == nil {
+		t.Fatal("expected error for size beyond the EBS maximum")
+	}
 }
 
 func TestPickDevice(t *testing.T) {
