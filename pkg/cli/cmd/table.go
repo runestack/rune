@@ -406,6 +406,40 @@ func (t *ResourceTable) RenderConfigmaps(configmaps []*types.Configmap) error {
 	return t.tableRenderer.WithData(rows).Render()
 }
 
+// RenderEvents renders a table of resource events, newest-first as
+// supplied by the caller. The TARGET column is "<kind>/<name>" with the
+// kind lowercased (e.g. instance/gateway-0) to match the resource-ref
+// style used elsewhere in the CLI and in `rune describe`.
+func (t *ResourceTable) RenderEvents(events []*generated.Event) error {
+	if len(events) == 0 {
+		fmt.Println(t.emptyMessage("events"))
+		return nil
+	}
+
+	if len(t.Headers) == 0 {
+		t.Headers = []string{"TIME", "LEVEL", "TARGET", "COUNT", "REASON", "MESSAGE"}
+	}
+
+	rows := [][]string{t.Headers}
+	for _, e := range events {
+		count := ""
+		if e.Count > 1 {
+			count = fmt.Sprintf("×%d", e.Count)
+		}
+		target := strings.ToLower(e.Kind) + "/" + e.Name
+		rows = append(rows, []string{
+			e.LastSeen,
+			format.PTermEventLevelLabel(e.Level),
+			target,
+			count,
+			e.Reason,
+			e.Message,
+		})
+	}
+
+	return t.tableRenderer.WithData(rows).Render()
+}
+
 // Helper functions with unique names to avoid conflicts
 
 // formatAgeTable formats a time.Time as a human-readable age string

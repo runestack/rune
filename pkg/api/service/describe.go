@@ -263,9 +263,65 @@ func (s *DescribeService) describeService(ctx context.Context, ns, name string) 
 		})
 	}
 
+	if sec := serviceDiscoverySection(&svc); sec != nil {
+		res.Sections = append(res.Sections, sec)
+	}
+
 	res.Hints = []string{fmt.Sprintf("rune logs %s -n %s --tail=50", svc.Name, svc.Namespace)}
 	s.attachEvents(ctx, res, svc.Namespace, "Service", svc.Name)
 	return res, nil
+}
+
+// serviceDiscoverySection renders the in-cluster discovery endpoint for a
+// service — the counterpart to the external endpoint shown by
+// `rune get ingress`. Other services reach this one at its cluster DNS
+// name (<svc>.<ns>.rune) on the declared ports; the dataplane proxies the
+// VIP to a healthy instance. Returns nil when there's nothing useful to
+// show (no VIP and no ports), so headless/degenerate services don't get an
+// empty block.
+func serviceDiscoverySection(svc *types.Service) *generated.DescribeSection {
+	vip := ""
+	mode := ""
+	if svc.Discovery != nil {
+		vip = svc.Discovery.VIP
+		mode = svc.Discovery.Mode
+	}
+	if vip == "" && len(svc.Ports) == 0 {
+		return nil
+	}
+
+	clusterDNS := fmt.Sprintf("%s.%s.rune", svc.Name, svc.Namespace)
+
+	vipStr := vip
+	if vipStr == "" {
+		vipStr = "(not allocated)"
+	}
+
+	lines := []string{
+		fmt.Sprintf("%-13s %s", "VIP:", vipStr),
+		fmt.Sprintf("%-13s %s", "Cluster DNS:", clusterDNS),
+	}
+	if mode != "" {
+		lines = append(lines, fmt.Sprintf("%-13s %s", "Mode:", mode))
+	}
+
+	if len(svc.Ports) > 0 {
+		lines = append(lines, "Endpoints:")
+		for _, p := range svc.Ports {
+			ep := fmt.Sprintf("  %s:%d", clusterDNS, p.Port)
+			if p.Name != "" {
+				ep += fmt.Sprintf(" (%s)", p.Name)
+			}
+			// hostPort is the dev-mode escape hatch (macOS Docker Desktop):
+			// the same container port is also published on host loopback.
+			if p.HostPort > 0 {
+				ep += fmt.Sprintf("  [dev: 127.0.0.1:%d]", p.HostPort)
+			}
+			lines = append(lines, ep)
+		}
+	}
+
+	return &generated.DescribeSection{Title: "Discovery", Lines: lines}
 }
 
 func (s *DescribeService) describeVolume(ctx context.Context, ns, name string) (*generated.DescribeResult, error) {
