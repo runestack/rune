@@ -272,13 +272,17 @@ func (s *DescribeService) describeService(ctx context.Context, ns, name string) 
 	return res, nil
 }
 
-// serviceDiscoverySection renders the in-cluster discovery endpoint for a
-// service — the counterpart to the external endpoint shown by
-// `rune get ingress`. Other services reach this one at its cluster DNS
-// name (<svc>.<ns>.rune) on the declared ports; the dataplane proxies the
-// VIP to a healthy instance. Returns nil when there's nothing useful to
-// show (no VIP and no ports), so headless/degenerate services don't get an
-// empty block.
+// serviceDiscoverySection renders how a service is reached, both east-west
+// (in-cluster) and north-south (external ingress):
+//
+//   - Cluster: VIP + DNS name (<svc>.<ns>.rune) on the declared ports; the
+//     dataplane proxies the VIP to a healthy instance. hostPort ports also
+//     show the dev loopback form (127.0.0.1:<hostPort>).
+//   - External: the ingress URL (the same thing `rune get ingress` shows),
+//     present only when the service has spec.expose.host set.
+//
+// Returns nil when there's nothing useful to show, so headless/degenerate
+// services don't get an empty block.
 func serviceDiscoverySection(svc *types.Service) *generated.DescribeSection {
 	vip := ""
 	mode := ""
@@ -286,7 +290,8 @@ func serviceDiscoverySection(svc *types.Service) *generated.DescribeSection {
 		vip = svc.Discovery.VIP
 		mode = svc.Discovery.Mode
 	}
-	if vip == "" && len(svc.Ports) == 0 {
+	exposed := svc.Expose != nil && svc.Expose.Host != ""
+	if vip == "" && len(svc.Ports) == 0 && !exposed {
 		return nil
 	}
 
@@ -321,7 +326,42 @@ func serviceDiscoverySection(svc *types.Service) *generated.DescribeSection {
 		}
 	}
 
+	if exposed {
+		lines = append(lines, fmt.Sprintf("%-13s %s", "External:", serviceExternalEndpoint(svc)))
+	}
+
 	return &generated.DescribeSection{Title: "Discovery", Lines: lines}
+}
+
+// serviceExternalEndpoint builds the ingress URL line shown under
+// Discovery → External. Scheme is https when TLS is configured, http
+// otherwise. The TLS mode and cert state are appended in brackets so a
+// failing cert is visible without running `rune get ingress`.
+func serviceExternalEndpoint(svc *types.Service) string {
+	scheme := "http"
+	tlsMode := ""
+	if svc.Expose.TLS != nil {
+		scheme = "https"
+		switch {
+		case svc.Expose.TLS.IsACME():
+			tlsMode = types.ExposeTLSModeACME
+		case svc.Expose.TLS.Secret != "":
+			tlsMode = types.ExposeTLSModeManual
+		}
+	}
+	url := fmt.Sprintf("%s://%s%s", scheme, svc.Expose.Host, svc.Expose.Path)
+
+	var annotations []string
+	if tlsMode != "" {
+		annotations = append(annotations, "TLS: "+tlsMode)
+	}
+	if svc.IngressCert != nil && svc.IngressCert.State != "" {
+		annotations = append(annotations, "cert: "+string(svc.IngressCert.State))
+	}
+	if len(annotations) > 0 {
+		url += "  [" + strings.Join(annotations, ", ") + "]"
+	}
+	return url
 }
 
 func (s *DescribeService) describeVolume(ctx context.Context, ns, name string) (*generated.DescribeResult, error) {

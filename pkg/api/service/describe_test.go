@@ -227,6 +227,42 @@ func TestDescribe_Service_DiscoverySection(t *testing.T) {
 	assert.Contains(t, joined, "127.0.0.1:19002")
 }
 
+func TestDescribe_Service_DiscoveryExternalEndpoint(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	require.NoError(t, st.Create(context.Background(), types.ResourceTypeService, "prod", "web",
+		&types.Service{
+			ID: "s-web", Name: "web", Namespace: "prod", Scale: 2,
+			Status:    types.ServiceStatusRunning,
+			Discovery: &types.ServiceDiscovery{VIP: "10.96.0.9"},
+			Ports:     []types.ServicePort{{Name: "http", Port: 8080}},
+			Expose: &types.ServiceExpose{
+				Host: "web.example.com",
+				Path: "/",
+				TLS:  &types.ExposeServiceTLS{Mode: types.ExposeTLSModeACME},
+			},
+			IngressCert: &types.IngressCertStatus{State: types.IngressCertIssued},
+		}))
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{
+		Kind: "service", Name: "web", Namespace: "prod",
+	})
+	require.NoError(t, err)
+
+	var disc *generated.DescribeSection
+	for _, sec := range resp.Result.Sections {
+		if sec.Title == "Discovery" {
+			disc = sec
+		}
+	}
+	require.NotNil(t, disc)
+
+	joined := strings.Join(disc.Lines, "\n")
+	assert.Contains(t, joined, "External:")
+	assert.Contains(t, joined, "https://web.example.com/")
+	assert.Contains(t, joined, "TLS: acme")
+	assert.Contains(t, joined, "cert: Issued")
+}
+
 func TestDescribe_Service_DiscoveryOmittedWhenEmpty(t *testing.T) {
 	svc, st := newDescribeTestService(t)
 	require.NoError(t, st.Create(context.Background(), types.ResourceTypeService, "prod", "bare",
