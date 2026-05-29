@@ -188,7 +188,7 @@ func renderDescribe(w io.Writer, r *generated.DescribeResult) {
 
 	fmt.Fprintln(w)
 	if len(r.Events) == 0 {
-		fmt.Fprintf(w, "Events:          %s\n", dim("(none yet — RUNE-126 Phase 2)"))
+		fmt.Fprintf(w, "Events:          %s\n", dim("(none)"))
 	} else {
 		fmt.Fprintln(w, "Events:")
 		for _, e := range r.Events {
