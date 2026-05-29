@@ -87,7 +87,11 @@ issues:
     - examples/
 
 run:
-  deadline: 5m
+  # `timeout` (was `deadline`, deprecated and ignored by newer
+  # golangci-lint, which then falls back to the 1m default). The EC2
+  # SDK added for the aws-ebs driver pushes whole-module analysis past
+  # 1m, so the intended 5m must actually take effect.
+  timeout: 5m
   tests: true
 
 output:
