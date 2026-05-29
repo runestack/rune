@@ -141,3 +141,61 @@ func TestStatusGlyphFallbackToASCII(t *testing.T) {
 		}
 	}
 }
+
+// shortImage trims the registry/repo prefix so the service table stays
+// narrow, keeping the image name + tag.
+func TestShortImage(t *testing.T) {
+	cases := map[string]string{
+		"ghcr.io/withpropeller/propeller/api:feat-x": "…/api:feat-x",
+		"nginx:1.27":     "nginx:1.27", // no registry prefix → unchanged
+		"nginx":          "nginx",
+		"":               "-",
+		"org/app:latest": "…/app:latest",
+	}
+	for in, want := range cases {
+		if got := shortImage(in); got != want {
+			t.Errorf("shortImage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// instancesCell shows just the total when healthy, and appends non-running
+// states (attention) when present.
+func TestInstancesCell(t *testing.T) {
+	healthy := statusSummary{Instances: 21, InstanceStates: instanceStateCounts{Running: 21}}
+	if got := instancesCell(healthy); got != "21" {
+		t.Errorf("healthy = %q, want %q", got, "21")
+	}
+	trouble := statusSummary{Instances: 28, InstanceStates: instanceStateCounts{Running: 25, Starting: 1, Failed: 2}}
+	got := instancesCell(trouble)
+	if !strings.Contains(got, "28 (") || !strings.Contains(got, "1 starting") || !strings.Contains(got, "2 failed") {
+		t.Errorf("trouble = %q, want it to show total + starting + failed", got)
+	}
+}
+
+// The summary JSON gains instanceStates without dropping the flat keys
+// scripts already rely on.
+func TestStatusJSONInstanceStates(t *testing.T) {
+	report := &statusReport{
+		Server:  "prod:7863",
+		Context: "default",
+		Namespaces: []namespaceReport{{
+			Namespace: "prod",
+			Summary: statusSummary{
+				Total: 1, Running: 1, Instances: 3,
+				InstanceStates: instanceStateCounts{Running: 2, Starting: 1},
+			},
+			Services: []serviceReport{{Name: "api", Status: "Running", Image: "ghcr.io/org/api:1", DesiredScale: 3, ReadyInstances: 2}},
+		}},
+	}
+	b, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+	for _, want := range []string{`"server":"prod:7863"`, `"context":"default"`, `"instanceStates"`, `"starting":1`, `"image":"ghcr.io/org/api:1"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("json missing %s\nfull: %s", want, s)
+		}
+	}
+}

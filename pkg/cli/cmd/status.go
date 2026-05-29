@@ -35,8 +35,15 @@ type statusOptions struct {
 	watch         bool
 	watchInterval time.Duration
 	outputFormat  string // "" (text), "json", "yaml"
-	detail        bool   // with -A, expand each namespace into per-service rows
+	detail        bool   // expand each namespace into per-service rows
 	noRollUp      bool   // skip the roll-up header (useful when piping text)
+
+	// global is the resolved scope: true => roll up every namespace (the
+	// default for a bare `rune status`); false => focus the single namespace
+	// the user named with -n. Computed in runStatus from whether -n was
+	// passed (and -A, which forces global). See the Scope model in
+	// _docs/designs/RUNE-0XY-Status-Command-Design.md.
+	global bool
 }
 
 // newStatusCmd creates the status command. The default output is a
@@ -47,37 +54,36 @@ func newStatusCmd() *cobra.Command {
 	opts := &statusOptions{}
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show a quick health summary for services",
-		Long: `Show a roll-up of service health for a namespace (or all namespaces with -A).
+		Short: "Show a health summary for the whole cluster (or a namespace)",
+		Long: `Show an at-a-glance health summary.
 
-The default output groups services into Running / Deploying / Stopping /
-Failed / Pending and prints a per-service table with the desired/ready
-scale, age, and — for non-Running rows — the status reason and message
-so you don't need a second command to learn why something is unhealthy.
+By default — with no -n — this reports on the WHOLE cluster: a one-line
+roll-up for every namespace. Name a namespace with -n to focus on it and
+get the full per-service table (status, ready/desired scale, image, age,
+and the reason/message for anything not Running).
 
 Examples:
-  rune status                         # default namespace
-  rune status -n prod                 # specific namespace
-  rune status -A                      # all namespaces, one summary line each
-  rune status -A --detail             # all namespaces + per-service table for each
+  rune status                         # GLOBAL: roll-up across all namespaces
+  rune status -n prod                 # focus one namespace (per-service table)
+  rune status --detail                # per-service table for every namespace
   rune status -w                      # re-render every 2s (Ctrl+C to exit)
   rune status -o json                 # structured output for scripting`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !opts.allNamespaces {
-				opts.namespace = effectiveCmdNS(opts.namespace)
-			}
+			// Global by default. -n focuses a namespace; -A forces global
+			// even if a default namespace is configured (back-compat alias).
+			opts.global = opts.allNamespaces || !cmd.Flags().Changed("namespace")
 			return runStatus(cmd, args, opts)
 		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 
-	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace to summarize (ignored with -A)")
-	cmd.Flags().BoolVarP(&opts.allNamespaces, "all-namespaces", "A", false, "Summarize every namespace")
+	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Focus a single namespace (default: roll up all namespaces)")
+	cmd.Flags().BoolVarP(&opts.allNamespaces, "all-namespaces", "A", false, "Roll up every namespace (the default; kept for back-compat)")
 	cmd.Flags().BoolVarP(&opts.watch, "watch", "w", false, "Re-render every --watch-interval seconds until Ctrl+C")
 	cmd.Flags().DurationVar(&opts.watchInterval, "watch-interval", 2*time.Second, "Refresh interval for --watch")
 	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", "", "Output format: '' (text), 'json', 'yaml'")
-	cmd.Flags().BoolVar(&opts.detail, "detail", false, "With -A, include the per-service table for each namespace")
+	cmd.Flags().BoolVar(&opts.detail, "detail", false, "In the global view, include the per-service table for each namespace")
 	cmd.Flags().BoolVar(&opts.noRollUp, "no-roll-up", false, "Hide the roll-up header (useful when piping)")
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "Address of the API server")
 
@@ -113,6 +119,10 @@ func runStatus(cmd *cobra.Command, args []string, opts *statusOptions) error {
 // shape is shared by the human renderer and JSON/YAML output, so anything a
 // user can see in the table is also queryable from a script.
 type statusReport struct {
+	// Server / Context identify which cluster this summary is about. Read
+	// from the active CLI context (no extra RPC). Empty when unconfigured.
+	Server     string            `json:"server,omitempty" yaml:"server,omitempty"`
+	Context    string            `json:"context,omitempty" yaml:"context,omitempty"`
 	Namespaces []namespaceReport `json:"namespaces" yaml:"namespaces"`
 }
 
@@ -133,11 +143,25 @@ type statusSummary struct {
 	Failed    int `json:"failed" yaml:"failed"`
 	// Instances is the total count of non-deleted instances in the namespace.
 	Instances int `json:"instances" yaml:"instances"`
+	// InstanceStates breaks the total down by instance status. Added
+	// alongside Instances (kept for back-compat) rather than replacing it.
+	InstanceStates instanceStateCounts `json:"instanceStates" yaml:"instanceStates"`
+}
+
+// instanceStateCounts buckets non-deleted instances by status for the
+// summary. Starting folds in Pending/Created (all "coming up" states).
+type instanceStateCounts struct {
+	Running     int `json:"running" yaml:"running"`
+	Starting    int `json:"starting" yaml:"starting"`
+	Failed      int `json:"failed" yaml:"failed"`
+	Stalled     int `json:"stalled" yaml:"stalled"`
+	Terminating int `json:"terminating" yaml:"terminating"`
 }
 
 type serviceReport struct {
 	Name           string `json:"name" yaml:"name"`
 	Status         string `json:"status" yaml:"status"`
+	Image          string `json:"image,omitempty" yaml:"image,omitempty"`
 	DesiredScale   int    `json:"desiredScale" yaml:"desiredScale"`
 	ReadyInstances int    `json:"readyInstances" yaml:"readyInstances"`
 	Age            string `json:"age" yaml:"age"`
@@ -156,7 +180,7 @@ func collectStatus(api *client.Client, opts *statusOptions) (*statusReport, erro
 	ic := client.NewInstanceClient(api)
 
 	var namespaces []string
-	if opts.allNamespaces {
+	if opts.global {
 		nsClient := client.NewNamespaceClient(api)
 		nss, err := nsClient.ListNamespaces(nil, nil)
 		if err != nil {
@@ -171,6 +195,10 @@ func collectStatus(api *client.Client, opts *statusOptions) (*statusReport, erro
 	}
 
 	report := &statusReport{}
+	report.Server, report.Context = activeContext()
+	if opts.addressOverride != "" {
+		report.Server = opts.addressOverride
+	}
 	for _, ns := range namespaces {
 		nr, err := collectNamespace(sc, ic, ns)
 		if err != nil {
@@ -189,23 +217,50 @@ func collectStatus(api *client.Client, opts *statusOptions) (*statusReport, erro
 	return report, nil
 }
 
+// activeContext returns the configured server address and current context
+// name for the status header. Best-effort and RPC-free: returns empty
+// strings when no context is configured, so status still renders.
+func activeContext() (server, contextName string) {
+	cfg, err := loadContextConfig()
+	if err != nil || cfg == nil {
+		return "", ""
+	}
+	contextName = cfg.CurrentContext
+	if c, ok := cfg.Contexts[contextName]; ok {
+		server = c.Server
+	}
+	return server, contextName
+}
+
 func collectNamespace(sc *client.ServiceClient, ic *client.InstanceClient, namespace string) (*namespaceReport, error) {
 	services, err := sc.ListServices(types.NS(namespace), "", "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list services in %s: %w", namespace, err)
 	}
 
-	// Bucket instance counts per service so we can render desired/ready.
+	// Bucket instance counts per service (for ready/desired) and by state
+	// (for the summary breakdown).
 	ready := map[string]int{}
 	totalInstances := 0
+	var states instanceStateCounts
 	if insts, err := ic.ListInstances(namespace, "", "", ""); err == nil {
 		for _, inst := range insts {
 			if inst == nil || inst.Status == types.InstanceStatusDeleted {
 				continue
 			}
 			totalInstances++
-			if inst.Status == types.InstanceStatusRunning {
+			switch inst.Status {
+			case types.InstanceStatusRunning:
+				states.Running++
 				ready[inst.ServiceName]++
+			case types.InstanceStatusStarting, types.InstanceStatusPending, types.InstanceStatusCreated:
+				states.Starting++
+			case types.InstanceStatusFailed:
+				states.Failed++
+			case types.InstanceStatusStalled:
+				states.Stalled++
+			case types.InstanceStatusTerminating:
+				states.Terminating++
 			}
 		}
 	}
@@ -219,6 +274,7 @@ func collectNamespace(sc *client.ServiceClient, ic *client.InstanceClient, names
 		nr.Services = append(nr.Services, serviceReport{
 			Name:           s.Name,
 			Status:         string(s.Status),
+			Image:          s.Image,
 			DesiredScale:   s.Scale,
 			ReadyInstances: ready[s.Name],
 			Age:            formatAge(updatedAt),
@@ -234,6 +290,7 @@ func collectNamespace(sc *client.ServiceClient, ic *client.InstanceClient, names
 		nr.Summary.Failed += boolToInt(s.Status == types.ServiceStatusFailed)
 	}
 	nr.Summary.Instances = totalInstances
+	nr.Summary.InstanceStates = states
 
 	// Stable sort: needs-attention statuses bubble up, ties broken by name.
 	sort.SliceStable(nr.Services, func(i, j int) bool {
@@ -285,11 +342,12 @@ func renderStatus(w *os.File, report *statusReport, opts *statusOptions) error {
 	}
 }
 
-// renderStatusText is the human-readable renderer: optional roll-up, then
-// per-namespace blocks. With -A we render a one-line summary per namespace
-// unless --detail asks for the full per-service table.
+// renderStatusText is the human-readable renderer. Global (the default)
+// prints the cluster/context header + a per-namespace roll-up; focused
+// (-n) prints one namespace with its full per-service table.
 func renderStatusText(w *os.File, report *statusReport, opts *statusOptions) error {
-	if opts.allNamespaces {
+	renderStatusBanner(w, report, opts.noRollUp)
+	if opts.global {
 		return renderAllNamespaces(w, report, opts)
 	}
 	if len(report.Namespaces) == 0 {
@@ -300,6 +358,23 @@ func renderStatusText(w *os.File, report *statusReport, opts *statusOptions) err
 	renderHeader(w, nr, opts.noRollUp)
 	renderServiceTable(w, nr.Services)
 	return nil
+}
+
+// renderStatusBanner prints the "server / context" line that identifies
+// which cluster this summary describes. Skipped when --no-roll-up (piping)
+// or when no context is configured.
+func renderStatusBanner(w *os.File, report *statusReport, hideRollUp bool) {
+	if hideRollUp || (report.Server == "" && report.Context == "") {
+		return
+	}
+	parts := []string{}
+	if report.Server != "" {
+		parts = append(parts, fmt.Sprintf("server=%s", report.Server))
+	}
+	if report.Context != "" {
+		parts = append(parts, fmt.Sprintf("context=%s", report.Context))
+	}
+	fmt.Fprintf(w, "%s   %s\n\n", format.Highlight("Rune Status"), format.Dim("%s", strings.Join(parts, "   ")))
 }
 
 func renderAllNamespaces(w *os.File, report *statusReport, opts *statusOptions) error {
@@ -324,7 +399,7 @@ func renderAllNamespaces(w *os.File, report *statusReport, opts *statusOptions) 
 		return nil
 	}
 
-	rows := [][]string{{"NAMESPACE", "SERVICES", "RUNNING", "DEPLOYING", "STOPPING", "FAILED", "PENDING"}}
+	rows := [][]string{{"NAMESPACE", "SERVICES", "RUNNING", "DEPLOYING", "STOPPING", "FAILED", "PENDING", "INSTANCES"}}
 	for _, nr := range report.Namespaces {
 		s := nr.Summary
 		rows = append(rows, []string{
@@ -335,9 +410,35 @@ func renderAllNamespaces(w *os.File, report *statusReport, opts *statusOptions) 
 			countCell(s.Stopping, types.ServiceStatusStopping),
 			countCell(s.Failed, types.ServiceStatusFailed),
 			countCell(s.Pending, types.ServiceStatusPending),
+			instancesCell(s),
 		})
 	}
 	return statusTable().WithData(rows).Render()
+}
+
+// instancesCell summarizes a namespace's instances for the global roll-up:
+// the total, plus any non-running states that warrant attention. A fully
+// healthy namespace just shows the count (e.g. "21"); one with trouble
+// shows "28 (1 starting, 2 failed)".
+func instancesCell(s statusSummary) string {
+	st := s.InstanceStates
+	var extra []string
+	if st.Starting > 0 {
+		extra = append(extra, fmt.Sprintf("%d starting", st.Starting))
+	}
+	if st.Failed > 0 {
+		extra = append(extra, fmt.Sprintf("%d failed", st.Failed))
+	}
+	if st.Stalled > 0 {
+		extra = append(extra, fmt.Sprintf("%d stalled", st.Stalled))
+	}
+	if st.Terminating > 0 {
+		extra = append(extra, fmt.Sprintf("%d terminating", st.Terminating))
+	}
+	if len(extra) == 0 {
+		return fmt.Sprintf("%d", s.Instances)
+	}
+	return fmt.Sprintf("%d (%s)", s.Instances, strings.Join(extra, ", "))
 }
 
 // renderHeader prints the namespace header and the bucketed roll-up.
@@ -379,6 +480,12 @@ func renderHeader(w *os.File, nr namespaceReport, hideRollUp bool) {
 	if !any {
 		fmt.Fprintf(w, "  %s\n", format.Dim("no services"))
 	}
+
+	// Instance state breakdown — one line so operators see Starting/Failed/
+	// Stalled without running `rune get instances`.
+	st := s.InstanceStates
+	fmt.Fprintf(w, "\n  %s Running %d · Starting %d · Failed %d · Stalled %d · Terminating %d\n",
+		format.Dim("Instances:"), st.Running, st.Starting, st.Failed, st.Stalled, st.Terminating)
 	fmt.Fprintln(w)
 }
 
@@ -387,7 +494,7 @@ func renderHeader(w *os.File, nr namespaceReport, hideRollUp bool) {
 // is healthy. Uses pterm so colored cells line up correctly (tabwriter
 // counts ANSI escape bytes as visible width and misaligns).
 func renderServiceTable(_ *os.File, services []serviceReport) {
-	rows := [][]string{{"NAME", "STATUS", "SCALE", "AGE", "REASON / MESSAGE"}}
+	rows := [][]string{{"NAME", "STATUS", "SCALE", "IMAGE", "AGE", "REASON / MESSAGE"}}
 	for _, s := range services {
 		reason := ""
 		if s.Status != string(types.ServiceStatusRunning) {
@@ -403,12 +510,27 @@ func renderServiceTable(_ *os.File, services []serviceReport) {
 		rows = append(rows, []string{
 			s.Name,
 			colorStatus(s.Status),
-			fmt.Sprintf("%d/%d", s.DesiredScale, s.ReadyInstances),
+			// ready/desired (k8s convention) — 2/3 = 2 ready of 3 desired.
+			fmt.Sprintf("%d/%d", s.ReadyInstances, s.DesiredScale),
+			shortImage(s.Image),
 			s.Age,
 			reason,
 		})
 	}
 	_ = statusTable().WithData(rows).Render()
+}
+
+// shortImage trims a registry/repo prefix to keep the service table narrow,
+// keeping the final path segment (image name + tag). "…/" marks truncation:
+// ghcr.io/org/proj/api:dev -> …/api:dev. Empty stays "-".
+func shortImage(image string) string {
+	if image == "" {
+		return "-"
+	}
+	if i := strings.LastIndex(image, "/"); i >= 0 {
+		return "…/" + image[i+1:]
+	}
+	return image
 }
 
 // glyphFor returns a bucket glyph for the roll-up. Auto-degrades to ASCII
