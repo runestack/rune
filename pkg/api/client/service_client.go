@@ -969,14 +969,25 @@ func embeddedInstanceToProto(i *types.Instance) *generated.Instance {
 		StatusMessage: i.StatusMessage,
 		ContainerId:   i.ContainerID,
 		Pid:           utils.ToInt32NonNegative(i.PID),
+		CreatedAt:     formatInstanceTime(i.CreatedAt),
+		UpdatedAt:     formatInstanceTime(i.UpdatedAt),
 	}
+}
+
+// formatInstanceTime renders a timestamp as RFC3339, or "" for the zero
+// value so inlined instances don't serialize "0001-01-01T00:00:00Z".
+func formatInstanceTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 func embeddedInstanceFromProto(p *generated.Instance) *types.Instance {
 	if p == nil {
 		return nil
 	}
-	return &types.Instance{
+	inst := &types.Instance{
 		ID:            p.Id,
 		Runner:        types.RunnerType(p.Runner),
 		Namespace:     p.Namespace,
@@ -990,6 +1001,13 @@ func embeddedInstanceFromProto(p *generated.Instance) *types.Instance {
 		ContainerID:   p.ContainerId,
 		PID:           int(p.Pid),
 	}
+	if ts, err := parseTimestamp(p.CreatedAt); err == nil && ts != nil {
+		inst.CreatedAt = *ts
+	}
+	if ts, err := parseTimestamp(p.UpdatedAt); err == nil && ts != nil {
+		inst.UpdatedAt = *ts
+	}
+	return inst
 }
 
 func instanceStatusToProto(s types.InstanceStatus) generated.InstanceStatus {
