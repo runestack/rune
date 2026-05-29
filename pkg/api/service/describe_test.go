@@ -58,6 +58,36 @@ func TestDescribe_Instance_StatusAndReason(t *testing.T) {
 	assert.Equal(t, "i-1", gotID)
 }
 
+func TestDescribe_Instance_IP(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+
+	// Top-level IP populated → shown verbatim.
+	putInstance(t, st, &types.Instance{
+		ID: "i-1", Name: "api-0", Namespace: "prod", ServiceName: "api",
+		Status: types.InstanceStatusRunning, IP: "10.96.0.46",
+	})
+	// Only ContainerIP populated (pre-backfill instance) → fallback.
+	putInstance(t, st, &types.Instance{
+		ID: "i-2", Name: "api-1", Namespace: "prod", ServiceName: "api",
+		Status:   types.InstanceStatusRunning,
+		Metadata: &types.InstanceMetadata{ContainerIP: "10.96.0.47"},
+	})
+
+	for name, want := range map[string]string{"api-0": "10.96.0.46", "api-1": "10.96.0.47"} {
+		resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{
+			Kind: "instance", Name: name, Namespace: "prod",
+		})
+		require.NoError(t, err)
+		var gotIP string
+		for _, kv := range resp.Result.Identity {
+			if kv.Key == "IP" {
+				gotIP = kv.Value
+			}
+		}
+		assert.Equal(t, want, gotIP, "instance %s IP", name)
+	}
+}
+
 func TestDescribe_Instance_VolumeMountResolved(t *testing.T) {
 	svc, st := newDescribeTestService(t)
 	require.NoError(t, st.Create(context.Background(), types.ResourceTypeVolume, "shared", "flo-data-flo-0",
