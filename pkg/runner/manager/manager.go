@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"sync"
 
 	"os"
@@ -208,6 +209,31 @@ func (m *RunnerManager) GetProcessRunner() (runner.Runner, error) {
 	}
 
 	return m.processRunner, nil
+}
+
+// RunnerHealth reports readiness for each configured runner: "ready", or
+// "unreachable: <reason>" when the runner's HealthCheck fails (e.g. the
+// Docker daemon is down). Only configured runners appear in the map.
+// Runners that don't implement runner.HealthChecker (the process runner)
+// are reported ready — they have no external daemon to probe.
+func (m *RunnerManager) RunnerHealth(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	check := func(name string, r runner.Runner) {
+		if hc, ok := r.(runner.HealthChecker); ok {
+			if err := hc.HealthCheck(ctx); err != nil {
+				out[name] = "unreachable: " + err.Error()
+				return
+			}
+		}
+		out[name] = "ready"
+	}
+	if r, err := m.GetDockerRunner(); err == nil {
+		check("docker", r)
+	}
+	if r, err := m.GetProcessRunner(); err == nil {
+		check("process", r)
+	}
+	return out
 }
 
 // Close closes all runners

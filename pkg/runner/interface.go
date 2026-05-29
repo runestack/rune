@@ -93,6 +93,15 @@ type IPProvider interface {
 	InstanceIP(ctx context.Context, instance *types.Instance) (string, error)
 }
 
+// HealthChecker is implemented by runners that can verify their backing
+// runtime is reachable (e.g. the Docker runner pinging the daemon). A
+// runner that does not implement it is treated as always-ready — correct
+// for the process runner, which has no external daemon. Used by
+// RunnerManager.RunnerHealth to surface "Docker is down" in `rune status`.
+type HealthChecker interface {
+	HealthCheck(ctx context.Context) error
+}
+
 // ErrInitNotSupported is returned by Runner.RunInit implementations
 // that do not (yet) support init steps. The instance controller
 // surfaces this as a fatal scheduling error so operators get a clear

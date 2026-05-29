@@ -87,6 +87,21 @@ type RegistryAuth struct {
 // Validate that DockerRunner implements the runner.Runner interface
 var _ runner.Runner = &DockerRunner{}
 
+// Validate that DockerRunner implements the optional HealthChecker.
+var _ runner.HealthChecker = &DockerRunner{}
+
+// HealthCheck pings the Docker daemon. A non-nil error means the daemon is
+// unreachable — the server keeps running and the store stays fine, but no
+// container can be created/started/restarted until Docker recovers. This is
+// the signal `rune status` surfaces as "Runners: docker=unreachable".
+func (r *DockerRunner) HealthCheck(ctx context.Context) error {
+	if r.client == nil {
+		return fmt.Errorf("docker client not initialized")
+	}
+	_, err := r.client.Ping(ctx)
+	return err
+}
+
 // DockerRunner implements the runner.Runner interface for Docker.
 type DockerRunner struct {
 	client       *client.Client

@@ -19,12 +19,21 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// RunnerHealthReporter reports per-runner readiness ("ready" or
+// "unreachable: <reason>"). Satisfied by *manager.RunnerManager; kept as a
+// local interface so the health service doesn't depend on the manager
+// package (and stays nil-safe when no manager is wired, e.g. in tests).
+type RunnerHealthReporter interface {
+	RunnerHealth(ctx context.Context) map[string]string
+}
+
 // HealthService implements the gRPC HealthService.
 type HealthService struct {
 	generated.UnimplementedHealthServiceServer
 
-	store  store.Store
-	logger log.Logger
+	store   store.Store
+	runners RunnerHealthReporter
+	logger  log.Logger
 
 	// Optional cached capacity (single-node MVP)
 	capacityCPU float64
@@ -32,11 +41,13 @@ type HealthService struct {
 	hasCapacity bool
 }
 
-// NewHealthService creates a new HealthService with the given store and logger.
-func NewHealthService(store store.Store, logger log.Logger) *HealthService {
+// NewHealthService creates a new HealthService. runners may be nil (the
+// "runner" component then reports nothing rather than failing).
+func NewHealthService(store store.Store, runners RunnerHealthReporter, logger log.Logger) *HealthService {
 	hs := &HealthService{
-		store:  store,
-		logger: logger.WithComponent("health-service"),
+		store:   store,
+		runners: runners,
+		logger:  logger.WithComponent("health-service"),
 	}
 	// Best-effort capacity detection at construction
 	hs.DetectAndSetCapacity()
@@ -203,9 +214,69 @@ func (s *HealthService) GetHealth(ctx context.Context, req *generated.GetHealthR
 		return s.getNodeHealth(ctx, req)
 	case "api-server":
 		return s.getAPIServerHealth(ctx, req)
+	case "runner":
+		return s.getRunnerHealth(ctx, req)
+	case "store":
+		return s.getStoreHealth(ctx, req)
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown component type: %s", req.ComponentType)
 	}
+}
+
+// getRunnerHealth reports one component per configured runner. "ready" maps
+// to HEALTHY; anything else (e.g. "unreachable: <docker error>") maps to
+// UNHEALTHY with the reason in Message. Empty when no runner manager is
+// wired — the caller renders nothing rather than a fake "ready".
+func (s *HealthService) getRunnerHealth(ctx context.Context, _ *generated.GetHealthRequest) (*generated.GetHealthResponse, error) {
+	var comps []*generated.ComponentHealth
+	if s.runners != nil {
+		now := time.Now().Format(time.RFC3339)
+		for name, st := range s.runners.RunnerHealth(ctx) {
+			hs := generated.HealthStatus_HEALTH_STATUS_HEALTHY
+			if st != "ready" {
+				hs = generated.HealthStatus_HEALTH_STATUS_UNHEALTHY
+			}
+			comps = append(comps, &generated.ComponentHealth{
+				ComponentType: "runner",
+				Id:            name,
+				Name:          name,
+				Status:        hs,
+				Message:       st,
+				Timestamp:     now,
+			})
+		}
+	}
+	return &generated.GetHealthResponse{
+		Components: comps,
+		Status:     &generated.Status{Code: int32(codes.OK), Message: "runner health"},
+	}, nil
+}
+
+// getStoreHealth probes the store with a cheap, bounded namespace list.
+// On a single node a wedged store usually means the server can't answer at
+// all; this still catches a degraded-but-alive store (read-only, slow, near
+// full) while the server keeps responding.
+func (s *HealthService) getStoreHealth(ctx context.Context, _ *generated.GetHealthRequest) (*generated.GetHealthResponse, error) {
+	hs := generated.HealthStatus_HEALTH_STATUS_HEALTHY
+	msg := "healthy"
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var nss []types.Namespace
+	if err := s.store.List(probeCtx, types.ResourceTypeNamespace, "", &nss); err != nil {
+		hs = generated.HealthStatus_HEALTH_STATUS_UNHEALTHY
+		msg = err.Error()
+	}
+	return &generated.GetHealthResponse{
+		Components: []*generated.ComponentHealth{{
+			ComponentType: "store",
+			Id:            "store",
+			Name:          "store",
+			Status:        hs,
+			Message:       msg,
+			Timestamp:     time.Now().Format(time.RFC3339),
+		}},
+		Status: &generated.Status{Code: int32(codes.OK), Message: "store health"},
+	}, nil
 }
 
 // GetServerVersion returns build/version metadata for the running server
