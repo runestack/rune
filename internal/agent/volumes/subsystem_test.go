@@ -287,9 +287,12 @@ func TestSubsystem_UnmountDetachOnUnbind(t *testing.T) {
 	vol.Status = types.VolumeStatusAvailable
 	require.NoError(t, ts.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 
+	// Unbind clears the tracker before tearDown's Unmount+Detach, so wait
+	// on the driver counts we assert rather than MountTargetFor (which
+	// flips as soon as the tracker entry is removed, ahead of teardown).
 	waitFor(t, 2*time.Second, func() error {
-		if _, ok := sub.MountTargetFor(vol.ID); ok {
-			return errors.New("still tracked")
+		if _, d, _, u := drv.snapshot(); d != 1 || u != 1 {
+			return errors.New("waiting for Unmount+Detach")
 		}
 		return nil
 	})
@@ -321,15 +324,19 @@ func TestSubsystem_DeleteEvent(t *testing.T) {
 	})
 
 	require.NoError(t, ts.Delete(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name))
+	// The delete handler clears the tracker (so MountTargetFor returns
+	// false) BEFORE running tearDown's Unmount+Detach. Waiting on
+	// MountTargetFor therefore races teardown — the driver calls may not
+	// have landed yet. Wait on the driver counts we actually assert.
 	waitFor(t, 2*time.Second, func() error {
-		if _, ok := sub.MountTargetFor(vol.ID); ok {
-			return errors.New("still tracked")
+		if _, d, _, u := drv.snapshot(); d != 1 || u != 1 {
+			return errors.New("waiting for Unmount+Detach")
 		}
 		return nil
 	})
 	_, d, _, u := drv.snapshot()
-	assert.Equal(t, 1, d)
-	assert.Equal(t, 1, u)
+	assert.Equal(t, 1, d, "Detach called on delete")
+	assert.Equal(t, 1, u, "Unmount called on delete")
 }
 
 // TestSubsystem_StopUnmountsTracked asserts that Stop drains the
