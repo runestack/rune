@@ -39,3 +39,33 @@ func TestValidateExpose_AllowCIDRs(t *testing.T) {
 		t.Error("bare IP without mask should be rejected as a CIDR")
 	}
 }
+
+func TestValidateExpose_ClientCert(t *testing.T) {
+	host := "api.example.com"
+
+	// Valid: caSecret set, mode require.
+	if err := ValidateExpose(&ServiceExpose{Port: "http", Host: host,
+		ClientCert: &ExposeClientCert{CASecret: "common/ca", Mode: "require"}}, false); err != nil {
+		t.Fatalf("valid clientCert rejected: %v", err)
+	}
+	// Valid: empty mode defaults to require.
+	if err := ValidateExpose(&ServiceExpose{Port: "http", Host: host,
+		ClientCert: &ExposeClientCert{CASecret: "common/ca"}}, false); err != nil {
+		t.Fatalf("empty-mode clientCert rejected: %v", err)
+	}
+	// Missing caSecret.
+	if err := ValidateExpose(&ServiceExpose{Port: "http", Host: host,
+		ClientCert: &ExposeClientCert{Mode: "require"}}, false); err == nil {
+		t.Error("clientCert without caSecret should be rejected")
+	}
+	// Unsupported mode (e.g. optional, cut from v1).
+	if err := ValidateExpose(&ServiceExpose{Port: "http", Host: host,
+		ClientCert: &ExposeClientCert{CASecret: "common/ca", Mode: "optional"}}, false); err == nil {
+		t.Error("clientCert mode 'optional' should be rejected in v1")
+	}
+	// clientCert requires a host (handshake routes by SNI).
+	if err := ValidateExpose(&ServiceExpose{Port: "http",
+		ClientCert: &ExposeClientCert{CASecret: "common/ca"}}, false); err == nil {
+		t.Error("clientCert without host should be rejected")
+	}
+}

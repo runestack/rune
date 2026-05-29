@@ -31,6 +31,12 @@ type Config struct {
 	// Certs is the TLS certificate loader. Required.
 	Certs *CertLoader
 
+	// ClientCAs holds per-host client-CA pools for inbound mTLS
+	// (origin hardening). Optional; nil disables client-cert
+	// verification entirely. When set, hosts with a registered pool
+	// require + verify a client cert at the handshake.
+	ClientCAs *ClientCARegistry
+
 	// HTTPAddr is the bind address for the plain HTTP listener.
 	// Default ":80". Use ":8080" or similar in dev mode to avoid
 	// requiring CAP_NET_BIND_SERVICE.
@@ -175,6 +181,17 @@ func (s *Subsystem) Start(ctx context.Context) error {
 			GetCertificate: s.cfg.Certs.GetCertificate,
 			MinVersion:     tls.VersionTLS12,
 			NextProtos:     []string{"h2", "http/1.1"},
+		}
+		// Per-SNI inbound mTLS (origin hardening). Client-cert
+		// verification is negotiated during the handshake, before the
+		// HTTP Host is known, so we vary the config by SNI: hosts with a
+		// registered client-CA pool require + verify a client cert; all
+		// others fall through to the base config (no client auth).
+		if s.cfg.ClientCAs != nil {
+			base := tlsCfg.Clone()
+			tlsCfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+				return s.cfg.ClientCAs.ConfigFor(hello, base), nil
+			}
 		}
 		s.httpsSrv = &http.Server{
 			Handler:           http.HandlerFunc(s.serveHTTPS),

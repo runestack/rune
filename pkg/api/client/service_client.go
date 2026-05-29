@@ -460,6 +460,12 @@ func ServiceToProto(service *types.Service) *generated.Service {
 				Mode:   service.Expose.TLS.Mode,
 			}
 		}
+		if service.Expose.ClientCert != nil {
+			protoService.Expose.ClientCert = &generated.ExposeClientCert{
+				CaSecret: service.Expose.ClientCert.CASecret,
+				Mode:     service.Expose.ClientCert.Mode,
+			}
+		}
 	}
 
 	// Convert resources
@@ -750,6 +756,12 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 				Secret: proto.Expose.Tls.Secret,
 				Auto:   proto.Expose.Tls.Auto,
 				Mode:   proto.Expose.Tls.Mode,
+			}
+		}
+		if proto.Expose.ClientCert != nil {
+			service.Expose.ClientCert = &types.ExposeClientCert{
+				CASecret: proto.Expose.ClientCert.CaSecret,
+				Mode:     proto.Expose.ClientCert.Mode,
 			}
 		}
 	}

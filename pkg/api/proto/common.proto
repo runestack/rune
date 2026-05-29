@@ -160,6 +160,20 @@ message ServiceExpose {
   // peer (not a forwarding header). Empty means no restriction. Origin
   // hardening.
   repeated string allow_cidrs = 6;
+
+  // Optional inbound mTLS: require a trusted client certificate verified
+  // at the ingress handshake. Origin hardening (RUNE-0XX).
+  ExposeClientCert client_cert = 7;
+}
+
+// ExposeClientCert configures inbound client-certificate (mTLS)
+// verification for an exposed service.
+message ExposeClientCert {
+  // Reference to a Secret holding a PEM CA bundle (data key "ca.crt")
+  // the client cert is verified against. Same ref shapes as TLS.secret.
+  string ca_secret = 1;
+  // Verification mode. v1: "require" (empty defaults to require).
+  string mode = 2;
 }
 
 // ExposeServiceTLS controls how the ingress terminates TLS for an

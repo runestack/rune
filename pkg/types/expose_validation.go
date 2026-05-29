@@ -48,5 +48,19 @@ func ValidateExpose(e *ServiceExpose, onEdge bool) error {
 			return NewValidationError("expose.allowCidrs[" + strconv.Itoa(i) + "] is not a valid CIDR: " + c)
 		}
 	}
+	if e.ClientCert != nil {
+		if e.ClientCert.CASecret == "" {
+			return NewValidationError("expose.clientCert.caSecret is required")
+		}
+		switch e.ClientCert.Mode {
+		case "", ClientCertModeRequire:
+			// ok ("" defaults to require)
+		default:
+			return NewValidationError("expose.clientCert.mode must be 'require' (got '" + e.ClientCert.Mode + "')")
+		}
+		if e.Host == "" {
+			return NewValidationError("expose.host is required when expose.clientCert is set")
+		}
+	}
 	return nil
 }

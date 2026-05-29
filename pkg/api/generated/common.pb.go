@@ -784,8 +784,11 @@ type ServiceExpose struct {
 	// Optional source-IP allowlist. When non-empty, the ingress accepts
 	// connections only from these CIDRs, matched against the real TCP
 	// peer (not a forwarding header). Empty means no restriction. Origin
-	// hardening — see RUNE-0XX-Expose-Origin-Hardening-Design.md.
-	AllowCidrs    []string `protobuf:"bytes,6,rep,name=allow_cidrs,json=allowCidrs,proto3" json:"allow_cidrs,omitempty"`
+	// hardening.
+	AllowCidrs []string `protobuf:"bytes,6,rep,name=allow_cidrs,json=allowCidrs,proto3" json:"allow_cidrs,omitempty"`
+	// Optional inbound mTLS: require a trusted client certificate verified
+	// at the ingress handshake. Origin hardening (RUNE-0XX).
+	ClientCert    *ExposeClientCert `protobuf:"bytes,7,opt,name=client_cert,json=clientCert,proto3" json:"client_cert,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -863,6 +866,70 @@ func (x *ServiceExpose) GetAllowCidrs() []string {
 	return nil
 }
 
+func (x *ServiceExpose) GetClientCert() *ExposeClientCert {
+	if x != nil {
+		return x.ClientCert
+	}
+	return nil
+}
+
+// ExposeClientCert configures inbound client-certificate (mTLS)
+// verification for an exposed service.
+type ExposeClientCert struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Reference to a Secret holding a PEM CA bundle (data key "ca.crt")
+	// the client cert is verified against. Same ref shapes as TLS.secret.
+	CaSecret string `protobuf:"bytes,1,opt,name=ca_secret,json=caSecret,proto3" json:"ca_secret,omitempty"`
+	// Verification mode. v1: "require" (empty defaults to require).
+	Mode          string `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExposeClientCert) Reset() {
+	*x = ExposeClientCert{}
+	mi := &file_pkg_api_proto_common_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExposeClientCert) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExposeClientCert) ProtoMessage() {}
+
+func (x *ExposeClientCert) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_common_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExposeClientCert.ProtoReflect.Descriptor instead.
+func (*ExposeClientCert) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ExposeClientCert) GetCaSecret() string {
+	if x != nil {
+		return x.CaSecret
+	}
+	return ""
+}
+
+func (x *ExposeClientCert) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
 // ExposeServiceTLS controls how the ingress terminates TLS for an
 // exposed service. The fields are mutually informative: setting
 // `mode = "acme"` (or `mode = "auto"`) requests an ACME-issued
@@ -890,7 +957,7 @@ type ExposeServiceTLS struct {
 
 func (x *ExposeServiceTLS) Reset() {
 	*x = ExposeServiceTLS{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[9]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -902,7 +969,7 @@ func (x *ExposeServiceTLS) String() string {
 func (*ExposeServiceTLS) ProtoMessage() {}
 
 func (x *ExposeServiceTLS) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[9]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -915,7 +982,7 @@ func (x *ExposeServiceTLS) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExposeServiceTLS.ProtoReflect.Descriptor instead.
 func (*ExposeServiceTLS) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{9}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ExposeServiceTLS) GetSecret() string {
@@ -971,7 +1038,7 @@ type Probe struct {
 
 func (x *Probe) Reset() {
 	*x = Probe{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[10]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -983,7 +1050,7 @@ func (x *Probe) String() string {
 func (*Probe) ProtoMessage() {}
 
 func (x *Probe) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[10]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -996,7 +1063,7 @@ func (x *Probe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Probe.ProtoReflect.Descriptor instead.
 func (*Probe) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{10}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Probe) GetType() ProbeType {
@@ -1082,7 +1149,7 @@ type HealthCheck struct {
 
 func (x *HealthCheck) Reset() {
 	*x = HealthCheck{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[11]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1094,7 +1161,7 @@ func (x *HealthCheck) String() string {
 func (*HealthCheck) ProtoMessage() {}
 
 func (x *HealthCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[11]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1107,7 +1174,7 @@ func (x *HealthCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheck.ProtoReflect.Descriptor instead.
 func (*HealthCheck) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{11}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *HealthCheck) GetLiveness() *Probe {
@@ -1164,7 +1231,7 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\vtarget_port\x18\x03 \x01(\x05R\n" +
 	"targetPort\x12\x1a\n" +
 	"\bprotocol\x18\x04 \x01(\tR\bprotocol\x12\x1b\n" +
-	"\thost_port\x18\x05 \x01(\x05R\bhostPort\"\xbb\x01\n" +
+	"\thost_port\x18\x05 \x01(\x05R\bhostPort\"\xf8\x01\n" +
 	"\rServiceExpose\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\tR\x04port\x12\x12\n" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12\x1f\n" +
@@ -1172,7 +1239,12 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x12,\n" +
 	"\x03tls\x18\x05 \x01(\v2\x1a.rune.api.ExposeServiceTLSR\x03tls\x12\x1f\n" +
 	"\vallow_cidrs\x18\x06 \x03(\tR\n" +
-	"allowCidrs\"R\n" +
+	"allowCidrs\x12;\n" +
+	"\vclient_cert\x18\a \x01(\v2\x1a.rune.api.ExposeClientCertR\n" +
+	"clientCert\"C\n" +
+	"\x10ExposeClientCert\x12\x1b\n" +
+	"\tca_secret\x18\x01 \x01(\tR\bcaSecret\x12\x12\n" +
+	"\x04mode\x18\x02 \x01(\tR\x04mode\"R\n" +
 	"\x10ExposeServiceTLS\x12\x16\n" +
 	"\x06secret\x18\x01 \x01(\tR\x06secret\x12\x12\n" +
 	"\x04auto\x18\x02 \x01(\bR\x04auto\x12\x12\n" +
@@ -1228,7 +1300,7 @@ func file_pkg_api_proto_common_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_common_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_pkg_api_proto_common_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_pkg_api_proto_common_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_pkg_api_proto_common_proto_goTypes = []any{
 	(ResourceType)(0),              // 0: rune.api.ResourceType
 	(EventType)(0),                 // 1: rune.api.EventType
@@ -1243,23 +1315,25 @@ var file_pkg_api_proto_common_proto_goTypes = []any{
 	(*ProcessSecurityContext)(nil), // 10: rune.api.ProcessSecurityContext
 	(*ServicePort)(nil),            // 11: rune.api.ServicePort
 	(*ServiceExpose)(nil),          // 12: rune.api.ServiceExpose
-	(*ExposeServiceTLS)(nil),       // 13: rune.api.ExposeServiceTLS
-	(*Probe)(nil),                  // 14: rune.api.Probe
-	(*HealthCheck)(nil),            // 15: rune.api.HealthCheck
+	(*ExposeClientCert)(nil),       // 13: rune.api.ExposeClientCert
+	(*ExposeServiceTLS)(nil),       // 14: rune.api.ExposeServiceTLS
+	(*Probe)(nil),                  // 15: rune.api.Probe
+	(*HealthCheck)(nil),            // 16: rune.api.HealthCheck
 }
 var file_pkg_api_proto_common_proto_depIdxs = []int32{
 	7,  // 0: rune.api.Resources.cpu:type_name -> rune.api.ResourceLimit
 	7,  // 1: rune.api.Resources.memory:type_name -> rune.api.ResourceLimit
 	10, // 2: rune.api.ProcessSpec.security_context:type_name -> rune.api.ProcessSecurityContext
-	13, // 3: rune.api.ServiceExpose.tls:type_name -> rune.api.ExposeServiceTLS
-	3,  // 4: rune.api.Probe.type:type_name -> rune.api.ProbeType
-	14, // 5: rune.api.HealthCheck.liveness:type_name -> rune.api.Probe
-	14, // 6: rune.api.HealthCheck.readiness:type_name -> rune.api.Probe
-	7,  // [7:7] is the sub-list for method output_type
-	7,  // [7:7] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	14, // 3: rune.api.ServiceExpose.tls:type_name -> rune.api.ExposeServiceTLS
+	13, // 4: rune.api.ServiceExpose.client_cert:type_name -> rune.api.ExposeClientCert
+	3,  // 5: rune.api.Probe.type:type_name -> rune.api.ProbeType
+	15, // 6: rune.api.HealthCheck.liveness:type_name -> rune.api.Probe
+	15, // 7: rune.api.HealthCheck.readiness:type_name -> rune.api.Probe
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_common_proto_init() }
@@ -1273,7 +1347,7 @@ func file_pkg_api_proto_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_common_proto_rawDesc), len(file_pkg_api_proto_common_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
