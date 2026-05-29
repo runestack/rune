@@ -52,6 +52,18 @@ func (r *ClientCARegistry) pool(host string) (*x509.CertPool, bool) {
 	return p, ok
 }
 
+// HasPool reports whether a client-CA pool is registered for host. The
+// listener uses this to fail closed: a route that requires mTLS but has no
+// pool loaded (e.g. a misconfigured caSecret) must be refused, not served
+// unauthenticated. Nil-safe.
+func (r *ClientCARegistry) HasPool(host string) bool {
+	if r == nil {
+		return false
+	}
+	_, ok := r.pool(host)
+	return ok
+}
+
 // ConfigFor implements the per-SNI branch of tls.Config.GetConfigForClient.
 // Client-cert verification is negotiated during the handshake — before the
 // HTTP Host header exists — so the only routing signal is SNI. When the SNI

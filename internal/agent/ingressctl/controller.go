@@ -250,12 +250,13 @@ func (c *Controller) reconcile(ctx context.Context) {
 			continue
 		}
 		routes = append(routes, ingress.Route{
-			Host:       s.Expose.Host,
-			Namespace:  s.Namespace,
-			Service:    s.Name,
-			Port:       port,
-			Path:       s.Expose.Path,
-			AllowCIDRs: parseAllowCIDRs(s.Expose.AllowCIDRs, s.Expose.Host, c.cfg.Logger),
+			Host:              s.Expose.Host,
+			Namespace:         s.Namespace,
+			Service:           s.Name,
+			Port:              port,
+			Path:              s.Expose.Path,
+			AllowCIDRs:        parseAllowCIDRs(s.Expose.AllowCIDRs, s.Expose.Host, c.cfg.Logger),
+			RequireClientCert: s.Expose.ClientCert != nil && s.Expose.ClientCert.CASecret != "",
 		})
 		hosts[s.Expose.Host] = struct{}{}
 		if c.cfg.ACME != nil && s.Expose.TLS.IsACME() {

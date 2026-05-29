@@ -25,6 +25,12 @@ type Route struct {
 	// no restriction. Parsed once at Apply time so the request path does no
 	// parsing. See RUNE-0XX-Expose-Origin-Hardening-Design.md.
 	AllowCIDRs []*net.IPNet
+	// RequireClientCert is true when the service declares expose.clientCert
+	// (inbound mTLS). Carried on the route — independent of whether the CA
+	// pool has loaded — so the listener can fail CLOSED: refuse plaintext
+	// (:80) and refuse :443 when the per-host CA pool isn't registered yet,
+	// instead of serving the origin unauthenticated.
+	RequireClientCert bool
 }
 
 // Router is a host-keyed lookup for resolved upstream routes.

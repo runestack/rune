@@ -295,6 +295,29 @@ func peerIP(remoteAddr string) net.IP {
 	return net.ParseIP(host)
 }
 
+// mtlsGate decides whether a request may proceed for a route that requires
+// inbound mTLS (expose.clientCert). It fails CLOSED: plaintext (:80) is
+// never allowed for an mTLS-locked origin (the handshake — and thus client
+// cert verification — only happens on :443), and even on :443 the per-host
+// CA pool must be loaded, else GetConfigForClient would fall through to the
+// no-client-auth base config and serve the origin unauthenticated. Returns
+// (status, false) to reject, or (0, true) to proceed.
+func mtlsGate(rt Route, scheme string, hasPool bool) (int, bool) {
+	if !rt.RequireClientCert {
+		return 0, true
+	}
+	if scheme != "https" {
+		// Plaintext can never carry a verified client cert.
+		return http.StatusForbidden, false
+	}
+	if !hasPool {
+		// Required but the CA isn't loaded (e.g. bad/missing caSecret).
+		// Refuse rather than serve without verifying the client.
+		return http.StatusServiceUnavailable, false
+	}
+	return 0, true
+}
+
 func (s *Subsystem) proxy(w http.ResponseWriter, r *http.Request, scheme string) {
 	rt, ok := s.cfg.Router.Match(r.Host, r.URL.Path)
 	if !ok {
@@ -309,6 +332,19 @@ func (s *Subsystem) proxy(w http.ResponseWriter, r *http.Request, scheme string)
 			log.Str("host", r.Host),
 			log.Str("peer", r.RemoteAddr))
 		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	// Inbound mTLS (origin hardening). Fail closed: refuse plaintext for an
+	// mTLS-locked host, and refuse :443 when the CA pool isn't loaded — so a
+	// clientCert origin is never served unauthenticated. See RUNE-0XX.
+	hasPool := s.cfg.ClientCAs.HasPool(rt.Host)
+	if code, allow := mtlsGate(rt, scheme, hasPool); !allow {
+		s.cfg.Logger.Warn("ingress: clientCert required; rejecting",
+			log.Str("host", r.Host),
+			log.Str("scheme", scheme),
+			log.Bool("caLoaded", hasPool),
+			log.Int("status", code))
+		http.Error(w, "forbidden", code)
 		return
 	}
 	target, ok := s.cfg.UpstreamResolver.Resolve(rt.Namespace, rt.Service, rt.Port)

@@ -53,3 +53,22 @@ func TestClientCARegistry_NilSafe(t *testing.T) {
 		t.Error("nil registry must be nil-safe and yield nil")
 	}
 }
+
+func TestClientCARegistry_HasPool(t *testing.T) {
+	var nilReg *ClientCARegistry
+	if nilReg.HasPool("x") {
+		t.Error("nil registry HasPool must be false (nil-safe)")
+	}
+	reg := NewClientCARegistry()
+	if reg.HasPool("api.example.com") {
+		t.Error("empty registry HasPool should be false")
+	}
+	reg.Set("api.example.com", x509.NewCertPool())
+	if !reg.HasPool("API.example.com") { // case-insensitive via normalizeHost
+		t.Error("HasPool should find a registered (normalized) host")
+	}
+	reg.Forget("api.example.com")
+	if reg.HasPool("api.example.com") {
+		t.Error("HasPool false after Forget")
+	}
+}

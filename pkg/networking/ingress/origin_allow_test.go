@@ -59,3 +59,34 @@ func TestPeerIP(t *testing.T) {
 		}
 	}
 }
+
+func TestMTLSGate(t *testing.T) {
+	noMTLS := Route{}
+	mtls := Route{RequireClientCert: true}
+
+	cases := []struct {
+		name     string
+		rt       Route
+		scheme   string
+		hasPool  bool
+		wantOK   bool
+		wantCode int
+	}{
+		// Routes without clientCert always proceed.
+		{"no-mtls http", noMTLS, "http", false, true, 0},
+		{"no-mtls https", noMTLS, "https", false, true, 0},
+		// mTLS-required: plaintext is never allowed (no client cert possible).
+		{"mtls http refused", mtls, "http", true, false, 403},
+		// mTLS-required on https but CA pool not loaded → fail closed.
+		{"mtls https no pool", mtls, "https", false, false, 503},
+		// mTLS-required, https, pool loaded → proceed (handshake already
+		// verified the cert).
+		{"mtls https with pool", mtls, "https", true, true, 0},
+	}
+	for _, c := range cases {
+		code, ok := mtlsGate(c.rt, c.scheme, c.hasPool)
+		if ok != c.wantOK || code != c.wantCode {
+			t.Errorf("%s: mtlsGate = (%d, %v), want (%d, %v)", c.name, code, ok, c.wantCode, c.wantOK)
+		}
+	}
+}
