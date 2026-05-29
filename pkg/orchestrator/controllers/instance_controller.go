@@ -229,54 +229,62 @@ func (c *instanceController) SetMountResolver(resolver MountResolver) {
 }
 
 // instanceEndpointIP returns the routable IP for endpoint publishing.
-// It prefers persisted metadata, then asks the runner (Docker inspect)
-// and backfills metadata when discovered.
+// It prefers persisted metadata, then asks the runner (Docker inspect),
+// and in both cases ensures the discovered IP is persisted to the
+// instance's top-level IP field as well as Metadata.ContainerIP.
 func (c *instanceController) instanceEndpointIP(ctx context.Context, inst *types.Instance) string {
 	if inst == nil {
 		return ""
 	}
+
+	ip := ""
 	if inst.Metadata != nil && inst.Metadata.ContainerIP != "" {
-		return inst.Metadata.ContainerIP
+		ip = inst.Metadata.ContainerIP
+	} else if r, err := c.runnerManager.GetInstanceRunner(inst); err == nil {
+		if p, ok := r.(runner.IPProvider); ok {
+			if got, ipErr := p.InstanceIP(ctx, inst); ipErr == nil {
+				ip = got
+			}
+		}
 	}
-	r, err := c.runnerManager.GetInstanceRunner(inst)
-	if err != nil {
+	if ip == "" {
 		return ""
 	}
-	p, ok := r.(runner.IPProvider)
-	if !ok {
-		return ""
-	}
-	ip, err := p.InstanceIP(ctx, inst)
-	if err != nil || ip == "" {
-		return ""
-	}
-	// Backfill ContainerIP onto a freshly-loaded copy. The in-hand
-	// `inst` was listed earlier in the republish pass; writing it back
-	// whole would clobber any concurrent status update from the
-	// reconciler or health controller (the store has no CAS). Re-Get,
-	// mutate only the metadata field, write that — same load-modify-
-	// write discipline promoteToRunningOnReady uses.
+
+	c.persistInstanceIP(ctx, inst, ip)
+	return ip
+}
+
+// persistInstanceIP records ip on both Instance.IP (the operator-facing
+// field surfaced by `rune get`/`describe`) and Metadata.ContainerIP (used
+// for VIP routing / probes). Historically only ContainerIP was written,
+// leaving Instance.IP permanently empty in CLI output. The write targets
+// a freshly-loaded copy — the in-hand `inst` was listed earlier in the
+// republish pass and writing it back whole would clobber a concurrent
+// status update (the store has no CAS); same load-modify-write discipline
+// promoteToRunningOnReady uses. The in-hand copy is kept in sync so the
+// rest of this pass sees the IP even if the store write is skipped/fails.
+func (c *instanceController) persistInstanceIP(ctx context.Context, inst *types.Instance, ip string) {
 	var fresh types.Instance
 	if err := c.store.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh); err == nil {
 		if fresh.Metadata == nil {
 			fresh.Metadata = &types.InstanceMetadata{}
 		}
-		if fresh.Metadata.ContainerIP != ip {
+		if fresh.Metadata.ContainerIP != ip || fresh.IP != ip {
 			fresh.Metadata.ContainerIP = ip
+			fresh.IP = ip
 			if err := c.store.Update(ctx, types.ResourceTypeInstance, fresh.Namespace, fresh.ID, &fresh); err != nil {
-				c.logger.Debug("instanceEndpointIP: persist containerIp failed",
+				c.logger.Debug("persistInstanceIP: persist failed",
 					log.Str("instance", inst.Name),
 					log.Err(err))
 			}
 		}
 	}
-	// Keep the caller's in-hand copy consistent for the rest of this
-	// republish pass even if the store write above was skipped/failed.
 	if inst.Metadata == nil {
 		inst.Metadata = &types.InstanceMetadata{}
 	}
 	inst.Metadata.ContainerIP = ip
-	return ip
+	inst.IP = ip
 }
 
 // republishService recomputes the endpoint set for a service from

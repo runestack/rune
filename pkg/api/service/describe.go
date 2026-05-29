@@ -137,6 +137,7 @@ func (s *DescribeService) describeInstance(ctx context.Context, ns, name string)
 		kv("Service", svcLabel),
 		kv("Node", emptyDashStr(inst.NodeID)),
 		kv("Runner", string(inst.Runner)),
+		kv("IP", emptyDashStr(instanceDisplayIP(inst))),
 	}
 	res.Timestamps = timestampKVs(inst.CreatedAt, inst.LastTransitionAt, inst.UpdatedAt)
 
@@ -510,6 +511,20 @@ func emptyDashStr(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// instanceDisplayIP returns the instance's IP for display, falling back to
+// Metadata.ContainerIP. The fallback covers instances written before the
+// controller began persisting the top-level IP field (and any runner that
+// only records ContainerIP) so describe shows a real address either way.
+func instanceDisplayIP(inst *types.Instance) string {
+	if inst.IP != "" {
+		return inst.IP
+	}
+	if inst.Metadata != nil {
+		return inst.Metadata.ContainerIP
+	}
+	return ""
 }
 
 // timestampKVs builds the Created / LastTransition / LastUpdated block,
