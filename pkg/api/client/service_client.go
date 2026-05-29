@@ -448,9 +448,10 @@ func ServiceToProto(service *types.Service) *generated.Service {
 	// Convert expose
 	if service.Expose != nil {
 		protoService.Expose = &generated.ServiceExpose{
-			Port: service.Expose.Port,
-			Host: service.Expose.Host,
-			Path: service.Expose.Path,
+			Port:       service.Expose.Port,
+			Host:       service.Expose.Host,
+			Path:       service.Expose.Path,
+			AllowCidrs: service.Expose.AllowCIDRs,
 		}
 		if service.Expose.TLS != nil {
 			protoService.Expose.Tls = &generated.ExposeServiceTLS{
@@ -739,9 +740,10 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 	// Convert expose
 	if proto.Expose != nil {
 		service.Expose = &types.ServiceExpose{
-			Port: proto.Expose.Port,
-			Host: proto.Expose.Host,
-			Path: proto.Expose.Path,
+			Port:       proto.Expose.Port,
+			Host:       proto.Expose.Host,
+			Path:       proto.Expose.Path,
+			AllowCIDRs: proto.Expose.AllowCidrs,
 		}
 		if proto.Expose.Tls != nil {
 			service.Expose.TLS = &types.ExposeServiceTLS{

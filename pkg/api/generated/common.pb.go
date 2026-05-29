@@ -780,7 +780,12 @@ type ServiceExpose struct {
 	Path string `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
 	// Optional TLS configuration. When omitted, the ingress serves
 	// the host on plain HTTP only.
-	Tls           *ExposeServiceTLS `protobuf:"bytes,5,opt,name=tls,proto3" json:"tls,omitempty"`
+	Tls *ExposeServiceTLS `protobuf:"bytes,5,opt,name=tls,proto3" json:"tls,omitempty"`
+	// Optional source-IP allowlist. When non-empty, the ingress accepts
+	// connections only from these CIDRs, matched against the real TCP
+	// peer (not a forwarding header). Empty means no restriction. Origin
+	// hardening — see RUNE-0XX-Expose-Origin-Hardening-Design.md.
+	AllowCidrs    []string `protobuf:"bytes,6,rep,name=allow_cidrs,json=allowCidrs,proto3" json:"allow_cidrs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -847,6 +852,13 @@ func (x *ServiceExpose) GetPath() string {
 func (x *ServiceExpose) GetTls() *ExposeServiceTLS {
 	if x != nil {
 		return x.Tls
+	}
+	return nil
+}
+
+func (x *ServiceExpose) GetAllowCidrs() []string {
+	if x != nil {
+		return x.AllowCidrs
 	}
 	return nil
 }
@@ -1152,13 +1164,15 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\vtarget_port\x18\x03 \x01(\x05R\n" +
 	"targetPort\x12\x1a\n" +
 	"\bprotocol\x18\x04 \x01(\tR\bprotocol\x12\x1b\n" +
-	"\thost_port\x18\x05 \x01(\x05R\bhostPort\"\x9a\x01\n" +
+	"\thost_port\x18\x05 \x01(\x05R\bhostPort\"\xbb\x01\n" +
 	"\rServiceExpose\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\tR\x04port\x12\x12\n" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12\x1f\n" +
 	"\thost_port\x18\x03 \x01(\rB\x02\x18\x01R\bhostPort\x12\x12\n" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x12,\n" +
-	"\x03tls\x18\x05 \x01(\v2\x1a.rune.api.ExposeServiceTLSR\x03tls\"R\n" +
+	"\x03tls\x18\x05 \x01(\v2\x1a.rune.api.ExposeServiceTLSR\x03tls\x12\x1f\n" +
+	"\vallow_cidrs\x18\x06 \x03(\tR\n" +
+	"allowCidrs\"R\n" +
 	"\x10ExposeServiceTLS\x12\x16\n" +
 	"\x06secret\x18\x01 \x01(\tR\x06secret\x12\x12\n" +
 	"\x04auto\x18\x02 \x01(\bR\x04auto\x12\x12\n" +

@@ -11,7 +11,11 @@
 // and is safe to call from cast pipelines and admission tests.
 package types
 
-import "strings"
+import (
+	"net"
+	"strconv"
+	"strings"
+)
 
 // ValidateExpose checks a ServiceExpose value for the invariants
 // required by the ingress controller. Returns nil if e is nil.
@@ -37,6 +41,11 @@ func ValidateExpose(e *ServiceExpose, onEdge bool) error {
 		}
 		if e.Host == "" {
 			return NewValidationError("expose.host is required when expose.tls.mode is manual")
+		}
+	}
+	for i, c := range e.AllowCIDRs {
+		if _, _, err := net.ParseCIDR(c); err != nil {
+			return NewValidationError("expose.allowCidrs[" + strconv.Itoa(i) + "] is not a valid CIDR: " + c)
 		}
 	}
 	return nil

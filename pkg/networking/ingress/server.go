@@ -266,10 +266,32 @@ func (s *Subsystem) serveHTTPS(w http.ResponseWriter, r *http.Request) {
 	s.proxy(w, r, "https")
 }
 
+// peerIP extracts the IP from an http.Request.RemoteAddr ("ip:port", set
+// by the server from the connection — not spoofable via headers). Returns
+// nil when it can't be parsed, which PeerAllowed treats as deny under an
+// active allowlist.
+func peerIP(remoteAddr string) net.IP {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr // already a bare IP?
+	}
+	return net.ParseIP(host)
+}
+
 func (s *Subsystem) proxy(w http.ResponseWriter, r *http.Request, scheme string) {
 	rt, ok := s.cfg.Router.Match(r.Host, r.URL.Path)
 	if !ok {
 		http.Error(w, "no route for host "+r.Host, http.StatusNotFound)
+		return
+	}
+	// Source-IP allowlist (origin hardening). Checked against the real TCP
+	// peer (r.RemoteAddr), never a forwarding header which the client can
+	// set. Empty allowlist = allow all. See RUNE-0XX.
+	if !rt.PeerAllowed(peerIP(r.RemoteAddr)) {
+		s.cfg.Logger.Warn("ingress: source not in allowCidrs; rejecting",
+			log.Str("host", r.Host),
+			log.Str("peer", r.RemoteAddr))
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	target, ok := s.cfg.UpstreamResolver.Resolve(rt.Namespace, rt.Service, rt.Port)

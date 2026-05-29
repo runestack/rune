@@ -230,11 +230,12 @@ func (c *Controller) reconcile(ctx context.Context) {
 			continue
 		}
 		routes = append(routes, ingress.Route{
-			Host:      s.Expose.Host,
-			Namespace: s.Namespace,
-			Service:   s.Name,
-			Port:      port,
-			Path:      s.Expose.Path,
+			Host:       s.Expose.Host,
+			Namespace:  s.Namespace,
+			Service:    s.Name,
+			Port:       port,
+			Path:       s.Expose.Path,
+			AllowCIDRs: parseAllowCIDRs(s.Expose.AllowCIDRs, s.Expose.Host, c.cfg.Logger),
 		})
 		hosts[s.Expose.Host] = struct{}{}
 		if c.cfg.ACME != nil && s.Expose.TLS.IsACME() {
@@ -384,6 +385,30 @@ func (c *Controller) clearManualWarns(host string) {
 			delete(c.manualLogged, k)
 		}
 	}
+}
+
+// parseAllowCIDRs parses the source-IP allowlist into networks for the
+// route. Entries are validated at cast time; we parse defensively here and
+// skip (with a warning) any that fail, rather than dropping the whole route
+// — a malformed entry shouldn't silently widen access by yielding an empty
+// (allow-all) list, so callers should treat a parse-skip as a tightening.
+func parseAllowCIDRs(cidrs []string, host string, logger log.Logger) []*net.IPNet {
+	if len(cidrs) == 0 {
+		return nil
+	}
+	out := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil || n == nil {
+			if logger != nil {
+				logger.Warn("ingress: skipping invalid allowCidrs entry",
+					log.Str("host", host), log.Str("cidr", c))
+			}
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func primaryServicePort(s *types.Service) int {

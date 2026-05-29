@@ -154,6 +154,12 @@ message ServiceExpose {
   // Optional TLS configuration. When omitted, the ingress serves
   // the host on plain HTTP only.
   ExposeServiceTLS tls = 5;
+
+  // Optional source-IP allowlist. When non-empty, the ingress accepts
+  // connections only from these CIDRs, matched against the real TCP
+  // peer (not a forwarding header). Empty means no restriction. Origin
+  // hardening.
+  repeated string allow_cidrs = 6;
 }
 
 // ExposeServiceTLS controls how the ingress terminates TLS for an

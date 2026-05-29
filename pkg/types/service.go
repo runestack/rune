@@ -215,6 +215,14 @@ type ServiceExpose struct {
 
 	// TLS configuration for the exposed service
 	TLS *ExposeServiceTLS `json:"tls,omitempty" yaml:"tls,omitempty"`
+
+	// AllowCIDRs restricts inbound connections to these source CIDRs,
+	// enforced at the ingress listener against the real TCP peer (not a
+	// forwarding header). Empty means "no restriction" (allow all) — never
+	// deny-all. Defense-in-depth for origin lockdown behind a CDN. Only
+	// meaningful when ingress is the direct TCP terminator (no L4 LB in
+	// front rewriting the source IP).
+	AllowCIDRs []string `json:"allowCidrs,omitempty" yaml:"allowCidrs,omitempty"`
 }
 
 // ExposeServiceTLS defines TLS configuration for exposed services.
