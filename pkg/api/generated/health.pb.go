@@ -239,7 +239,10 @@ type ComponentHealth struct {
 	// Last update timestamp (RFC 3339 format)
 	Timestamp string `protobuf:"bytes,7,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	// Individual health check results
-	CheckResults  []*HealthCheckResult `protobuf:"bytes,8,rep,name=check_results,json=checkResults,proto3" json:"check_results,omitempty"`
+	CheckResults []*HealthCheckResult `protobuf:"bytes,8,rep,name=check_results,json=checkResults,proto3" json:"check_results,omitempty"`
+	// Node resource capacity + live usage. Populated only for "node"
+	// components; nil elsewhere.
+	Resources     *NodeResources `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -330,6 +333,88 @@ func (x *ComponentHealth) GetCheckResults() []*HealthCheckResult {
 	return nil
 }
 
+func (x *ComponentHealth) GetResources() *NodeResources {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+// NodeResources reports a node's CPU/memory capacity and live usage.
+// Single-node today, so this is effectively "this host's pressure".
+type NodeResources struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Total schedulable CPU cores (capacity).
+	CpuCores float64 `protobuf:"fixed64,1,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	// Total memory in bytes (capacity).
+	MemTotalBytes int64 `protobuf:"varint,2,opt,name=mem_total_bytes,json=memTotalBytes,proto3" json:"mem_total_bytes,omitempty"`
+	// Live CPU usage as a percentage of capacity (0-100). -1 when usage
+	// could not be sampled (e.g. macOS / unsupported runtime).
+	CpuUsedPercent float64 `protobuf:"fixed64,3,opt,name=cpu_used_percent,json=cpuUsedPercent,proto3" json:"cpu_used_percent,omitempty"`
+	// Live memory used in bytes (working set). 0 when unavailable.
+	MemUsedBytes  int64 `protobuf:"varint,4,opt,name=mem_used_bytes,json=memUsedBytes,proto3" json:"mem_used_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodeResources) Reset() {
+	*x = NodeResources{}
+	mi := &file_pkg_api_proto_health_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeResources) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeResources) ProtoMessage() {}
+
+func (x *NodeResources) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_health_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeResources.ProtoReflect.Descriptor instead.
+func (*NodeResources) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeResources) GetCpuCores() float64 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *NodeResources) GetMemTotalBytes() int64 {
+	if x != nil {
+		return x.MemTotalBytes
+	}
+	return 0
+}
+
+func (x *NodeResources) GetCpuUsedPercent() float64 {
+	if x != nil {
+		return x.CpuUsedPercent
+	}
+	return 0
+}
+
+func (x *NodeResources) GetMemUsedBytes() int64 {
+	if x != nil {
+		return x.MemUsedBytes
+	}
+	return 0
+}
+
 // GetHealthRequest requests health information.
 type GetHealthRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -347,7 +432,7 @@ type GetHealthRequest struct {
 
 func (x *GetHealthRequest) Reset() {
 	*x = GetHealthRequest{}
-	mi := &file_pkg_api_proto_health_proto_msgTypes[2]
+	mi := &file_pkg_api_proto_health_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -359,7 +444,7 @@ func (x *GetHealthRequest) String() string {
 func (*GetHealthRequest) ProtoMessage() {}
 
 func (x *GetHealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_health_proto_msgTypes[2]
+	mi := &file_pkg_api_proto_health_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -372,7 +457,7 @@ func (x *GetHealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetHealthRequest.ProtoReflect.Descriptor instead.
 func (*GetHealthRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{2}
+	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetHealthRequest) GetComponentType() string {
@@ -416,7 +501,7 @@ type GetHealthResponse struct {
 
 func (x *GetHealthResponse) Reset() {
 	*x = GetHealthResponse{}
-	mi := &file_pkg_api_proto_health_proto_msgTypes[3]
+	mi := &file_pkg_api_proto_health_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -428,7 +513,7 @@ func (x *GetHealthResponse) String() string {
 func (*GetHealthResponse) ProtoMessage() {}
 
 func (x *GetHealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_health_proto_msgTypes[3]
+	mi := &file_pkg_api_proto_health_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -441,7 +526,7 @@ func (x *GetHealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetHealthResponse.ProtoReflect.Descriptor instead.
 func (*GetHealthResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{3}
+	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GetHealthResponse) GetComponents() []*ComponentHealth {
@@ -467,7 +552,7 @@ type GetServerVersionRequest struct {
 
 func (x *GetServerVersionRequest) Reset() {
 	*x = GetServerVersionRequest{}
-	mi := &file_pkg_api_proto_health_proto_msgTypes[4]
+	mi := &file_pkg_api_proto_health_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +564,7 @@ func (x *GetServerVersionRequest) String() string {
 func (*GetServerVersionRequest) ProtoMessage() {}
 
 func (x *GetServerVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_health_proto_msgTypes[4]
+	mi := &file_pkg_api_proto_health_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +577,7 @@ func (x *GetServerVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServerVersionRequest.ProtoReflect.Descriptor instead.
 func (*GetServerVersionRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{4}
+	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{5}
 }
 
 // GetServerVersionResponse returns server build/version information.
@@ -516,7 +601,7 @@ type GetServerVersionResponse struct {
 
 func (x *GetServerVersionResponse) Reset() {
 	*x = GetServerVersionResponse{}
-	mi := &file_pkg_api_proto_health_proto_msgTypes[5]
+	mi := &file_pkg_api_proto_health_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -528,7 +613,7 @@ func (x *GetServerVersionResponse) String() string {
 func (*GetServerVersionResponse) ProtoMessage() {}
 
 func (x *GetServerVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_health_proto_msgTypes[5]
+	mi := &file_pkg_api_proto_health_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -541,7 +626,7 @@ func (x *GetServerVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServerVersionResponse.ProtoReflect.Descriptor instead.
 func (*GetServerVersionResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{5}
+	return file_pkg_api_proto_health_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetServerVersionResponse) GetVersion() string {
@@ -597,7 +682,7 @@ const file_pkg_api_proto_health_proto_rawDesc = "" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12\x1c\n" +
 	"\ttimestamp\x18\x04 \x01(\tR\ttimestamp\x123\n" +
 	"\x15consecutive_successes\x18\x05 \x01(\x05R\x14consecutiveSuccesses\x121\n" +
-	"\x14consecutive_failures\x18\x06 \x01(\x05R\x13consecutiveFailures\"\xa4\x02\n" +
+	"\x14consecutive_failures\x18\x06 \x01(\x05R\x13consecutiveFailures\"\xdb\x02\n" +
 	"\x0fComponentHealth\x12%\n" +
 	"\x0ecomponent_type\x18\x01 \x01(\tR\rcomponentType\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x12\n" +
@@ -606,7 +691,13 @@ const file_pkg_api_proto_health_proto_rawDesc = "" +
 	"\x06status\x18\x05 \x01(\x0e2\x16.rune.api.HealthStatusR\x06status\x12\x18\n" +
 	"\amessage\x18\x06 \x01(\tR\amessage\x12\x1c\n" +
 	"\ttimestamp\x18\a \x01(\tR\ttimestamp\x12@\n" +
-	"\rcheck_results\x18\b \x03(\v2\x1b.rune.api.HealthCheckResultR\fcheckResults\"\x92\x01\n" +
+	"\rcheck_results\x18\b \x03(\v2\x1b.rune.api.HealthCheckResultR\fcheckResults\x125\n" +
+	"\tresources\x18\t \x01(\v2\x17.rune.api.NodeResourcesR\tresources\"\xa4\x01\n" +
+	"\rNodeResources\x12\x1b\n" +
+	"\tcpu_cores\x18\x01 \x01(\x01R\bcpuCores\x12&\n" +
+	"\x0fmem_total_bytes\x18\x02 \x01(\x03R\rmemTotalBytes\x12(\n" +
+	"\x10cpu_used_percent\x18\x03 \x01(\x01R\x0ecpuUsedPercent\x12$\n" +
+	"\x0emem_used_bytes\x18\x04 \x01(\x03R\fmemUsedBytes\"\x92\x01\n" +
 	"\x10GetHealthRequest\x12%\n" +
 	"\x0ecomponent_type\x18\x01 \x01(\tR\rcomponentType\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -655,34 +746,36 @@ func file_pkg_api_proto_health_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_health_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_pkg_api_proto_health_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_pkg_api_proto_health_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_pkg_api_proto_health_proto_goTypes = []any{
 	(HealthStatus)(0),                // 0: rune.api.HealthStatus
 	(HealthCheckType)(0),             // 1: rune.api.HealthCheckType
 	(*HealthCheckResult)(nil),        // 2: rune.api.HealthCheckResult
 	(*ComponentHealth)(nil),          // 3: rune.api.ComponentHealth
-	(*GetHealthRequest)(nil),         // 4: rune.api.GetHealthRequest
-	(*GetHealthResponse)(nil),        // 5: rune.api.GetHealthResponse
-	(*GetServerVersionRequest)(nil),  // 6: rune.api.GetServerVersionRequest
-	(*GetServerVersionResponse)(nil), // 7: rune.api.GetServerVersionResponse
-	(*Status)(nil),                   // 8: rune.api.Status
+	(*NodeResources)(nil),            // 4: rune.api.NodeResources
+	(*GetHealthRequest)(nil),         // 5: rune.api.GetHealthRequest
+	(*GetHealthResponse)(nil),        // 6: rune.api.GetHealthResponse
+	(*GetServerVersionRequest)(nil),  // 7: rune.api.GetServerVersionRequest
+	(*GetServerVersionResponse)(nil), // 8: rune.api.GetServerVersionResponse
+	(*Status)(nil),                   // 9: rune.api.Status
 }
 var file_pkg_api_proto_health_proto_depIdxs = []int32{
 	1, // 0: rune.api.HealthCheckResult.type:type_name -> rune.api.HealthCheckType
 	0, // 1: rune.api.HealthCheckResult.status:type_name -> rune.api.HealthStatus
 	0, // 2: rune.api.ComponentHealth.status:type_name -> rune.api.HealthStatus
 	2, // 3: rune.api.ComponentHealth.check_results:type_name -> rune.api.HealthCheckResult
-	3, // 4: rune.api.GetHealthResponse.components:type_name -> rune.api.ComponentHealth
-	8, // 5: rune.api.GetHealthResponse.status:type_name -> rune.api.Status
-	4, // 6: rune.api.HealthService.GetHealth:input_type -> rune.api.GetHealthRequest
-	6, // 7: rune.api.HealthService.GetServerVersion:input_type -> rune.api.GetServerVersionRequest
-	5, // 8: rune.api.HealthService.GetHealth:output_type -> rune.api.GetHealthResponse
-	7, // 9: rune.api.HealthService.GetServerVersion:output_type -> rune.api.GetServerVersionResponse
-	8, // [8:10] is the sub-list for method output_type
-	6, // [6:8] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	4, // 4: rune.api.ComponentHealth.resources:type_name -> rune.api.NodeResources
+	3, // 5: rune.api.GetHealthResponse.components:type_name -> rune.api.ComponentHealth
+	9, // 6: rune.api.GetHealthResponse.status:type_name -> rune.api.Status
+	5, // 7: rune.api.HealthService.GetHealth:input_type -> rune.api.GetHealthRequest
+	7, // 8: rune.api.HealthService.GetServerVersion:input_type -> rune.api.GetServerVersionRequest
+	6, // 9: rune.api.HealthService.GetHealth:output_type -> rune.api.GetHealthResponse
+	8, // 10: rune.api.HealthService.GetServerVersion:output_type -> rune.api.GetServerVersionResponse
+	9, // [9:11] is the sub-list for method output_type
+	7, // [7:9] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_health_proto_init() }
@@ -697,7 +790,7 @@ func file_pkg_api_proto_health_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_health_proto_rawDesc), len(file_pkg_api_proto_health_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

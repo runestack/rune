@@ -69,6 +69,24 @@ message ComponentHealth {
   
   // Individual health check results
   repeated HealthCheckResult check_results = 8;
+
+  // Node resource capacity + live usage. Populated only for "node"
+  // components; nil elsewhere.
+  NodeResources resources = 9;
+}
+
+// NodeResources reports a node's CPU/memory capacity and live usage.
+// Single-node today, so this is effectively "this host's pressure".
+message NodeResources {
+  // Total schedulable CPU cores (capacity).
+  double cpu_cores = 1;
+  // Total memory in bytes (capacity).
+  int64 mem_total_bytes = 2;
+  // Live CPU usage as a percentage of capacity (0-100). -1 when usage
+  // could not be sampled (e.g. macOS / unsupported runtime).
+  double cpu_used_percent = 3;
+  // Live memory used in bytes (working set). 0 when unavailable.
+  int64 mem_used_bytes = 4;
 }
 
 // GetHealthRequest requests health information.

@@ -147,8 +147,19 @@ type clusterReport struct {
 	ServerVersion string            `json:"serverVersion,omitempty" yaml:"serverVersion,omitempty"`
 	Runners       map[string]string `json:"runners,omitempty" yaml:"runners,omitempty"`
 	Store         string            `json:"store,omitempty" yaml:"store,omitempty"`
+	NodeUsage     *nodeUsageBrief   `json:"nodeUsage,omitempty" yaml:"nodeUsage,omitempty"`
 	Network       *networkBrief     `json:"network,omitempty" yaml:"network,omitempty"`
 	Registries    *registriesBrief  `json:"registries,omitempty" yaml:"registries,omitempty"`
+}
+
+// nodeUsageBrief is live node pressure: CPU as a percent of capacity
+// (CPUUsedPercent < 0 means usage couldn't be sampled) and memory used vs
+// total bytes. Single-node today, so this is effectively this host.
+type nodeUsageBrief struct {
+	CPUCores       float64 `json:"cpuCores" yaml:"cpuCores"`
+	CPUUsedPercent float64 `json:"cpuUsedPercent" yaml:"cpuUsedPercent"`
+	MemUsedBytes   int64   `json:"memUsedBytes" yaml:"memUsedBytes"`
+	MemTotalBytes  int64   `json:"memTotalBytes" yaml:"memTotalBytes"`
 }
 
 type networkBrief struct {
@@ -312,6 +323,20 @@ func collectCluster(api *client.Client) *clusterReport {
 		}
 		cancel()
 	}
+	// Live node pressure (CPU%/mem). Single-node today, so "node" == host.
+	if ctx, cancel := api.Context(); true {
+		if resp, err := hc.GetHealth(ctx, &generated.GetHealthRequest{ComponentType: "node"}); err == nil && resp != nil && len(resp.Components) > 0 {
+			if r := resp.Components[0].Resources; r != nil && (r.MemTotalBytes > 0 || r.CpuCores > 0) {
+				cr.NodeUsage = &nodeUsageBrief{
+					CPUCores:       r.CpuCores,
+					CPUUsedPercent: r.CpuUsedPercent,
+					MemUsedBytes:   r.MemUsedBytes,
+					MemTotalBytes:  r.MemTotalBytes,
+				}
+			}
+		}
+		cancel()
+	}
 
 	ac := generated.NewAdminServiceClient(api.Conn())
 	if ctx, cancel := api.Context(); true {
@@ -339,10 +364,51 @@ func collectCluster(api *client.Client) *clusterReport {
 		cancel()
 	}
 
-	if cr.ServerVersion == "" && len(cr.Runners) == 0 && cr.Store == "" && cr.Network == nil && cr.Registries == nil {
+	if cr.ServerVersion == "" && len(cr.Runners) == 0 && cr.Store == "" && cr.NodeUsage == nil && cr.Network == nil && cr.Registries == nil {
 		return nil
 	}
 	return cr
+}
+
+// formatNodeUsage renders the live node pressure line, e.g.
+// "CPU 38% (8 cores) · Mem 6.2 GiB / 16.0 GiB". CPU is omitted when usage
+// couldn't be sampled (CPUUsedPercent < 0); memory is omitted when total is
+// unknown — so a partial probe still shows whatever it has.
+func formatNodeUsage(u *nodeUsageBrief) string {
+	var parts []string
+	if u.CPUUsedPercent >= 0 {
+		cpu := fmt.Sprintf("CPU %.0f%%", u.CPUUsedPercent)
+		if u.CPUCores > 0 {
+			cpu += fmt.Sprintf(" (%g cores)", u.CPUCores)
+		}
+		parts = append(parts, cpu)
+	} else if u.CPUCores > 0 {
+		parts = append(parts, fmt.Sprintf("CPU %g cores", u.CPUCores))
+	}
+	if u.MemTotalBytes > 0 {
+		parts = append(parts, fmt.Sprintf("Mem %s / %s", formatBytes(u.MemUsedBytes), formatBytes(u.MemTotalBytes)))
+	} else if u.MemUsedBytes > 0 {
+		parts = append(parts, fmt.Sprintf("Mem %s", formatBytes(u.MemUsedBytes)))
+	}
+	if len(parts) == 0 {
+		return "(usage unavailable)"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// formatBytes renders a byte count as a binary-unit string ("6.2 GiB").
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	return fmt.Sprintf("%.1f %s", float64(b)/float64(div), units[exp])
 }
 
 // healthWord maps a GetHealth component status into a short display word.
@@ -603,6 +669,9 @@ func renderCluster(w *os.File, c *clusterReport) {
 	}
 	if c.Store != "" {
 		fmt.Fprintf(w, "  %-11s %s\n", "Store:", c.Store)
+	}
+	if c.NodeUsage != nil {
+		fmt.Fprintf(w, "  %-11s %s\n", "Node:", formatNodeUsage(c.NodeUsage))
 	}
 	if c.Network != nil {
 		extra := ""
