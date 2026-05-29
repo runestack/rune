@@ -263,9 +263,105 @@ func (s *DescribeService) describeService(ctx context.Context, ns, name string) 
 		})
 	}
 
+	if sec := serviceDiscoverySection(&svc); sec != nil {
+		res.Sections = append(res.Sections, sec)
+	}
+
 	res.Hints = []string{fmt.Sprintf("rune logs %s -n %s --tail=50", svc.Name, svc.Namespace)}
 	s.attachEvents(ctx, res, svc.Namespace, "Service", svc.Name)
 	return res, nil
+}
+
+// serviceDiscoverySection renders how a service is reached, both east-west
+// (in-cluster) and north-south (external ingress):
+//
+//   - Cluster: VIP + DNS name (<svc>.<ns>.rune) on the declared ports; the
+//     dataplane proxies the VIP to a healthy instance. hostPort ports also
+//     show the dev loopback form (127.0.0.1:<hostPort>).
+//   - External: the ingress URL (the same thing `rune get ingress` shows),
+//     present only when the service has spec.expose.host set.
+//
+// Returns nil when there's nothing useful to show, so headless/degenerate
+// services don't get an empty block.
+func serviceDiscoverySection(svc *types.Service) *generated.DescribeSection {
+	vip := ""
+	mode := ""
+	if svc.Discovery != nil {
+		vip = svc.Discovery.VIP
+		mode = svc.Discovery.Mode
+	}
+	exposed := svc.Expose != nil && svc.Expose.Host != ""
+	if vip == "" && len(svc.Ports) == 0 && !exposed {
+		return nil
+	}
+
+	clusterDNS := fmt.Sprintf("%s.%s.rune", svc.Name, svc.Namespace)
+
+	vipStr := vip
+	if vipStr == "" {
+		vipStr = "(not allocated)"
+	}
+
+	lines := []string{
+		fmt.Sprintf("%-13s %s", "VIP:", vipStr),
+		fmt.Sprintf("%-13s %s", "Cluster DNS:", clusterDNS),
+	}
+	if mode != "" {
+		lines = append(lines, fmt.Sprintf("%-13s %s", "Mode:", mode))
+	}
+
+	if len(svc.Ports) > 0 {
+		lines = append(lines, "Endpoints:")
+		for _, p := range svc.Ports {
+			ep := fmt.Sprintf("  %s:%d", clusterDNS, p.Port)
+			if p.Name != "" {
+				ep += fmt.Sprintf(" (%s)", p.Name)
+			}
+			// hostPort is the dev-mode escape hatch (macOS Docker Desktop):
+			// the same container port is also published on host loopback.
+			if p.HostPort > 0 {
+				ep += fmt.Sprintf("  [dev: 127.0.0.1:%d]", p.HostPort)
+			}
+			lines = append(lines, ep)
+		}
+	}
+
+	if exposed {
+		lines = append(lines, fmt.Sprintf("%-13s %s", "External:", serviceExternalEndpoint(svc)))
+	}
+
+	return &generated.DescribeSection{Title: "Discovery", Lines: lines}
+}
+
+// serviceExternalEndpoint builds the ingress URL line shown under
+// Discovery → External. Scheme is https when TLS is configured, http
+// otherwise. The TLS mode and cert state are appended in brackets so a
+// failing cert is visible without running `rune get ingress`.
+func serviceExternalEndpoint(svc *types.Service) string {
+	scheme := "http"
+	tlsMode := ""
+	if svc.Expose.TLS != nil {
+		scheme = "https"
+		switch {
+		case svc.Expose.TLS.IsACME():
+			tlsMode = types.ExposeTLSModeACME
+		case svc.Expose.TLS.Secret != "":
+			tlsMode = types.ExposeTLSModeManual
+		}
+	}
+	url := fmt.Sprintf("%s://%s%s", scheme, svc.Expose.Host, svc.Expose.Path)
+
+	var annotations []string
+	if tlsMode != "" {
+		annotations = append(annotations, "TLS: "+tlsMode)
+	}
+	if svc.IngressCert != nil && svc.IngressCert.State != "" {
+		annotations = append(annotations, "cert: "+string(svc.IngressCert.State))
+	}
+	if len(annotations) > 0 {
+		url += "  [" + strings.Join(annotations, ", ") + "]"
+	}
+	return url
 }
 
 func (s *DescribeService) describeVolume(ctx context.Context, ns, name string) (*generated.DescribeResult, error) {

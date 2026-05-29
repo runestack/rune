@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +190,92 @@ func TestDescribe_Service_ReplicaRollup(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, instRefs)
+}
+
+func TestDescribe_Service_DiscoverySection(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	require.NoError(t, st.Create(context.Background(), types.ResourceTypeService, "prod", "api",
+		&types.Service{
+			ID: "s-api", Name: "api", Namespace: "prod", Scale: 1,
+			Status:    types.ServiceStatusRunning,
+			Discovery: &types.ServiceDiscovery{VIP: "10.96.0.7", Mode: "load-balanced"},
+			Ports: []types.ServicePort{
+				{Name: "client", Port: 9000},
+				{Name: "dashboard", Port: 9002, HostPort: 19002},
+			},
+		}))
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{
+		Kind: "service", Name: "api", Namespace: "prod",
+	})
+	require.NoError(t, err)
+
+	var disc *generated.DescribeSection
+	for _, sec := range resp.Result.Sections {
+		if sec.Title == "Discovery" {
+			disc = sec
+		}
+	}
+	require.NotNil(t, disc, "expected a Discovery section")
+
+	joined := strings.Join(disc.Lines, "\n")
+	assert.Contains(t, joined, "10.96.0.7")
+	assert.Contains(t, joined, "api.prod.rune")
+	assert.Contains(t, joined, "api.prod.rune:9000 (client)")
+	assert.Contains(t, joined, "api.prod.rune:9002 (dashboard)")
+	// hostPort surfaces the dev loopback hint.
+	assert.Contains(t, joined, "127.0.0.1:19002")
+}
+
+func TestDescribe_Service_DiscoveryExternalEndpoint(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	require.NoError(t, st.Create(context.Background(), types.ResourceTypeService, "prod", "web",
+		&types.Service{
+			ID: "s-web", Name: "web", Namespace: "prod", Scale: 2,
+			Status:    types.ServiceStatusRunning,
+			Discovery: &types.ServiceDiscovery{VIP: "10.96.0.9"},
+			Ports:     []types.ServicePort{{Name: "http", Port: 8080}},
+			Expose: &types.ServiceExpose{
+				Host: "web.example.com",
+				Path: "/",
+				TLS:  &types.ExposeServiceTLS{Mode: types.ExposeTLSModeACME},
+			},
+			IngressCert: &types.IngressCertStatus{State: types.IngressCertIssued},
+		}))
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{
+		Kind: "service", Name: "web", Namespace: "prod",
+	})
+	require.NoError(t, err)
+
+	var disc *generated.DescribeSection
+	for _, sec := range resp.Result.Sections {
+		if sec.Title == "Discovery" {
+			disc = sec
+		}
+	}
+	require.NotNil(t, disc)
+
+	joined := strings.Join(disc.Lines, "\n")
+	assert.Contains(t, joined, "External:")
+	assert.Contains(t, joined, "https://web.example.com/")
+	assert.Contains(t, joined, "TLS: acme")
+	assert.Contains(t, joined, "cert: Issued")
+}
+
+func TestDescribe_Service_DiscoveryOmittedWhenEmpty(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	require.NoError(t, st.Create(context.Background(), types.ResourceTypeService, "prod", "bare",
+		&types.Service{ID: "s-bare", Name: "bare", Namespace: "prod", Scale: 1,
+			Status: types.ServiceStatusRunning}))
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{
+		Kind: "service", Name: "bare", Namespace: "prod",
+	})
+	require.NoError(t, err)
+	for _, sec := range resp.Result.Sections {
+		assert.NotEqual(t, "Discovery", sec.Title, "no VIP and no ports → no Discovery section")
+	}
 }
 
 func TestDescribe_Volume_StorageClassRef(t *testing.T) {

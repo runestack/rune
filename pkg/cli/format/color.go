@@ -167,6 +167,21 @@ func PTermStatusLabel(status string) string {
 	}
 }
 
+// PTermEventLevelLabel colors an event severity (INFO/WARN/ERR). Unknown
+// levels render plain so new vocabulary doesn't break the table.
+func PTermEventLevelLabel(level string) string {
+	switch strings.ToUpper(level) {
+	case "INFO":
+		return pterm.NewStyle(pterm.FgGreen).Sprint(level)
+	case "WARN":
+		return pterm.NewStyle(pterm.FgYellow, pterm.Bold).Sprint(level)
+	case "ERR", "ERROR":
+		return pterm.NewStyle(pterm.FgRed, pterm.Bold).Sprint(level)
+	default:
+		return pterm.NewStyle(pterm.FgWhite).Sprint(level)
+	}
+}
+
 // FormatTable colorizes a table of strings based on a header row
 func FormatTable(table [][]string, headerRow bool) [][]string {
 	result := make([][]string, len(table))
