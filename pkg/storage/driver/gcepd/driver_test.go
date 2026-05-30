@@ -3,10 +3,14 @@ package gcepd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+
+	compute "google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
 
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/types"
@@ -585,5 +589,75 @@ func TestDevicePathAndSelfLink(t *testing.T) {
 	}
 	if got := instanceNameFromSelfLink(selfPrefix + "/instances/node-a"); got != "node-a" {
 		t.Fatalf("instanceNameFromSelfLink = %q, want node-a", got)
+	}
+}
+
+// --- production-client glue (bypassed by the fake interface; tested here
+//     directly because it's the GCE-specific, error-prone part) ---
+
+func TestIsGCENotFound(t *testing.T) {
+	if !isGCENotFound(errNotFound) {
+		t.Fatal("errNotFound should be not-found")
+	}
+	if !isGCENotFound(fmt.Errorf("wrapped: %w", &googleapi.Error{Code: 404})) {
+		t.Fatal("googleapi 404 should be not-found")
+	}
+	if isGCENotFound(&googleapi.Error{Code: 403}) {
+		t.Fatal("403 should NOT be not-found")
+	}
+	if isGCENotFound(nil) || isGCENotFound(errors.New("boom")) {
+		t.Fatal("nil / generic errors should not be not-found")
+	}
+}
+
+func TestOpError(t *testing.T) {
+	// No error on the operation -> nil.
+	if err := opError(&compute.Operation{Name: "op-1"}); err != nil {
+		t.Fatalf("expected nil for clean op, got %v", err)
+	}
+	if err := opError(&compute.Operation{Name: "op-2", Error: &compute.OperationError{}}); err != nil {
+		t.Fatalf("expected nil for empty error list, got %v", err)
+	}
+	// Populated error list -> formatted error carrying the codes/messages.
+	err := opError(&compute.Operation{
+		Name: "op-3",
+		Error: &compute.OperationError{Errors: []*compute.OperationErrorErrors{
+			{Code: "RESOURCE_NOT_READY", Message: "disk busy"},
+			{Code: "QUOTA_EXCEEDED", Message: "no quota"},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected error for failed op")
+	}
+	for _, want := range []string{"op-3", "RESOURCE_NOT_READY", "disk busy", "QUOTA_EXCEEDED"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("opError message %q missing %q", err.Error(), want)
+		}
+	}
+}
+
+func TestGCELabelValue(t *testing.T) {
+	cases := map[string]string{
+		"default":       "default",
+		"My/Name.Space": "my-name-space",
+		"":              "none",
+	}
+	for in, want := range cases {
+		if got := gceLabelValue(in); got != want {
+			t.Errorf("gceLabelValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := gceLabelValue(strings.Repeat("a", 80)); len(got) != 63 {
+		t.Errorf("gceLabelValue truncation = %d chars, want 63", len(got))
+	}
+}
+
+func TestProvision_InsertError(t *testing.T) {
+	fake := newFakeGCE()
+	fake.insertErr = errors.New("quota exceeded")
+	d, _ := newTestDriver(fake)
+	_, err := d.Provision(context.Background(), euw2OpCtx(mkVolume("data")), driver.ProvisionRequest{SizeBytes: 10 << 30})
+	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
+		t.Fatalf("expected insert error to surface, got %v", err)
 	}
 }
