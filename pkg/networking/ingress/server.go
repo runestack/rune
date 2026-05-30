@@ -31,6 +31,12 @@ type Config struct {
 	// Certs is the TLS certificate loader. Required.
 	Certs *CertLoader
 
+	// ClientCAs holds per-host client-CA pools for inbound mTLS
+	// (origin hardening). Optional; nil disables client-cert
+	// verification entirely. When set, hosts with a registered pool
+	// require + verify a client cert at the handshake.
+	ClientCAs *ClientCARegistry
+
 	// HTTPAddr is the bind address for the plain HTTP listener.
 	// Default ":80". Use ":8080" or similar in dev mode to avoid
 	// requiring CAP_NET_BIND_SERVICE.
@@ -176,6 +182,17 @@ func (s *Subsystem) Start(ctx context.Context) error {
 			MinVersion:     tls.VersionTLS12,
 			NextProtos:     []string{"h2", "http/1.1"},
 		}
+		// Per-SNI inbound mTLS (origin hardening). Client-cert
+		// verification is negotiated during the handshake, before the
+		// HTTP Host is known, so we vary the config by SNI: hosts with a
+		// registered client-CA pool require + verify a client cert; all
+		// others fall through to the base config (no client auth).
+		if s.cfg.ClientCAs != nil {
+			base := tlsCfg.Clone()
+			tlsCfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+				return s.cfg.ClientCAs.ConfigFor(hello, base), nil
+			}
+		}
 		s.httpsSrv = &http.Server{
 			Handler:           http.HandlerFunc(s.serveHTTPS),
 			TLSConfig:         tlsCfg,
@@ -266,10 +283,68 @@ func (s *Subsystem) serveHTTPS(w http.ResponseWriter, r *http.Request) {
 	s.proxy(w, r, "https")
 }
 
+// peerIP extracts the IP from an http.Request.RemoteAddr ("ip:port", set
+// by the server from the connection — not spoofable via headers). Returns
+// nil when it can't be parsed, which PeerAllowed treats as deny under an
+// active allowlist.
+func peerIP(remoteAddr string) net.IP {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr // already a bare IP?
+	}
+	return net.ParseIP(host)
+}
+
+// mtlsGate decides whether a request may proceed for a route that requires
+// inbound mTLS (expose.clientCert). It fails CLOSED: plaintext (:80) is
+// never allowed for an mTLS-locked origin (the handshake — and thus client
+// cert verification — only happens on :443), and even on :443 the per-host
+// CA pool must be loaded, else GetConfigForClient would fall through to the
+// no-client-auth base config and serve the origin unauthenticated. Returns
+// (status, false) to reject, or (0, true) to proceed.
+func mtlsGate(rt Route, scheme string, hasPool bool) (int, bool) {
+	if !rt.RequireClientCert {
+		return 0, true
+	}
+	if scheme != "https" {
+		// Plaintext can never carry a verified client cert.
+		return http.StatusForbidden, false
+	}
+	if !hasPool {
+		// Required but the CA isn't loaded (e.g. bad/missing caSecret).
+		// Refuse rather than serve without verifying the client.
+		return http.StatusServiceUnavailable, false
+	}
+	return 0, true
+}
+
 func (s *Subsystem) proxy(w http.ResponseWriter, r *http.Request, scheme string) {
 	rt, ok := s.cfg.Router.Match(r.Host, r.URL.Path)
 	if !ok {
 		http.Error(w, "no route for host "+r.Host, http.StatusNotFound)
+		return
+	}
+	// Source-IP allowlist (origin hardening). Checked against the real TCP
+	// peer (r.RemoteAddr), never a forwarding header which the client can
+	// set. Empty allowlist = allow all. See RUNE-0XX.
+	if !rt.PeerAllowed(peerIP(r.RemoteAddr)) {
+		s.cfg.Logger.Warn("ingress: source not in allowCidrs; rejecting",
+			log.Str("host", r.Host),
+			log.Str("peer", r.RemoteAddr))
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	// Inbound mTLS (origin hardening). Fail closed: refuse plaintext for an
+	// mTLS-locked host, and refuse :443 when the CA pool isn't loaded — so a
+	// clientCert origin is never served unauthenticated. See RUNE-0XX.
+	hasPool := s.cfg.ClientCAs.HasPool(rt.Host)
+	if code, allow := mtlsGate(rt, scheme, hasPool); !allow {
+		s.cfg.Logger.Warn("ingress: clientCert required; rejecting",
+			log.Str("host", r.Host),
+			log.Str("scheme", scheme),
+			log.Bool("caLoaded", hasPool),
+			log.Int("status", code))
+		http.Error(w, "forbidden", code)
 		return
 	}
 	target, ok := s.cfg.UpstreamResolver.Resolve(rt.Namespace, rt.Service, rt.Port)

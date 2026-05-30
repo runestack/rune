@@ -649,6 +649,11 @@ func main() {
 			certStore := acmesvc.NewBadgerCertStore(stateStore)
 			loader := ingress.NewCertLoader(certStore)
 			router := ingress.NewRouter()
+			// Shared per-host client-CA registry for inbound mTLS
+			// (origin hardening): the controller writes pools resolved
+			// from each service's clientCert.caSecret; the listener reads
+			// them at handshake time.
+			clientCAs := ingress.NewClientCARegistry()
 
 			httpAddr := *ingressHTTP
 			httpsAddr := *ingressHTTPS
@@ -693,6 +698,7 @@ func main() {
 				ACME:              orch,
 				Secrets:           repos.NewSecretRepo(stateStore),
 				Certs:             acmeCertStoreWithReload{store: certStore, loader: loader},
+				ClientCAs:         clientCAs,
 				Logger:            logger.WithComponent("ingressctl"),
 				ReservedHostPorts: ingressReservedPorts(httpAddr, httpsAddr, *devMode),
 			})
@@ -701,6 +707,7 @@ func main() {
 				Router:           router,
 				Challenges:       challenges,
 				Certs:            loader,
+				ClientCAs:        clientCAs,
 				HTTPAddr:         httpAddr,
 				HTTPSAddr:        httpsAddr,
 				UpstreamResolver: ictl,

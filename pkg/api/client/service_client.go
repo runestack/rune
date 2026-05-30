@@ -448,15 +448,22 @@ func ServiceToProto(service *types.Service) *generated.Service {
 	// Convert expose
 	if service.Expose != nil {
 		protoService.Expose = &generated.ServiceExpose{
-			Port: service.Expose.Port,
-			Host: service.Expose.Host,
-			Path: service.Expose.Path,
+			Port:       service.Expose.Port,
+			Host:       service.Expose.Host,
+			Path:       service.Expose.Path,
+			AllowCidrs: service.Expose.AllowCIDRs,
 		}
 		if service.Expose.TLS != nil {
 			protoService.Expose.Tls = &generated.ExposeServiceTLS{
 				Secret: service.Expose.TLS.Secret,
 				Auto:   service.Expose.TLS.Auto,
 				Mode:   service.Expose.TLS.Mode,
+			}
+		}
+		if service.Expose.ClientCert != nil {
+			protoService.Expose.ClientCert = &generated.ExposeClientCert{
+				CaSecret: service.Expose.ClientCert.CASecret,
+				Mode:     service.Expose.ClientCert.Mode,
 			}
 		}
 	}
@@ -739,15 +746,22 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 	// Convert expose
 	if proto.Expose != nil {
 		service.Expose = &types.ServiceExpose{
-			Port: proto.Expose.Port,
-			Host: proto.Expose.Host,
-			Path: proto.Expose.Path,
+			Port:       proto.Expose.Port,
+			Host:       proto.Expose.Host,
+			Path:       proto.Expose.Path,
+			AllowCIDRs: proto.Expose.AllowCidrs,
 		}
 		if proto.Expose.Tls != nil {
 			service.Expose.TLS = &types.ExposeServiceTLS{
 				Secret: proto.Expose.Tls.Secret,
 				Auto:   proto.Expose.Tls.Auto,
 				Mode:   proto.Expose.Tls.Mode,
+			}
+		}
+		if proto.Expose.ClientCert != nil {
+			service.Expose.ClientCert = &types.ExposeClientCert{
+				CASecret: proto.Expose.ClientCert.CaSecret,
+				Mode:     proto.Expose.ClientCert.Mode,
 			}
 		}
 	}

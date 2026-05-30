@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,17 @@ type Route struct {
 	Port int
 	// Path is an optional path prefix; empty matches all.
 	Path string
+	// AllowCIDRs, when non-empty, restricts inbound connections to these
+	// parsed source networks (matched against the real TCP peer). Empty =
+	// no restriction. Parsed once at Apply time so the request path does no
+	// parsing. See RUNE-0XX-Expose-Origin-Hardening-Design.md.
+	AllowCIDRs []*net.IPNet
+	// RequireClientCert is true when the service declares expose.clientCert
+	// (inbound mTLS). Carried on the route — independent of whether the CA
+	// pool has loaded — so the listener can fail CLOSED: refuse plaintext
+	// (:80) and refuse :443 when the per-host CA pool isn't registered yet,
+	// instead of serving the origin unauthenticated.
+	RequireClientCert bool
 }
 
 // Router is a host-keyed lookup for resolved upstream routes.
@@ -72,6 +84,26 @@ func (r *Router) Match(host, path string) (Route, bool) {
 		}
 	}
 	return Route{}, false
+}
+
+// PeerAllowed reports whether a connection from peerIP may proceed under
+// this route's source-IP allowlist. An empty allowlist means "no
+// restriction" (allow all) — never deny-all. A non-nil allowlist with no
+// match denies. A nil/unparseable peerIP denies when an allowlist is set
+// (fail closed: we can't prove the source is trusted).
+func (rt Route) PeerAllowed(peerIP net.IP) bool {
+	if len(rt.AllowCIDRs) == 0 {
+		return true
+	}
+	if peerIP == nil {
+		return false
+	}
+	for _, n := range rt.AllowCIDRs {
+		if n != nil && n.Contains(peerIP) {
+			return true
+		}
+	}
+	return false
 }
 
 // Hosts returns a sorted snapshot of all hostnames in the table.

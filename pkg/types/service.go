@@ -215,7 +215,38 @@ type ServiceExpose struct {
 
 	// TLS configuration for the exposed service
 	TLS *ExposeServiceTLS `json:"tls,omitempty" yaml:"tls,omitempty"`
+
+	// AllowCIDRs restricts inbound connections to these source CIDRs,
+	// enforced at the ingress listener against the real TCP peer (not a
+	// forwarding header). Empty means "no restriction" (allow all) — never
+	// deny-all. Defense-in-depth for origin lockdown behind a CDN. Only
+	// meaningful when ingress is the direct TCP terminator (no L4 LB in
+	// front rewriting the source IP).
+	AllowCIDRs []string `json:"allowCidrs,omitempty" yaml:"allowCidrs,omitempty"`
+
+	// ClientCert requires a trusted client certificate (mTLS) on inbound
+	// TLS connections, verified at the ingress handshake. The primary
+	// origin-lockdown control — strongest when the CA is account-specific
+	// (not a CDN's shared origin-pull CA).
+	ClientCert *ExposeClientCert `json:"clientCert,omitempty" yaml:"clientCert,omitempty"`
 }
+
+// ExposeClientCert configures inbound mTLS for an exposed service.
+type ExposeClientCert struct {
+	// CASecret references a Secret holding a PEM CA bundle (data key
+	// "ca.crt") used to verify the client certificate. Accepts the same
+	// resource-ref shapes as ExposeServiceTLS.Secret.
+	CASecret string `json:"caSecret" yaml:"caSecret"`
+
+	// Mode is the verification strictness. v1 supports only "require"
+	// (RequireAndVerifyClientCert); empty defaults to "require".
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+}
+
+// Well-known ExposeClientCert.Mode values.
+const (
+	ClientCertModeRequire = "require"
+)
 
 // ExposeServiceTLS defines TLS configuration for exposed services.
 type ExposeServiceTLS struct {

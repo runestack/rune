@@ -11,6 +11,7 @@ package ingressctl
 
 import (
 	"context"
+	"crypto/x509"
 	"net"
 	"strconv"
 	"sync"
@@ -47,6 +48,12 @@ type Config struct {
 	// cert loader are wired against. Required to enable manual
 	// mode; nil disables manual-mode handling.
 	Certs acme.CertStore
+	// ClientCAs is the per-host client-CA registry shared with the
+	// ingress listener for inbound mTLS. When set (and Secrets is
+	// available), the controller resolves each exposed service's
+	// clientCert.caSecret into a pool and pushes it here. nil disables
+	// clientCert handling.
+	ClientCAs *ingress.ClientCARegistry
 	// Logger is the structured logger. Defaults to "ingressctl".
 	Logger log.Logger
 	// ReconcilePeriod is how often the controller rebuilds the
@@ -80,6 +87,16 @@ type Controller struct {
 	// nothing changed (so we're not re-parsing a PEM every 2s).
 	manualPushed map[string]int
 
+	// clientCAPushed mirrors manualPushed for client-CA pools: the
+	// (host, caSecret-version) last pushed to the ClientCAs registry,
+	// so a CA rotation re-pushes but steady state skips the PEM parse.
+	clientCAPushed map[string]int
+
+	// clientCAHosts is the set of hosts that had a clientCert in the
+	// last reconcile, so hosts that drop it get Forget'd from the
+	// registry (disabling mTLS) on the next pass.
+	clientCAHosts map[string]struct{}
+
 	// manualLogged dedups warning logs on manual-TLS failures so a
 	// single bad secret doesn't spam the journal at the 2 s reconcile
 	// cadence. Keyed by "<host>::<errKind>"; first failure logs, then
@@ -104,11 +121,13 @@ func New(cfg Config) *Controller {
 		cfg.ReconcilePeriod = 2 * time.Second
 	}
 	return &Controller{
-		cfg:          cfg,
-		lastHosts:    map[string]struct{}{},
-		manualPushed: map[string]int{},
-		manualLogged: map[string]time.Time{},
-		svcSnapshot:  map[string]*types.Service{},
+		cfg:            cfg,
+		lastHosts:      map[string]struct{}{},
+		manualPushed:   map[string]int{},
+		manualLogged:   map[string]time.Time{},
+		svcSnapshot:    map[string]*types.Service{},
+		clientCAPushed: map[string]int{},
+		clientCAHosts:  map[string]struct{}{},
 	}
 }
 
@@ -220,6 +239,7 @@ func (c *Controller) reconcile(ctx context.Context) {
 
 	routes := make([]ingress.Route, 0)
 	hosts := make(map[string]struct{})
+	clientCAHosts := make(map[string]struct{})
 	for i := range svcs {
 		s := &svcs[i]
 		if s.Expose == nil || s.Expose.Host == "" {
@@ -230,11 +250,13 @@ func (c *Controller) reconcile(ctx context.Context) {
 			continue
 		}
 		routes = append(routes, ingress.Route{
-			Host:      s.Expose.Host,
-			Namespace: s.Namespace,
-			Service:   s.Name,
-			Port:      port,
-			Path:      s.Expose.Path,
+			Host:              s.Expose.Host,
+			Namespace:         s.Namespace,
+			Service:           s.Name,
+			Port:              port,
+			Path:              s.Expose.Path,
+			AllowCIDRs:        parseAllowCIDRs(s.Expose.AllowCIDRs, s.Expose.Host, c.cfg.Logger),
+			RequireClientCert: s.Expose.ClientCert != nil && s.Expose.ClientCert.CASecret != "",
 		})
 		hosts[s.Expose.Host] = struct{}{}
 		if c.cfg.ACME != nil && s.Expose.TLS.IsACME() {
@@ -246,8 +268,13 @@ func (c *Controller) reconcile(ctx context.Context) {
 		} else if s.Expose.TLS != nil && s.Expose.TLS.Mode == types.ExposeTLSModeManual && s.Expose.TLS.Secret != "" {
 			c.applyManualTLS(ctx, s)
 		}
+		if s.Expose.ClientCert != nil && s.Expose.ClientCert.CASecret != "" {
+			c.applyClientCert(ctx, s)
+			clientCAHosts[s.Expose.Host] = struct{}{}
+		}
 	}
 	c.cfg.Router.Apply(routes)
+	c.pruneClientCAs(clientCAHosts)
 
 	// Log only when the host set changes so steady-state reconciles
 	// stay quiet.
@@ -353,6 +380,91 @@ func (c *Controller) applyManualTLS(ctx context.Context, s *types.Service) {
 		log.Int("secretVersion", secret.Version))
 }
 
+// applyClientCert resolves Expose.ClientCert.CASecret into an x509 pool
+// and pushes it into the shared ClientCAs registry, so the ingress
+// listener requires + verifies a client cert for this host. Idempotent per
+// (host, caSecret-version): a CA rotation re-pushes, steady state skips the
+// PEM parse. A misconfigured CA leaves the host's prior pool in place (or
+// absent) and warns — it does NOT silently disable mTLS, which would be a
+// fail-open regression on a lockdown control.
+func (c *Controller) applyClientCert(ctx context.Context, s *types.Service) {
+	if c.cfg.ClientCAs == nil || c.cfg.Secrets == nil {
+		return
+	}
+	host := s.Expose.Host
+	cc := s.Expose.ClientCert
+
+	ref, refErr := types.ParseResourceRefWithDefaults(cc.CASecret, types.ResourceTypeSecret, s.Namespace)
+	if refErr != nil || ref.Type != types.ResourceTypeSecret {
+		c.warnManualOnce(host, "ca-ref", "clientCert: caSecret ref parse failed",
+			log.Str("host", host), log.Str("namespace", s.Namespace),
+			log.Str("caSecret", cc.CASecret), log.Err(refErr))
+		return
+	}
+	secret, err := c.cfg.Secrets.Get(ctx, ref.Namespace, ref.Name)
+	if err != nil {
+		c.warnManualOnce(host, "ca-lookup", "clientCert: caSecret lookup failed",
+			log.Str("host", host), log.Str("namespace", s.Namespace),
+			log.Str("caSecret", ref.Namespace+"/"+ref.Name), log.Err(err))
+		return
+	}
+	pem := secret.Data["ca.crt"]
+	if pem == "" {
+		c.warnManualOnce(host, "ca-missing", "clientCert: caSecret missing 'ca.crt' data key",
+			log.Str("host", host), log.Str("namespace", s.Namespace),
+			log.Str("caSecret", ref.Namespace+"/"+ref.Name))
+		return
+	}
+
+	// Skip the parse + push when this (host, secret-version) already landed.
+	c.mu.Lock()
+	if prev, ok := c.clientCAPushed[host]; ok && prev == secret.Version {
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(pem)) {
+		c.warnManualOnce(host, "ca-parse", "clientCert: caSecret ca.crt contains no valid PEM certificate",
+			log.Str("host", host), log.Str("namespace", s.Namespace),
+			log.Str("caSecret", ref.Namespace+"/"+ref.Name))
+		return
+	}
+	c.cfg.ClientCAs.Set(host, pool)
+	c.mu.Lock()
+	c.clientCAPushed[host] = secret.Version
+	c.mu.Unlock()
+	c.clearManualWarns(host)
+	c.cfg.Logger.Info("clientCert: CA pool loaded from secret",
+		log.Str("host", host), log.Str("namespace", s.Namespace),
+		log.Str("caSecret", ref.Namespace+"/"+ref.Name),
+		log.Int("secretVersion", secret.Version))
+}
+
+// pruneClientCAs forgets registry entries (and version cache) for hosts
+// that no longer declare a clientCert, so removing clientCert from a
+// service disables mTLS for its host on the next reconcile.
+func (c *Controller) pruneClientCAs(current map[string]struct{}) {
+	if c.cfg.ClientCAs == nil {
+		return
+	}
+	c.mu.Lock()
+	var dropped []string
+	for h := range c.clientCAHosts {
+		if _, ok := current[h]; !ok {
+			dropped = append(dropped, h)
+			delete(c.clientCAPushed, h)
+		}
+	}
+	c.clientCAHosts = current
+	c.mu.Unlock()
+	for _, h := range dropped {
+		c.cfg.ClientCAs.Forget(h)
+		c.cfg.Logger.Info("clientCert: disabled (clientCert removed)", log.Str("host", h))
+	}
+}
+
 // warnManualOnce emits a Warn-level log no more than once every
 // ManualLogRepeat for a given (host, errKind). Subsequent identical
 // failures within the window are dropped on the floor — useful because
@@ -384,6 +496,30 @@ func (c *Controller) clearManualWarns(host string) {
 			delete(c.manualLogged, k)
 		}
 	}
+}
+
+// parseAllowCIDRs parses the source-IP allowlist into networks for the
+// route. Entries are validated at cast time; we parse defensively here and
+// skip (with a warning) any that fail, rather than dropping the whole route
+// — a malformed entry shouldn't silently widen access by yielding an empty
+// (allow-all) list, so callers should treat a parse-skip as a tightening.
+func parseAllowCIDRs(cidrs []string, host string, logger log.Logger) []*net.IPNet {
+	if len(cidrs) == 0 {
+		return nil
+	}
+	out := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil || n == nil {
+			if logger != nil {
+				logger.Warn("ingress: skipping invalid allowCidrs entry",
+					log.Str("host", host), log.Str("cidr", c))
+			}
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func primaryServicePort(s *types.Service) int {
