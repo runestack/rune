@@ -15,7 +15,7 @@
 // row in the registry — there is no "subdriver" abstraction. Adding a third
 // local-style driver would mean adding a third Register() call.
 //
-// Introduced in RUNE-069. See _docs/designs/RUNE-069-Storage-Management.md §5.1.
+// Introduced in RUNE-069.
 package local
 
 import (

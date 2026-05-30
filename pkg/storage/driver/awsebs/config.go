@@ -34,8 +34,7 @@
 // the driver sees it (RUNE-200 / pkg/storage/driverparams), so rotation
 // flows through the secrets store with no driver-level wiring.
 //
-// Mirrors the do-volume reference driver (RUNE-069). See
-// _docs/designs/RUNE-069-Storage-Management.md.
+// Mirrors the do-volume reference driver (RUNE-069).
 package awsebs
 
 import (

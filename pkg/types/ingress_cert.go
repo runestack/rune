@@ -30,8 +30,8 @@ const (
 )
 
 // IngressCertStatus is the per-service cert status surfaced to the
-// operator via `rune get service`. Mirrors the design in
-// _docs/designs/Networking-Layer-Implementation-Plan.md (RUNE-066).
+// operator via `rune get service`. Mirrors the networking-layer
+// implementation plan (RUNE-066).
 type IngressCertStatus struct {
 	// Host is the hostname the cert is issued for, e.g. api.example.com.
 	Host string `json:"host" yaml:"host"`

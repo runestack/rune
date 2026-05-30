@@ -32,7 +32,7 @@ const (
 //
 // The walk and reference resolution happen server-side so the result
 // is a single consistent snapshot taken under one read pass, with one
-// authz check. See _docs/designs/RUNE-126-Describe-Command.md §4.2.
+// authz check (RUNE-126 §4.2).
 type DescribeServiceClient interface {
 	// Describe returns the assembled diagnostic view for one resource.
 	// Per-reference resolution failures are captured inside the result
@@ -69,7 +69,7 @@ func (c *describeServiceClient) Describe(ctx context.Context, in *DescribeReques
 //
 // The walk and reference resolution happen server-side so the result
 // is a single consistent snapshot taken under one read pass, with one
-// authz check. See _docs/designs/RUNE-126-Describe-Command.md §4.2.
+// authz check (RUNE-126 §4.2).
 type DescribeServiceServer interface {
 	// Describe returns the assembled diagnostic view for one resource.
 	// Per-reference resolution failures are captured inside the result

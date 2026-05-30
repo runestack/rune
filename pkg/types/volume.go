@@ -1,6 +1,6 @@
 // Package types — Volume resource definitions for the storage subsystem.
 //
-// Introduced in RUNE-069. See _docs/designs/RUNE-069-Storage-Management.md.
+// Introduced in RUNE-069.
 package types
 
 import (

@@ -32,7 +32,7 @@ var errDescribeNotFound = errors.New("describe target not found")
 // server-side: the target is read, its obvious references are walked
 // one level deep against the same store, and the assembled
 // DescribeResult is returned. A consistent snapshot under one read
-// pass, one authz check — see _docs/designs/RUNE-126-Describe-Command.md.
+// pass, one authz check (RUNE-126).
 type DescribeService struct {
 	generated.UnimplementedDescribeServiceServer
 

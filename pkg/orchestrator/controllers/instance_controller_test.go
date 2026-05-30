@@ -1069,7 +1069,7 @@ func TestPrepareEnvVars_EnvFrom(t *testing.T) {
 // CreateAttempts. This is the load-bearing field used by the reconciler
 // to tell "container vanished" apart from "create never succeeded";
 // regressing this would re-introduce the churn loop documented in
-// _docs/bugs-reporting/RUNE-BUG-RECONCILER-CHURN-ON-STABLE-PRECONDITION-FAILURE.md.
+// RUNE-BUG-RECONCILER-CHURN-ON-STABLE-PRECONDITION-FAILURE.
 func TestCreateInstance_SuccessSetsContainerEverCreatedAt(t *testing.T) {
 	ctx, _, _, controller := setupTestController(t)
 	service := instanceControllerCreateTestService(t.Context(), t, controllerTestStore(controller), "test-service", types.RestartPolicyAlways)

@@ -8,7 +8,7 @@
 // snapshot -> restore -> expand -> delete — gating capability-specific
 // stages on the driver's advertised Capabilities.
 //
-// Introduced in RUNE-069. See _docs/designs/RUNE-069-Storage-Management.md.
+// Introduced in RUNE-069.
 package drivertest
 
 import (

@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// RunIfType selects when an InitStep should execute. See
-// _docs/designs/RUNE-121-Service-Init-Steps.md §3 for the rationale.
+// RunIfType selects when an InitStep should execute. See RUNE-121 §3
+// for the rationale.
 type RunIfType string
 
 const (

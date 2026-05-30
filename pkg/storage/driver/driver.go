@@ -3,7 +3,7 @@
 // subpackages (driver/local, driver/dovolume, ...) and register themselves
 // with the registry from init().
 //
-// Introduced in RUNE-069. See _docs/designs/RUNE-069-Storage-Management.md.
+// Introduced in RUNE-069.
 package driver
 
 import (
