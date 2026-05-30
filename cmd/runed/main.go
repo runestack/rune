@@ -47,6 +47,7 @@ import (
 	// driver is one more line here.
 	_ "github.com/runestack/rune/pkg/storage/driver/awsebs"
 	_ "github.com/runestack/rune/pkg/storage/driver/dovolume"
+	_ "github.com/runestack/rune/pkg/storage/driver/gcepd"
 	_ "github.com/runestack/rune/pkg/storage/driver/hcloudvolume"
 	_ "github.com/runestack/rune/pkg/storage/driver/local"
 
