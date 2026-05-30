@@ -1,6 +1,6 @@
 // Package types — StorageClass resource definitions.
 //
-// Introduced in RUNE-073. See _docs/designs/RUNE-069-Storage-Management.md.
+// Introduced in RUNE-073.
 package types
 
 import "time"

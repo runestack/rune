@@ -44,7 +44,7 @@ type statusOptions struct {
 	// default for a bare `rune status`); false => focus the single namespace
 	// the user named with -n. Computed in runStatus from whether -n was
 	// passed (and -A, which forces global). See the Scope model in
-	// _docs/designs/RUNE-0XY-Status-Command-Design.md.
+	// the RUNE-0XY status-command design.
 	global bool
 }
 

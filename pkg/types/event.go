@@ -20,7 +20,7 @@ const (
 // and serves them. Events are observability, not consensus state —
 // they are node-local and never routed through OrderedLog/Raft.
 //
-// See _docs/designs/RUNE-126-Describe-Command.md §5.
+// See RUNE-126 §5.
 type Event struct {
 	// ID is the stable, per-resource identifier "<kind>/<name>/<resourceSeq>".
 	// It is the idempotency key for server-side dedup at any consumer.

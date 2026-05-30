@@ -1705,8 +1705,7 @@ func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context
 	// secret, image-pull error). The slot is legitimately held by
 	// this record — returning false would trigger
 	// tombstone+recreate-with-new-UUID every reconcile tick, the
-	// exact churn that
-	// _docs/bugs-reporting/RUNE-BUG-RECONCILER-CHURN-ON-STABLE-PRECONDITION-FAILURE.md
+	// exact churn that RUNE-BUG-RECONCILER-CHURN-ON-STABLE-PRECONDITION-FAILURE
 	// describes. Return true so the reconciler leaves the record in
 	// place; the reconciler's retry-in-place branch handles backoff
 	// (Failed) or holds-without-retry (Stalled — operator must run

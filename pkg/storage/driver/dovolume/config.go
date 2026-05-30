@@ -24,7 +24,7 @@
 // (RUNE-200 PR 3 / pkg/storage/driverparams), so token rotation flows
 // through the secrets store with no driver-level wiring.
 //
-// Introduced in RUNE-069. See _docs/designs/RUNE-069-Storage-Management.md §5.1.
+// Introduced in RUNE-069.
 package dovolume
 
 import (
