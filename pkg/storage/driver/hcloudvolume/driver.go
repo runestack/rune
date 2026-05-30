@@ -87,6 +87,18 @@ func (d *hcloudVolumeDriver) Provision(ctx context.Context, opctx driver.OpConte
 		gigabytes = 10
 	}
 	hcName := d.hcVolumeName(opctx.Volume)
+	// Adopt an existing volume with the same name before creating a new
+	// one. Hetzner volume names are project-unique and hcName is derived
+	// deterministically from the Rune volume's namespace+name, so a
+	// re-cast after the Rune Volume row was lost (or a retried Provision)
+	// reuses the existing volume and its data instead of dead-ending on
+	// Hetzner's name-uniqueness error. Mirrors the adopt-on-conflict path
+	// in dovolume / aws-ebs.
+	if existing, err := d.client.volumeByName(ctx, hcName, location); err == nil {
+		return driver.VolumeHandle(strconv.FormatInt(existing.ID, 10)), nil
+	} else if !errors.Is(err, errHCNotFound) {
+		return "", fmt.Errorf("hcloudvolume: lookup existing volume %q: %w", hcName, err)
+	}
 	in := createVolumeIn{
 		Name:      hcName,
 		Size:      gigabytes,

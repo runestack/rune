@@ -22,6 +22,7 @@ import (
 type hcloudClient interface {
 	createVolume(ctx context.Context, in createVolumeIn) (*hcVolume, *hcAction, error)
 	getVolume(ctx context.Context, id int64) (*hcVolume, error)
+	volumeByName(ctx context.Context, name, location string) (*hcVolume, error)
 	deleteVolume(ctx context.Context, id int64) error
 	attachVolume(ctx context.Context, volumeID, serverID int64) (*hcAction, error)
 	detachVolume(ctx context.Context, volumeID int64) (*hcAction, error)
@@ -202,6 +203,27 @@ func (c *httpClient) getVolume(ctx context.Context, id int64) (*hcVolume, error)
 		return nil, errors.New("hcloudvolume: getVolume response missing volume")
 	}
 	return resp.Volume, nil
+}
+
+// volumeByName looks up a volume by its Hetzner name. Hetzner volume
+// names are unique per project, so at most one matches. When location is
+// non-empty the match is additionally constrained to that location, so a
+// stale same-name volume in another location isn't adopted (Hetzner
+// refuses cross-location attaches). Returns errHCNotFound on no match.
+func (c *httpClient) volumeByName(ctx context.Context, name, location string) (*hcVolume, error) {
+	var resp struct {
+		Volumes []*hcVolume `json:"volumes"`
+	}
+	path := "/v1/volumes?name=" + url.QueryEscape(name)
+	if err := c.doRequest(ctx, "GET", path, nil, &resp); err != nil {
+		return nil, err
+	}
+	for _, v := range resp.Volumes {
+		if v != nil && v.Name == name && (location == "" || v.Location.Name == location) {
+			return v, nil
+		}
+	}
+	return nil, errHCNotFound
 }
 
 func (c *httpClient) deleteVolume(ctx context.Context, id int64) error {

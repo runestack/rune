@@ -71,6 +71,8 @@ func (f *fakeHC) handle(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == "POST" && p == "/v1/volumes":
 		f.createVolume(w, body)
+	case r.Method == "GET" && p == "/v1/volumes":
+		f.listVolumes(w, r.URL.Query().Get("name"))
 	case r.Method == "GET" && strings.HasPrefix(p, "/v1/volumes/"):
 		f.getVolume(w, strings.TrimPrefix(p, "/v1/volumes/"))
 	case r.Method == "DELETE" && strings.HasPrefix(p, "/v1/volumes/"):
@@ -120,6 +122,18 @@ func (f *fakeHC) createVolume(w http.ResponseWriter, body []byte) {
 	f.volumes[id] = v
 	act := f.newAction("create_volume")
 	writeJSON(w, http.StatusCreated, map[string]any{"volume": v, "action": actionWire(act)})
+}
+
+func (f *fakeHC) listVolumes(w http.ResponseWriter, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	matches := make([]*hcVolume, 0)
+	for _, v := range f.volumes {
+		if name == "" || v.Name == name {
+			matches = append(matches, v)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"volumes": matches})
 }
 
 func (f *fakeHC) getVolume(w http.ResponseWriter, idStr string) {
@@ -378,6 +392,38 @@ func TestProvision_LocationRequiredAndRegionAlias(t *testing.T) {
 		Parameters: map[string]string{"apiToken": "t", "region": "fsn1"},
 	}, driver.ProvisionRequest{SizeBytes: 10 * 1_000_000_000}); err != nil {
 		t.Fatalf("region alias should work: %v", err)
+	}
+}
+
+// TestProvision_AdoptsExisting covers re-casting a service whose Hetzner
+// volume still exists (e.g. the Rune Volume row was lost): Provision must
+// adopt the existing volume by name rather than fail on Hetzner's
+// name-uniqueness constraint.
+func TestProvision_AdoptsExisting(t *testing.T) {
+	fake := newFakeHC(t)
+	ts := fake.server()
+	defer ts.Close()
+	d, _ := newTestDriver(t, ts)
+	opctx := nbg1OpCtx(mkVolume("data"))
+	req := driver.ProvisionRequest{SizeBytes: 10 * 1_000_000_000}
+
+	first, err := d.Provision(context.Background(), opctx, req)
+	if err != nil {
+		t.Fatalf("first Provision: %v", err)
+	}
+	// Second Provision of the same Rune volume must adopt the existing
+	// Hetzner volume and return the same handle, not create a duplicate.
+	second, err := d.Provision(context.Background(), opctx, req)
+	if err != nil {
+		t.Fatalf("second Provision (adopt): %v", err)
+	}
+	if second != first {
+		t.Fatalf("adopt returned %q, want existing %q", second, first)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.volumes) != 1 {
+		t.Fatalf("expected 1 volume after adopt, got %d", len(fake.volumes))
 	}
 }
 
