@@ -54,9 +54,31 @@ Expected output:
 [smoke] PASS ✅
 ```
 
-**Known constraint:** unary and **server-streaming** (logs, watches) work over
-Connect/HTTP1.1 — what the dashboard needs. True **client/bidi streaming** (exec)
-cannot run in a browser over HTTP and will need a WebSocket bridge in Phase 4.
+### Transport capability matrix (measured — `scripts/streamcheck.ts`)
+
+Run against a live `runed` with the **real browser transport** (`@connectrpc/connect-web`):
+
+| Call shape | Example RPC | Browser (connect-web) |
+|---|---|---|
+| Unary | `WhoAmI`, `ListServices` | ✅ works |
+| Server-streaming | `WatchNamespaces`, watches | ✅ works |
+| **Bidi** | **`StreamLogs`, `StreamExec`** | ❌ **rejected**: *"The fetch API does not support streaming request bodies"* |
+
+> **Important:** `LogService.StreamLogs` and `ExecService.StreamExec` are declared
+> **bidirectional**, which **no browser can call** (Connect/gRPC-Web have no
+> client/bidi streaming — a protocol-level limit, not a bug). So **logs and exec
+> are NOT browser-usable as currently shaped.**
+>
+> - **Logs**: the server only reads the *first* request (the bidi `parameter_update`
+>   is unimplemented), so logs is *functionally* server-streaming. Fix is small:
+>   add a server-streaming `GetLogs(LogRequest) returns (stream LogResponse)`.
+>   See `_docs/designs/RUNE-200C-Logs-Exec-Browser-Transport.md`.
+> - **Exec**: genuinely needs bidi (stdin) → requires a WebSocket bridge (Phase 4).
+> - **Pagination**: `LogRequest` has only `tail` + `since`/`until` — no cursor.
+>   "Load older" needs a real page token; tracked in RUNE-200C.
+
+So: **unary + server-streaming are proven**; **logs/exec need the RUNE-200C
+changes before the SPA can use them.**
 
 ## Build
 
