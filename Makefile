@@ -220,12 +220,15 @@ proto-tools:
 	@bash scripts/install-proto-tools.sh
 
 ## Generate TypeScript Connect clients for the dashboard (RUNE-200)
+## Uses protoc + the npm-installed @bufbuild/@connectrpc plugins (works with the
+## protoc already vendored for `make proto`). buf.gen.yaml is kept for newer buf
+## (>=1.32, v2 config); `npm run gen` is the canonical path today.
 proto-ts:
-	@if command -v buf >/dev/null 2>&1; then \
+	@if [ -d web/node_modules ]; then \
 		echo "Generating TS Connect clients into web/src/gen..."; \
-		cd web && buf generate; \
+		cd web && npm run gen; \
 	else \
-		echo "buf not found; skipping TS client generation (install: https://buf.build/docs/installation)"; \
+		echo "web/ deps not installed; run 'cd web && npm install' first"; \
 	fi
 
 ## Build the embedded dashboard SPA (RUNE-200).
