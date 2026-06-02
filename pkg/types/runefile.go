@@ -111,9 +111,29 @@ type RuneFile struct {
 	// GC reaps them. Mirrors internal/config.FailedInstanceRetention.
 	FailedInstanceRetention *FailedInstanceRetentionConfig `yaml:"failed_instance_retention,omitempty"`
 
+	// UI configures the embedded web dashboard (RUNE-200). Mirrors
+	// internal/config.UI.
+	UI *UIConfig `yaml:"ui,omitempty"`
+
 	// Internal tracking for line numbers (not serialized)
 	lineInfo map[string]int `json:"-" yaml:"-"`
 	rawNode  *yaml.Node     `json:"-" yaml:"-"`
+}
+
+// UIConfig is the runefile-side view of the embedded dashboard settings
+// (RUNE-200). Parallel to internal/config.UI.
+type UIConfig struct {
+	// Enabled turns the dashboard (and the HTTP serving layer) on/off.
+	Enabled bool `yaml:"enabled,omitempty"`
+	// Path is the dashboard mount point (default /ui).
+	Path string `yaml:"path,omitempty"`
+	// HandoffEnabled allows the `rune ui login` token-handoff flow.
+	HandoffEnabled bool `yaml:"handoff_enabled,omitempty"`
+	// HandoffTTL bounds a one-time handoff code's lifetime.
+	HandoffTTL time.Duration `yaml:"handoff_ttl,omitempty"`
+	// RequireTLS refuses to serve the UI over plaintext on a non-loopback
+	// address (binds 127.0.0.1 only when TLS is off).
+	RequireTLS bool `yaml:"require_tls,omitempty"`
 }
 
 // FailedInstanceRetentionConfig is the runefile-side view of the failed-
@@ -620,6 +640,14 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 		"failed_instance_retention": true,
 		"per_service_cap":           true,
 		"snapshot_log_bytes":        true,
+
+		// embedded dashboard (RUNE-200): ui.{enabled,path,handoff_enabled,
+		// handoff_ttl,require_tls}. "enabled" is shared with server.tls.
+		"ui":              true,
+		"path":            true,
+		"handoff_enabled": true,
+		"handoff_ttl":     true,
+		"require_tls":     true,
 
 		// storage.* (typed knobs + opaque per-driver maps; key names
 		// under .drivers are driver-specific so we accept anything

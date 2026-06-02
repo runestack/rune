@@ -30,6 +30,27 @@ type Server struct {
 	TLS      TLS    `yaml:"tls"`
 }
 
+// UI configures the embedded web dashboard (RUNE-200). The dashboard is
+// served from the HTTP server on Server.HTTPAddr under Path. When disabled
+// the HTTP server is not started at all (no /ui, no /grpc transcoder).
+type UI struct {
+	// Enabled turns the dashboard (and the HTTP serving layer it rides
+	// on) on or off. Defaults to true.
+	Enabled bool `yaml:"enabled"`
+	// Path is the mount point for the dashboard. Defaults to "/ui".
+	Path string `yaml:"path"`
+	// HandoffEnabled allows the `rune ui login` CLI token-handoff flow
+	// (POST /v1/ui/handoff/{code}). Defaults to true.
+	HandoffEnabled bool `yaml:"handoff_enabled"`
+	// HandoffTTL bounds the lifetime of a one-time handoff code.
+	// Defaults to 60s.
+	HandoffTTL time.Duration `yaml:"handoff_ttl"`
+	// RequireTLS refuses to serve the UI over plaintext on a non-loopback
+	// address: when true and TLS is off, the HTTP server binds 127.0.0.1
+	// only and logs a warning. Defaults to true.
+	RequireTLS bool `yaml:"require_tls"`
+}
+
 type Client struct {
 	Timeout time.Duration `yaml:"timeout"`
 	Retries int           `yaml:"retries"`
@@ -188,6 +209,7 @@ type Storage struct {
 
 type Config struct {
 	Server    Server    `yaml:"server"`
+	UI        UI        `yaml:"ui"`
 	DataDir   string    `yaml:"data_dir"`
 	Client    Client    `yaml:"client"`
 	Docker    Docker    `yaml:"docker"`
@@ -241,6 +263,7 @@ type FailedInstanceRetention struct {
 func Default() *Config {
 	return &Config{
 		Server:    Server{GRPCAddr: fmt.Sprintf(":%d", DefaultGRPCPort), HTTPAddr: fmt.Sprintf(":%d", DefaultHTTPPort)},
+		UI:        UI{Enabled: true, Path: "/ui", HandoffEnabled: true, HandoffTTL: 60 * time.Second, RequireTLS: true},
 		DataDir:   defaultDataDir(),
 		Client:    Client{Timeout: 30 * time.Second, Retries: 3},
 		Docker:    Docker{FallbackAPIVersion: "1.43", NegotiationTimeoutSeconds: 3},

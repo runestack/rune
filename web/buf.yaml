@@ -1,0 +1,12 @@
+# Buf configuration for generating the dashboard's TypeScript Connect clients
+# (RUNE-200). The Go protobuf pipeline remains scripts/generate-proto.sh; this
+# is an additive, frontend-only toolchain that reads the same .proto sources.
+version: v2
+modules:
+  - path: ../pkg/api/proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

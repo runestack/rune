@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/api/service"
@@ -96,6 +97,30 @@ type Options struct {
 	// controllers so status transitions surface in `rune describe`.
 	// Nil disables emission.
 	EventLog events.EventLog
+
+	// UI configures the embedded dashboard and the HTTP serving layer it
+	// rides on (RUNE-200). When UI.Enabled is false the HTTP server is not
+	// started at all. Zero value disables the UI; runed populates this from
+	// the runefile [ui] block via WithUI.
+	UI UIOptions
+}
+
+// UIOptions configures the embedded dashboard HTTP layer (RUNE-200). It is
+// the server-package mirror of the runefile config.UI block; cmd/runed maps
+// one onto the other so this package needn't import internal/config.
+type UIOptions struct {
+	// Enabled starts the HTTP server (vanguard transcoder + /ui + handoff).
+	Enabled bool
+	// Path is the dashboard mount point (default "/ui").
+	Path string
+	// HandoffEnabled enables POST/GET /v1/ui/handoff/{code}.
+	HandoffEnabled bool
+	// HandoffTTL bounds a one-time handoff code's lifetime.
+	HandoffTTL time.Duration
+	// RequireTLS, when set with EnableTLS=false, binds the HTTP server to
+	// loopback only and logs a warning instead of exposing bearer-token
+	// traffic on the wire.
+	RequireTLS bool
 }
 
 // Option is a function that configures options.
@@ -263,5 +288,15 @@ func WithInitialMountResolver(resolver controllers.MountResolver) Option {
 func WithEventLog(eventLog events.EventLog) Option {
 	return func(opts *Options) {
 		opts.EventLog = eventLog
+	}
+}
+
+// WithUI configures the embedded dashboard HTTP layer (RUNE-200). When
+// ui.Enabled is true the server starts an HTTP listener on Options.HTTPAddr
+// serving the vanguard transcoder under /grpc, the dashboard under ui.Path,
+// and the CLI handoff endpoint.
+func WithUI(ui UIOptions) Option {
+	return func(opts *Options) {
+		opts.UI = ui
 	}
 }
