@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.304.1
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.48.0
 	github.com/aws/smithy-go v1.25.1
+	github.com/coder/websocket v1.8.14
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/docker/docker v28.3.3+incompatible
 	github.com/docker/go-connections v0.5.0

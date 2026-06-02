@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"net/http"
@@ -108,7 +109,6 @@ func (s *APIServer) startHTTPServer() error {
 // or starting the orchestrator. Requires s.grpcServer to be populated and
 // s.handoff to be initialised.
 func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
-	initUIMetrics()
 	registerJSONCodec()
 
 	if s.handoff == nil {
@@ -127,6 +127,10 @@ func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
 
 	// CLI token handoff.
 	mux.Handle(handoffMountPrefix, s.handoffHandler())
+
+	// Exec WebSocket bridge (RUNE-200C §3) — browser exec, since bidi gRPC
+	// isn't browser-callable.
+	mux.Handle(execWSPath, s.execWSHandler())
 
 	// Embedded dashboard.
 	mountPath := s.uiMountPath()
@@ -270,6 +274,17 @@ func (s *statusRecorder) Flush() {
 	}
 }
 
+// Hijack delegates to the underlying ResponseWriter so WebSocket upgrades
+// (the exec bridge) work even though this wrapper sits in the metrics
+// middleware. Without this, the wrapper would mask the http.Hijacker the
+// WebSocket library needs.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
+}
+
 // uiMetricsMiddleware records request counts and active stream gauge. It is a
 // method so route classification honours the configured (possibly custom) UI
 // mount path rather than a hardcoded "/ui".
@@ -277,16 +292,13 @@ func (s *APIServer) uiMetricsMiddleware(next http.Handler) http.Handler {
 	uiPrefix := s.uiMountPath()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route := routeClass(r.URL.Path, uiPrefix)
-		isStream := route == "grpc"
-		if isStream && uiMetricsRegistered {
+		if route == "grpc" {
 			uiActiveStreams.Inc()
 			defer uiActiveStreams.Dec()
 		}
 		rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		if uiMetricsRegistered {
-			uiRequestsTotal.WithLabelValues(route, strconv.Itoa(rec.code)).Inc()
-		}
+		uiRequestsTotal.WithLabelValues(route, strconv.Itoa(rec.code)).Inc()
 	})
 }
 
@@ -297,6 +309,8 @@ func routeClass(p, uiPrefix string) string {
 		return "grpc"
 	case strings.HasPrefix(p, handoffMountPrefix):
 		return "handoff"
+	case p == execWSPath:
+		return "exec"
 	case p == "/healthz" || p == "/readyz":
 		return "health"
 	case p == uiPrefix || strings.HasPrefix(p, uiPrefix+"/"):
