@@ -1,4 +1,4 @@
-.PHONY: build test lint lint-orderedlog-seam clean setup dev generate proto proto-tools docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
+.PHONY: build test lint lint-orderedlog-seam clean setup dev generate proto proto-tools proto-ts ui docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
 
 # Tools and paths
 GO ?= go
@@ -218,6 +218,30 @@ proto:
 ## Install protobuf tools
 proto-tools:
 	@bash scripts/install-proto-tools.sh
+
+## Generate TypeScript Connect clients for the dashboard (RUNE-200)
+proto-ts:
+	@if command -v buf >/dev/null 2>&1; then \
+		echo "Generating TS Connect clients into web/src/gen..."; \
+		cd web && buf generate; \
+	else \
+		echo "buf not found; skipping TS client generation (install: https://buf.build/docs/installation)"; \
+	fi
+
+## Build the embedded dashboard SPA (RUNE-200).
+## Phase 1: this is a no-op that guarantees the placeholder bundle exists so
+## `go build`/`go:embed` stay green. Phase 2 replaces this body with the real
+## Vite build that emits into pkg/api/server/uiassets/dist.
+ui:
+	@if [ -d web ] && [ -f web/package.json ]; then \
+		echo "Building dashboard SPA..."; \
+		cd web && npm ci && npm run build; \
+	else \
+		echo "web/ not scaffolded yet (Phase 2); using embedded placeholder."; \
+	fi
+	@test -f pkg/api/server/uiassets/dist/index.html || \
+		(echo "ERROR: embedded UI placeholder missing" && exit 1)
+	@echo "UI assets ready."
 
 ## Run documentation server
 docs:

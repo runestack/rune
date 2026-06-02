@@ -132,6 +132,9 @@ var (
 	ingressHTTPS  = flag.String("ingress-https-addr", "", "Bind address for the ingress HTTPS listener. Defaults to :443 in production, :8443 in dev mode. Used only when node-role contains 'edge'. Empty disables TLS termination.")
 	acmeDirectory = flag.String("acme-directory", "", "ACME directory URL. Empty defaults to Let's Encrypt production. Use a Pebble URL for integration tests.")
 	acmeEmail     = flag.String("acme-email", "", "Contact email passed to the ACME provider on account registration.")
+	uiEnabled     = flag.Bool("ui", true, "Serve the embedded web dashboard and gRPC-Web transcoder on the HTTP address (RUNE-200). Use --ui=false for headless installs.")
+	uiPath        = flag.String("ui-path", "", "Mount path for the embedded dashboard (default /ui).")
+	uiRequireTLS  = flag.Bool("ui-require-tls", true, "Refuse to serve the dashboard over plaintext on a non-loopback address; bind 127.0.0.1 only when TLS is off. Set false for dev or when TLS terminates at an ingress.")
 	showHelp      = flag.Bool("help", false, "Show help")
 	showVer       = flag.Bool("version", false, "Show version")
 )
@@ -364,6 +367,19 @@ func initRuntimeConfig() {
 		*acmeEmail = v.GetString("acme.email")
 	}
 
+	// Dashboard UI flag precedence (RUNE-200). Defaults match config.Default()
+	// (enabled, require_tls), so the flag default holds unless the runefile or
+	// an explicit flag overrides it.
+	if !cmdFlags["ui"] && v.IsSet("ui.enabled") {
+		*uiEnabled = v.GetBool("ui.enabled")
+	}
+	if !cmdFlags["ui-path"] && v.IsSet("ui.path") {
+		*uiPath = v.GetString("ui.path")
+	}
+	if !cmdFlags["ui-require-tls"] && v.IsSet("ui.require_tls") {
+		*uiRequireTLS = v.GetBool("ui.require_tls")
+	}
+
 	// Final validation and defaults for required parameters
 	if *dataDir == "" {
 		*dataDir = defaultDataDir
@@ -498,6 +514,15 @@ func main() {
 	}
 
 	// Create and start API server (with WatchService registered).
+	// Fold reconciled UI flags onto the typed config so buildServerOptions
+	// can map a single struct into server.WithUI (RUNE-200). Handoff knobs
+	// have no flags and ride the runefile/config defaults.
+	appCfg.UI.Enabled = *uiEnabled
+	appCfg.UI.RequireTLS = *uiRequireTLS
+	if *uiPath != "" {
+		appCfg.UI.Path = *uiPath
+	}
+
 	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, eventLog, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
@@ -1016,6 +1041,16 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 	// Volume.Handle as the bind source. The agent's volumes Subsystem
 	// will replace this with its real resolver once it's up.
 	opts = append(opts, server.WithInitialMountResolver(notReadyMountResolver{}))
+	// Embedded dashboard + gRPC-Web transcoder (RUNE-200).
+	if appCfg != nil {
+		opts = append(opts, server.WithUI(server.UIOptions{
+			Enabled:        appCfg.UI.Enabled,
+			Path:           appCfg.UI.Path,
+			HandoffEnabled: appCfg.UI.HandoffEnabled,
+			HandoffTTL:     appCfg.UI.HandoffTTL,
+			RequireTLS:     appCfg.UI.RequireTLS,
+		}))
+	}
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
 	}

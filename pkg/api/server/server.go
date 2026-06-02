@@ -56,8 +56,11 @@ type APIServer struct {
 	// gRPC server
 	grpcServer *grpc.Server
 
-	// HTTP server for REST gateway
+	// HTTP server for the embedded dashboard + gRPC-Web transcoder (RUNE-200)
 	httpServer *http.Server
+
+	// handoff backs the `rune ui login` CLI token-handoff flow (RUNE-200).
+	handoff *handoffStore
 
 	// State store
 	store store.Store
@@ -204,6 +207,15 @@ func (s *APIServer) Start() error {
 	// Start gRPC server
 	if err := s.startGRPCServer(); err != nil {
 		return fmt.Errorf("failed to start gRPC server: %w", err)
+	}
+
+	// Start the dashboard HTTP serving layer (RUNE-200). Disabled installs
+	// (ui.enabled=false / headless) skip it entirely — no HTTP listener, no
+	// /ui, no /grpc transcoder.
+	if s.options.UI.Enabled {
+		if err := s.startHTTPServer(); err != nil {
+			return fmt.Errorf("failed to start dashboard HTTP server: %w", err)
+		}
 	}
 
 	// SIGINT/SIGTERM are handled by cmd/runed (setupSignalContext) which
@@ -559,6 +571,22 @@ func (s *APIServer) stop() error {
 		close(s.shutdownCh)
 	}
 
+	// Stop the HTTP server FIRST. The dashboard /grpc transcoder dispatches
+	// in-process into s.grpcServer via ServeHTTP, so the HTTP layer must
+	// quiesce before the gRPC server is torn down — otherwise in-flight
+	// transcoded requests hit a stopping gRPC server. Shutdown waits for
+	// connections to drain; long-lived log/exec streams never go idle, so we
+	// force a Close() once the grace window elapses (mirrors the gRPC path).
+	if s.httpServer != nil {
+		s.logger.Info("Stopping dashboard HTTP server")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			s.logger.Warn("dashboard HTTP graceful shutdown incomplete; forcing close", log.Err(err))
+			_ = s.httpServer.Close()
+		}
+		cancel()
+	}
+
 	// Stop gRPC server (GracefulStop can block forever on open streams).
 	if s.grpcServer != nil {
 		s.logger.Info("Stopping gRPC server")
@@ -572,16 +600,6 @@ func (s *APIServer) stop() error {
 		case <-time.After(5 * time.Second):
 			s.logger.Warn("gRPC graceful stop timed out; forcing stop")
 			s.grpcServer.Stop()
-		}
-	}
-
-	// Stop HTTP server
-	if s.httpServer != nil {
-		s.logger.Info("Stopping REST gateway")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.httpServer.Shutdown(ctx); err != nil {
-			s.logger.Error("Error shutting down REST gateway", log.Err(err))
 		}
 	}
 
