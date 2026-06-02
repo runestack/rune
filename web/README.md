@@ -64,21 +64,31 @@ Run against a live `runed` with the **real browser transport** (`@connectrpc/con
 | Server-streaming | `WatchNamespaces`, watches | ✅ works |
 | **Bidi** | **`StreamLogs`, `StreamExec`** | ❌ **rejected**: *"The fetch API does not support streaming request bodies"* |
 
-> **Important:** `LogService.StreamLogs` and `ExecService.StreamExec` are declared
-> **bidirectional**, which **no browser can call** (Connect/gRPC-Web have no
-> client/bidi streaming — a protocol-level limit, not a bug). So **logs and exec
-> are NOT browser-usable as currently shaped.**
->
-> - **Logs**: the server only reads the *first* request (the bidi `parameter_update`
->   is unimplemented), so logs is *functionally* server-streaming. Fix is small:
->   add a server-streaming `GetLogs(LogRequest) returns (stream LogResponse)`.
->   See `_docs/designs/RUNE-200C-Logs-Exec-Browser-Transport.md`.
-> - **Exec**: genuinely needs bidi (stdin) → requires a WebSocket bridge (Phase 4).
-> - **Pagination**: `LogRequest` has only `tail` + `since`/`until` — no cursor.
->   "Load older" needs a real page token; tracked in RUNE-200C.
+Bidi RPCs (`StreamLogs`, `StreamExec`) are **not browser-callable** (Connect/gRPC-Web
+have no client/bidi streaming). RUNE-200C resolves both for the SPA:
 
-So: **unary + server-streaming are proven**; **logs/exec need the RUNE-200C
-changes before the SPA can use them.**
+### Logs — use `GetLogs` (server-streaming)
+
+`LogService.GetLogs(LogRequest) returns (stream LogResponse)` is the browser path
+(`StreamLogs` stays for the CLI). Covers history (`follow=false`) and live tail
+(`follow=true`). Page older by setting `until=<oldest-line-timestamp>` with `tail`;
+dedup the boundary by `(timestamp, content)`. A stable line cursor is future work.
+
+### Exec — use the WebSocket bridge
+
+`GET /v1/exec/ws` (since exec is inherently bidi):
+
+- Open with subprotocols `["rune.bearer.<token>", "rune.exec.v1"]` — the token can't
+  go in an `Authorization` header on a browser WebSocket. Server negotiates
+  `rune.exec.v1`.
+- Send/receive **binary** messages that are proto-encoded `ExecRequest` /
+  `ExecResponse` — reuse the generated `*_pb` types (`new ExecRequest({...}).toBinary()`,
+  `ExecResponse.fromBinary(bytes)`). First frame is an `init`; then `stdin`/`resize`;
+  responses are `stdout`/`stderr`/`exit`. Wire to xterm.js.
+- `ui:access` is checked at upgrade; `exec:exec` is enforced server-side.
+
+So: **unary, server-streaming, logs (`GetLogs`), and exec (WS) are all proven** —
+the SPA can use everything. Only a gap-free log cursor remains future work.
 
 ## Build
 

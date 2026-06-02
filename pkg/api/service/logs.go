@@ -208,7 +208,12 @@ func (s *LogService) getLogReader(ctx context.Context, req *generated.LogRequest
 	return logReader, serviceName, instanceName, nil
 }
 
-// StreamLogs provides bidirectional streaming for logs.
+// StreamLogs provides bidirectional streaming for logs (CLI path). The client
+// sends an initial LogRequest; the server streams log content back. The bidi
+// shape exists for historical reasons (mid-stream parameter updates) but only
+// the initial request is read — see serveLogs.
+//
+// Browser clients cannot call bidi RPCs; they use GetLogs instead (RUNE-200C).
 func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) error {
 	// Get the initial request
 	req, err := stream.Recv()
@@ -216,6 +221,24 @@ func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) er
 		s.logger.Error("Failed to receive initial log request", log.Err(err))
 		return status.Errorf(codes.Internal, "failed to receive initial request: %v", err)
 	}
+	return s.serveLogs(stream.Context(), req, stream.Send)
+}
+
+// GetLogs is the server-streaming (browser-callable) equivalent of StreamLogs:
+// one LogRequest in, a stream of LogResponses out. connect-web / gRPC-Web
+// support server-streaming, so this is the path the dashboard uses for both
+// history (follow=false) and live tail (follow=true). See RUNE-200C.
+func (s *LogService) GetLogs(req *generated.LogRequest, stream generated.LogService_GetLogsServer) error {
+	return s.serveLogs(stream.Context(), req, stream.Send)
+}
+
+// serveLogs is the shared body behind StreamLogs and GetLogs. It validates the
+// request, opens the appropriate log reader, and pumps log lines to the client
+// via send until the reader drains (non-follow) or the context is cancelled.
+// send is the stream's Send method; both the bidi and server-streaming server
+// stream types expose an identical Send(*LogResponse) error.
+func (s *LogService) serveLogs(parent context.Context, req *generated.LogRequest,
+	send func(*generated.LogResponse) error) error {
 
 	// Validate the request
 	if err := s.validateLogRequest(req); err != nil {
@@ -224,7 +247,7 @@ func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) er
 	}
 
 	// Set up context with cancel
-	ctx, cancel := context.WithCancel(stream.Context())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	// Build log options from request
@@ -248,21 +271,20 @@ func (s *LogService) StreamLogs(stream generated.LogService_StreamLogsServer) er
 	errCh := make(chan error, 1)
 
 	// Start a goroutine to read from logReader and send to logCh.
-	// gRPC will cancel stream.Context() automatically when the client
-	// disconnects, so we don't need a separate goroutine to Recv() — and
-	// doing so would race with the client's CloseSend() (which sends EOF
-	// immediately after the initial request) and tear down the stream
-	// before any logs are sent.
+	// gRPC will cancel ctx automatically when the client disconnects, so we
+	// don't need a separate goroutine to Recv() — and doing so would race with
+	// a bidi client's CloseSend() (which sends EOF immediately after the
+	// initial request) and tear down the stream before any logs are sent.
 	go s.readLogsFromReader(ctx, logReader, logCh, errCh, serviceName, instanceName)
 
 	// Stream logs to client
-	return s.streamLogsToClient(ctx, stream, logCh, errCh)
+	return s.streamLogsToClient(ctx, send, logCh, errCh)
 }
 
 // streamLogsToClient sends log responses to the client. It returns nil when
 // the reader signals end-of-stream by closing logCh (e.g. non-follow logs were
 // fully consumed) so the gRPC stream is half-closed and the client sees io.EOF.
-func (s *LogService) streamLogsToClient(ctx context.Context, stream generated.LogService_StreamLogsServer,
+func (s *LogService) streamLogsToClient(ctx context.Context, send func(*generated.LogResponse) error,
 	logCh <-chan *generated.LogResponse, errCh <-chan error) error {
 
 	for {
@@ -271,7 +293,7 @@ func (s *LogService) streamLogsToClient(ctx context.Context, stream generated.Lo
 			if !ok {
 				return nil
 			}
-			if err := stream.Send(logResp); err != nil {
+			if err := send(logResp); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}

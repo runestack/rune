@@ -308,11 +308,12 @@ const file_pkg_api_proto_logs_proto_rawDesc = "" +
 	"\acontent\x18\x05 \x01(\tR\acontent\x12\x16\n" +
 	"\x06stream\x18\x06 \x01(\tR\x06stream\x12(\n" +
 	"\x06status\x18\a \x01(\v2\x10.rune.api.StatusR\x06status\x12\x1b\n" +
-	"\tlog_level\x18\b \x01(\tR\blogLevel2K\n" +
+	"\tlog_level\x18\b \x01(\tR\blogLevel2\x85\x01\n" +
 	"\n" +
 	"LogService\x12=\n" +
 	"\n" +
-	"StreamLogs\x12\x14.rune.api.LogRequest\x1a\x15.rune.api.LogResponse(\x010\x01B-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"StreamLogs\x12\x14.rune.api.LogRequest\x1a\x15.rune.api.LogResponse(\x010\x01\x128\n" +
+	"\aGetLogs\x12\x14.rune.api.LogRequest\x1a\x15.rune.api.LogResponse0\x01B-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_logs_proto_rawDescOnce sync.Once
@@ -335,9 +336,11 @@ var file_pkg_api_proto_logs_proto_goTypes = []any{
 var file_pkg_api_proto_logs_proto_depIdxs = []int32{
 	2, // 0: rune.api.LogResponse.status:type_name -> rune.api.Status
 	0, // 1: rune.api.LogService.StreamLogs:input_type -> rune.api.LogRequest
-	1, // 2: rune.api.LogService.StreamLogs:output_type -> rune.api.LogResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
+	0, // 2: rune.api.LogService.GetLogs:input_type -> rune.api.LogRequest
+	1, // 3: rune.api.LogService.StreamLogs:output_type -> rune.api.LogResponse
+	1, // 4: rune.api.LogService.GetLogs:output_type -> rune.api.LogResponse
+	3, // [3:5] is the sub-list for method output_type
+	1, // [1:3] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name

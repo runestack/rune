@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	LogService_StreamLogs_FullMethodName = "/rune.api.LogService/StreamLogs"
+	LogService_GetLogs_FullMethodName    = "/rune.api.LogService/GetLogs"
 )
 
 // LogServiceClient is the client API for LogService service.
@@ -30,7 +31,18 @@ const (
 type LogServiceClient interface {
 	// StreamLogs provides bidirectional streaming for logs.
 	// Clients can stream parameter updates, server streams log content.
+	//
+	// NOTE: bidi RPCs cannot be called from a browser (Connect/gRPC-Web have no
+	// client/bidi streaming). Web clients must use GetLogs. StreamLogs is kept
+	// for the CLI. See RUNE-200C.
 	StreamLogs(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[LogRequest, LogResponse], error)
+	// GetLogs is the unidirectional (server-streaming) equivalent of StreamLogs:
+	// the client sends a single LogRequest and the server streams LogResponses.
+	// This is the browser-callable path — connect-web / gRPC-Web support
+	// server-streaming. follow=false ends the stream once history is drained;
+	// follow=true keeps streaming. Mid-stream parameter updates are not
+	// supported here; reconnect with new parameters instead. See RUNE-200C.
+	GetLogs(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogResponse], error)
 }
 
 type logServiceClient struct {
@@ -54,6 +66,25 @@ func (c *logServiceClient) StreamLogs(ctx context.Context, opts ...grpc.CallOpti
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type LogService_StreamLogsClient = grpc.BidiStreamingClient[LogRequest, LogResponse]
 
+func (c *logServiceClient) GetLogs(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &LogService_ServiceDesc.Streams[1], LogService_GetLogs_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[LogRequest, LogResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LogService_GetLogsClient = grpc.ServerStreamingClient[LogResponse]
+
 // LogServiceServer is the server API for LogService service.
 // All implementations must embed UnimplementedLogServiceServer
 // for forward compatibility.
@@ -62,7 +93,18 @@ type LogService_StreamLogsClient = grpc.BidiStreamingClient[LogRequest, LogRespo
 type LogServiceServer interface {
 	// StreamLogs provides bidirectional streaming for logs.
 	// Clients can stream parameter updates, server streams log content.
+	//
+	// NOTE: bidi RPCs cannot be called from a browser (Connect/gRPC-Web have no
+	// client/bidi streaming). Web clients must use GetLogs. StreamLogs is kept
+	// for the CLI. See RUNE-200C.
 	StreamLogs(grpc.BidiStreamingServer[LogRequest, LogResponse]) error
+	// GetLogs is the unidirectional (server-streaming) equivalent of StreamLogs:
+	// the client sends a single LogRequest and the server streams LogResponses.
+	// This is the browser-callable path — connect-web / gRPC-Web support
+	// server-streaming. follow=false ends the stream once history is drained;
+	// follow=true keeps streaming. Mid-stream parameter updates are not
+	// supported here; reconnect with new parameters instead. See RUNE-200C.
+	GetLogs(*LogRequest, grpc.ServerStreamingServer[LogResponse]) error
 	mustEmbedUnimplementedLogServiceServer()
 }
 
@@ -75,6 +117,9 @@ type UnimplementedLogServiceServer struct{}
 
 func (UnimplementedLogServiceServer) StreamLogs(grpc.BidiStreamingServer[LogRequest, LogResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamLogs not implemented")
+}
+func (UnimplementedLogServiceServer) GetLogs(*LogRequest, grpc.ServerStreamingServer[LogResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method GetLogs not implemented")
 }
 func (UnimplementedLogServiceServer) mustEmbedUnimplementedLogServiceServer() {}
 func (UnimplementedLogServiceServer) testEmbeddedByValue()                    {}
@@ -104,6 +149,17 @@ func _LogService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStream) e
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type LogService_StreamLogsServer = grpc.BidiStreamingServer[LogRequest, LogResponse]
 
+func _LogService_GetLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(LogRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(LogServiceServer).GetLogs(m, &grpc.GenericServerStream[LogRequest, LogResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LogService_GetLogsServer = grpc.ServerStreamingServer[LogResponse]
+
 // LogService_ServiceDesc is the grpc.ServiceDesc for LogService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -117,6 +173,11 @@ var LogService_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _LogService_StreamLogs_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "GetLogs",
+			Handler:       _LogService_GetLogs_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "pkg/api/proto/logs.proto",

@@ -94,7 +94,26 @@ async function main() {
     results["bidi (StreamExec) via connect-web"] = `REJECTED [${Code[ce.code]}]: ${ce.rawMessage}`;
   }
 
-  // 4. bidi StreamLogs via NODE h2 transport — transport supports bidi; this
+  // 4. NEW server-streaming GetLogs via BROWSER transport (RUNE-200C) —
+  //    expected to be ACCEPTED by connect-web and reach the server (which then
+  //    errors on the bogus target, since no instances exist without Docker).
+  //    The point: the browser can now *call* logs, unlike bidi StreamLogs.
+  try {
+    const logs = createPromiseClient(LogService, web);
+    let n = 0;
+    for await (const _ of logs.getLogs(
+      new LogRequest({ resourceTarget: "no-such-instance", namespace: "default", follow: false, tail: 10 }),
+    )) {
+      if (++n >= 1) break;
+    }
+    results["server-streaming (GetLogs) via connect-web"] = `OK — streamed ${n} frame(s)`;
+  } catch (e) {
+    const ce = ConnectError.from(e);
+    results["server-streaming (GetLogs) via connect-web"] =
+      `reached server (browser-callable ✓), code [${Code[ce.code]}]: ${ce.rawMessage}`;
+  }
+
+  // 5. bidi StreamLogs via NODE h2 transport — transport supports bidi; this
   //    reaches the server (which then errors on a bogus target). Proves the
   //    server path is fine and a bidi-capable proxy could drive it.
   try {

@@ -74,6 +74,31 @@ func request_LogService_StreamLogs_0(ctx context.Context, marshaler runtime.Mars
 	return stream, metadata, nil
 }
 
+func request_LogService_GetLogs_0(ctx context.Context, marshaler runtime.Marshaler, client LogServiceClient, req *http.Request, pathParams map[string]string) (LogService_GetLogsClient, runtime.ServerMetadata, error) {
+	var protoReq LogRequest
+	var metadata runtime.ServerMetadata
+
+	newReader, berr := utilities.IOReaderFactory(req.Body)
+	if berr != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", berr)
+	}
+	if err := marshaler.NewDecoder(newReader()).Decode(&protoReq); err != nil && err != io.EOF {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+
+	stream, err := client.GetLogs(ctx, &protoReq)
+	if err != nil {
+		return nil, metadata, err
+	}
+	header, err := stream.Header()
+	if err != nil {
+		return nil, metadata, err
+	}
+	metadata.HeaderMD = header
+	return stream, metadata, nil
+
+}
+
 // RegisterLogServiceHandlerServer registers the http handlers for service LogService to "mux".
 // UnaryRPC     :call LogServiceServer directly.
 // StreamingRPC :currently unsupported pending https://github.com/grpc/grpc-go/issues/906.
@@ -81,6 +106,13 @@ func request_LogService_StreamLogs_0(ctx context.Context, marshaler runtime.Mars
 func RegisterLogServiceHandlerServer(ctx context.Context, mux *runtime.ServeMux, server LogServiceServer) error {
 
 	mux.Handle("POST", pattern_LogService_StreamLogs_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		err := status.Error(codes.Unimplemented, "streaming calls are not yet supported in the in-process transport")
+		_, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+		return
+	})
+
+	mux.Handle("POST", pattern_LogService_GetLogs_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		err := status.Error(codes.Unimplemented, "streaming calls are not yet supported in the in-process transport")
 		_, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
 		runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
@@ -150,13 +182,39 @@ func RegisterLogServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux,
 
 	})
 
+	mux.Handle("POST", pattern_LogService_GetLogs_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		var err error
+		var annotatedContext context.Context
+		annotatedContext, err = runtime.AnnotateContext(ctx, mux, req, "/rune.api.LogService/GetLogs", runtime.WithHTTPPathPattern("/rune.api.LogService/GetLogs"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_LogService_GetLogs_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+
+		forward_LogService_GetLogs_0(annotatedContext, mux, outboundMarshaler, w, req, func() (proto.Message, error) { return resp.Recv() }, mux.GetForwardResponseOptions()...)
+
+	})
+
 	return nil
 }
 
 var (
 	pattern_LogService_StreamLogs_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"rune.api.LogService", "StreamLogs"}, ""))
+
+	pattern_LogService_GetLogs_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"rune.api.LogService", "GetLogs"}, ""))
 )
 
 var (
 	forward_LogService_StreamLogs_0 = runtime.ForwardResponseStream
+
+	forward_LogService_GetLogs_0 = runtime.ForwardResponseStream
 )
