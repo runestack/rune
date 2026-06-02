@@ -16,17 +16,69 @@ The backend serving layer is in place:
 
 The SPA itself (Vite + React + TanStack Query + Tailwind) lands in **Phase 2**.
 
-## Transport
+## Transport — validated ✅
 
-The SPA talks to the server with [`@connectrpc/connect-web`](https://connectrpc.com/docs/web/getting-started)
+The SPA talks to the server with [`@connectrpc/connect`](https://connectrpc.com/docs/web/getting-started)
 pointed at `<origin>/grpc`. Generate the typed clients with:
 
 ```bash
-npm i -D @bufbuild/protoc-gen-es @connectrpc/protoc-gen-connect-es
-make proto-ts   # or: cd web && buf generate
+cd web
+npm install
+npm run gen      # protoc + @bufbuild/@connectrpc plugins → src/gen/ (gitignored)
 ```
 
-This reads `../pkg/api/proto/*.proto` and emits `web/src/gen/`.
+`npm run gen` reads `../pkg/api/proto/*.proto` via protoc. (`buf.gen.yaml` is kept
+for buf ≥ 1.32 v2 config, but the protoc path is canonical because it works with
+the protoc already used by `make proto`.)
+
+### Streaming smoke (Phase-1 risk closed)
+
+`scripts/smoke.ts` drives a live `runed` through the vanguard transcoder using the
+exact Connect stack the SPA will use, proving both call shapes work end-to-end:
+
+```bash
+# 1. start a runed (no Docker needed for the API layer):
+#    runed --dev-mode --node-role="" --ui --ui-require-tls=false
+# 2. run the smoke:
+cd web && RUNE_URL=http://127.0.0.1:7861/grpc npm run smoke
+```
+
+Expected output:
+
+```
+[smoke] UNARY AdminBootstrap OK — subject=…
+[smoke] UNARY WhoAmI OK — subject=… policies=[root]
+[smoke] STREAM frame 1: namespace=default event=1
+[smoke] STREAM frame 2: namespace=system event=1
+[smoke] SERVER-STREAMING OK — 2 frame(s) over the transcoder
+[smoke] PASS ✅
+```
+
+### Transport capability matrix (measured — `scripts/streamcheck.ts`)
+
+Run against a live `runed` with the **real browser transport** (`@connectrpc/connect-web`):
+
+| Call shape | Example RPC | Browser (connect-web) |
+|---|---|---|
+| Unary | `WhoAmI`, `ListServices` | ✅ works |
+| Server-streaming | `WatchNamespaces`, watches | ✅ works |
+| **Bidi** | **`StreamLogs`, `StreamExec`** | ❌ **rejected**: *"The fetch API does not support streaming request bodies"* |
+
+> **Important:** `LogService.StreamLogs` and `ExecService.StreamExec` are declared
+> **bidirectional**, which **no browser can call** (Connect/gRPC-Web have no
+> client/bidi streaming — a protocol-level limit, not a bug). So **logs and exec
+> are NOT browser-usable as currently shaped.**
+>
+> - **Logs**: the server only reads the *first* request (the bidi `parameter_update`
+>   is unimplemented), so logs is *functionally* server-streaming. Fix is small:
+>   add a server-streaming `GetLogs(LogRequest) returns (stream LogResponse)`.
+>   See `_docs/designs/RUNE-200C-Logs-Exec-Browser-Transport.md`.
+> - **Exec**: genuinely needs bidi (stdin) → requires a WebSocket bridge (Phase 4).
+> - **Pagination**: `LogRequest` has only `tail` + `since`/`until` — no cursor.
+>   "Load older" needs a real page token; tracked in RUNE-200C.
+
+So: **unary + server-streaming are proven**; **logs/exec need the RUNE-200C
+changes before the SPA can use them.**
 
 ## Build
 
