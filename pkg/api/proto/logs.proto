@@ -76,5 +76,17 @@ message LogResponse {
 service LogService {
   // StreamLogs provides bidirectional streaming for logs.
   // Clients can stream parameter updates, server streams log content.
+  //
+  // NOTE: bidi RPCs cannot be called from a browser (Connect/gRPC-Web have no
+  // client/bidi streaming). Web clients must use GetLogs. StreamLogs is kept
+  // for the CLI. See RUNE-200C.
   rpc StreamLogs(stream LogRequest) returns (stream LogResponse);
-} 
+
+  // GetLogs is the unidirectional (server-streaming) equivalent of StreamLogs:
+  // the client sends a single LogRequest and the server streams LogResponses.
+  // This is the browser-callable path — connect-web / gRPC-Web support
+  // server-streaming. follow=false ends the stream once history is drained;
+  // follow=true keeps streaming. Mid-stream parameter updates are not
+  // supported here; reconnect with new parameters instead. See RUNE-200C.
+  rpc GetLogs(LogRequest) returns (stream LogResponse);
+}

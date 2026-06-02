@@ -36,6 +36,10 @@ func methodToAction(method string) (string, string) {
 
 	case strings.HasPrefix(method, "/rune.api.LogService/StreamLogs"):
 		return "logs", "get"
+	case strings.HasPrefix(method, "/rune.api.LogService/GetLogs"):
+		// Browser-callable server-streaming logs (RUNE-200C). Same
+		// authorization surface as StreamLogs.
+		return "logs", "get"
 	case strings.HasPrefix(method, "/rune.api.ExecService/StreamExec"):
 		return "exec", "exec"
 	case strings.HasPrefix(method, "/rune.api.PortForwardService/StreamPortForward"):
