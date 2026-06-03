@@ -418,6 +418,18 @@ func (s *TestStore) Get(ctx context.Context, resourceType types.ResourceType, na
 				return nil
 			}
 
+		case *types.Token:
+			if targetTok, ok := resource.(*types.Token); ok && storedData != nil {
+				*targetTok = *storedData
+				return nil
+			}
+
+		case types.Token:
+			if targetTok, ok := resource.(*types.Token); ok {
+				*targetTok = storedData
+				return nil
+			}
+
 		}
 
 		// Store the data - for testing we assume this will work

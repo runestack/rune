@@ -21,8 +21,16 @@ type ClientOptions struct {
 	UseTLS      bool
 	TLSCertFile string
 
-	// Authentication (token-only)
+	// Authentication. Token is the bearer (access or legacy) sent on requests.
 	Token string
+
+	// RefreshToken, when set, lets the client transparently renew Token on
+	// Unauthenticated responses via AuthService.Refresh (RUNE-201).
+	RefreshToken string
+
+	// OnRefresh, if set, is invoked after a successful refresh with the rotated
+	// credentials so the caller can persist them (e.g. to the CLI context).
+	OnRefresh func(accessToken, refreshToken string, expiresAt int64) error
 
 	// Timeouts
 	DialTimeout time.Duration
@@ -84,9 +92,16 @@ func NewClient(options *ClientOptions) (*Client, error) {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
-	// Add bearer auth if provided
-	if options.Token != "" {
-		dialOpts = append(dialOpts, grpc.WithPerRPCCredentials(&bearerCredentials{token: options.Token}))
+	// Add bearer auth + transparent refresh (RUNE-201) if any credential is set.
+	// A refresh grant alone (empty Token) is valid: the first request 401s and
+	// the interceptor mints an access token on demand.
+	if options.Token != "" || options.RefreshToken != "" {
+		auth := newAuthState(options.Token, options.RefreshToken, options.OnRefresh, logger)
+		dialOpts = append(dialOpts,
+			grpc.WithPerRPCCredentials(auth),
+			grpc.WithChainUnaryInterceptor(auth.unaryInterceptor),
+			grpc.WithChainStreamInterceptor(auth.streamInterceptor),
+		)
 	}
 
 	// Connect to the API server
@@ -121,20 +136,7 @@ func (c *Client) Context() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), c.options.CallTimeout)
 }
 
-// apiKeyCredentials implements the grpc.PerRPCCredentials interface for API key authentication.
-// removed apiKeyCredentials; tokens only
-
-// bearerCredentials implements Authorization: Bearer <token>
-type bearerCredentials struct{ token string }
-
-func (b *bearerCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	return map[string]string{
-		"authorization": "Bearer " + b.token,
-	}, nil
-}
-
-// For local dev we allow sending token over insecure; production should use TLS
-func (b *bearerCredentials) RequireTransportSecurity() bool { return false }
+// Bearer credentials + transparent refresh live in refresh.go (authState).
 
 // parseTimestamp parses a timestamp string into a time.Time.
 func parseTimestamp(timestampStr string) (*time.Time, error) {

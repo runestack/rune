@@ -53,7 +53,7 @@ func (s *APIServer) execWSHandler() http.HandlerFunc {
 				http.Error(w, "missing bearer token (Sec-WebSocket-Protocol rune.bearer.<token>)", http.StatusUnauthorized)
 				return
 			}
-			tok, err := repos.NewTokenRepo(s.store).FindBySecret(r.Context(), token)
+			tok, err := repos.NewTokenRepo(s.store).FindRequestBearer(r.Context(), token)
 			if err != nil {
 				http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 				return

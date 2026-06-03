@@ -22,6 +22,7 @@ func newLoginCmd() *cobra.Command {
 	var tokenStdin bool
 	var contextName string
 	var noVerify bool
+	var asRefresh bool
 
 	cmd := &cobra.Command{
 		Use:   "login [context-name]",
@@ -86,8 +87,28 @@ If --set-current is provided, the new context will become the current context.`,
 				}
 			}
 
-			// Verify credentials with server before saving context (unless skipped)
-			if !noVerify {
+			// RUNE-201 refresh-grant login: exchange the grant for an initial
+			// access token (this also verifies it), and store the rotated grant
+			// so the client can transparently renew the session later.
+			var refreshTokenVal string
+			if asRefresh {
+				api, err := newAPIClient(server, "")
+				if err != nil {
+					return fmt.Errorf("failed to connect to server %s: %w", server, err)
+				}
+				defer api.Close()
+
+				ac := generated.NewAuthServiceClient(api.Conn())
+				rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				resp, err := ac.Refresh(rctx, &generated.RefreshRequest{RefreshToken: token})
+				if err != nil {
+					return fmt.Errorf("failed to exchange refresh grant with server %s: %w", server, err)
+				}
+				refreshTokenVal = resp.GetRefreshToken()
+				token = resp.GetAccessToken() // store the minted access token as the bearer
+			} else if !noVerify {
+				// Verify credentials with server before saving context.
 				api, err := newAPIClient(server, token)
 				if err != nil {
 					return fmt.Errorf("failed to connect to server %s: %w", server, err)
@@ -106,6 +127,7 @@ If --set-current is provided, the new context will become the current context.`,
 			ctx := Context{
 				Server:           server,
 				Token:            token,
+				RefreshToken:     refreshTokenVal,
 				DefaultNamespace: defaultNamespace,
 			}
 
@@ -141,5 +163,6 @@ If --set-current is provided, the new context will become the current context.`,
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Path to file containing the bearer token")
 	cmd.Flags().BoolVar(&tokenStdin, "token-stdin", false, "Read the bearer token from stdin (recommended for CI)")
 	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "Skip server verification and just set the context")
+	cmd.Flags().BoolVar(&asRefresh, "refresh", false, "Treat the provided token as a RUNE-201 refresh grant: exchange it for an access token and store it for transparent session renewal")
 	return cmd
 }

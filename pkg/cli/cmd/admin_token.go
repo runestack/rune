@@ -15,6 +15,7 @@ func newAdminTokenCreateCmd() *cobra.Command {
 	var ttl time.Duration
 	var subjectID, subjectType, name string
 	var policies []string
+	var refresh bool
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new token and write it to a file",
@@ -30,6 +31,10 @@ func newAdminTokenCreateCmd() *cobra.Command {
 			defer api.Close()
 
 			ac := generated.NewAuthServiceClient(api.Conn())
+			kind := ""
+			if refresh {
+				kind = "refresh"
+			}
 			req := &generated.CreateTokenRequest{
 				Name:        name,
 				SubjectId:   subjectID,
@@ -37,6 +42,7 @@ func newAdminTokenCreateCmd() *cobra.Command {
 				Policies:    policies,
 				TtlSeconds:  int64(ttl / time.Second),
 				Description: desc,
+				Kind:        kind,
 			}
 			ctx, cancel := api.Context()
 			defer cancel()
@@ -61,6 +67,7 @@ func newAdminTokenCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&subjectType, "subject-type", "user", "Subject type (user|service)")
 	cmd.Flags().StringVar(&name, "name", "", "Token name")
 	cmd.Flags().StringSliceVar(&policies, "policy", nil, "Default policy to attach on auto-create (repeatable)")
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "Issue a refresh grant (RUNE-201) instead of a long-lived token; exchange it at /v1/auth/refresh for short-lived access tokens")
 	return cmd
 }
 

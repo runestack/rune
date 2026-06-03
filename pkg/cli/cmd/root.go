@@ -179,6 +179,9 @@ func loadCurrentContextIntoViper() error {
 	if ctx.Token != "" {
 		viper.Set("contexts.default.token", ctx.Token)
 	}
+	if ctx.RefreshToken != "" {
+		viper.Set("contexts.default.refreshToken", ctx.RefreshToken)
+	}
 	if ctx.DefaultNamespace != "" {
 		viper.Set("contexts.default.defaultNamespace", ctx.DefaultNamespace)
 	}

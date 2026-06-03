@@ -20,6 +20,11 @@ message CreateTokenRequest {
   repeated string policies = 5; // repurposed to carry default policies on auto-create
   int64 ttl_seconds = 6; // 0 for no expiry
   string description = 7;
+  // kind selects the credential type (RUNE-201): "" or "legacy" issues a
+  // long-lived bearer (the default; used by service accounts / break-glass);
+  // "refresh" issues a refresh grant that is exchanged at /v1/auth/refresh for
+  // short-lived access tokens. "access" is not directly issuable here.
+  string kind = 8;
 }
 message CreateTokenResponse {
   string id = 1;
@@ -34,10 +39,24 @@ message RevokeTokenResponse {
   bool revoked = 1;
 }
 
+// RUNE-201 session refresh. Self-authenticating on the refresh secret itself
+// (no RBAC verb) — exempt from the auth/rbac interceptors like AdminBootstrap.
+// The CLI uses this gRPC method; browsers use the HTTP cookie endpoint at
+// /v1/auth/refresh.
+message RefreshRequest {
+  string refresh_token = 1;
+}
+message RefreshResponse {
+  string access_token = 1;
+  string refresh_token = 2; // rotated successor
+  int64 expires_at = 3;     // access token expiry, unix seconds; 0 = no expiry
+}
+
 service AuthService {
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
   rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
+  rpc Refresh(RefreshRequest) returns (RefreshResponse);
 }
 
 

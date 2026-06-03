@@ -15,6 +15,7 @@ import (
 	grpc_validator "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/validator"
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/service"
+	"github.com/runestack/rune/pkg/api/session"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/runner/manager"
@@ -61,6 +62,11 @@ type APIServer struct {
 
 	// handoff backs the `rune ui login` CLI token-handoff flow (RUNE-200).
 	handoff *handoffStore
+
+	// refresh implements RUNE-201 refresh-token rotation (held here so its
+	// in-memory grace cache persists across requests). Shared by the browser
+	// HTTP cookie endpoint and the CLI gRPC AuthService.Refresh RPC.
+	refresh *session.Manager
 
 	// State store
 	store store.Store
@@ -186,7 +192,13 @@ func (s *APIServer) Start() error {
 	s.healthService = service.NewHealthService(s.store, s.runnerManager, s.logger)
 	s.secretService = service.NewSecretService(s.store, s.logger)
 	s.configService = service.NewConfigmapService(s.store, s.logger)
+	// RUNE-201: construct the shared refresh manager before AuthService so the
+	// gRPC Refresh RPC and the HTTP cookie endpoint drive the same grace cache.
+	if s.refresh == nil {
+		s.refresh = session.New(s.store, s.logger)
+	}
 	s.authService = service.NewAuthService(s.store, s.logger)
+	s.authService.SetRefreshManager(s.refresh)
 	s.adminService = service.NewAdminService(s.store, s.logger)
 	s.auditService = service.NewAuditService(s.store, s.logger)
 	s.storageClassService = service.NewStorageClassService(s.store, s.logger)
@@ -217,6 +229,10 @@ func (s *APIServer) Start() error {
 			return fmt.Errorf("failed to start dashboard HTTP server: %w", err)
 		}
 	}
+
+	// Background sweep of expired access tokens (RUNE-201). Runs regardless of
+	// UI, since access tokens are minted whenever refresh is used.
+	s.startAccessTokenGC()
 
 	// SIGINT/SIGTERM are handled by cmd/runed (setupSignalContext) which
 	// calls Stop() after ctx cancellation. Do not register a second
@@ -322,6 +338,11 @@ func (s *APIServer) authUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
 			return handler(ctx, req)
 		}
+		// RUNE-201 session refresh is self-authenticating on the refresh
+		// secret in its payload; it must not require a (still-valid) bearer.
+		if info.FullMethod == "/rune.api.AuthService/Refresh" {
+			return handler(ctx, req)
+		}
 		// Otherwise, run normal auth
 		ctx2, err := s.authFunc(ctx)
 		if err != nil {
@@ -349,6 +370,10 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 		}
 		// Server version probe is read-only and intentionally public.
 		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
+			return handler(ctx, req)
+		}
+		// RUNE-201 refresh authenticates on its payload, not a bearer subject.
+		if info.FullMethod == "/rune.api.AuthService/Refresh" {
 			return handler(ctx, req)
 		}
 		var subjectID string

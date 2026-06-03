@@ -42,9 +42,10 @@ func (s *APIServer) authFunc(ctx context.Context) (context.Context, error) {
 		return nil, status.Errorf(codes.Unauthenticated, "missing bearer token: %v", err)
 	}
 
-	// Validate bearer token via TokenRepo
+	// Validate bearer token via TokenRepo. FindRequestBearer rejects
+	// refresh-kind tokens — they are never valid request bearers (RUNE-201).
 	tokRepo := repos.NewTokenRepo(s.store)
-	tok, err := tokRepo.FindBySecret(ctx, token)
+	tok, err := tokRepo.FindRequestBearer(ctx, token)
 	if err != nil {
 		s.logger.Warn("Invalid bearer token")
 		return nil, status.Errorf(codes.Unauthenticated, "invalid bearer token")

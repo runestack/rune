@@ -126,14 +126,19 @@ func (x *WhoAmIResponse) GetPolicies() []string {
 }
 
 type CreateTokenRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	SubjectId     string                 `protobuf:"bytes,2,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
-	SubjectName   string                 `protobuf:"bytes,3,opt,name=subject_name,json=subjectName,proto3" json:"subject_name,omitempty"`
-	SubjectType   string                 `protobuf:"bytes,4,opt,name=subject_type,json=subjectType,proto3" json:"subject_type,omitempty"` // user|service
-	Policies      []string               `protobuf:"bytes,5,rep,name=policies,proto3" json:"policies,omitempty"`                          // repurposed to carry default policies on auto-create
-	TtlSeconds    int64                  `protobuf:"varint,6,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`   // 0 for no expiry
-	Description   string                 `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	SubjectId   string                 `protobuf:"bytes,2,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
+	SubjectName string                 `protobuf:"bytes,3,opt,name=subject_name,json=subjectName,proto3" json:"subject_name,omitempty"`
+	SubjectType string                 `protobuf:"bytes,4,opt,name=subject_type,json=subjectType,proto3" json:"subject_type,omitempty"` // user|service
+	Policies    []string               `protobuf:"bytes,5,rep,name=policies,proto3" json:"policies,omitempty"`                          // repurposed to carry default policies on auto-create
+	TtlSeconds  int64                  `protobuf:"varint,6,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`   // 0 for no expiry
+	Description string                 `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`
+	// kind selects the credential type (RUNE-201): "" or "legacy" issues a
+	// long-lived bearer (the default; used by service accounts / break-glass);
+	// "refresh" issues a refresh grant that is exchanged at /v1/auth/refresh for
+	// short-lived access tokens. "access" is not directly issuable here.
+	Kind          string `protobuf:"bytes,8,opt,name=kind,proto3" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -213,6 +218,13 @@ func (x *CreateTokenRequest) GetTtlSeconds() int64 {
 func (x *CreateTokenRequest) GetDescription() string {
 	if x != nil {
 		return x.Description
+	}
+	return ""
+}
+
+func (x *CreateTokenRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
 	}
 	return ""
 }
@@ -365,6 +377,114 @@ func (x *RevokeTokenResponse) GetRevoked() bool {
 	return false
 }
 
+// RUNE-201 session refresh. Self-authenticating on the refresh secret itself
+// (no RBAC verb) — exempt from the auth/rbac interceptors like AdminBootstrap.
+// The CLI uses this gRPC method; browsers use the HTTP cookie endpoint at
+// /v1/auth/refresh.
+type RefreshRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RefreshToken  string                 `protobuf:"bytes,1,opt,name=refresh_token,json=refreshToken,proto3" json:"refresh_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RefreshRequest) Reset() {
+	*x = RefreshRequest{}
+	mi := &file_pkg_api_proto_auth_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RefreshRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RefreshRequest) ProtoMessage() {}
+
+func (x *RefreshRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_auth_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RefreshRequest.ProtoReflect.Descriptor instead.
+func (*RefreshRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_auth_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RefreshRequest) GetRefreshToken() string {
+	if x != nil {
+		return x.RefreshToken
+	}
+	return ""
+}
+
+type RefreshResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccessToken   string                 `protobuf:"bytes,1,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	RefreshToken  string                 `protobuf:"bytes,2,opt,name=refresh_token,json=refreshToken,proto3" json:"refresh_token,omitempty"` // rotated successor
+	ExpiresAt     int64                  `protobuf:"varint,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`         // access token expiry, unix seconds; 0 = no expiry
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RefreshResponse) Reset() {
+	*x = RefreshResponse{}
+	mi := &file_pkg_api_proto_auth_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RefreshResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RefreshResponse) ProtoMessage() {}
+
+func (x *RefreshResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_auth_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RefreshResponse.ProtoReflect.Descriptor instead.
+func (*RefreshResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_auth_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RefreshResponse) GetAccessToken() string {
+	if x != nil {
+		return x.AccessToken
+	}
+	return ""
+}
+
+func (x *RefreshResponse) GetRefreshToken() string {
+	if x != nil {
+		return x.RefreshToken
+	}
+	return ""
+}
+
+func (x *RefreshResponse) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
 var File_pkg_api_proto_auth_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_auth_proto_rawDesc = "" +
@@ -376,7 +496,7 @@ const file_pkg_api_proto_auth_proto_rawDesc = "" +
 	"subject_id\x18\x01 \x01(\tR\tsubjectId\x12!\n" +
 	"\fsubject_name\x18\x02 \x01(\tR\vsubjectName\x12#\n" +
 	"\rsubject_email\x18\x03 \x01(\tR\fsubjectEmail\x12\x1a\n" +
-	"\bpolicies\x18\x04 \x03(\tR\bpolicies\"\xec\x01\n" +
+	"\bpolicies\x18\x04 \x03(\tR\bpolicies\"\x80\x02\n" +
 	"\x12CreateTokenRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
@@ -386,7 +506,8 @@ const file_pkg_api_proto_auth_proto_rawDesc = "" +
 	"\bpolicies\x18\x05 \x03(\tR\bpolicies\x12\x1f\n" +
 	"\vttl_seconds\x18\x06 \x01(\x03R\n" +
 	"ttlSeconds\x12 \n" +
-	"\vdescription\x18\a \x01(\tR\vdescription\"Q\n" +
+	"\vdescription\x18\a \x01(\tR\vdescription\x12\x12\n" +
+	"\x04kind\x18\b \x01(\tR\x04kind\"Q\n" +
 	"\x13CreateTokenResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
@@ -394,11 +515,19 @@ const file_pkg_api_proto_auth_proto_rawDesc = "" +
 	"\x12RevokeTokenRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"/\n" +
 	"\x13RevokeTokenResponse\x12\x18\n" +
-	"\arevoked\x18\x01 \x01(\bR\arevoked2\xe2\x01\n" +
+	"\arevoked\x18\x01 \x01(\bR\arevoked\"5\n" +
+	"\x0eRefreshRequest\x12#\n" +
+	"\rrefresh_token\x18\x01 \x01(\tR\frefreshToken\"x\n" +
+	"\x0fRefreshResponse\x12!\n" +
+	"\faccess_token\x18\x01 \x01(\tR\vaccessToken\x12#\n" +
+	"\rrefresh_token\x18\x02 \x01(\tR\frefreshToken\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x03 \x01(\x03R\texpiresAt2\xa2\x02\n" +
 	"\vAuthService\x12;\n" +
 	"\x06WhoAmI\x12\x17.rune.api.WhoAmIRequest\x1a\x18.rune.api.WhoAmIResponse\x12J\n" +
 	"\vCreateToken\x12\x1c.rune.api.CreateTokenRequest\x1a\x1d.rune.api.CreateTokenResponse\x12J\n" +
-	"\vRevokeToken\x12\x1c.rune.api.RevokeTokenRequest\x1a\x1d.rune.api.RevokeTokenResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\vRevokeToken\x12\x1c.rune.api.RevokeTokenRequest\x1a\x1d.rune.api.RevokeTokenResponse\x12>\n" +
+	"\aRefresh\x12\x18.rune.api.RefreshRequest\x1a\x19.rune.api.RefreshResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_auth_proto_rawDescOnce sync.Once
@@ -412,7 +541,7 @@ func file_pkg_api_proto_auth_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_auth_proto_rawDescData
 }
 
-var file_pkg_api_proto_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_pkg_api_proto_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_pkg_api_proto_auth_proto_goTypes = []any{
 	(*WhoAmIRequest)(nil),       // 0: rune.api.WhoAmIRequest
 	(*WhoAmIResponse)(nil),      // 1: rune.api.WhoAmIResponse
@@ -420,16 +549,20 @@ var file_pkg_api_proto_auth_proto_goTypes = []any{
 	(*CreateTokenResponse)(nil), // 3: rune.api.CreateTokenResponse
 	(*RevokeTokenRequest)(nil),  // 4: rune.api.RevokeTokenRequest
 	(*RevokeTokenResponse)(nil), // 5: rune.api.RevokeTokenResponse
+	(*RefreshRequest)(nil),      // 6: rune.api.RefreshRequest
+	(*RefreshResponse)(nil),     // 7: rune.api.RefreshResponse
 }
 var file_pkg_api_proto_auth_proto_depIdxs = []int32{
 	0, // 0: rune.api.AuthService.WhoAmI:input_type -> rune.api.WhoAmIRequest
 	2, // 1: rune.api.AuthService.CreateToken:input_type -> rune.api.CreateTokenRequest
 	4, // 2: rune.api.AuthService.RevokeToken:input_type -> rune.api.RevokeTokenRequest
-	1, // 3: rune.api.AuthService.WhoAmI:output_type -> rune.api.WhoAmIResponse
-	3, // 4: rune.api.AuthService.CreateToken:output_type -> rune.api.CreateTokenResponse
-	5, // 5: rune.api.AuthService.RevokeToken:output_type -> rune.api.RevokeTokenResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	6, // 3: rune.api.AuthService.Refresh:input_type -> rune.api.RefreshRequest
+	1, // 4: rune.api.AuthService.WhoAmI:output_type -> rune.api.WhoAmIResponse
+	3, // 5: rune.api.AuthService.CreateToken:output_type -> rune.api.CreateTokenResponse
+	5, // 6: rune.api.AuthService.RevokeToken:output_type -> rune.api.RevokeTokenResponse
+	7, // 7: rune.api.AuthService.Refresh:output_type -> rune.api.RefreshResponse
+	4, // [4:8] is the sub-list for method output_type
+	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -446,7 +579,7 @@ func file_pkg_api_proto_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_auth_proto_rawDesc), len(file_pkg_api_proto_auth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

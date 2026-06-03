@@ -12,6 +12,7 @@ import (
 
 	"connectrpc.com/vanguard"
 	"connectrpc.com/vanguard/vanguardgrpc"
+	"github.com/runestack/rune/pkg/api/session"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store/repos"
 	"golang.org/x/net/http2"
@@ -114,6 +115,9 @@ func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
 	if s.handoff == nil {
 		s.handoff = newHandoffStore(s.options.UI.HandoffTTL)
 	}
+	if s.refresh == nil {
+		s.refresh = session.New(s.store, s.logger)
+	}
 
 	mux := http.NewServeMux()
 
@@ -127,6 +131,9 @@ func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
 
 	// CLI token handoff.
 	mux.Handle(handoffMountPrefix, s.handoffHandler())
+
+	// RUNE-201 session refresh (plain HTTP so Set-Cookie is emitted natively).
+	mux.HandleFunc(refreshMountPath, s.refreshHandler())
 
 	// Exec WebSocket bridge (RUNE-200C §3) — browser exec, since bidi gRPC
 	// isn't browser-callable.
@@ -220,7 +227,7 @@ func (s *APIServer) uiAccessMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
-		tok, err := repos.NewTokenRepo(s.store).FindBySecret(r.Context(), token)
+		tok, err := repos.NewTokenRepo(s.store).FindRequestBearer(r.Context(), token)
 		if err != nil {
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
@@ -309,6 +316,8 @@ func routeClass(p, uiPrefix string) string {
 		return "grpc"
 	case strings.HasPrefix(p, handoffMountPrefix):
 		return "handoff"
+	case p == refreshMountPath:
+		return "refresh"
 	case p == execWSPath:
 		return "exec"
 	case p == "/healthz" || p == "/readyz":
