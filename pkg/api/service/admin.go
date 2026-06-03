@@ -70,7 +70,7 @@ func (s *AdminService) AdminBootstrap(ctx context.Context, _ *generated.AdminBoo
 	// Issue root token with unique name
 	tr := repos.NewTokenRepo(s.st)
 	name := fmt.Sprintf("bootstrap-admin-%d", time.Now().UnixNano())
-	tok, secret, err := tr.Issue(ctx, name, root.ID, "user", "bootstrap-admin", 0)
+	tok, secret, err := tr.IssueStatic(ctx, name, root.ID, "user", "bootstrap-admin", 0)
 	if err != nil {
 		return nil, err
 	}

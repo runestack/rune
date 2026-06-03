@@ -23,7 +23,7 @@ func TestFindRequestBearer_RejectsRefresh(t *testing.T) {
 	ctx := context.Background()
 	repo, _ := newTestRepo(t)
 
-	_, staticSecret, err := repo.Issue(ctx, "ci", "alice", "user", "", 0)
+	_, staticSecret, err := repo.IssueStatic(ctx, "ci", "alice", "user", "", 0)
 	if err != nil {
 		t.Fatalf("issue static: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestDeleteExpiredTokens(t *testing.T) {
 
 	// Live access (kept) and a no-expiry static token (kept).
 	_, _, _ = repo.IssueAccess(ctx, "alice", "user", time.Hour)
-	_, _, _ = repo.Issue(ctx, "ci", "alice", "user", "", 0)
+	_, _, _ = repo.IssueStatic(ctx, "ci", "alice", "user", "", 0)
 
 	n, err := repo.DeleteExpiredTokens(ctx, time.Now())
 	if err != nil {

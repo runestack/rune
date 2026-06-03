@@ -182,7 +182,7 @@ func (s *AuthService) CreateToken(ctx context.Context, req *generated.CreateToke
 		}
 		tok, secret, err = s.tokenRepo.IssueRefreshGrant(ctx, req.Name, u.ID, subjectType, ttl)
 	} else {
-		tok, secret, err = s.tokenRepo.Issue(ctx, req.Name, u.ID, subjectType, req.Description, ttl)
+		tok, secret, err = s.tokenRepo.IssueStatic(ctx, req.Name, u.ID, subjectType, req.Description, ttl)
 	}
 	if err != nil {
 		return nil, err

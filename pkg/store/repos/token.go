@@ -40,10 +40,11 @@ func newSecret() string {
 // presented without it are rejected at validation time.
 const TokenSecretPrefix = "rune_"
 
-// Issue creates a new long-lived (legacy) token with a freshly generated secret.
-// Returns the plaintext secret once. Legacy tokens are full bearers and are not
-// subject to RUNE-201 refresh; service accounts and break-glass use this path.
-func (r *TokenRepo) Issue(ctx context.Context, name, subjectID, subjectType string, desc string, ttl time.Duration) (*types.Token, string, error) {
+// IssueStatic creates a new long-lived (static) token with a freshly generated
+// secret. Returns the plaintext secret once. Static tokens are full bearers and
+// are not subject to RUNE-201 refresh; service accounts, CI (`cast`), and the
+// bootstrap/break-glass root token use this path.
+func (r *TokenRepo) IssueStatic(ctx context.Context, name, subjectID, subjectType string, desc string, ttl time.Duration) (*types.Token, string, error) {
 	return r.issue(ctx, name, subjectID, subjectType, desc, ttl, types.TokenKindStatic)
 }
 
