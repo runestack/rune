@@ -12,7 +12,6 @@ import (
 
 	"connectrpc.com/vanguard"
 	"connectrpc.com/vanguard/vanguardgrpc"
-	"github.com/runestack/rune/pkg/api/session"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store/repos"
 	"golang.org/x/net/http2"
@@ -115,9 +114,7 @@ func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
 	if s.handoff == nil {
 		s.handoff = newHandoffStore(s.options.UI.HandoffTTL)
 	}
-	if s.refresh == nil {
-		s.refresh = session.New(s.store, s.logger)
-	}
+	s.ensureRefreshManager()
 
 	mux := http.NewServeMux()
 

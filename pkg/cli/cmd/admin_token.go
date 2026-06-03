@@ -132,7 +132,15 @@ func newAdminTokenListCmd() *cobra.Command {
 					exp = time.Unix(t.ExpiresAt, 0).Format(time.RFC3339)
 				}
 				issued := time.Unix(t.IssuedAt, 0).Format(time.RFC3339)
-				fmt.Printf("%s\t%s\t%s\t%s\trevoked=%v\n", t.Name, t.SubjectId, issued, exp, t.Revoked)
+				kind := t.Kind
+				if kind == "" {
+					kind = "legacy"
+				}
+				lastUsed := "-"
+				if t.LastUsedAt != 0 {
+					lastUsed = time.Unix(t.LastUsedAt, 0).Format(time.RFC3339)
+				}
+				fmt.Printf("%s\t%s\t%s\t%s\t%s\tlast-used=%s\trevoked=%v\n", t.Name, kind, t.SubjectId, issued, exp, lastUsed, t.Revoked)
 			}
 			return nil
 		},

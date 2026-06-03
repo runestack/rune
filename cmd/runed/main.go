@@ -1050,6 +1050,12 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 			HandoffTTL:     appCfg.UI.HandoffTTL,
 			RequireTLS:     appCfg.UI.RequireTLS,
 		}))
+		// RUNE-201 session lifetimes (zero fields keep defaults).
+		opts = append(opts, server.WithSession(server.SessionOptions{
+			AccessTTL:   appCfg.Auth.SessionAccessTTL,
+			RefreshTTL:  appCfg.Auth.SessionRefreshTTL,
+			GraceWindow: appCfg.Auth.SessionGraceWindow,
+		}))
 	}
 	for _, r := range extraRegistrars {
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))

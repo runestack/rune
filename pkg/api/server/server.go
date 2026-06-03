@@ -194,9 +194,7 @@ func (s *APIServer) Start() error {
 	s.configService = service.NewConfigmapService(s.store, s.logger)
 	// RUNE-201: construct the shared refresh manager before AuthService so the
 	// gRPC Refresh RPC and the HTTP cookie endpoint drive the same grace cache.
-	if s.refresh == nil {
-		s.refresh = session.New(s.store, s.logger)
-	}
+	s.ensureRefreshManager()
 	s.authService = service.NewAuthService(s.store, s.logger)
 	s.authService.SetRefreshManager(s.refresh)
 	s.adminService = service.NewAdminService(s.store, s.logger)

@@ -1213,6 +1213,8 @@ type TokenInfo struct {
 	IssuedAt      int64                  `protobuf:"varint,6,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`    // unix seconds
 	ExpiresAt     int64                  `protobuf:"varint,7,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"` // unix seconds (0 means none)
 	Revoked       bool                   `protobuf:"varint,8,opt,name=revoked,proto3" json:"revoked,omitempty"`
+	Kind          string                 `protobuf:"bytes,9,opt,name=kind,proto3" json:"kind,omitempty"`                                   // RUNE-201: legacy|access|refresh
+	LastUsedAt    int64                  `protobuf:"varint,10,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"` // unix seconds; 0 if never (last refresh-grant rotation)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1301,6 +1303,20 @@ func (x *TokenInfo) GetRevoked() bool {
 		return x.Revoked
 	}
 	return false
+}
+
+func (x *TokenInfo) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *TokenInfo) GetLastUsedAt() int64 {
+	if x != nil {
+		return x.LastUsedAt
+	}
+	return 0
 }
 
 type TokenListRequest struct {
@@ -2611,7 +2627,7 @@ const file_pkg_api_proto_admin_proto_rawDesc = "" +
 	"\x04user\x18\x01 \x01(\v2\x11.rune.api.SubjectR\x04user\"\x11\n" +
 	"\x0fUserListRequest\";\n" +
 	"\x10UserListResponse\x12'\n" +
-	"\x05users\x18\x01 \x03(\v2\x11.rune.api.SubjectR\x05users\"\xe9\x01\n" +
+	"\x05users\x18\x01 \x03(\v2\x11.rune.api.SubjectR\x05users\"\x9f\x02\n" +
 	"\tTokenInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1d\n" +
@@ -2622,7 +2638,11 @@ const file_pkg_api_proto_admin_proto_rawDesc = "" +
 	"\tissued_at\x18\x06 \x01(\x03R\bissuedAt\x12\x1d\n" +
 	"\n" +
 	"expires_at\x18\a \x01(\x03R\texpiresAt\x12\x18\n" +
-	"\arevoked\x18\b \x01(\bR\arevoked\"\x12\n" +
+	"\arevoked\x18\b \x01(\bR\arevoked\x12\x12\n" +
+	"\x04kind\x18\t \x01(\tR\x04kind\x12 \n" +
+	"\flast_used_at\x18\n" +
+	" \x01(\x03R\n" +
+	"lastUsedAt\"\x12\n" +
 	"\x10TokenListRequest\"@\n" +
 	"\x11TokenListResponse\x12+\n" +
 	"\x06tokens\x18\x01 \x03(\v2\x13.rune.api.TokenInfoR\x06tokens\"\xf8\x02\n" +

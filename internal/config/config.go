@@ -105,6 +105,12 @@ type Auth struct {
 	Provider         string `yaml:"provider"`
 	Token            string `yaml:"token"`
 	AllowRemoteAdmin bool   `yaml:"allow_remote_admin"`
+
+	// RUNE-201 session tuning. Zero values fall back to the built-in defaults
+	// (15m access, 30d sliding refresh, 30s rotation grace).
+	SessionAccessTTL   time.Duration `yaml:"session_access_ttl"`
+	SessionRefreshTTL  time.Duration `yaml:"session_refresh_ttl"`
+	SessionGraceWindow time.Duration `yaml:"session_grace_window"`
 }
 
 type SecretEncryption struct {

@@ -34,6 +34,23 @@ func newRefreshTestServer(t *testing.T) (*APIServer, store.Store) {
 	return s, st
 }
 
+// SessionOptions TTL overrides must reach the manager (config knob wiring).
+func TestEnsureRefreshManager_AppliesTTLOverrides(t *testing.T) {
+	st := store.NewTestStore()
+	if err := st.Open(""); err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	s, err := New(WithStore(st), WithLogger(log.GetDefaultLogger()),
+		WithSession(SessionOptions{AccessTTL: time.Minute, RefreshTTL: 2 * time.Hour, GraceWindow: 3 * time.Second}))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	m := s.ensureRefreshManager()
+	if m.AccessTTL != time.Minute || m.RefreshTTL != 2*time.Hour || m.GraceWindow != 3*time.Second {
+		t.Fatalf("TTL overrides not applied: access=%v refresh=%v grace=%v", m.AccessTTL, m.RefreshTTL, m.GraceWindow)
+	}
+}
+
 // Browser mode: refresh token rides an HttpOnly cookie; the response rotates it
 // via Set-Cookie and returns only the access token in the body.
 func TestRefreshHandler_CookieRoundTrip(t *testing.T) {

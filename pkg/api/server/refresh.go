@@ -18,6 +18,26 @@ const (
 	refreshMountPath  = "/v1/auth/refresh"
 )
 
+// ensureRefreshManager lazily builds the shared session manager, applying any
+// SessionOptions TTL overrides (zero fields keep the session defaults).
+func (s *APIServer) ensureRefreshManager() *session.Manager {
+	if s.refresh != nil {
+		return s.refresh
+	}
+	m := session.New(s.store, s.logger)
+	if v := s.options.Session.AccessTTL; v > 0 {
+		m.AccessTTL = v
+	}
+	if v := s.options.Session.RefreshTTL; v > 0 {
+		m.RefreshTTL = v
+	}
+	if v := s.options.Session.GraceWindow; v > 0 {
+		m.GraceWindow = v
+	}
+	s.refresh = m
+	return m
+}
+
 // accessTokenGCInterval is how often expired access tokens are swept. Chosen
 // ≥ the access TTL so the table never accumulates more than ~one TTL of dead
 // rows per active grant.
