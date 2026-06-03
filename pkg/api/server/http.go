@@ -143,6 +143,10 @@ func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
 		return nil, fmt.Errorf("build UI handler: %w", err)
 	}
 	mux.Handle(mountPath+"/", uiHandler)
+	// Minimal sign-in page handling the CLI→browser handoff (RUNE-201). Exact
+	// path, so it takes precedence over the SPA subtree handler above. The full
+	// SPA will later own this route.
+	mux.HandleFunc(mountPath+"/login", s.uiLoginHandler(mountPath))
 	// /ui (no trailing slash) → /ui/
 	mux.HandleFunc(mountPath, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, mountPath+"/", http.StatusFound)

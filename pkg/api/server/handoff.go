@@ -1,11 +1,12 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/runestack/rune/pkg/store/repos"
 )
 
 // handoffStore is the short-lived, in-memory token store backing the
@@ -90,16 +91,17 @@ func handoffCodeFromPath(p string) string {
 	return strings.Trim(strings.TrimPrefix(p, prefix), "/")
 }
 
-type handoffPostBody struct {
-	Token string `json:"token"`
-}
-
-type handoffGetBody struct {
-	Token string `json:"token"`
-}
-
-// handoffHandler serves POST (store) and GET (claim) for /v1/ui/handoff/{code}.
-// POST body: {"token":"..."}. GET response: {"token":"..."}.
+// handoffHandler serves the CLI→browser session handoff for
+// /v1/ui/handoff/{code} (RUNE-200 + RUNE-201 cookie flow).
+//
+//   - POST is authenticated with the CLI's bearer (Authorization header). The
+//     server mints a fresh, browser-scoped refresh grant for that subject and
+//     parks the grant secret under the one-time code. The browser-scoped grant
+//     is independently revocable and never exposes the CLI's own credential.
+//   - GET (from the browser) claims the code and delivers the grant as an
+//     HttpOnly, SameSite=Strict refresh cookie — it never touches JS or
+//     sessionStorage. The SPA then mints its first access token via
+//     /v1/auth/refresh (the standard RUNE-201 browser flow).
 func (s *APIServer) handoffHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.options.UI.HandoffEnabled {
@@ -114,21 +116,28 @@ func (s *APIServer) handoffHandler() http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodPost:
-			var body handoffPostBody
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body); err != nil {
-				http.Error(w, "invalid body", http.StatusBadRequest)
+			// Authenticate the CLI and mint a browser-scoped grant for its subject.
+			token := bearerFromRequest(r)
+			if token == "" {
+				http.Error(w, "missing bearer token", http.StatusUnauthorized)
 				return
 			}
-			if strings.TrimSpace(body.Token) == "" {
-				http.Error(w, "empty token", http.StatusBadRequest)
+			tok, err := repos.NewTokenRepo(s.store).FindRequestBearer(r.Context(), token)
+			if err != nil {
+				http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 				return
 			}
-			s.handoff.put(code, body.Token)
+			_, grantSecret, err := repos.NewTokenRepo(s.store).IssueRefreshGrant(r.Context(), "dashboard", tok.SubjectID, tok.SubjectType, 0)
+			if err != nil {
+				http.Error(w, "failed to mint browser session", http.StatusInternalServerError)
+				return
+			}
+			s.handoff.put(code, grantSecret)
 			uiHandoffResult("created")
 			w.WriteHeader(http.StatusNoContent)
 
 		case http.MethodGet:
-			token, result := s.handoff.take(code)
+			grantSecret, result := s.handoff.take(code)
 			switch result {
 			case takeExpired:
 				uiHandoffResult("expired")
@@ -140,8 +149,10 @@ func (s *APIServer) handoffHandler() http.HandlerFunc {
 				return
 			}
 			uiHandoffResult("claimed")
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(handoffGetBody{Token: token})
+			// Deliver the grant as an HttpOnly refresh cookie; the SPA mints its
+			// first access token via /v1/auth/refresh.
+			http.SetCookie(w, s.refreshCookie(grantSecret, s.ensureRefreshManager().RefreshTTL))
+			w.WriteHeader(http.StatusNoContent)
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
