@@ -24,6 +24,7 @@ type AuthService struct {
 	userRepo   *repos.UserRepo
 	policyRepo *repos.PolicyRepo
 	refresh    *session.Manager
+	enroll     *enrollmentStore
 	logger     log.Logger
 }
 
@@ -42,6 +43,7 @@ func NewAuthService(st store.Store, logger log.Logger) *AuthService {
 		tokenRepo:  repos.NewTokenRepo(st),
 		userRepo:   repos.NewUserRepo(st),
 		policyRepo: repos.NewPolicyRepo(st),
+		enroll:     newEnrollmentStore(),
 		logger:     logger,
 	}
 }

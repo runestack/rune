@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/session"
@@ -126,6 +127,84 @@ func TestRefreshRPC_NotEnabled(t *testing.T) {
 	svc, _ := newAuthTestService(t) // no SetRefreshManager
 	if _, err := svc.Refresh(ctx, &generated.RefreshRequest{RefreshToken: "rune_x"}); err == nil {
 		t.Fatal("refresh without a manager should return an error")
+	}
+}
+
+// Enroll → Redeem is the Phase 2 flow: an admin-issued code lets the user
+// self-provision a session; the refresh secret is returned to the redeemer, and
+// the code is single-use.
+func TestEnrollThenRedeem(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newAuthTestService(t)
+	svc.SetRefreshManager(session.New(st, log.GetDefaultLogger()))
+	repo := repos.NewTokenRepo(st)
+
+	enr, err := svc.Enroll(ctx, &generated.EnrollRequest{
+		SubjectName: "alice", SubjectType: "user", Policies: []string{"readonly"},
+	})
+	if err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	if enr.Code == "" || enr.ExpiresAt == 0 {
+		t.Fatalf("enroll must return a code + expiry, got %+v", enr)
+	}
+
+	red, err := svc.RedeemEnrollment(ctx, &generated.RedeemEnrollmentRequest{Code: enr.Code, GrantName: "alice-laptop"})
+	if err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+	if red.AccessToken == "" || red.RefreshToken == "" || red.SubjectId == "" {
+		t.Fatalf("redeem must return access+refresh+subject, got %+v", red)
+	}
+	// access token is a usable bearer; refresh is a grant, not a bearer.
+	if _, err := repo.FindRequestBearer(ctx, red.AccessToken); err != nil {
+		t.Fatalf("redeemed access token should be a valid bearer: %v", err)
+	}
+	if _, err := repo.FindRefreshGrant(ctx, red.RefreshToken); err != nil {
+		t.Fatalf("redeemed refresh token should be a valid grant: %v", err)
+	}
+	// the subject was created with the enrolled policy.
+	u, err := repos.NewUserRepo(st).GetByNameOrID(ctx, "alice")
+	if err != nil {
+		t.Fatalf("subject should exist after redeem: %v", err)
+	}
+	if len(u.Policies) == 0 || u.Policies[0] != "readonly" {
+		t.Fatalf("subject should carry the enrolled policy, got %v", u.Policies)
+	}
+
+	// Single-use: the same code cannot be redeemed twice.
+	if _, err := svc.RedeemEnrollment(ctx, &generated.RedeemEnrollmentRequest{Code: enr.Code}); err == nil {
+		t.Fatal("enrollment code must be single-use")
+	}
+}
+
+func TestRedeem_InvalidCode(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newAuthTestService(t)
+	if _, err := svc.RedeemEnrollment(ctx, &generated.RedeemEnrollmentRequest{Code: "enr_nope"}); err == nil {
+		t.Fatal("unknown enrollment code should error")
+	}
+}
+
+func TestEnroll_ExpiredCodeRejected(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newAuthTestService(t)
+	enr, err := svc.Enroll(ctx, &generated.EnrollRequest{SubjectName: "bob", Policies: []string{"readonly"}})
+	if err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+	// Force the stored code to be expired.
+	svc.enroll.now = func() time.Time { return time.Now().Add(time.Hour) }
+	if _, err := svc.RedeemEnrollment(ctx, &generated.RedeemEnrollmentRequest{Code: enr.Code}); err == nil {
+		t.Fatal("expired enrollment code should be rejected")
+	}
+}
+
+func TestEnroll_InvalidPolicy(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newAuthTestService(t)
+	if _, err := svc.Enroll(ctx, &generated.EnrollRequest{SubjectName: "alice", Policies: []string{"nope"}}); err == nil {
+		t.Fatal("enroll with a nonexistent policy should error")
 	}
 }
 

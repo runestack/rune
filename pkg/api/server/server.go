@@ -343,6 +343,11 @@ func (s *APIServer) authUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if info.FullMethod == "/rune.api.AuthService/Refresh" {
 			return handler(ctx, req)
 		}
+		// RUNE-201 enrollment redemption self-authenticates on the one-time
+		// code in its payload (the redeemer has no token yet).
+		if info.FullMethod == "/rune.api.AuthService/RedeemEnrollment" {
+			return handler(ctx, req)
+		}
 		// Otherwise, run normal auth
 		ctx2, err := s.authFunc(ctx)
 		if err != nil {
@@ -372,8 +377,10 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
 			return handler(ctx, req)
 		}
-		// RUNE-201 refresh authenticates on its payload, not a bearer subject.
-		if info.FullMethod == "/rune.api.AuthService/Refresh" {
+		// RUNE-201 refresh / enrollment-redeem authenticate on their payload,
+		// not a bearer subject.
+		if info.FullMethod == "/rune.api.AuthService/Refresh" ||
+			info.FullMethod == "/rune.api.AuthService/RedeemEnrollment" {
 			return handler(ctx, req)
 		}
 		var subjectID string

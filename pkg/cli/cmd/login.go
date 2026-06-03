@@ -23,6 +23,7 @@ func newLoginCmd() *cobra.Command {
 	var contextName string
 	var noVerify bool
 	var asRefresh bool
+	var enrollCode string
 
 	cmd := &cobra.Command{
 		Use:   "login [context-name]",
@@ -36,8 +37,8 @@ If context-name is not provided, it will use "default".
 If --set-current is provided, the new context will become the current context.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if token == "" && tokenFile == "" && !tokenStdin {
-				return fmt.Errorf("must provide --token, --token-file, or --token-stdin")
+			if enrollCode == "" && token == "" && tokenFile == "" && !tokenStdin {
+				return fmt.Errorf("must provide --token, --token-file, --token-stdin, or --enroll")
 			}
 
 			// Resolve --default-namespace, accepting deprecated --namespace as a fallback.
@@ -91,7 +92,29 @@ If --set-current is provided, the new context will become the current context.`,
 			// access token (this also verifies it), and store the rotated grant
 			// so the client can transparently renew the session later.
 			var refreshTokenVal string
-			if asRefresh {
+			if enrollCode != "" {
+				// Redeem a one-time enrollment code: the refresh secret is minted
+				// server-side and returned directly to us — the admin who issued
+				// the code never handled it.
+				api, err := newAPIClient(server, "")
+				if err != nil {
+					return fmt.Errorf("failed to connect to server %s: %w", server, err)
+				}
+				defer api.Close()
+
+				grantName, _ := os.Hostname()
+				ac := generated.NewAuthServiceClient(api.Conn())
+				rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				resp, err := ac.RedeemEnrollment(rctx, &generated.RedeemEnrollmentRequest{Code: enrollCode, GrantName: grantName})
+				if err != nil {
+					return fmt.Errorf("failed to redeem enrollment code: %w", err)
+				}
+				refreshTokenVal = resp.GetRefreshToken()
+				if token = resp.GetAccessToken(); token == "" {
+					token = resp.GetRefreshToken() // no access minted; bearer falls back to refresh
+				}
+			} else if asRefresh {
 				api, err := newAPIClient(server, "")
 				if err != nil {
 					return fmt.Errorf("failed to connect to server %s: %w", server, err)
@@ -164,5 +187,6 @@ If --set-current is provided, the new context will become the current context.`,
 	cmd.Flags().BoolVar(&tokenStdin, "token-stdin", false, "Read the bearer token from stdin (recommended for CI)")
 	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "Skip server verification and just set the context")
 	cmd.Flags().BoolVar(&asRefresh, "refresh", false, "Treat the provided token as a RUNE-201 refresh grant: exchange it for an access token and store it for transparent session renewal")
+	cmd.Flags().StringVar(&enrollCode, "enroll", "", "Redeem a one-time enrollment code (from 'rune admin user enroll') to self-provision a session")
 	return cmd
 }

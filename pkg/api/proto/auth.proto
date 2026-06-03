@@ -52,11 +52,40 @@ message RefreshResponse {
   int64 expires_at = 3;     // access token expiry, unix seconds; 0 = no expiry
 }
 
+// RUNE-201 Phase 2 enrollment. An admin issues a one-time, short-TTL code that
+// authorizes creating ONE refresh grant for a named subject with a fixed policy
+// set — the code is NOT a usable credential. The user redeems it on their own
+// machine and receives the refresh secret directly, so the admin never handles
+// a working credential.
+message EnrollRequest {
+  string subject_name = 1;        // subject the redeemer will become
+  string subject_type = 2;        // user|service (default user)
+  repeated string policies = 3;   // policies attached on (auto-)create
+  int64 ttl_seconds = 4;          // code lifetime; 0 → server default (10m)
+}
+message EnrollResponse {
+  string code = 1;
+  int64 expires_at = 2; // unix seconds
+}
+
+message RedeemEnrollmentRequest {
+  string code = 1;
+  string grant_name = 2; // device/surface label for the new grant (e.g. host)
+}
+message RedeemEnrollmentResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_at = 3;  // access token expiry, unix seconds
+  string subject_id = 4;
+}
+
 service AuthService {
   rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
   rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
   rpc Refresh(RefreshRequest) returns (RefreshResponse);
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  rpc RedeemEnrollment(RedeemEnrollmentRequest) returns (RedeemEnrollmentResponse);
 }
 
 
