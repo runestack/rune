@@ -134,7 +134,7 @@ func newAdminTokenListCmd() *cobra.Command {
 				issued := time.Unix(t.IssuedAt, 0).Format(time.RFC3339)
 				kind := t.Kind
 				if kind == "" {
-					kind = "legacy"
+					kind = "static"
 				}
 				lastUsed := "-"
 				if t.LastUsedAt != 0 {

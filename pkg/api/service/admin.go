@@ -183,7 +183,7 @@ func (s *AdminService) TokenList(ctx context.Context, _ *generated.TokenListRequ
 			Description: t.Description,
 			IssuedAt:    t.IssuedAt.Unix(),
 			Revoked:     t.Revoked,
-			Kind:        string(t.EffectiveKind()),
+			Kind:        string(t.Kind),
 		}
 		if t.ExpiresAt != nil {
 			ti.ExpiresAt = t.ExpiresAt.Unix()

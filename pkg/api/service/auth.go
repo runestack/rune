@@ -96,17 +96,17 @@ func (s *AuthService) CreateToken(ctx context.Context, req *generated.CreateToke
 		return nil, fmt.Errorf("invalid subject-type: %s (expected 'user' or 'service')", subjectType)
 	}
 
-	// Validate the credential kind (RUNE-201). Only legacy (default) and refresh
+	// Validate the credential kind (RUNE-201). Only static (default) and refresh
 	// are issuable here; access tokens are minted exclusively by the refresh
 	// endpoint, never directly.
 	kind := types.TokenKind(req.GetKind())
 	switch kind {
-	case "", types.TokenKindLegacy:
-		kind = types.TokenKindLegacy
+	case "", types.TokenKindStatic:
+		kind = types.TokenKindStatic
 	case types.TokenKindRefresh:
 		// ok
 	default:
-		return nil, fmt.Errorf("invalid kind: %s (expected 'legacy' or 'refresh')", req.GetKind())
+		return nil, fmt.Errorf("invalid kind: %s (expected 'static' or 'refresh')", req.GetKind())
 	}
 
 	// Validate every requested policy exists *before* mutating any

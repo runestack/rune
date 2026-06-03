@@ -56,8 +56,8 @@ func TestCreateToken_RefreshKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh grant should be accepted by FindRefreshGrant: %v", err)
 	}
-	if grant.EffectiveKind() != types.TokenKindRefresh {
-		t.Fatalf("expected refresh kind, got %q", grant.EffectiveKind())
+	if grant.Kind != types.TokenKindRefresh {
+		t.Fatalf("expected refresh kind, got %q", grant.Kind)
 	}
 }
 

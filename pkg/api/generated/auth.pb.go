@@ -134,7 +134,7 @@ type CreateTokenRequest struct {
 	Policies    []string               `protobuf:"bytes,5,rep,name=policies,proto3" json:"policies,omitempty"`                          // repurposed to carry default policies on auto-create
 	TtlSeconds  int64                  `protobuf:"varint,6,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`   // 0 for no expiry
 	Description string                 `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`
-	// kind selects the credential type (RUNE-201): "" or "legacy" issues a
+	// kind selects the credential type (RUNE-201): "" or "static" issues a
 	// long-lived bearer (the default; used by service accounts / break-glass);
 	// "refresh" issues a refresh grant that is exchanged at /v1/auth/refresh for
 	// short-lived access tokens. "access" is not directly issuable here.

@@ -1213,7 +1213,7 @@ type TokenInfo struct {
 	IssuedAt      int64                  `protobuf:"varint,6,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`    // unix seconds
 	ExpiresAt     int64                  `protobuf:"varint,7,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"` // unix seconds (0 means none)
 	Revoked       bool                   `protobuf:"varint,8,opt,name=revoked,proto3" json:"revoked,omitempty"`
-	Kind          string                 `protobuf:"bytes,9,opt,name=kind,proto3" json:"kind,omitempty"`                                   // RUNE-201: legacy|access|refresh
+	Kind          string                 `protobuf:"bytes,9,opt,name=kind,proto3" json:"kind,omitempty"`                                   // RUNE-201: static|access|refresh
 	LastUsedAt    int64                  `protobuf:"varint,10,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"` // unix seconds; 0 if never (last refresh-grant rotation)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

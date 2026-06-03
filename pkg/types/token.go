@@ -2,16 +2,15 @@ package types
 
 import "time"
 
-// TokenKind discriminates the role a token plays (RUNE-201). The zero value
-// ("") is treated as Legacy for backwards compatibility with tokens issued
-// before this field existed — see Token.EffectiveKind.
+// TokenKind discriminates the role a token plays (RUNE-201). Every token is
+// issued with an explicit kind.
 type TokenKind string
 
 const (
-	// TokenKindLegacy is a long-lived bearer token (the pre-RUNE-201 model,
-	// and the model service accounts / CI continue to use). Accepted as a
-	// request bearer; never refreshed.
-	TokenKindLegacy TokenKind = "legacy"
+	// TokenKindStatic is a long-lived bearer token with no refresh: the model
+	// service accounts, CI (`cast`), and the bootstrap/break-glass root token
+	// use. Accepted as a request bearer.
+	TokenKindStatic TokenKind = "static"
 
 	// TokenKindAccess is a short-lived session credential minted from a
 	// refresh grant. Accepted as a request bearer; expires quickly.
@@ -36,8 +35,7 @@ type Token struct {
 	Revoked     bool       `json:"revoked" yaml:"revoked"`
 	SecretHash  string     `json:"secretHash" yaml:"secretHash"`
 
-	// Kind discriminates legacy/access/refresh (RUNE-201). Empty means legacy
-	// (tokens predating the field); always read via EffectiveKind.
+	// Kind discriminates static/access/refresh (RUNE-201).
 	Kind TokenKind `json:"kind,omitempty" yaml:"kind,omitempty"`
 
 	// PrevSecretHash holds the hash of the immediately-prior refresh secret for
@@ -53,15 +51,3 @@ type Token struct {
 
 func (t *Token) GetID() string                 { return t.ID }
 func (t *Token) GetResourceType() ResourceType { return ResourceTypeToken }
-
-// EffectiveKind normalizes the zero value to Legacy. Every reader MUST use this
-// rather than comparing Kind directly, so that tokens issued before the field
-// existed (Kind=="") are treated as legacy bearers and keep working across the
-// upgrade. The safety invariant elsewhere is: only EffectiveKind in
-// {Access, Legacy} is accepted as a request bearer.
-func (t *Token) EffectiveKind() TokenKind {
-	if t.Kind == "" {
-		return TokenKindLegacy
-	}
-	return t.Kind
-}

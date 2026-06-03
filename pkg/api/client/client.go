@@ -21,7 +21,7 @@ type ClientOptions struct {
 	UseTLS      bool
 	TLSCertFile string
 
-	// Authentication. Token is the bearer (access or legacy) sent on requests.
+	// Authentication. Token is the bearer (access or static) sent on requests.
 	Token string
 
 	// RefreshToken, when set, lets the client transparently renew Token on

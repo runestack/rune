@@ -5,9 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/runestack/rune/pkg/store"
-	"github.com/runestack/rune/pkg/types"
 )
 
 func newTestRepo(t *testing.T) (*TokenRepo, store.Store) {
@@ -25,9 +23,9 @@ func TestFindRequestBearer_RejectsRefresh(t *testing.T) {
 	ctx := context.Background()
 	repo, _ := newTestRepo(t)
 
-	_, legacySecret, err := repo.Issue(ctx, "legacy", "alice", "user", "", 0)
+	_, staticSecret, err := repo.Issue(ctx, "ci", "alice", "user", "", 0)
 	if err != nil {
-		t.Fatalf("issue legacy: %v", err)
+		t.Fatalf("issue static: %v", err)
 	}
 	_, accessSecret, err := repo.IssueAccess(ctx, "alice", "user", time.Hour)
 	if err != nil {
@@ -38,9 +36,9 @@ func TestFindRequestBearer_RejectsRefresh(t *testing.T) {
 		t.Fatalf("issue refresh: %v", err)
 	}
 
-	// Legacy + access are valid bearers.
-	if _, err := repo.FindRequestBearer(ctx, legacySecret); err != nil {
-		t.Errorf("legacy token should be a valid bearer, got %v", err)
+	// Static + access are valid bearers.
+	if _, err := repo.FindRequestBearer(ctx, staticSecret); err != nil {
+		t.Errorf("static token should be a valid bearer, got %v", err)
 	}
 	if _, err := repo.FindRequestBearer(ctx, accessSecret); err != nil {
 		t.Errorf("access token should be a valid bearer, got %v", err)
@@ -57,34 +55,8 @@ func TestFindRequestBearer_RejectsRefresh(t *testing.T) {
 	if _, err := repo.FindRefreshGrant(ctx, accessSecret); err == nil {
 		t.Error("access token must not be accepted as a refresh grant")
 	}
-	if _, err := repo.FindRefreshGrant(ctx, legacySecret); err == nil {
-		t.Error("legacy token must not be accepted as a refresh grant")
-	}
-}
-
-// A token persisted before the Kind field existed (Kind=="") must be treated as
-// legacy and remain a valid bearer across the upgrade.
-func TestEmptyKindIsLegacyBearer(t *testing.T) {
-	ctx := context.Background()
-	repo, st := newTestRepo(t)
-
-	secret := newSecret()
-	tok := &types.Token{
-		ID:         uuid.NewString(),
-		Name:       "preupgrade",
-		SubjectID:  "alice",
-		IssuedAt:   time.Now(),
-		SecretHash: hashSecret(secret),
-		// Kind intentionally unset to simulate a pre-RUNE-201 row.
-	}
-	if err := st.Create(ctx, types.ResourceTypeToken, "system", tok.ID, tok); err != nil {
-		t.Fatalf("seed legacy token: %v", err)
-	}
-	if tok.EffectiveKind() != types.TokenKindLegacy {
-		t.Fatalf("empty kind should normalize to legacy, got %q", tok.EffectiveKind())
-	}
-	if _, err := repo.FindRequestBearer(ctx, secret); err != nil {
-		t.Fatalf("pre-upgrade (kind=\"\") token must remain a valid bearer, got %v", err)
+	if _, err := repo.FindRefreshGrant(ctx, staticSecret); err == nil {
+		t.Error("static token must not be accepted as a refresh grant")
 	}
 }
 
@@ -105,9 +77,9 @@ func TestDeleteExpiredTokens(t *testing.T) {
 	expRefresh.ExpiresAt = &past
 	_ = repo.Update(ctx, expRefresh)
 
-	// Live access (kept) and a no-expiry legacy token (kept).
+	// Live access (kept) and a no-expiry static token (kept).
 	_, _, _ = repo.IssueAccess(ctx, "alice", "user", time.Hour)
-	_, _, _ = repo.Issue(ctx, "legacy", "alice", "user", "", 0)
+	_, _, _ = repo.Issue(ctx, "ci", "alice", "user", "", 0)
 
 	n, err := repo.DeleteExpiredTokens(ctx, time.Now())
 	if err != nil {
@@ -118,6 +90,6 @@ func TestDeleteExpiredTokens(t *testing.T) {
 	}
 	all, _ := repo.List(ctx)
 	if len(all) != 2 {
-		t.Fatalf("expected 2 tokens remaining (live access, no-expiry legacy), got %d", len(all))
+		t.Fatalf("expected 2 tokens remaining (live access, no-expiry static), got %d", len(all))
 	}
 }

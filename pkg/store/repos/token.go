@@ -44,7 +44,7 @@ const TokenSecretPrefix = "rune_"
 // Returns the plaintext secret once. Legacy tokens are full bearers and are not
 // subject to RUNE-201 refresh; service accounts and break-glass use this path.
 func (r *TokenRepo) Issue(ctx context.Context, name, subjectID, subjectType string, desc string, ttl time.Duration) (*types.Token, string, error) {
-	return r.issue(ctx, name, subjectID, subjectType, desc, ttl, types.TokenKindLegacy)
+	return r.issue(ctx, name, subjectID, subjectType, desc, ttl, types.TokenKindStatic)
 }
 
 // IssueAccess mints a short-lived access token (RUNE-201). Accepted as a request
@@ -158,7 +158,7 @@ func (r *TokenRepo) FindRequestBearer(ctx context.Context, secret string) (*type
 	if err != nil {
 		return nil, err
 	}
-	if tok.EffectiveKind() == types.TokenKindRefresh {
+	if tok.Kind == types.TokenKindRefresh {
 		// A refresh token is not a bearer. Report as invalid rather than
 		// leaking that the secret exists.
 		return nil, fmt.Errorf("token not found or invalid")
@@ -167,13 +167,13 @@ func (r *TokenRepo) FindRequestBearer(ctx context.Context, secret string) (*type
 }
 
 // FindRefreshGrant validates a token presented to the refresh endpoint. It
-// requires refresh-kind; anything else (access/legacy) is rejected.
+// requires refresh-kind; anything else (access/static) is rejected.
 func (r *TokenRepo) FindRefreshGrant(ctx context.Context, secret string) (*types.Token, error) {
 	tok, err := r.lookupBySecret(ctx, secret)
 	if err != nil {
 		return nil, err
 	}
-	if tok.EffectiveKind() != types.TokenKindRefresh {
+	if tok.Kind != types.TokenKindRefresh {
 		return nil, fmt.Errorf("token not found or invalid")
 	}
 	return tok, nil
@@ -193,7 +193,7 @@ func (r *TokenRepo) FindRefreshGrantByPrevHash(ctx context.Context, secret strin
 	}
 	h := hashSecret(secret)
 	for _, t := range tokens {
-		if t.EffectiveKind() == types.TokenKindRefresh && !t.Revoked && t.PrevSecretHash == h {
+		if t.Kind == types.TokenKindRefresh && !t.Revoked && t.PrevSecretHash == h {
 			tt := t
 			return &tt, nil
 		}
@@ -224,7 +224,7 @@ func (r *TokenRepo) RotateGrantSecret(ctx context.Context, grant *types.Token, s
 
 // DeleteExpiredTokens evicts any token whose expiry has passed as of `now`,
 // regardless of kind (short-lived access tokens, unused refresh grants that were
-// never rotated forward, and legacy tokens issued with a TTL). Tokens with no
+// never rotated forward, and static tokens issued with a TTL). Tokens with no
 // expiry (ExpiresAt == nil) are kept. Returns the number deleted. Revoked rows
 // are intentionally retained for audit (`token list` shows revoked=true).
 func (r *TokenRepo) DeleteExpiredTokens(ctx context.Context, now time.Time) (int, error) {
