@@ -175,6 +175,11 @@ func (s *AuthService) CreateToken(ctx context.Context, req *generated.CreateToke
 		secret string
 	)
 	if kind == types.TokenKindRefresh {
+		// A refresh grant with no caller TTL gets the sliding refresh window so
+		// it isn't a permanent credential; rotation extends it on use.
+		if ttl <= 0 {
+			ttl = session.DefaultRefreshTTL
+		}
 		tok, secret, err = s.tokenRepo.IssueRefreshGrant(ctx, req.Name, u.ID, subjectType, ttl)
 	} else {
 		tok, secret, err = s.tokenRepo.Issue(ctx, req.Name, u.ID, subjectType, req.Description, ttl)

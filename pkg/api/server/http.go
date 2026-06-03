@@ -246,14 +246,32 @@ func (s *APIServer) uiAccessMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// isPublicGRPCPath reports whether an RPC reached over the transcoder is
-// intentionally reachable without authentication — mirroring the gRPC auth
-// interceptor's exemptions so the dashboard login screen can probe the server
-// version and run bootstrap before a token exists.
-func isPublicGRPCPath(p string) bool {
-	return strings.HasSuffix(p, "/rune.api.HealthService/GetServerVersion") ||
-		strings.HasSuffix(p, "/rune.api.AdminService/AdminBootstrap")
+// publicMethodSuffixes are the gRPC methods reachable without a request bearer:
+// either intentionally public (version probe, bootstrap) or self-authenticating
+// on their own payload (RUNE-201 refresh / enrollment redeem). Defined once and
+// consulted by the auth interceptor, the rbac interceptor, AND the dashboard
+// transcoder gate (isPublicGRPCPath), so the exemption set cannot drift between
+// the native-gRPC and HTTP transports. HasSuffix matches both the exact gRPC
+// full-method ("/rune.api.X/M") and the transcoder path ("/grpc/rune.api.X/M").
+var publicMethodSuffixes = []string{
+	"/rune.api.HealthService/GetServerVersion",
+	"/rune.api.AdminService/AdminBootstrap",
+	"/rune.api.AuthService/Refresh",
+	"/rune.api.AuthService/RedeemEnrollment",
 }
+
+func isPublicMethod(fullMethod string) bool {
+	for _, suffix := range publicMethodSuffixes {
+		if strings.HasSuffix(fullMethod, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPublicGRPCPath reports whether an RPC reached over the transcoder bypasses
+// the dashboard ui:access gate, mirroring the gRPC interceptor exemptions.
+func isPublicGRPCPath(p string) bool { return isPublicMethod(p) }
 
 // bearerFromRequest extracts a bearer token from the Authorization header.
 func bearerFromRequest(r *http.Request) string {

@@ -222,10 +222,12 @@ func (r *TokenRepo) RotateGrantSecret(ctx context.Context, grant *types.Token, s
 	return newPlain, nil
 }
 
-// DeleteExpiredAccessTokens evicts access-kind tokens past their expiry as of
-// `now`. Returns the number deleted. Refresh and legacy tokens are exempt
-// (refresh is GC'd on grant revoke/expiry; legacy never expires by GC).
-func (r *TokenRepo) DeleteExpiredAccessTokens(ctx context.Context, now time.Time) (int, error) {
+// DeleteExpiredTokens evicts any token whose expiry has passed as of `now`,
+// regardless of kind (short-lived access tokens, unused refresh grants that were
+// never rotated forward, and legacy tokens issued with a TTL). Tokens with no
+// expiry (ExpiresAt == nil) are kept. Returns the number deleted. Revoked rows
+// are intentionally retained for audit (`token list` shows revoked=true).
+func (r *TokenRepo) DeleteExpiredTokens(ctx context.Context, now time.Time) (int, error) {
 	tokens, err := r.List(ctx)
 	if err != nil {
 		return 0, err
@@ -233,9 +235,6 @@ func (r *TokenRepo) DeleteExpiredAccessTokens(ctx context.Context, now time.Time
 	deleted := 0
 	for i := range tokens {
 		t := &tokens[i]
-		if t.EffectiveKind() != types.TokenKindAccess {
-			continue
-		}
 		if t.ExpiresAt != nil && !t.ExpiresAt.After(now) {
 			if err := r.Delete(ctx, t.ID); err != nil {
 				return deleted, err

@@ -111,8 +111,13 @@ If --set-current is provided, the new context will become the current context.`,
 					return fmt.Errorf("failed to redeem enrollment code: %w", err)
 				}
 				refreshTokenVal = resp.GetRefreshToken()
-				if token = resp.GetAccessToken(); token == "" {
-					token = resp.GetRefreshToken() // no access minted; bearer falls back to refresh
+				token = resp.GetAccessToken()
+				// Do NOT fall back to storing the refresh secret as the bearer:
+				// FindRequestBearer rejects refresh-kind tokens. If only a refresh
+				// grant came back (older server with no refresh manager), leave
+				// Token empty and let the client mint an access token on first use.
+				if token == "" && refreshTokenVal == "" {
+					return fmt.Errorf("server returned no session credentials")
 				}
 			} else if asRefresh {
 				api, err := newAPIClient(server, "")

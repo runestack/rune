@@ -38,22 +38,23 @@ func (s *APIServer) ensureRefreshManager() *session.Manager {
 	return m
 }
 
-// accessTokenGCInterval is how often expired access tokens are swept. Chosen
-// ≥ the access TTL so the table never accumulates more than ~one TTL of dead
-// rows per active grant.
-const accessTokenGCInterval = 10 * time.Minute
+// tokenGCInterval is how often expired tokens are swept. Bounded well below the
+// refresh idle window so dead rows (expired access tokens, abandoned grants)
+// don't accumulate for long; it need not relate to the access TTL since the
+// sweep deletes by absolute expiry, not age.
+const tokenGCInterval = 10 * time.Minute
 
-// startAccessTokenGC launches the background sweep that evicts expired
-// access-kind tokens (RUNE-201). It runs until the server's shutdown channel
-// closes and is registered on the wait group so Stop() drains it.
-func (s *APIServer) startAccessTokenGC() {
+// startTokenGC launches the background sweep that evicts expired tokens
+// (RUNE-201). It runs until the server's shutdown channel closes and is
+// registered on the wait group so Stop() drains it.
+func (s *APIServer) startTokenGC() {
 	if s.store == nil {
 		return
 	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		ticker := time.NewTicker(accessTokenGCInterval)
+		ticker := time.NewTicker(tokenGCInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -61,13 +62,13 @@ func (s *APIServer) startAccessTokenGC() {
 				return
 			case <-ticker.C:
 				repo := repos.NewTokenRepo(s.store)
-				n, err := repo.DeleteExpiredAccessTokens(context.Background(), time.Now())
+				n, err := repo.DeleteExpiredTokens(context.Background(), time.Now())
 				if err != nil {
-					s.logger.Warn("access-token GC sweep failed", log.Err(err))
+					s.logger.Warn("token GC sweep failed", log.Err(err))
 					continue
 				}
 				if n > 0 {
-					s.logger.Debug("access-token GC sweep", log.Int("deleted", n))
+					s.logger.Debug("token GC sweep", log.Int("deleted", n))
 				}
 			}
 		}
@@ -110,11 +111,12 @@ func (s *APIServer) refreshHandler() http.HandlerFunc {
 			return
 		}
 
-		out, result := s.refresh.Rotate(r.Context(), secret)
+		mgr := s.ensureRefreshManager()
+		out, result := mgr.Rotate(r.Context(), secret)
 		switch result {
 		case session.ResultOK:
 			if cookieMode {
-				http.SetCookie(w, s.refreshCookie(out.Refresh, s.refresh.RefreshTTL))
+				http.SetCookie(w, s.refreshCookie(r, out.Refresh, mgr.RefreshTTL))
 			}
 			body := refreshRespBody{AccessToken: out.Access}
 			if !cookieMode {
@@ -128,13 +130,13 @@ func (s *APIServer) refreshHandler() http.HandlerFunc {
 
 		case session.ResultBreach:
 			if cookieMode {
-				http.SetCookie(w, s.refreshCookie("", -time.Hour)) // clear
+				http.SetCookie(w, s.refreshCookie(r, "", -time.Hour)) // clear
 			}
 			http.Error(w, "refresh token reuse detected; session revoked", http.StatusUnauthorized)
 
 		case session.ResultInvalid:
 			if cookieMode {
-				http.SetCookie(w, s.refreshCookie("", -time.Hour)) // clear
+				http.SetCookie(w, s.refreshCookie(r, "", -time.Hour)) // clear
 			}
 			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
 
@@ -157,16 +159,21 @@ func (s *APIServer) presentedRefresh(r *http.Request) (string, bool) {
 	return "", false
 }
 
-// refreshCookie builds the rotated/cleared refresh cookie. Secure is set under
-// TLS; SameSite=Strict + Path-scoping are the CSRF defense (RUNE-201 CSRF §).
-func (s *APIServer) refreshCookie(value string, ttl time.Duration) *http.Cookie {
+// refreshCookie builds the rotated/cleared refresh cookie. Secure tracks the
+// externally-observed scheme (local TLS, a direct https request, or an
+// X-Forwarded-Proto=https from a TLS-terminating proxy) so the grant is never
+// emitted without Secure behind an ingress. SameSite=Strict + Path-scoping are
+// the CSRF defense (RUNE-201 CSRF §).
+func (s *APIServer) refreshCookie(r *http.Request, value string, ttl time.Duration) *http.Cookie {
+	secure := s.options.EnableTLS || r.TLS != nil ||
+		strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 	c := &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    value,
 		Path:     refreshMountPath,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   s.options.EnableTLS,
+		Secure:   secure,
 	}
 	if ttl < 0 {
 		c.MaxAge = -1 // delete now

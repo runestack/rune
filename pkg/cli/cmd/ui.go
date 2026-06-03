@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/internal/config"
+	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -37,14 +39,23 @@ session (RUNE-201). The CLI hands a one-time code to the server, which mints a
 fresh browser-scoped session delivered as an HttpOnly cookie — your CLI token is
 never exposed to the browser.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			token := viper.GetString("contexts.default.token")
-			if token == "" {
-				if t, ok := getEnv("RUNE_TOKEN"); ok {
-					token = t
+			if viper.GetString("contexts.default.token") == "" &&
+				viper.GetString("contexts.default.refreshToken") == "" {
+				if _, ok := getEnv("RUNE_TOKEN"); !ok {
+					return fmt.Errorf("no active session; run 'rune login' first")
 				}
 			}
+
+			// Ensure a valid (non-expired) access token before the handoff POST:
+			// the gRPC client transparently refreshes on Unauthenticated and
+			// persists the rotated tokens to the context. Without this, an expired
+			// access token would 401 the handoff even with a valid refresh grant.
+			if err := ensureFreshSession(); err != nil {
+				return err
+			}
+			token := currentBearerToken()
 			if token == "" {
-				return fmt.Errorf("no active session; run 'rune login' first")
+				return fmt.Errorf("no usable access token after refresh; run 'rune login' again")
 			}
 
 			base, err := resolveUIBaseURL(uiURL)
@@ -87,6 +98,41 @@ never exposed to the browser.`,
 	cmd.Flags().StringVar(&uiURL, "ui-url", "", "Dashboard base URL (e.g. https://rune.example.com). Defaults to the context server host on the HTTP port")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Print the sign-in URL without opening a browser")
 	return cmd
+}
+
+// ensureFreshSession makes one authenticated gRPC call (WhoAmI) through the
+// standard client, which transparently refreshes an expired access token using
+// the stored refresh grant and persists the rotated tokens to the context file.
+func ensureFreshSession() error {
+	api, err := newAPIClient("", "")
+	if err != nil {
+		return err
+	}
+	defer api.Close()
+	ac := generated.NewAuthServiceClient(api.Conn())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := ac.WhoAmI(ctx, &generated.WhoAmIRequest{}); err != nil {
+		return fmt.Errorf("current session is not valid (run 'rune login'): %w", err)
+	}
+	return nil
+}
+
+// currentBearerToken reads the freshest access token from the context file
+// (which ensureFreshSession may have just rewritten), falling back to viper/env.
+func currentBearerToken() string {
+	if cfg, err := loadContextConfig(); err == nil {
+		if c, ok := cfg.Contexts[cfg.CurrentContext]; ok && c.Token != "" {
+			return c.Token
+		}
+	}
+	if t := viper.GetString("contexts.default.token"); t != "" {
+		return t
+	}
+	if t, ok := getEnv("RUNE_TOKEN"); ok {
+		return t
+	}
+	return ""
 }
 
 // resolveUIBaseURL derives the dashboard base URL. An explicit --ui-url wins;

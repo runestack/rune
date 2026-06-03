@@ -228,9 +228,9 @@ func (s *APIServer) Start() error {
 		}
 	}
 
-	// Background sweep of expired access tokens (RUNE-201). Runs regardless of
-	// UI, since access tokens are minted whenever refresh is used.
-	s.startAccessTokenGC()
+	// Background sweep of expired tokens (RUNE-201). Runs regardless of UI,
+	// since access tokens / grants are minted whenever refresh is used.
+	s.startTokenGC()
 
 	// SIGINT/SIGTERM are handled by cmd/runed (setupSignalContext) which
 	// calls Stop() after ctx cancellation. Do not register a second
@@ -327,23 +327,11 @@ func (s *APIServer) authUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if !s.options.EnableAuth {
 			return handler(ctx, req)
 		}
-		// Allow unauthenticated bootstrap
-		if info.FullMethod == "/rune.api.AdminService/AdminBootstrap" {
-			return handler(ctx, req)
-		}
-		// Allow unauthenticated server version probe so `rune version`
-		// can report server build info before the user has logged in.
-		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
-			return handler(ctx, req)
-		}
-		// RUNE-201 session refresh is self-authenticating on the refresh
-		// secret in its payload; it must not require a (still-valid) bearer.
-		if info.FullMethod == "/rune.api.AuthService/Refresh" {
-			return handler(ctx, req)
-		}
-		// RUNE-201 enrollment redemption self-authenticates on the one-time
-		// code in its payload (the redeemer has no token yet).
-		if info.FullMethod == "/rune.api.AuthService/RedeemEnrollment" {
+		// Public / self-authenticating methods (version probe, bootstrap, and
+		// the RUNE-201 refresh / enrollment-redeem RPCs that authenticate on
+		// their own payload) bypass bearer auth. The set is defined once in
+		// isPublicMethod so it can't drift from the rbac and transcoder gates.
+		if isPublicMethod(info.FullMethod) {
 			return handler(ctx, req)
 		}
 		// Otherwise, run normal auth
@@ -367,18 +355,9 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 			return handler(ctx, req)
 		}
 
-		// Require authenticated subject, except bootstrap which is already allowed above
-		if info.FullMethod == "/rune.api.AdminService/AdminBootstrap" {
-			return handler(ctx, req)
-		}
-		// Server version probe is read-only and intentionally public.
-		if info.FullMethod == "/rune.api.HealthService/GetServerVersion" {
-			return handler(ctx, req)
-		}
-		// RUNE-201 refresh / enrollment-redeem authenticate on their payload,
-		// not a bearer subject.
-		if info.FullMethod == "/rune.api.AuthService/Refresh" ||
-			info.FullMethod == "/rune.api.AuthService/RedeemEnrollment" {
+		// Same public / self-authenticating set as the auth interceptor — these
+		// have no bearer subject to evaluate.
+		if isPublicMethod(info.FullMethod) {
 			return handler(ctx, req)
 		}
 		var subjectID string

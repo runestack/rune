@@ -88,33 +88,36 @@ func TestEmptyKindIsLegacyBearer(t *testing.T) {
 	}
 }
 
-func TestDeleteExpiredAccessTokens(t *testing.T) {
+func TestDeleteExpiredTokens(t *testing.T) {
 	ctx := context.Background()
 	repo, _ := newTestRepo(t)
 
-	// One expired access token, one live, one legacy (exempt), one refresh (exempt).
-	expTok, _, _ := repo.IssueAccess(ctx, "alice", "user", time.Hour)
-	// force-expire it
 	past := time.Now().Add(-time.Hour)
-	expTok.ExpiresAt = &past
-	if err := repo.Update(ctx, expTok); err != nil {
+
+	// Expired access token (deleted).
+	expAccess, _, _ := repo.IssueAccess(ctx, "alice", "user", time.Hour)
+	expAccess.ExpiresAt = &past
+	if err := repo.Update(ctx, expAccess); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	_, _, _ = repo.IssueAccess(ctx, "alice", "user", time.Hour) // live
-	_, _, _ = repo.Issue(ctx, "legacy", "alice", "user", "", 0) // exempt
-	expRefresh, _, _ := repo.IssueRefreshGrant(ctx, "g", "alice", "user", 0)
-	expRefresh.ExpiresAt = &past // even an "expired" refresh is exempt from access GC
+	// Expired (abandoned) refresh grant (deleted).
+	expRefresh, _, _ := repo.IssueRefreshGrant(ctx, "g", "alice", "user", time.Hour)
+	expRefresh.ExpiresAt = &past
 	_ = repo.Update(ctx, expRefresh)
 
-	n, err := repo.DeleteExpiredAccessTokens(ctx, time.Now())
+	// Live access (kept) and a no-expiry legacy token (kept).
+	_, _, _ = repo.IssueAccess(ctx, "alice", "user", time.Hour)
+	_, _, _ = repo.Issue(ctx, "legacy", "alice", "user", "", 0)
+
+	n, err := repo.DeleteExpiredTokens(ctx, time.Now())
 	if err != nil {
 		t.Fatalf("gc: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("expected to delete exactly 1 expired access token, deleted %d", n)
+	if n != 2 {
+		t.Fatalf("expected to delete 2 expired tokens (access + abandoned grant), deleted %d", n)
 	}
 	all, _ := repo.List(ctx)
-	if len(all) != 3 {
-		t.Fatalf("expected 3 tokens remaining (live access, legacy, refresh), got %d", len(all))
+	if len(all) != 2 {
+		t.Fatalf("expected 2 tokens remaining (live access, no-expiry legacy), got %d", len(all))
 	}
 }

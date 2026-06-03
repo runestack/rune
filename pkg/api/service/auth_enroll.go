@@ -163,10 +163,15 @@ func (s *AuthService) RedeemEnrollment(ctx context.Context, req *generated.Redee
 		grantName = "enrolled"
 	}
 
-	// Mint the refresh grant. If the refresh manager is wired, rotate it
-	// immediately so the redeemer gets a ready-to-use access token too;
-	// otherwise hand back the grant secret as the refresh token.
-	grant, refreshSecret, err := s.tokenRepo.IssueRefreshGrant(ctx, grantName, u.ID, entry.subjectType, 0)
+	// Mint the refresh grant, bounded by the sliding refresh window so an
+	// unused grant eventually expires and is GC'd. If the refresh manager is
+	// wired, rotate it immediately so the redeemer gets a ready-to-use access
+	// token too; otherwise hand back the grant secret as the refresh token.
+	refreshTTL := session.DefaultRefreshTTL
+	if s.refresh != nil {
+		refreshTTL = s.refresh.RefreshTTL
+	}
+	_, refreshSecret, err := s.tokenRepo.IssueRefreshGrant(ctx, grantName, u.ID, entry.subjectType, refreshTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +189,5 @@ func (s *AuthService) RedeemEnrollment(ctx context.Context, req *generated.Redee
 			}
 		}
 	}
-	_ = grant
 	return resp, nil
 }

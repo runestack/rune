@@ -122,12 +122,16 @@ func (s *APIServer) handoffHandler() http.HandlerFunc {
 				http.Error(w, "missing bearer token", http.StatusUnauthorized)
 				return
 			}
-			tok, err := repos.NewTokenRepo(s.store).FindRequestBearer(r.Context(), token)
+			repo := repos.NewTokenRepo(s.store)
+			tok, err := repo.FindRequestBearer(r.Context(), token)
 			if err != nil {
 				http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 				return
 			}
-			_, grantSecret, err := repos.NewTokenRepo(s.store).IssueRefreshGrant(r.Context(), "dashboard", tok.SubjectID, tok.SubjectType, 0)
+			// Bound the grant with the sliding refresh window so an abandoned
+			// handoff (minted but never claimed/used) eventually expires and is
+			// GC'd, rather than living forever.
+			_, grantSecret, err := repo.IssueRefreshGrant(r.Context(), "dashboard", tok.SubjectID, tok.SubjectType, s.ensureRefreshManager().RefreshTTL)
 			if err != nil {
 				http.Error(w, "failed to mint browser session", http.StatusInternalServerError)
 				return
@@ -151,7 +155,7 @@ func (s *APIServer) handoffHandler() http.HandlerFunc {
 			uiHandoffResult("claimed")
 			// Deliver the grant as an HttpOnly refresh cookie; the SPA mints its
 			// first access token via /v1/auth/refresh.
-			http.SetCookie(w, s.refreshCookie(grantSecret, s.ensureRefreshManager().RefreshTTL))
+			http.SetCookie(w, s.refreshCookie(r, grantSecret, s.ensureRefreshManager().RefreshTTL))
 			w.WriteHeader(http.StatusNoContent)
 
 		default:
