@@ -13,9 +13,11 @@ export interface SidebarProps {
   logoVariant: LogoVariant;
   cluster: { name: string; context: string; version: string };
   user: { name: string; role: string };
+  demo?: boolean;
+  onLogout?: () => void;
 }
 
-export function Sidebar({ nav, route, go, logoVariant, cluster, user }: SidebarProps) {
+export function Sidebar({ nav, route, go, logoVariant, cluster, user, demo, onLogout }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sb-head">
@@ -46,9 +48,19 @@ export function Sidebar({ nav, route, go, logoVariant, cluster, user }: SidebarP
         ))}
       </nav>
       <div className="sb-foot">
-        <div className="avatar">{user.name[0].toUpperCase()}</div>
-        <div className="who">{user.name}<small>{user.role}</small></div>
-        <Icon name="dots" size={16} style={{ marginLeft: "auto", color: "var(--text-3)", cursor: "pointer" }} />
+        <div className="avatar">{(user.name[0] || "?").toUpperCase()}</div>
+        <div className="who">
+          {user.name}
+          <small>{demo ? "demo session" : user.role}</small>
+        </div>
+        <button
+          className="sb-logout"
+          title={onLogout ? "Sign out" : undefined}
+          onClick={onLogout}
+          style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-3)", cursor: onLogout ? "pointer" : "default", display: "flex", padding: 2 }}
+        >
+          <Icon name={onLogout ? "external" : "dots"} size={16} />
+        </button>
       </div>
     </aside>
   );

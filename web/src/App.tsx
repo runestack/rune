@@ -65,7 +65,13 @@ function Placeholder({ title }: { title: string }) {
   );
 }
 
-export function App() {
+export interface AppProps {
+  user: { name: string; role: string };
+  demo?: boolean;
+  onLogout?: () => void;
+}
+
+export function App({ user, demo, onLogout }: AppProps) {
   const [t, setTweak] = useTweaks();
   const [route, setRoute] = useState("overview");
   const [svc, setSvc] = useState<Service | null>(null);
@@ -104,7 +110,9 @@ export function App() {
             go={go}
             logoVariant={t.logo}
             cluster={RUNE.cluster}
-            user={{ name: "Ore", role: "cluster-admin" }}
+            user={user}
+            demo={demo}
+            onLogout={onLogout}
           />
         }
         topbar={<Topbar crumbs={CRUMBS[route] ?? ["Cluster"]} />}
