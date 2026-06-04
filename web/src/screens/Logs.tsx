@@ -1,15 +1,18 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Dot, Dropdown, Icon, PageHead, Segmented } from "../components";
 import { RUNE } from "../mock/data";
-import type { Instance } from "../mock/data";
+import type { Instance, Service } from "../mock/data";
 import { execBanner, execRun, type ExecLine } from "../lib/execEngine";
+import { useDemo } from "../api/demo";
+import { useInstances, useServices } from "../api/hooks";
+import { openExecSession, streamLogs, type ExecSession, type LiveLogLine } from "../api/streams";
 import "./Logs.css";
 
 /* ---------- scalable pickers ---------- */
-function ServicePicker({ svc, onPick }: { svc: string; onPick: (n: string) => void }) {
+function ServicePicker({ svc, onPick, services }: { svc: string; onPick: (n: string) => void; services: Service[] }) {
   const [q, setQ] = useState("");
-  const cur = RUNE.services.find((s) => s.name === svc);
-  const list = RUNE.services.filter((s) => (s.ports.length || s.type === "container") && s.name.toLowerCase().includes(q.toLowerCase()));
+  const cur = services.find((s) => s.name === svc);
+  const list = services.filter((s) => (s.ports.length || s.type === "container") && s.name.toLowerCase().includes(q.toLowerCase()));
   return (
     <Dropdown width={300} label={<span className="dd-lab"><span className="eyebrow">service</span><Dot s={cur ? cur.status : "run"} /><b>{svc}</b></span>}>
       {(close) => (
@@ -29,8 +32,8 @@ function ServicePicker({ svc, onPick }: { svc: string; onPick: (n: string) => vo
   );
 }
 
-function ScopePicker({ mode, svc, inst, setInst }: { mode: string; svc: string; inst: string | null; setInst: (i: string | null) => void }) {
-  const insts = RUNE.instances.filter((i) => i.svc === svc);
+function ScopePicker({ mode, svc, inst, setInst, instances }: { mode: string; svc: string; inst: string | null; setInst: (i: string | null) => void; instances: Instance[] }) {
+  const insts = instances.filter((i) => i.svc === svc);
   const autoLabel = mode === "logs" ? "All instances" : "Auto · first healthy";
   const curInst = insts.find((i) => i.id === inst);
   return (
@@ -55,6 +58,19 @@ function ScopePicker({ mode, svc, inst, setInst }: { mode: string; svc: string; 
       )}
     </Dropdown>
   );
+}
+
+// Strip ANSI/VT control sequences (CSI, OSC, single ESC pairs) and other
+// non-printing control bytes from PTY output so the line-based terminal renders
+// clean text. Keeps tab; drops the rest of C0 controls.
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+const ANSI_CSI = new RegExp(ESC + "\\[[0-9;?]*[ -/]*[@-~]", "g");
+const ANSI_OSC = new RegExp(ESC + "\\][^" + BEL + ESC + "]*(?:" + BEL + "|" + ESC + "\\\\)", "g");
+const ANSI_ESC = new RegExp(ESC + "[@-_]", "g");
+const C0 = new RegExp("[\\x00-\\x08\\x0b-\\x1f\\x7f]", "g");
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_CSI, "").replace(ANSI_OSC, "").replace(ANSI_ESC, "").replace(C0, "");
 }
 
 /* ---------- log formats ---------- */
@@ -165,14 +181,14 @@ function PrettyLine({ l }: { l: RawLine }) {
   return <span className="tok-msg">{l.raw}</span>;
 }
 
-/* ---------- logs view ---------- */
-function LogsView({ svc, instId }: { svc: string; instId: string | null }) {
+/* ---------- logs view (demo / simulated) ---------- */
+function LogsView({ svc, instId, services, instances }: { svc: string; instId: string | null; services: Service[]; instances: Instance[] }) {
   const fmt = fmtFor(svc);
   const [level, setLevel] = useState("all");
   const [tail, setTail] = useState(true);
   const [pretty, setPretty] = useState(true);
-  const ns = RUNE.services.find((s) => s.name === svc)?.ns;
-  const insts = RUNE.instances.filter((i) => i.svc === svc);
+  const ns = services.find((s) => s.name === svc)?.ns;
+  const insts = instances.filter((i) => i.svc === svc);
   const pickOrigin = (k?: number) => instId || (insts.length ? insts[(k ?? insts.length) % insts.length].id : svc);
 
   const wellRef = useRef<HTMLDivElement>(null);
@@ -279,6 +295,101 @@ function LogsView({ svc, instId }: { svc: string; instId: string | null }) {
   );
 }
 
+/* ---------- logs view (live · GetLogs server-stream) ---------- */
+function LiveLogsView({ svc, instId, ns }: { svc: string; instId: string | null; ns: string }) {
+  const [level, setLevel] = useState("all");
+  const [pretty, setPretty] = useState(true);
+  const [tail, setTail] = useState(true);
+  const [lines, setLines] = useState<RawLine[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const wellRef = useRef<HTMLDivElement>(null);
+  const nearBottomRef = useRef(true);
+  const TAIL_N = 200;
+
+  const target = instId || svc;
+
+  // (Re)open the stream whenever the target / namespace / tail toggle changes.
+  // streamLogs returns a stop() that aborts the underlying server-stream, so
+  // the connection is torn down cleanly on unmount and on every dependency
+  // change (no leaks).
+  useEffect(() => {
+    setLines([]);
+    setError(null);
+    setConnected(false);
+    const stop = streamLogs({
+      target,
+      namespace: ns || "default",
+      follow: tail,
+      tail: TAIL_N,
+      onLine: (l: LiveLogLine) => {
+        setConnected(true);
+        const fmt = detectFormat(l.content);
+        setLines((prev) => {
+          const next = [...prev, { ts: l.ts, level: l.level, raw: l.content, fmt, origin: l.origin }];
+          return next.length > 2000 ? next.slice(next.length - 2000) : next;
+        });
+      },
+      onError: (e) => setError(e.message),
+      onEnd: () => setConnected(false),
+    });
+    return stop;
+  }, [target, ns, tail]);
+
+  useEffect(() => {
+    if (nearBottomRef.current && wellRef.current) wellRef.current.scrollTop = wellRef.current.scrollHeight;
+  }, [lines]);
+
+  function onScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  }
+
+  const shown = lines.filter((l) => level === "all" || l.level === level);
+  const detected = lines.length ? lines[lines.length - 1].fmt : "plain";
+
+  return (
+    <div className="fadein">
+      <div style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <Segmented options={["all", "info", "warn", "error", "debug"]} value={level} onChange={setLevel} />
+        <Segmented options={[{ value: "pretty", label: "Pretty" }, { value: "raw", label: "Raw" }]} value={pretty ? "pretty" : "raw"} onChange={(v) => setPretty(v === "pretty")} />
+        <span className="fmtbadge" style={{ marginLeft: "auto" }} title="Detected automatically from the stream">
+          <Icon name="health" size={12} style={{ color: "var(--text-3)" }} />detected <b>{FMT_LABEL[detected]}</b>
+        </span>
+        <button className="loadmore" onClick={() => setTail((t) => !t)} style={{ borderColor: tail ? "rgba(48,164,108,.45)" : "var(--border-strong)" }}>
+          <span className={`dot ${tail ? "run pulse" : "idle"}`} style={{ boxShadow: "none" }} />
+          <span style={{ color: tail ? "#6bd49b" : "var(--text-2)" }}>{tail ? "Tailing" : "Paused"}</span>
+        </button>
+      </div>
+      <div className="cmdline">
+        <span className="c-prompt">$</span> rune logs {target} {tail ? "--follow" : ""}{level !== "all" ? ` --grep=${level}` : ""}{!pretty ? " -o raw" : ""}{" "}
+        <span style={{ color: "var(--text-4)" }}># {instId ? "single instance" : "aggregated across the service's instances"}</span>
+      </div>
+      <div className="logwell" ref={wellRef} onScroll={onScroll} style={{ height: 430, overflowY: "auto" }}>
+        {error ? (
+          <div className="logtop"><span className="logtop-end" style={{ color: "var(--fail)" }}>stream error: {error}</span></div>
+        ) : shown.length === 0 ? (
+          <div className="logtop"><span className="logtop-end">{connected ? "— no log lines yet —" : "connecting to log stream…"}</span></div>
+        ) : null}
+        {shown.map((l, i) => (
+          <div className="logline" key={i}>
+            <span className="lt">{l.ts}</span>
+            <span className={`lv ${l.level}`}>{l.level.toUpperCase()}</span>
+            <span className="lsvc">{l.origin}</span>
+            <span className="lm">{pretty ? <PrettyLine l={l} /> : l.raw}</span>
+          </div>
+        ))}
+      </div>
+      <div className="logmeta">
+        <span>{shown.length} lines</span>
+        <span style={{ color: "var(--text-4)" }}>·</span>
+        <span>{instId ? `instance ${instId}` : `service ${svc}`}</span>
+        <span style={{ marginLeft: "auto", color: tail && connected ? "var(--run)" : "var(--text-3)" }}>{tail ? (connected ? "● streaming" : "○ connecting") : "○ paused"}</span>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- exec terminal ---------- */
 function TermLine({ item }: { item: ExecLine }) {
   if (item.type === "cmd") return <div className="term-line"><span className="term-prompt">{item.prompt}</span> <span className="term-cmd">{item.text}</span></div>;
@@ -286,12 +397,12 @@ function TermLine({ item }: { item: ExecLine }) {
   return <div className={`term-line ${cls}`}>{item.text}</div>;
 }
 
-function ExecTerminal({ svc, instId }: { svc: string; instId: string | null }) {
+function ExecTerminal({ svc, instId, services, instances }: { svc: string; instId: string | null; services: Service[]; instances: Instance[] }) {
   const inst: Instance | undefined = instId
-    ? RUNE.instances.find((i) => i.id === instId)
-    : RUNE.instances.find((i) => i.svc === svc && i.status === "run") || RUNE.instances.find((i) => i.svc === svc);
+    ? instances.find((i) => i.id === instId)
+    : instances.find((i) => i.svc === svc && i.status === "run") || instances.find((i) => i.svc === svc);
   const host = inst ? inst.id : instId || svc + "-x7f2a";
-  const ns = RUNE.services.find((s) => s.name === svc)?.ns;
+  const ns = services.find((s) => s.name === svc)?.ns;
   const [cwd, setCwd] = useState("/app");
   const [closed, setClosed] = useState(false);
   const [hist, setHist] = useState<ExecLine[]>(() => execBanner(svc, host, inst, instId));
@@ -362,12 +473,142 @@ function ExecTerminal({ svc, instId }: { svc: string; instId: string | null }) {
   );
 }
 
+/* ---------- exec terminal (live · WS bridge) ---------- */
+interface LiveLine { type: "cmd" | "out" | "sys" | "err"; text: string; prompt?: string }
+
+function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | null; ns: string }) {
+  const host = instId || svc;
+  const [hist, setHist] = useState<LiveLine[]>([{ type: "sys", text: `Connecting to ${instId ? `instance ${instId}` : `a healthy instance of ${svc}`} …` }]);
+  const [input, setInput] = useState("");
+  const [cmdHist, setCmdHist] = useState<string[]>([]);
+  const [histIdx, setHistIdx] = useState(-1);
+  const [connected, setConnected] = useState(false);
+  const [closed, setClosed] = useState(false);
+  const sessionRef = useRef<ExecSession | null>(null);
+  const wellRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Accumulate raw stdout and flush it as output lines.
+  const bufRef = useRef("");
+
+  function pushBuf(text: string) {
+    bufRef.current += text;
+    // Normalize CRLF, then split into lines.
+    const norm = bufRef.current.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const parts = norm.split("\n");
+    bufRef.current = parts.pop() ?? "";
+    const clean = parts.map((t) => ({ type: "out" as const, text: stripAnsi(t) }));
+    if (clean.length) setHist((h) => [...h, ...clean]);
+  }
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const session = await openExecSession({
+          service: instId ? undefined : svc,
+          instanceId: instId || undefined,
+          namespace: ns || "default",
+          command: ["/bin/sh"],
+          tty: true,
+          cols: 100,
+          rows: 30,
+          onOpen: () => { if (live) { setConnected(true); setHist((h) => [...h, { type: "sys", text: `Connected · ${host}` }]); } },
+          onData: (text) => { if (live) pushBuf(text); },
+          onExit: (code) => {
+            if (!live) return;
+            if (bufRef.current) { setHist((h) => [...h, { type: "out", text: bufRef.current }]); bufRef.current = ""; }
+            setHist((h) => [...h, { type: "sys", text: `Session closed${code ? ` (exit ${code})` : ""}.` }]);
+            setClosed(true);
+            setConnected(false);
+          },
+          onError: (e) => { if (live) setHist((h) => [...h, { type: "err", text: e.message }]); },
+        });
+        if (!live) { session.close(); return; }
+        sessionRef.current = session;
+      } catch (e) {
+        if (live) setHist((h) => [...h, { type: "err", text: e instanceof Error ? e.message : String(e) }]);
+      }
+    })();
+    return () => {
+      live = false;
+      sessionRef.current?.close();
+      sessionRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [svc, instId, ns]);
+
+  useEffect(() => { if (wellRef.current) wellRef.current.scrollTop = wellRef.current.scrollHeight; }, [hist]);
+  useEffect(() => { if (inputRef.current && !closed) inputRef.current.focus(); }, [closed]);
+
+  function run(raw: string) {
+    const prompt = `${host}:~#`;
+    setHist((h) => [...h, { type: "cmd", prompt, text: raw }]);
+    if (raw.trim()) { setCmdHist((c) => [...c, raw]); setHistIdx(-1); }
+    sessionRef.current?.send(raw + "\n");
+  }
+  function onKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") { e.preventDefault(); const v = input; setInput(""); run(v); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); navHist(-1); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); navHist(1); }
+    else if (e.key === "c" && e.ctrlKey) { e.preventDefault(); sessionRef.current?.send("\x03"); }
+  }
+  function navHist(dir: number) {
+    if (!cmdHist.length) return;
+    let idx = histIdx === -1 ? cmdHist.length : histIdx;
+    idx = Math.max(0, Math.min(cmdHist.length, idx + dir));
+    setHistIdx(idx >= cmdHist.length ? -1 : idx);
+    setInput(idx >= cmdHist.length ? "" : cmdHist[idx]);
+  }
+  const promptStr = `${host}:~#`;
+
+  return (
+    <div className="fadein">
+      <div className="cmdline"><span className="c-prompt">$</span> rune exec {instId || svc} <span style={{ color: "var(--text-4)" }}># {instId ? "pinned instance" : "attaches to a healthy instance"} · WS bridge</span></div>
+      <div className="term" ref={wellRef} onClick={() => inputRef.current?.focus()}>
+        {hist.map((h, i) => <TermLine key={i} item={h as ExecLine} />)}
+        {!closed ? (
+          <div className="term-input-row">
+            <span className="term-prompt">{promptStr}</span>
+            <input ref={inputRef} className="term-input" value={input} spellCheck={false} autoComplete="off" disabled={!connected} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} aria-label="exec command" />
+          </div>
+        ) : (
+          <div className="term-closed">session closed</div>
+        )}
+      </div>
+      <div className="logmeta">
+        <span>exec · {svc}</span><span style={{ color: "var(--text-4)" }}>·</span>
+        <span>{instId ? `instance ${instId}` : "auto instance"}</span>
+        <span style={{ marginLeft: "auto", color: closed ? "var(--text-3)" : connected ? "var(--run)" : "var(--text-3)" }}>{closed ? "○ disconnected" : connected ? "● connected · root" : "○ connecting"}</span>
+      </div>
+    </div>
+  );
+}
+
 export function Logs({ initialSvc }: { initialSvc?: string | null }) {
-  const svcNames = RUNE.services.filter((s) => s.ports.length || s.type === "container").map((s) => s.name);
+  const demo = useDemo();
+  const { data: liveServices } = useServices();
+  const { data: liveInstances } = useInstances();
+  const services = demo ? RUNE.services : liveServices;
+  const instances = demo ? RUNE.instances : liveInstances;
+
+  const svcNames = services.filter((s) => s.ports.length || s.type === "container").map((s) => s.name);
+  const fallback = svcNames[0] || services[0]?.name || "";
   const [mode, setMode] = useState("logs");
-  const [svc, setSvc] = useState(initialSvc && svcNames.includes(initialSvc) ? initialSvc : "api-core");
+  const [svc, setSvc] = useState(initialSvc && svcNames.includes(initialSvc) ? initialSvc : fallback);
   const [inst, setInst] = useState<string | null>(null);
   const pickSvc = (n: string) => { setSvc(n); setInst(null); };
+
+  // Once live data arrives, snap the selection to a real service if the
+  // current pick isn't present (e.g. the mock default "api-core").
+  useEffect(() => {
+    if (!demo && services.length && !services.some((s) => s.name === svc)) {
+      setSvc(initialSvc && svcNames.includes(initialSvc) ? initialSvc : fallback);
+      setInst(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, services.length]);
+
+  const ns = services.find((s) => s.name === svc)?.ns || "default";
 
   return (
     <div className="wrap" style={{ maxWidth: 1100 }}>
@@ -378,10 +619,18 @@ export function Logs({ initialSvc }: { initialSvc?: string | null }) {
       />
       <div style={{ display: "flex", gap: 12, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
         <Segmented options={[{ value: "logs", label: "Logs" }, { value: "exec", label: "Exec" }]} value={mode} onChange={setMode} />
-        <ServicePicker svc={svc} onPick={pickSvc} />
-        <ScopePicker mode={mode} svc={svc} inst={inst} setInst={setInst} />
+        <ServicePicker svc={svc} onPick={pickSvc} services={services} />
+        <ScopePicker mode={mode} svc={svc} inst={inst} setInst={setInst} instances={instances} />
       </div>
-      {mode === "logs" ? <LogsView svc={svc} instId={inst} key={"l-" + svc + (inst || "")} /> : <ExecTerminal svc={svc} instId={inst} key={"e-" + svc + (inst || "")} />}
+      {mode === "logs" ? (
+        demo
+          ? <LogsView svc={svc} instId={inst} services={services} instances={instances} key={"l-" + svc + (inst || "")} />
+          : <LiveLogsView svc={svc} instId={inst} ns={ns} key={"ll-" + svc + (inst || "")} />
+      ) : (
+        demo
+          ? <ExecTerminal svc={svc} instId={inst} services={services} instances={instances} key={"e-" + svc + (inst || "")} />
+          : <LiveExecTerminal svc={svc} instId={inst} ns={ns} key={"le-" + svc + (inst || "")} />
+      )}
     </div>
   );
 }
