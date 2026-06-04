@@ -3,22 +3,32 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Rune embedded web dashboard (RUNE-200). Phase 2 scaffolding.",
+  "description": "Rune embedded web dashboard (RUNE-200).",
   "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
     "gen": "rm -rf src/gen && mkdir -p src/gen && protoc --proto_path=.. --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --plugin=protoc-gen-connect-es=./node_modules/.bin/protoc-gen-connect-es --es_out=src/gen --es_opt=target=ts --connect-es_out=src/gen --connect-es_opt=target=ts $(cd .. && ls pkg/api/proto/*.proto)",
     "smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^1.10.0",
     "@connectrpc/connect": "^1.6.1",
-    "@connectrpc/connect-node": "^1.6.1",
-    "@connectrpc/connect-web": "^1.6.1"
+    "@connectrpc/connect-web": "^1.6.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@bufbuild/protoc-gen-es": "^1.10.0",
+    "@connectrpc/connect-node": "^1.6.1",
     "@connectrpc/protoc-gen-connect-es": "^1.6.1",
     "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
   }
 }

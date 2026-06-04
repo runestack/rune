@@ -1,0 +1,61 @@
+/* ============================================================
+   RUNE — design tokens (single source of theming truth)
+   Warm near-black base (Claude desktop) × precise technical
+   structure (Oxide/steel.dev). Purple #9e8cfc primary accent.
+   The Tweaks panel mutates --accent / --radius at runtime.
+   ============================================================ */
+:root {
+  /* surfaces — warm neutral darks */
+  --bg: #161513;
+  --bg-grid: rgba(236, 233, 226, 0.018);
+  --surface: #1f1d1b;
+  --surface-2: #262320;
+  --surface-3: #2f2c28; /* hover / raised */
+  --inset: #131210; /* code / log wells */
+
+  /* hairlines */
+  --border: #2c2925;
+  --border-strong: #3a3631;
+  --border-faint: #232120;
+
+  /* text */
+  --text: #ece8e1;
+  --text-2: #a6a097;
+  --text-3: #726c63;
+  --text-4: #534e47;
+
+  /* brand accent (tweakable) */
+  --accent: #9e8cfc;
+  --accent-text: #b8acff;
+  --accent-dim: rgba(158, 140, 252, 0.13);
+  --accent-line: rgba(158, 140, 252, 0.32);
+
+  /* semantic status — used sparingly, for attention only */
+  --run: #30a46c;
+  --fail: #e5484d;
+  --warn: #f6d908;
+  --deploy: #f76809;
+  --net: #67ddfd;
+  --pink: #d6409f;
+  --tan: #daa16e;
+  --idle: #6f6a62;
+
+  --run-dim: rgba(48, 164, 108, 0.14);
+  --fail-dim: rgba(229, 72, 77, 0.14);
+  --warn-dim: rgba(246, 217, 8, 0.13);
+  --deploy-dim: rgba(247, 104, 9, 0.14);
+  --net-dim: rgba(103, 221, 253, 0.13);
+
+  /* edges (tweakable: soft | crisp | sharp) */
+  --radius: 8px;
+  --radius-sm: 5px;
+  --radius-lg: 12px;
+
+  --sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Spectral", Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --sidebar-w: 248px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 30px rgba(0, 0, 0, 0.22);
+  --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.4);
+}

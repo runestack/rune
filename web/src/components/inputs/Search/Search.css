@@ -1,0 +1,12 @@
+.search {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 11px; width: 230px;
+  color: var(--text-3); cursor: text; transition: border-color 0.15s;
+}
+.search:focus-within { border-color: var(--accent-line); }
+.search input { background: none; border: none; outline: none; color: var(--text); font-family: var(--sans); font-size: 13px; width: 100%; }
+.search kbd {
+  font-family: var(--mono); font-size: 10px; color: var(--text-3);
+  border: 1px solid var(--border-strong); border-radius: 4px; padding: 1px 5px;
+}

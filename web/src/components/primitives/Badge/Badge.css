@@ -1,0 +1,47 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 9px 3px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+/* "Running" is intentionally quiet — a neutral pill, never a loud badge. */
+.badge.run {
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.badge.fail {
+  color: #f2868a;
+  background: var(--fail-dim);
+  border-color: rgba(229, 72, 77, 0.25);
+}
+.badge.warn {
+  color: #d9a94e;
+  background: var(--warn-dim);
+  border-color: rgba(217, 154, 62, 0.22);
+}
+.badge.deploy {
+  color: #d99360;
+  background: var(--deploy-dim);
+  border-color: rgba(217, 147, 96, 0.25);
+}
+.badge.idle {
+  color: var(--text-2);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.badge.net {
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.badge.accent {
+  color: var(--accent-text);
+  background: var(--accent-dim);
+  border-color: var(--accent-line);
+}

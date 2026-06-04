@@ -1,0 +1,114 @@
+/* ============================================================
+   RUNE — base / reset / global type helpers
+   ============================================================ */
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+#root {
+  height: 100%;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+::selection {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+
+/* scrollbars — quiet */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #34302b;
+  border-radius: 8px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #423d36;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+/* ---------- type helpers ---------- */
+.serif {
+  font-family: var(--serif);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+.mono {
+  font-family: var(--mono);
+}
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- generic utilities ---------- */
+.divider {
+  height: 1px;
+  background: var(--border-faint);
+  margin: 22px 0;
+}
+.empty {
+  text-align: center;
+  color: var(--text-3);
+  padding: 60px 20px;
+}
+.fadein {
+  animation: fadein 0.35s ease both;
+}
+@keyframes fadein {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* shared grid helpers */
+.grid {
+  display: grid;
+  gap: 16px;
+}
+.g-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+.g-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+.g-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+.g-2-1 {
+  grid-template-columns: 1.6fr 1fr;
+}

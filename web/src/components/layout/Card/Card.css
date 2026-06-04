@@ -1,0 +1,14 @@
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  position: relative;
+}
+.card-pad { padding: 18px 20px; }
+.card-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--border-faint);
+}
+.card-head h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.005em; white-space: nowrap; }
+.card-head .ch-act { margin-left: auto; display: flex; gap: 6px; }
