@@ -1,12 +1,56 @@
 import { useState } from "react";
-import { Badge, Button, Card, Dot, Drawer, Icon, KeyValue, LogWell, Replicas, Table, Tabs, Tag, UsageBar } from "../components";
-import { RUNE } from "../mock/data";
+import { Badge, Button, Card, Dot, Drawer, Icon, KeyValue, Replicas, Spinner, Table, Tabs, Tag, UsageBar } from "../components";
 import type { Service } from "../mock/data";
+import { useServiceInstances } from "../api/hooks";
+import { useDemo } from "../api/demo";
+import { clients } from "../api/transport";
+import { ScalingMode } from "../gen/pkg/api/proto/service_pb";
 
 export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () => void; go: (r: string, arg?: Service) => void }) {
+  const demo = useDemo();
   const [tab, setTab] = useState("overview");
-  const insts = RUNE.instances.filter((i) => i.svc === svc.name);
-  const logs = RUNE.makeLog(svc.name.length * 3).slice(-14).map((l) => ({ ...l, svc: svc.name }));
+  const { data: insts, loading: instLoading, reload: reloadInsts } = useServiceInstances(svc.name, svc.ns);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [actionErr, setActionErr] = useState<string | null>(null);
+
+  async function withConfirm(label: string, fn: () => Promise<void>) {
+    if (demo) {
+      // No backend in demo mode — actions are illustrative only.
+      window.alert(`${label} is available in a live session against a real cluster.`);
+      return;
+    }
+    if (!window.confirm(`${label} ${svc.name} in ${svc.ns}?`)) return;
+    setBusy(label);
+    setActionErr(null);
+    try {
+      await fn();
+      reloadInsts();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const onScale = () => {
+    const raw = window.prompt(`Scale ${svc.name} to how many instances?`, String(svc.want));
+    if (raw == null) return;
+    const scale = parseInt(raw, 10);
+    if (Number.isNaN(scale) || scale < 0) { window.alert("Enter a non-negative integer."); return; }
+    void withConfirm(`Scale to ${scale}`, async () => {
+      await clients.services.scaleService({ name: svc.name, namespace: svc.ns, scale, mode: ScalingMode.IMMEDIATE });
+    });
+  };
+  const onRestart = () => void withConfirm("Restart", async () => {
+    // Restart = scale to 0 then back to desired count (mirrors `rune restart`).
+    await clients.services.scaleService({ name: svc.name, namespace: svc.ns, scale: 0, mode: ScalingMode.IMMEDIATE });
+    await clients.services.scaleService({ name: svc.name, namespace: svc.ns, scale: svc.want || 1, mode: ScalingMode.IMMEDIATE });
+  });
+  const onDelete = () => void withConfirm("Delete", async () => {
+    await clients.services.deleteService({ name: svc.name, namespace: svc.ns });
+    onClose();
+  });
+
   return (
     <Drawer onClose={onClose}>
       <div className="drawer-head">
@@ -17,13 +61,20 @@ export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () 
           {svc.stateful && <Tag>stateful</Tag>}
           {svc.type === "process" && <Tag>process</Tag>}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Button size="sm" variant="primary"><Icon name="scale" size={14} />Scale</Button>
-          <Button size="sm"><Icon name="refresh" size={14} />Restart</Button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Button size="sm" variant="primary" onClick={onScale} disabled={!!busy}><Icon name="scale" size={14} />Scale</Button>
+          <Button size="sm" onClick={onRestart} disabled={!!busy}><Icon name="refresh" size={14} />Restart</Button>
           <Button size="sm" onClick={() => { onClose(); go("logs", svc); }}><Icon name="logs" size={14} />Logs</Button>
-          <Button size="sm"><Icon name="terminal" size={14} />Exec</Button>
+          <Button size="sm" onClick={() => { onClose(); go("logs", svc); }}><Icon name="terminal" size={14} />Exec</Button>
+          <Button size="sm" onClick={onDelete} disabled={!!busy}><Icon name="close" size={14} />Delete</Button>
         </div>
-        {svc.note && (
+        {busy && <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--text-3)", display: "flex", gap: 8, alignItems: "center" }}><Dot s="deploy" pulse />{busy}…</div>}
+        {actionErr && (
+          <div style={{ marginTop: 12, padding: "9px 12px", background: "var(--fail-dim)", border: "1px solid rgba(229,72,77,.25)", borderRadius: 8, fontSize: 12.5, color: "#f2868a", display: "flex", gap: 8, alignItems: "center" }}>
+            <Icon name="alert" size={15} />{actionErr}
+          </div>
+        )}
+        {svc.note && !actionErr && (
           <div style={{
             marginTop: 14, padding: "9px 12px",
             background: svc.status === "warn" ? "var(--fail-dim)" : "var(--deploy-dim)",
@@ -71,25 +122,38 @@ export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () 
 
         {tab === "instances" && (
           <Card className="fadein" style={{ overflow: "hidden" }}>
-            <Table>
-              <thead><tr><th>Instance</th><th>Node</th><th>CPU</th><th>Mem</th><th>Restarts</th><th>Status</th></tr></thead>
-              <tbody>
-                {insts.map((i) => (
-                  <tr key={i.id}>
-                    <td><div className="cell-name" style={{ fontWeight: 500 }}><Dot s={i.status} /><span className="mono" style={{ fontSize: 12 }}>{i.id}</span></div></td>
-                    <td className="cell-sub">{i.node}</td>
-                    <td className="num">{i.cpu}%</td>
-                    <td className="num">{i.mem}%</td>
-                    <td className="num">{i.restarts}</td>
-                    <td><Badge s={i.status} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
+            {instLoading ? (
+              <Spinner label="Loading instances…" height={120} />
+            ) : insts.length === 0 ? (
+              <div className="empty">No instances scheduled.</div>
+            ) : (
+              <Table>
+                <thead><tr><th>Instance</th><th>Node</th><th>CPU</th><th>Mem</th><th>Restarts</th><th>Status</th></tr></thead>
+                <tbody>
+                  {insts.map((i) => (
+                    <tr key={i.id}>
+                      <td><div className="cell-name" style={{ fontWeight: 500 }}><Dot s={i.status} /><span className="mono" style={{ fontSize: 12 }}>{i.id}</span></div></td>
+                      <td className="cell-sub">{i.node}</td>
+                      <td className="num">{i.cpu}%</td>
+                      <td className="num">{i.mem}%</td>
+                      <td className="num">{i.restarts}</td>
+                      <td><Badge s={i.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )}
           </Card>
         )}
 
-        {tab === "logs" && <div className="fadein"><LogWell lines={logs} height={420} /></div>}
+        {tab === "logs" && (
+          <div className="fadein">
+            <p style={{ fontSize: 12.5, color: "var(--text-3)", margin: "0 0 14px", lineHeight: 1.6 }}>
+              Open <b>Logs &amp; Exec</b> for the live stream.{" "}
+              <span style={{ color: "var(--accent-text)", cursor: "pointer" }} onClick={() => { onClose(); go("logs", svc); }}>Stream {svc.name} logs →</span>
+            </p>
+          </div>
+        )}
 
         {tab === "networking" && (
           <div className="fadein">

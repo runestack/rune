@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { Badge, Button, Card, Dot, Drawer, Icon, KeyValue, PageHead, Segmented, Table, Tabs, Tag } from "../components";
+import { useEffect, useState } from "react";
+import { Badge, Button, Card, Dot, Drawer, EmptyState, Icon, KeyValue, PageHead, Segmented, Spinner, Table, Tabs, Tag } from "../components";
 import { RUNE } from "../mock/data";
 import type { ConfigMap, Secret, SecretMount } from "../mock/data";
+import { useConfigmaps, useSecrets } from "../api/hooks";
 import "./Secrets.css";
 
 const DNS1123 = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
@@ -412,9 +413,17 @@ function CreateDrawer({ onClose, onCreate }: { onClose: () => void; onCreate: (k
 
 /* ---------------- MAIN SCREEN ---------------- */
 export function Secrets() {
+  const { data: liveSecrets, loading: sLoading, error: sError, reload: sReload } = useSecrets();
+  const { data: liveConfigs, loading: cLoading, error: cError } = useConfigmaps();
+  const loading = sLoading || cLoading;
+  const error = sError || cError;
+
   const [tab, setTab] = useState("secrets");
-  const [secrets, setSecrets] = useState<Secret[]>(() => clone(RUNE.secrets));
-  const [configs, setConfigs] = useState<ConfigMap[]>(() => clone(RUNE.configmaps));
+  const [secrets, setSecrets] = useState<Secret[]>(() => clone(liveSecrets));
+  const [configs, setConfigs] = useState<ConfigMap[]>(() => clone(liveConfigs));
+  // Re-seed local working state whenever the live lists resolve/change.
+  useEffect(() => { setSecrets(clone(liveSecrets)); }, [liveSecrets]);
+  useEffect(() => { setConfigs(clone(liveConfigs)); }, [liveConfigs]);
   const [openSec, setOpenSec] = useState<string | null>(null);
   const [openCm, setOpenCm] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -507,12 +516,19 @@ export function Secrets() {
       />
 
       {tab === "secrets" && (
+        loading ? (
+          <Spinner label="Loading secrets…" />
+        ) : error ? (
+          <EmptyState icon="secrets" tone="error" title="Couldn't load secrets" hint={error} action={{ label: "Retry", onClick: sReload }} />
+        ) : secrets.length === 0 ? (
+          <EmptyState icon="secrets" title="No secrets" hint="Create a sealed secret — values are encrypted at rest and never revealed in the UI." />
+        ) : (
         <Card className="fadein" style={{ overflow: "hidden" }}>
           <Table>
             <thead><tr><th>Secret</th><th>Type</th><th>Keys</th><th>Ver</th><th>Mounted by</th><th>Status</th><th>Last cast</th></tr></thead>
             <tbody>
               {secrets.map((s) => (
-                <tr key={s.name} className={flash === s.name ? "row-flash" : ""} onClick={() => setOpenSec(s.name)}>
+                <tr key={`${s.ns}/${s.name}`} className={flash === s.name ? "row-flash" : ""} onClick={() => setOpenSec(s.name)}>
                   <td>
                     <div className="cell-name mono" style={{ fontSize: 13 }}><Icon name="secrets" size={15} style={{ color: "var(--accent-text)" }} />{s.name}</div>
                     <div className="cell-sub" style={{ marginTop: 3, marginLeft: 25 }}>{s.ns}</div>
@@ -528,15 +544,23 @@ export function Secrets() {
             </tbody>
           </Table>
         </Card>
+        )
       )}
 
       {tab === "config" && (
+        loading ? (
+          <Spinner label="Loading configmaps…" />
+        ) : error ? (
+          <EmptyState icon="doc" tone="error" title="Couldn't load configmaps" hint={error} action={{ label: "Retry", onClick: sReload }} />
+        ) : configs.length === 0 ? (
+          <EmptyState icon="doc" title="No configmaps" hint="Cast a configmap to share plaintext configuration with services." />
+        ) : (
         <Card className="fadein" style={{ overflow: "hidden" }}>
           <Table>
             <thead><tr><th>ConfigMap</th><th>Keys</th><th>Ver</th><th>Mounted by</th><th>Status</th><th>Last cast</th></tr></thead>
             <tbody>
               {configs.map((c) => (
-                <tr key={c.name} className={flash === c.name ? "row-flash" : ""} onClick={() => setOpenCm(c.name)}>
+                <tr key={`${c.ns}/${c.name}`} className={flash === c.name ? "row-flash" : ""} onClick={() => setOpenCm(c.name)}>
                   <td>
                     <div className="cell-name mono" style={{ fontSize: 13 }}><Icon name="doc" size={15} style={{ color: "var(--text-3)" }} />{c.name}</div>
                     <div className="cell-sub" style={{ marginTop: 3, marginLeft: 25 }}>{c.ns}</div>
@@ -551,6 +575,7 @@ export function Secrets() {
             </tbody>
           </Table>
         </Card>
+        )
       )}
 
       {secDetail && <SecretDrawer sec={secDetail} onClose={() => setOpenSec(null)} onRestart={restartSec} fqdn={fqdn} setFqdn={setFqdn} />}

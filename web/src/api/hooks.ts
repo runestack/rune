@@ -137,6 +137,24 @@ export function useInstances(node?: string): Query<Instance[]> {
   );
 }
 
+/** Instances for a single service (used by the service drawer). */
+export function useServiceInstances(svcName: string, ns: string): Query<Instance[]> {
+  const mock = RUNE.instances.filter((i) => i.svc === svcName);
+  return useQuery<Instance[]>(
+    mock,
+    async (signal) => {
+      const res = await clients.instances.listInstances(
+        { serviceName: svcName, namespace: ns || "default" },
+        { signal },
+      );
+      return res.instances
+        .filter((i) => i.status !== InstanceStatus.DELETED)
+        .map((i) => mapInstance(i));
+    },
+    [svcName, ns],
+  );
+}
+
 /* ---------------- storage ---------------- */
 
 export function useVolumes(): Query<Volume[]> {
