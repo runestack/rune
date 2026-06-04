@@ -4,6 +4,7 @@ import {
 } from "./components";
 import type { NavGroup } from "./components";
 import { useTweaks } from "./lib/theme";
+import { DemoProvider } from "./api/demo";
 import { RUNE } from "./mock/data";
 import type { Service } from "./mock/data";
 import { Overview } from "./screens/Overview";
@@ -101,7 +102,7 @@ export function App({ user, demo, onLogout }: AppProps) {
   }
 
   return (
-    <>
+    <DemoProvider value={!!demo}>
       <AppShell
         sidebar={
           <Sidebar
@@ -129,6 +130,6 @@ export function App({ user, demo, onLogout }: AppProps) {
         <TweakSection label="Surface" />
         <TweakRadio label="Edges" value={t.edges} options={["soft", "crisp", "sharp"]} onChange={(v) => setTweak("edges", v)} />
       </TweaksPanel>
-    </>
+    </DemoProvider>
   );
 }

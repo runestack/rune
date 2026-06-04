@@ -11,7 +11,7 @@ import { InstanceService } from "../gen/pkg/api/proto/instance_connect";
 import { LogService } from "../gen/pkg/api/proto/logs_connect";
 import { SecretService } from "../gen/pkg/api/proto/secret_connect";
 import { ConfigmapService } from "../gen/pkg/api/proto/configmap_connect";
-import { VolumeService } from "../gen/pkg/api/proto/storage_connect";
+import { VolumeService, StorageClassService } from "../gen/pkg/api/proto/storage_connect";
 import { AuditService } from "../gen/pkg/api/proto/audit_connect";
 
 // The SPA is same-origin with runed (served under /ui); the transcoder is at
@@ -60,5 +60,6 @@ export const clients = {
   secrets: createPromiseClient(SecretService, transport),
   configmaps: createPromiseClient(ConfigmapService, transport),
   volumes: createPromiseClient(VolumeService, transport),
+  storage: createPromiseClient(StorageClassService, transport),
   audit: createPromiseClient(AuditService, transport),
 };
