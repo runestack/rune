@@ -176,6 +176,18 @@ func buildClientOptions(addressOverride string) *client.ClientOptions {
 	} else if t, ok := getEnv("RUNE_TOKEN"); ok {
 		opts.Token = t
 	}
+	// Refresh grant (RUNE-201): enables transparent access-token renewal. The
+	// OnRefresh callback persists rotated tokens back to the current context.
+	if rt := viper.GetString("contexts.default.refreshToken"); rt != "" {
+		opts.RefreshToken = rt
+	} else if rt, ok := getEnv("RUNE_REFRESH_TOKEN"); ok {
+		opts.RefreshToken = rt
+	}
+	if opts.RefreshToken != "" {
+		opts.OnRefresh = func(accessToken, refreshToken string, _ int64) error {
+			return persistRefreshedTokens(accessToken, refreshToken)
+		}
+	}
 	return opts
 }
 

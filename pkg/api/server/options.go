@@ -103,6 +103,18 @@ type Options struct {
 	// started at all. Zero value disables the UI; runed populates this from
 	// the runefile [ui] block via WithUI.
 	UI UIOptions
+
+	// Session tunes RUNE-201 refresh/access lifetimes. Zero fields fall back to
+	// the session package defaults.
+	Session SessionOptions
+}
+
+// SessionOptions configures RUNE-201 token lifetimes. Server-package mirror of
+// the [auth] session_* config keys; runed maps one onto the other.
+type SessionOptions struct {
+	AccessTTL   time.Duration // short-lived access token lifetime (default 15m)
+	RefreshTTL  time.Duration // sliding refresh idle window (default 30d)
+	GraceWindow time.Duration // concurrent-refresh grace (default 30s)
 }
 
 // UIOptions configures the embedded dashboard HTTP layer (RUNE-200). It is
@@ -298,5 +310,12 @@ func WithEventLog(eventLog events.EventLog) Option {
 func WithUI(ui UIOptions) Option {
 	return func(opts *Options) {
 		opts.UI = ui
+	}
+}
+
+// WithSession sets RUNE-201 token-lifetime overrides.
+func WithSession(s SessionOptions) Option {
+	return func(opts *Options) {
+		opts.Session = s
 	}
 }

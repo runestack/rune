@@ -67,6 +67,7 @@ func newAdminTokenCmd() *cobra.Command {
 func newAdminUserCmd() *cobra.Command {
 	c := &cobra.Command{Use: "user", Short: "Manage users (subjects)"}
 	c.AddCommand(newAdminUserCreateCmd())
+	c.AddCommand(newAdminUserEnrollCmd())
 	c.AddCommand(newAdminUserListCmd())
 	return c
 }

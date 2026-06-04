@@ -90,7 +90,7 @@ func newExecWSTestEnv(t *testing.T) *execWSTestEnv {
 		if err := st.Create(ctx, types.ResourceTypeUser, "system", name, u); err != nil {
 			t.Fatalf("user %s: %v", name, err)
 		}
-		_, secret, err := repos.NewTokenRepo(st).Issue(ctx, name+"-tok", name, "user", "", 0)
+		_, secret, err := repos.NewTokenRepo(st).IssueStatic(ctx, name+"-tok", name, "user", "", 0)
 		if err != nil {
 			t.Fatalf("token %s: %v", name, err)
 		}

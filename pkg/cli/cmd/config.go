@@ -21,6 +21,30 @@ type Context struct {
 	Server           string `yaml:"server"`
 	Token            string `yaml:"token"`
 	DefaultNamespace string `yaml:"defaultNamespace,omitempty"`
+	// RefreshToken is the RUNE-201 refresh grant. When present, the client
+	// transparently renews Token on Unauthenticated and rewrites both here.
+	RefreshToken string `yaml:"refreshToken,omitempty"`
+}
+
+// persistRefreshedTokens writes rotated session credentials back to the current
+// context (RUNE-201). Used as the client's OnRefresh callback so transparent
+// refreshes survive across CLI invocations. Best-effort: a save failure is
+// returned to the caller, which logs but does not fail the in-flight request.
+func persistRefreshedTokens(accessToken, refreshToken string) error {
+	cfg, err := loadContextConfig()
+	if err != nil {
+		return err
+	}
+	ctx, ok := cfg.Contexts[cfg.CurrentContext]
+	if !ok {
+		return fmt.Errorf("current context %q not found", cfg.CurrentContext)
+	}
+	ctx.Token = accessToken
+	if refreshToken != "" {
+		ctx.RefreshToken = refreshToken
+	}
+	cfg.Contexts[cfg.CurrentContext] = ctx
+	return saveContextConfig(cfg)
 }
 
 func newContextCmd() *cobra.Command {

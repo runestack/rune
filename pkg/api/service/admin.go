@@ -70,7 +70,7 @@ func (s *AdminService) AdminBootstrap(ctx context.Context, _ *generated.AdminBoo
 	// Issue root token with unique name
 	tr := repos.NewTokenRepo(s.st)
 	name := fmt.Sprintf("bootstrap-admin-%d", time.Now().UnixNano())
-	tok, secret, err := tr.Issue(ctx, name, root.ID, "user", "bootstrap-admin", 0)
+	tok, secret, err := tr.IssueStatic(ctx, name, root.ID, "user", "bootstrap-admin", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -183,9 +183,13 @@ func (s *AdminService) TokenList(ctx context.Context, _ *generated.TokenListRequ
 			Description: t.Description,
 			IssuedAt:    t.IssuedAt.Unix(),
 			Revoked:     t.Revoked,
+			Kind:        string(t.Kind),
 		}
 		if t.ExpiresAt != nil {
 			ti.ExpiresAt = t.ExpiresAt.Unix()
+		}
+		if t.LastUsedAt != nil {
+			ti.LastUsedAt = t.LastUsedAt.Unix()
 		}
 		out = append(out, ti)
 	}

@@ -67,6 +67,8 @@ func init() {
 	rootCmd.AddCommand(newDepsCmd())
 	// Register auth-related commands
 	rootCmd.AddCommand(newLoginCmd())
+	rootCmd.AddCommand(newLogoutCmd())
+	rootCmd.AddCommand(newUICmd())
 	rootCmd.AddCommand(newWhoAmICmd())
 	// Admin command group (bootstrap, token, user, policy, registry)
 	rootCmd.AddCommand(newAdminCmd())
@@ -178,6 +180,9 @@ func loadCurrentContextIntoViper() error {
 	}
 	if ctx.Token != "" {
 		viper.Set("contexts.default.token", ctx.Token)
+	}
+	if ctx.RefreshToken != "" {
+		viper.Set("contexts.default.refreshToken", ctx.RefreshToken)
 	}
 	if ctx.DefaultNamespace != "" {
 		viper.Set("contexts.default.defaultNamespace", ctx.DefaultNamespace)

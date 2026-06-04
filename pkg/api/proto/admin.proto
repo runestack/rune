@@ -85,6 +85,8 @@ message TokenInfo {
   int64 issued_at = 6;   // unix seconds
   int64 expires_at = 7;  // unix seconds (0 means none)
   bool revoked = 8;
+  string kind = 9;        // RUNE-201: static|access|refresh
+  int64 last_used_at = 10; // unix seconds; 0 if never (last refresh-grant rotation)
 }
 
 message TokenListRequest {}

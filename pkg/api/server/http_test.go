@@ -77,7 +77,7 @@ func newUITestEnv(t *testing.T) *uiTestEnv {
 		if err := st.Create(ctx, types.ResourceTypeUser, "system", name, u); err != nil {
 			t.Fatalf("create user %s: %v", name, err)
 		}
-		_, secret, err := repos.NewTokenRepo(st).Issue(ctx, name+"-tok", name, "user", "", 0)
+		_, secret, err := repos.NewTokenRepo(st).IssueStatic(ctx, name+"-tok", name, "user", "", 0)
 		if err != nil {
 			t.Fatalf("issue token for %s: %v", name, err)
 		}
@@ -294,45 +294,102 @@ func TestBuildHTTPHandlerRootPathDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestHandoffEndpoint exercises POST (store) then GET (single-use claim) and
-// the TTL expiry path.
+// TestUILoginPage serves the minimal sign-in page (CLI handoff claim landing).
+func TestUILoginPage(t *testing.T) {
+	e := newUITestEnv(t)
+	resp, err := e.ts.Client().Get(e.ts.URL + "/ui/login?handoff=abc")
+	if err != nil {
+		t.Fatalf("get login page: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login page expected 200, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("login page should be HTML, got %q", ct)
+	}
+	if resp.Header.Get("X-Frame-Options") != "DENY" {
+		t.Fatal("login page must forbid framing")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "/v1/ui/handoff/") {
+		t.Fatal("login page should claim the handoff code")
+	}
+}
+
+// TestHandoffEndpoint exercises the RUNE-201 cookie handoff: an authenticated
+// POST mints a browser-scoped grant; GET claims it once and delivers an HttpOnly
+// refresh cookie; the code is single-use and TTL-bounded.
 func TestHandoffEndpoint(t *testing.T) {
 	e := newUITestEnv(t)
 	client := e.ts.Client()
 
-	post := func(code, token string) int {
-		body, _ := json.Marshal(handoffPostBody{Token: token})
-		resp, err := client.Post(e.ts.URL+"/v1/ui/handoff/"+code, "application/json", bytes.NewReader(body))
+	// POST authenticated with the CLI's bearer (no body).
+	post := func(code, bearer string) int {
+		req, _ := http.NewRequest(http.MethodPost, e.ts.URL+"/v1/ui/handoff/"+code, nil)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatalf("post handoff: %v", err)
 		}
 		resp.Body.Close()
 		return resp.StatusCode
 	}
+	// GET claims the code; returns status + the rune_refresh cookie value (if any).
 	get := func(code string) (int, string) {
 		resp, err := client.Get(e.ts.URL + "/v1/ui/handoff/" + code)
 		if err != nil {
 			t.Fatalf("get handoff: %v", err)
 		}
 		defer resp.Body.Close()
-		var b handoffGetBody
-		_ = json.NewDecoder(resp.Body).Decode(&b)
-		return resp.StatusCode, b.Token
+		var cookie string
+		for _, c := range resp.Cookies() {
+			if c.Name == refreshCookieName {
+				cookie = c.Value
+			}
+		}
+		return resp.StatusCode, cookie
 	}
 
-	if c := post("abc123", "rune_secret_value"); c != http.StatusNoContent {
+	// Unauthenticated POST is rejected.
+	if c := post("noauth", ""); c != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated post expected 401, got %d", c)
+	}
+
+	if c := post("abc123", e.rootToken); c != http.StatusNoContent {
 		t.Fatalf("post expected 204, got %d", c)
 	}
-	code, tok := get("abc123")
-	if code != http.StatusOK || tok != "rune_secret_value" {
-		t.Fatalf("first get expected 200+token, got %d %q", code, tok)
+	code, cookie := get("abc123")
+	if code != http.StatusNoContent {
+		t.Fatalf("first get expected 204, got %d", code)
 	}
+	if cookie == "" {
+		t.Fatal("claim did not set a refresh cookie")
+	}
+	// The delivered cookie is a usable refresh grant: exchange it at the refresh
+	// endpoint for an access token (the browser's first-token flow).
+	{
+		req, _ := http.NewRequest(http.MethodPost, e.ts.URL+refreshMountPath, nil)
+		req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: cookie})
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("refresh with handoff cookie: %v", err)
+		}
+		sc := resp.StatusCode
+		resp.Body.Close()
+		if sc != http.StatusOK {
+			t.Fatalf("handoff cookie should refresh to an access token, got %d", sc)
+		}
+	}
+
 	// Single use: second get is 404.
 	if code, _ := get("abc123"); code != http.StatusNotFound {
 		t.Fatalf("second get expected 404, got %d", code)
 	}
 	// TTL expiry (store TTL is 50ms in the test env).
-	post("expiring", "rune_x")
+	post("expiring", e.rootToken)
 	time.Sleep(80 * time.Millisecond)
 	if code, _ := get("expiring"); code != http.StatusNotFound {
 		t.Fatalf("expired get expected 404, got %d", code)

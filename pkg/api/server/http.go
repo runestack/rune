@@ -114,6 +114,7 @@ func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
 	if s.handoff == nil {
 		s.handoff = newHandoffStore(s.options.UI.HandoffTTL)
 	}
+	s.ensureRefreshManager()
 
 	mux := http.NewServeMux()
 
@@ -128,6 +129,9 @@ func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
 	// CLI token handoff.
 	mux.Handle(handoffMountPrefix, s.handoffHandler())
 
+	// RUNE-201 session refresh (plain HTTP so Set-Cookie is emitted natively).
+	mux.HandleFunc(refreshMountPath, s.refreshHandler())
+
 	// Exec WebSocket bridge (RUNE-200C §3) — browser exec, since bidi gRPC
 	// isn't browser-callable.
 	mux.Handle(execWSPath, s.execWSHandler())
@@ -139,6 +143,10 @@ func (s *APIServer) buildHTTPHandler() (http.Handler, error) {
 		return nil, fmt.Errorf("build UI handler: %w", err)
 	}
 	mux.Handle(mountPath+"/", uiHandler)
+	// Minimal sign-in page handling the CLI→browser handoff (RUNE-201). Exact
+	// path, so it takes precedence over the SPA subtree handler above. The full
+	// SPA will later own this route.
+	mux.HandleFunc(mountPath+"/login", s.uiLoginHandler(mountPath))
 	// /ui (no trailing slash) → /ui/
 	mux.HandleFunc(mountPath, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, mountPath+"/", http.StatusFound)
@@ -220,7 +228,7 @@ func (s *APIServer) uiAccessMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
-		tok, err := repos.NewTokenRepo(s.store).FindBySecret(r.Context(), token)
+		tok, err := repos.NewTokenRepo(s.store).FindRequestBearer(r.Context(), token)
 		if err != nil {
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
@@ -238,14 +246,32 @@ func (s *APIServer) uiAccessMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// isPublicGRPCPath reports whether an RPC reached over the transcoder is
-// intentionally reachable without authentication — mirroring the gRPC auth
-// interceptor's exemptions so the dashboard login screen can probe the server
-// version and run bootstrap before a token exists.
-func isPublicGRPCPath(p string) bool {
-	return strings.HasSuffix(p, "/rune.api.HealthService/GetServerVersion") ||
-		strings.HasSuffix(p, "/rune.api.AdminService/AdminBootstrap")
+// publicMethodSuffixes are the gRPC methods reachable without a request bearer:
+// either intentionally public (version probe, bootstrap) or self-authenticating
+// on their own payload (RUNE-201 refresh / enrollment redeem). Defined once and
+// consulted by the auth interceptor, the rbac interceptor, AND the dashboard
+// transcoder gate (isPublicGRPCPath), so the exemption set cannot drift between
+// the native-gRPC and HTTP transports. HasSuffix matches both the exact gRPC
+// full-method ("/rune.api.X/M") and the transcoder path ("/grpc/rune.api.X/M").
+var publicMethodSuffixes = []string{
+	"/rune.api.HealthService/GetServerVersion",
+	"/rune.api.AdminService/AdminBootstrap",
+	"/rune.api.AuthService/Refresh",
+	"/rune.api.AuthService/RedeemEnrollment",
 }
+
+func isPublicMethod(fullMethod string) bool {
+	for _, suffix := range publicMethodSuffixes {
+		if strings.HasSuffix(fullMethod, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPublicGRPCPath reports whether an RPC reached over the transcoder bypasses
+// the dashboard ui:access gate, mirroring the gRPC interceptor exemptions.
+func isPublicGRPCPath(p string) bool { return isPublicMethod(p) }
 
 // bearerFromRequest extracts a bearer token from the Authorization header.
 func bearerFromRequest(r *http.Request) string {
@@ -309,6 +335,8 @@ func routeClass(p, uiPrefix string) string {
 		return "grpc"
 	case strings.HasPrefix(p, handoffMountPrefix):
 		return "handoff"
+	case p == refreshMountPath:
+		return "refresh"
 	case p == execWSPath:
 		return "exec"
 	case p == "/healthz" || p == "/readyz":
