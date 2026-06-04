@@ -1,0 +1,11 @@
+.logwell { background: var(--inset); border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono); font-size: 12.5px; line-height: 1.7; overflow: hidden; }
+.logline { display: flex; gap: 14px; padding: 1px 18px; }
+.logline:hover { background: rgba(255, 255, 255, 0.02); }
+.logline .lt { color: var(--text-4); flex: none; width: 96px; white-space: nowrap; }
+.logline .lv { flex: none; width: 46px; font-weight: 600; white-space: nowrap; }
+.logline .lv.info { color: var(--net); }
+.logline .lv.warn { color: var(--deploy); }
+.logline .lv.error { color: var(--fail); }
+.logline .lv.debug { color: var(--text-3); }
+.logline .lsvc { color: var(--accent-text); flex: none; width: 110px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.logline .lm { color: var(--text); flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }

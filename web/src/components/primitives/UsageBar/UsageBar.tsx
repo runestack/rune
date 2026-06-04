@@ -3,7 +3,7 @@ import "./UsageBar.css";
 export interface UsageBarProps {
   /** 0–100 */
   v: number;
-  w?: number;
+  w?: number | string;
 }
 
 /** Neutral gray until it matters: amber past 75%, red past 88%. */
