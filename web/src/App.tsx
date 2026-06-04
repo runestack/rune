@@ -15,6 +15,7 @@ import { Storage } from "./screens/Storage";
 import { Networking } from "./screens/Networking";
 import { Identity } from "./screens/Identity";
 import { Logs } from "./screens/Logs";
+import { Secrets } from "./screens/Secrets";
 
 const NAV: NavGroup[] = [
   {
@@ -86,6 +87,7 @@ export function App() {
     case "instances": screen = <Instances openSvc={openSvc} />; break;
     case "namespaces": screen = <Namespaces go={go} />; break;
     case "storage": screen = <Storage />; break;
+    case "secrets": screen = <Secrets />; break;
     case "network": screen = <Networking />; break;
     case "logs": screen = <Logs initialSvc={logsSvc} />; break;
     case "identity": screen = <Identity />; break;
