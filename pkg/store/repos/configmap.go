@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,13 +116,7 @@ func (r *ConfigmapRepo) ListVersions(ctx context.Context, namespace, name string
 	}
 	// Store order is newest-first by storage timestamp; ensure strict descending
 	// Version ordering for stable callers.
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].Version > out[i].Version {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Version > out[j].Version })
 	return out, nil
 }
 

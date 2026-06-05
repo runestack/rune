@@ -933,6 +933,10 @@ func runDeleteConfigmap(ctx context.Context, name string, opts *deleteOptions) e
 	defer apiClient.Close()
 	cc := client.NewConfigmapClient(apiClient)
 	if err := cc.DeleteConfigmap(opts.namespace, name); err != nil {
+		if opts.ignoreNotFound && strings.Contains(err.Error(), "not found") {
+			fmt.Printf("Config %s/%s not found (ignored)\n", opts.namespace, name)
+			return nil
+		}
 		return err
 	}
 	fmt.Printf("Config %s/%s deleted\n", opts.namespace, name)

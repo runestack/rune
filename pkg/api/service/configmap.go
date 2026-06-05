@@ -167,7 +167,7 @@ func (s *ConfigmapService) ListConfigmapVersions(ctx context.Context, req *gener
 	namespace := types.NS(req.Namespace)
 	versions, err := s.repo.ListVersions(ctx, namespace, req.Name)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list versions: %v", err)
+		return nil, status.Errorf(codes.NotFound, "list versions: %v", err)
 	}
 	out := make([]*generated.Configmap, 0, len(versions))
 	for _, c := range versions {
@@ -196,7 +196,7 @@ func (s *ConfigmapService) RollbackConfigmap(ctx context.Context, req *generated
 		return nil, status.Errorf(codes.NotFound, "configmap not found: %s/%s", namespace, req.Name)
 	}
 	if toVersion == current.Version {
-		return nil, status.Errorf(codes.InvalidArgument, "configmap %s/%s is already at version %d", namespace, req.Name, toVersion)
+		return nil, status.Errorf(codes.FailedPrecondition, "version %d is already HEAD", toVersion)
 	}
 	rolled, err := s.repo.Rollback(ctx, namespace, req.Name, toVersion, store.WithSource(store.EventSourceAPI))
 	if err != nil {
@@ -233,6 +233,9 @@ func (s *ConfigmapService) ListConfigmaps(ctx context.Context, req *generated.Li
 }
 
 func toProtoConfigmap(c *types.Configmap) *generated.Configmap {
+	if c == nil {
+		return nil
+	}
 	return &generated.Configmap{
 		Name:      c.Name,
 		Namespace: c.Namespace,
