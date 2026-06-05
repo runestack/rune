@@ -3,4 +3,3 @@ dist/
 src/gen/
 *.tsbuildinfo
 .env.local
-design-ref/
