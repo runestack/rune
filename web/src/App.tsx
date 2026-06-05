@@ -8,11 +8,12 @@ import { DEVTOOLS } from "./lib/devtools";
 import { ScopeProvider } from "./lib/scope";
 import { ContextSwitcher } from "./ContextSwitcher";
 import { ScopeIndicator } from "./ScopeIndicator";
-import type { Service } from "./api/types";
+import type { Instance, Service } from "./api/types";
 import { Overview } from "./screens/Overview";
 import { Services } from "./screens/Services";
 import { Instances } from "./screens/Instances";
 import { ServiceDrawer } from "./screens/ServiceDrawer";
+import { InstanceDrawer } from "./screens/InstanceDrawer";
 import { Namespaces } from "./screens/Namespaces";
 import { Storage } from "./screens/Storage";
 import { Networking } from "./screens/Networking";
@@ -77,6 +78,7 @@ export function App({ user, onLogout }: AppProps) {
   const [t, setTweak] = useTweaks();
   const [route, setRoute] = useState("overview");
   const [svc, setSvc] = useState<Service | null>(null);
+  const [inst, setInst] = useState<Instance | null>(null);
   const [logsSvc, setLogsSvc] = useState<string | null>(null);
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try { return localStorage.getItem("rune-nav-collapsed") === "1"; } catch { return false; }
@@ -106,16 +108,19 @@ export function App({ user, onLogout }: AppProps) {
     if (r === "logs" && arg) setLogsSvc(arg.name);
     setRoute(r);
     setSvc(null);
+    setInst(null);
     const c = document.querySelector(".content");
     if (c) c.scrollTop = 0;
   }
-  const openSvc = (s: Service) => setSvc(s);
+  // Service and instance drawers are mutually exclusive.
+  const openSvc = (s: Service) => { setInst(null); setSvc(s); };
+  const openInst = (i: Instance) => { setSvc(null); setInst(i); };
 
   let screen;
   switch (route) {
     case "overview": screen = <Overview go={go} openSvc={openSvc} />; break;
     case "services": screen = <Services openSvc={openSvc} />; break;
-    case "instances": screen = <Instances openSvc={openSvc} />; break;
+    case "instances": screen = <Instances openInst={openInst} />; break;
     case "namespaces": screen = <Namespaces go={go} />; break;
     case "storage": screen = <Storage />; break;
     case "secrets": screen = <Secrets />; break;
@@ -158,10 +163,11 @@ export function App({ user, onLogout }: AppProps) {
       </AppShell>
 
       {searchOpen && (
-        <SearchPalette nav={NAV} onClose={() => setSearchOpen(false)} go={go} openSvc={openSvc} />
+        <SearchPalette nav={NAV} onClose={() => setSearchOpen(false)} go={go} openSvc={openSvc} openInst={openInst} />
       )}
 
-      {svc && <ServiceDrawer svc={svc} onClose={() => setSvc(null)} go={go} />}
+      {svc && <ServiceDrawer svc={svc} onClose={() => setSvc(null)} go={go} openInst={openInst} />}
+      {inst && <InstanceDrawer inst={inst} onClose={() => setInst(null)} go={go} openSvc={openSvc} />}
 
       {DEVTOOLS && (
         <TweaksPanel>

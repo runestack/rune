@@ -76,6 +76,13 @@ a {
   background: var(--border-faint);
   margin: 22px 0;
 }
+/* metric captions (service / instance drawer CPU·memory) */
+.metric-cap { margin-top: 9px; font-size: 11.5px; color: var(--text-3); font-family: var(--mono); }
+.metric-empty { font-size: 12.5px; color: var(--text-4); font-style: italic; padding: 4px 0; }
+/* instance drawer title + service back-link */
+.inst-title { font-family: var(--mono); font-size: 18px; font-weight: 500; margin: 0; letter-spacing: -0.01em; color: var(--text); word-break: break-all; }
+.inst-link { color: var(--accent-text); cursor: pointer; border-bottom: 1px dotted var(--accent-line); }
+.inst-link:hover { border-bottom-style: solid; }
 .empty {
   text-align: center;
   color: var(--text-3);
