@@ -10,7 +10,7 @@ import (
 )
 
 // handoffStore is the short-lived, in-memory token store backing the
-// `rune ui login` CLI handoff flow (RUNE-200). The CLI POSTs its bearer token
+// `rune ui` CLI handoff flow (RUNE-200). The CLI POSTs its bearer token
 // against a one-time code; the browser SPA GETs it exactly once to seed its
 // session. Codes are single-use and expire after a TTL. Nothing is persisted —
 // a daemon restart drops all pending handoffs, which is the desired behaviour.

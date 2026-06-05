@@ -52,7 +52,7 @@ const uiLoginPageTemplate = `<!doctype html>
   var cont = document.getElementById('continue');
   var code = new URLSearchParams(location.search).get('handoff');
   if (!code) {
-    status.innerHTML = 'Run <code>rune ui login</code> from your terminal to sign in.';
+    status.innerHTML = 'Run <code>rune ui</code> from your terminal to sign in.';
     return;
   }
   try {
@@ -61,7 +61,7 @@ const uiLoginPageTemplate = `<!doctype html>
       status.textContent = 'Signed in — your dashboard session is active.';
       cont.style.display = 'inline-block';
     } else {
-      status.innerHTML = 'This sign-in link is invalid or expired. Run <code>rune ui login</code> again.';
+      status.innerHTML = 'This sign-in link is invalid or expired. Run <code>rune ui</code> again.';
     }
   } catch (e) {
     status.textContent = 'Sign-in failed: ' + e;

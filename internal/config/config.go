@@ -39,7 +39,7 @@ type UI struct {
 	Enabled bool `yaml:"enabled"`
 	// Path is the mount point for the dashboard. Defaults to "/ui".
 	Path string `yaml:"path"`
-	// HandoffEnabled allows the `rune ui login` CLI token-handoff flow
+	// HandoffEnabled allows the `rune ui` CLI token-handoff flow
 	// (POST /v1/ui/handoff/{code}). Defaults to true.
 	HandoffEnabled bool `yaml:"handoff_enabled"`
 	// HandoffTTL bounds the lifetime of a one-time handoff code.
