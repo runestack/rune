@@ -18,6 +18,15 @@ jobs:
         with:
           go-version: '1.25.x'
           check-latest: true
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build dashboard bundle
+        # Emits the hashed Vite bundle into pkg/api/server/uiassets/dist/assets
+        # so the following `go build` embeds the real dashboard, not the
+        # committed placeholder index.html (dist/assets is gitignored).
+        run: make ui
       - name: Determine release type
         id: release-type
         run: |
