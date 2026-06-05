@@ -134,7 +134,7 @@ func runUITunnel(ctx context.Context, token string, noOpen bool) error {
 	pf := client.NewPortForwardClient(apiClient)
 	sess, _, err := pf.Open(ctx, client.PortForwardTarget{
 		ControlPlane: true,
-		Ports:        []uint32{uint32(config.DefaultHTTPPort)},
+		Ports:        []uint32{uint32(config.DefaultHTTPPort)}, //nolint:gosec // G115: DefaultHTTPPort is a small constant
 	})
 	if err != nil {
 		return fmt.Errorf("open dashboard tunnel (is the dashboard enabled on the server?): %w", err)
@@ -170,7 +170,7 @@ func runUITunnel(ctx context.Context, token string, noOpen bool) error {
 			if aerr != nil {
 				return
 			}
-			go handleLocalConn(ctx, sess, router, c, uint16(config.DefaultHTTPPort))
+			go handleLocalConn(ctx, sess, router, c, uint16(config.DefaultHTTPPort)) //nolint:gosec // G115: DefaultHTTPPort is a small constant
 		}
 	}()
 
