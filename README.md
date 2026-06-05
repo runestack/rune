@@ -13,6 +13,7 @@ Rune is a lightweight, powerful orchestration platform designed to simplify the 
 - **Dependency-aware**: Automatically manage service dependencies
 - **Multi-node**: Scale across multiple nodes
 - **Built-in security**: Authentication, authorization, and encryption
+- **Web dashboard**: Embedded browser dashboard for live cluster ops — services, logs, exec, secrets, RBAC
 - **Interactive debugging**: Exec into running services for real-time debugging
 - **Health monitoring**: Built-in health checks and probes
 - **Rollback support**: Version history and instant rollbacks
@@ -165,6 +166,75 @@ You now have a fully configured Rune system with:
 - Keep bootstrap tokens secure - they have full admin access
 - Delete bootstrap tokens after creating regular users
 - Implement least-privilege policies for production use
+
+## Dashboard & remote access
+
+Runed ships an embedded **web dashboard** (enabled by default) for live cluster
+operations — services, instances, logs, exec, secrets, networking and RBAC. It's
+served by the server alongside the API:
+
+| Port | Used by | Purpose |
+| --- | --- | --- |
+| `:7863` | the `rune` CLI | gRPC API |
+| `:7861` | your browser | dashboard (`/ui`) + same-origin `/grpc` and `/v1` |
+
+Relevant `runefile` config (defaults shown):
+
+```yaml
+server:
+  grpc_address: ":7863"
+  http_address: ":7861"
+ui:
+  enabled: true          # serve the dashboard
+  path: "/ui"
+  require_tls: true      # refuse plaintext on a non-loopback address
+auth:
+  allow_remote_admin: false   # admin ops (users/tokens/policies/bootstrap) are localhost-only
+```
+
+### Open the dashboard
+
+```bash
+rune ui
+```
+
+`rune ui` signs the browser in with your current CLI session (no token copy-paste)
+and **tunnels the dashboard over the authenticated control-plane connection**,
+opening it on a local address. No exposed port, no SSH, and it satisfies the
+default `require_tls` (the browser hits loopback). It stays running until Ctrl-C.
+For a TLS-fronted deployment with a real domain, skip the tunnel and hand off
+directly:
+
+```bash
+rune ui --url https://rune.example.com
+```
+
+### Running the CLI against a remote server
+
+The CLI is a thin client; point it at a remote `runed` and everyday operations
+(deploy, scale, logs, exec, secrets, port-forward) work over gRPC:
+
+```bash
+rune login --server <host>     # CLI → host:7863
+rune ui                        # open the dashboard, tunnelled to localhost
+```
+
+Two things to know for remote setups:
+
+- **Bootstrap and admin are localhost-only by default.** Run the initial
+  `rune admin bootstrap` _on the server_, create a token, then log in with it
+  from your machine. To manage users / tokens / RBAC remotely (CLI or
+  dashboard), set `auth.allow_remote_admin: true` — and use TLS when you do.
+- **Use TLS over the public internet.** `require_tls` makes the dashboard refuse
+  plaintext on a non-loopback address; `rune ui`'s loopback tunnel sidesteps
+  this for ad-hoc access, but production should terminate TLS with a real domain.
+
+To reach a deployed service (e.g. a database) from your machine, tunnel it
+through the control plane:
+
+```bash
+rune port-forward postgres 5432
+```
 
 ## Core Concepts
 
@@ -557,9 +627,7 @@ User-facing documentation lives at **[docs.runestack.io](https://docs.runestack.
 Repo-local references:
 
 - [Examples](examples/README.md)
-- [Development Guide](.cursor/rules/development-guide.mdc)
-- [Architecture Guide](.cursor/rules/architecture-guide.mdc)
-- [CLI Commands](.cursor/rules/cli-commands.mdc)
+- [Contributing](CONTRIBUTING.md)
 
 ## Contributing
 
