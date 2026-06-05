@@ -1,13 +1,23 @@
 import { useState } from "react";
 import { Alert, Badge, Button, Card, Dot, Drawer, Icon, KeyValue, Replicas, Spinner, Table, Tabs, Tag, UsageBar, useConfirm } from "../components";
-import type { Service } from "../api/types";
+import type { Instance, Service } from "../api/types";
 import { useServiceInstances } from "../api/hooks";
 import { clients } from "../api/transport";
 import { ScalingMode } from "../gen/pkg/api/proto/service_pb";
 
-export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () => void; go: (r: string, arg?: Service) => void }) {
+export function ServiceDrawer({ svc, onClose, go, openInst }: { svc: Service; onClose: () => void; go: (r: string, arg?: Service) => void; openInst?: (i: Instance) => void }) {
   const [tab, setTab] = useState("overview");
   const { data: insts, loading: instLoading, reload: reloadInsts } = useServiceInstances(svc.name, svc.ns);
+
+  // Honest per-instance metrics: average across instances that report usage,
+  // with a peak callout — not one ambiguous service-level aggregate.
+  const metricInsts = insts.filter((i) => i.cpu > 0 || i.mem > 0);
+  const n = metricInsts.length;
+  const avg = (arr: number[]) => (n ? Math.round(arr.reduce((a, b) => a + b, 0) / n) : 0);
+  const avgCpu = avg(metricInsts.map((i) => i.cpu));
+  const avgMem = avg(metricInsts.map((i) => i.mem));
+  const peakCpu = n ? Math.max(...metricInsts.map((i) => i.cpu)) : 0;
+  const peakMem = n ? Math.max(...metricInsts.map((i) => i.mem)) : 0;
   const [busy, setBusy] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
   const confirm = useConfirm();
@@ -110,7 +120,6 @@ export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () 
           tabs={[
             { id: "overview", label: "Overview" },
             { id: "instances", label: `Instances (${insts.length})` },
-            { id: "logs", label: "Logs" },
             { id: "networking", label: "Networking" },
           ]}
           active={tab}
@@ -120,8 +129,18 @@ export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () 
         {tab === "overview" && (
           <div className="fadein">
             <div className="grid g-2" style={{ marginBottom: 20 }}>
-              <Card pad><div className="eyebrow" style={{ marginBottom: 12 }}>CPU</div><UsageBar v={svc.cpu} w={130} /></Card>
-              <Card pad><div className="eyebrow" style={{ marginBottom: 12 }}>Memory</div><UsageBar v={svc.mem} w={130} /></Card>
+              <Card pad>
+                <div className="eyebrow" style={{ marginBottom: 12 }}>CPU</div>
+                {n ? (
+                  <><UsageBar v={avgCpu} w={130} /><div className="metric-cap">{n > 1 ? `avg / instance · peak ${peakCpu}%` : "single instance"}</div></>
+                ) : <div className="metric-empty">no running instances</div>}
+              </Card>
+              <Card pad>
+                <div className="eyebrow" style={{ marginBottom: 12 }}>Memory</div>
+                {n ? (
+                  <><UsageBar v={avgMem} w={130} /><div className="metric-cap">{n > 1 ? `avg / instance · peak ${peakMem}%` : "single instance"}</div></>
+                ) : <div className="metric-empty">no running instances</div>}
+              </Card>
             </div>
             <KeyValue>
               <dt>Status</dt><dd><Badge s={svc.status} /></dd>
@@ -150,11 +169,11 @@ export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () 
                 <thead><tr><th>Instance</th><th>Node</th><th>CPU</th><th>Mem</th><th>Restarts</th><th>Status</th></tr></thead>
                 <tbody>
                   {insts.map((i) => (
-                    <tr key={i.id}>
+                    <tr key={i.id} onClick={() => openInst?.(i)} style={{ cursor: openInst ? "pointer" : "default" }}>
                       <td><div className="cell-name" style={{ fontWeight: 500 }}><Dot s={i.status} /><span className="mono" style={{ fontSize: 12 }}>{i.id}</span></div></td>
                       <td className="cell-sub">{i.node}</td>
-                      <td className="num">{i.cpu}%</td>
-                      <td className="num">{i.mem}%</td>
+                      <td className="num">{i.status === "fail" ? "—" : `${i.cpu}%`}</td>
+                      <td className="num">{i.status === "fail" ? "—" : `${i.mem}%`}</td>
                       <td className="num">{i.restarts}</td>
                       <td><Badge s={i.status} /></td>
                     </tr>
@@ -163,15 +182,6 @@ export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () 
               </Table>
             )}
           </Card>
-        )}
-
-        {tab === "logs" && (
-          <div className="fadein">
-            <p style={{ fontSize: 12.5, color: "var(--text-3)", margin: "0 0 14px", lineHeight: 1.6 }}>
-              Open <b>Logs &amp; Exec</b> for the live stream.{" "}
-              <span style={{ color: "var(--accent-text)", cursor: "pointer" }} onClick={() => { onClose(); go("logs", svc); }}>Stream {svc.name} logs →</span>
-            </p>
-          </div>
         )}
 
         {tab === "networking" && (

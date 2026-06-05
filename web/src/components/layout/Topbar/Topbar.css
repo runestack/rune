@@ -2,6 +2,7 @@
   height: 56px; flex: none; border-bottom: 1px solid var(--border); display: flex; align-items: center;
   gap: 14px; padding: 0 26px; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(8px);
 }
+.topbar-toggle { margin-right: 4px; }
 .crumb { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text-2); }
 .crumb b { color: var(--text); font-weight: 600; }
 .crumb .sep { color: var(--text-4); }

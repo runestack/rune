@@ -16,6 +16,7 @@ export * from "./inputs/Dropdown";
 export * from "./inputs/Segmented";
 export * from "./inputs/Tabs";
 export * from "./inputs/Search";
+export * from "./inputs/SearchPalette";
 export * from "./inputs/Field";
 export * from "./inputs/TextInput";
 export * from "./inputs/Select";

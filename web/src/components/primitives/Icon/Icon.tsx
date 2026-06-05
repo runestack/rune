@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 /** Line-glyph icon set (24×24, stroke-based). */
 export const ICON_PATHS = {
   overview: "M3 13h8V3H3v10zm10 8h8V11h-8v10zM3 21h8v-6H3v6zM13 3v6h8V3h-8z",
-  services: "M4 4h7v7H4zM13 13h7v7h-7zM13 4h7v5h-7zM4 13h7v7H4z",
+  services: "M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12.01l8.73-5.05M12 22.08V12",
   instances: "M3 6h18M3 12h18M3 18h18",
   namespaces: "M3 7l9-4 9 4-9 4-9-4zM3 12l9 4 9-4M3 17l9 4 9-4",
   storage:
@@ -17,6 +17,10 @@ export const ICON_PATHS = {
   search: "M11 19a8 8 0 100-16 8 8 0 000 16zM21 21l-4.3-4.3",
   chevron: "M9 6l6 6-6 6",
   chevrond: "M6 9l6 6 6-6",
+  chevleft: "M15 6l-6 6 6 6",
+  panel: "M4 4h16v16H4zM9 4v16",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7zM12 15a3 3 0 100-6 3 3 0 000 6z",
+  eyeoff: "M3 3l18 18M10.6 10.6a3 3 0 004.2 4.2M9.7 5.2A9.6 9.6 0 0112 5c6.4 0 10 7 10 7a16.7 16.7 0 01-3.4 4.1M6.3 6.3A16.6 16.6 0 002 12s3.6 7 10 7a9.5 9.5 0 003.9-.8",
   plus: "M12 5v14M5 12h14",
   bolt: "M13 2L4.5 13.5H11l-1 8.5L19.5 10H13z",
   refresh: "M21 12a9 9 0 11-2.6-6.4M21 3v6h-6",

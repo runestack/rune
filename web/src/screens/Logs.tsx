@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Dot, Dropdown, Icon, PageHead, Segmented, Tooltip } from "../components";
+import { Dot, Dropdown, Icon, Segmented, Tooltip } from "../components";
 import type { Instance, Service } from "../api/types";
 import { useInstances, useServices } from "../api/hooks";
 import { openExecSession, streamLogs, type ExecSession, type LiveLogLine } from "../api/streams";
@@ -205,7 +205,7 @@ function LiveLogsView({ svc, instId, ns }: { svc: string; instId: string | null;
   const detected = lines.length ? lines[lines.length - 1].fmt : "plain";
 
   return (
-    <div className="fadein">
+    <div className="fadein logsview">
       <div style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         <Segmented options={["all", "info", "warn", "error", "debug"]} value={level} onChange={setLevel} />
         <Segmented options={[{ value: "pretty", label: "Pretty" }, { value: "raw", label: "Raw" }]} value={pretty ? "pretty" : "raw"} onChange={(v) => setPretty(v === "pretty")} />
@@ -225,20 +225,28 @@ function LiveLogsView({ svc, instId, ns }: { svc: string; instId: string | null;
         <span className="c-prompt">$</span> rune logs {target} {tail ? "--follow" : ""}{level !== "all" ? ` --grep=${level}` : ""}{!pretty ? " -o raw" : ""}{" "}
         <span style={{ color: "var(--text-4)" }}># {instId ? "single instance" : "aggregated across the service's instances"}</span>
       </div>
-      <div className="logwell" ref={wellRef} onScroll={onScroll} style={{ height: 430, overflowY: "auto" }}>
+      <div className="logwell grow" ref={wellRef} onScroll={onScroll} style={{ overflowY: "auto" }}>
         {error ? (
           <div className="logtop"><span className="logtop-end" style={{ color: "var(--fail)" }}>stream error: {error}</span></div>
         ) : shown.length === 0 ? (
           <div className="logtop"><span className="logtop-end">{connected ? "— no log lines yet —" : "connecting to log stream…"}</span></div>
         ) : null}
-        {shown.map((l, i) => (
-          <div className="logline" key={i}>
-            <span className="lt">{l.ts}</span>
-            <span className={`lv ${l.level}`}>{l.level.toUpperCase()}</span>
-            <span className="lsvc">{l.origin}</span>
-            <span className="lm">{pretty ? <PrettyLine l={l} /> : l.raw}</span>
-          </div>
-        ))}
+        {shown.map((l, i) =>
+          pretty ? (
+            <div className="logline" key={i}>
+              <span className="lt">{l.ts}</span>
+              <span className={`lv ${l.level}`}>{l.level.toUpperCase()}</span>
+              <span className="lsvc">{l.origin}</span>
+              <span className="lm"><PrettyLine l={l} /></span>
+            </div>
+          ) : (
+            // Raw drops the timestamp/level/origin prefix columns — just the
+            // unaltered log line, the way `rune logs … -o raw` prints it.
+            <div className="logline raw" key={i}>
+              <span className="lm">{l.raw}</span>
+            </div>
+          ),
+        )}
       </div>
       <div className="logmeta">
         <span>{shown.length} lines</span>
@@ -378,9 +386,9 @@ function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | n
     setInput(idx >= cmdHist.length ? "" : cmdHist[idx]);
   }
   return (
-    <div className="fadein">
+    <div className="fadein execview">
       <div className="cmdline"><span className="c-prompt">$</span> rune exec {instId || svc} <span style={{ color: "var(--text-4)" }}># {instId ? "pinned instance" : "attaches to a healthy instance"} · WS bridge</span></div>
-      <div className="term" ref={wellRef} onClick={() => inputRef.current?.focus()}>
+      <div className="term grow" ref={wellRef} onClick={() => inputRef.current?.focus()}>
         {hist.map((h, i) => <TermLine key={i} item={h} />)}
         {!closed ? (
           <div className="term-input-row">
@@ -424,13 +432,12 @@ export function Logs({ initialSvc }: { initialSvc?: string | null }) {
   const ns = services.find((s) => s.name === svc)?.ns || "default";
 
   return (
-    <div className="wrap" style={{ maxWidth: 1100 }}>
-      <PageHead
-        eyebrow={mode === "logs" ? "rune logs · live stream" : "rune exec · interactive shell"}
-        title="Logs <em>&</em> Exec"
-        sub="Logs and exec operate on instances. Target a service to aggregate (logs) or pick a healthy instance (exec), or pin a specific instance."
-      />
-      <div style={{ display: "flex", gap: 12, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+    <div className="logs-screen">
+      <div className="logs-head">
+        <div className="lh-id">
+          <div className="eyebrow">{mode === "logs" ? "rune logs · live stream" : "rune exec · interactive shell"}</div>
+          <h1 className="lh-title">Logs <em>&amp;</em> Exec</h1>
+        </div>
         <Segmented options={[{ value: "logs", label: "Logs" }, { value: "exec", label: "Exec" }]} value={mode} onChange={setMode} />
         <ServicePicker svc={svc} onPick={pickSvc} services={services} />
         <ScopePicker mode={mode} svc={svc} inst={inst} setInst={setInst} instances={instances} />

@@ -1,0 +1,255 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Icon, type IconName } from "../../primitives/Icon";
+import { Dot } from "../../primitives/Dot";
+import type { NavGroup } from "../../layout/Sidebar";
+import type { StatusKey } from "../../../lib/status";
+import type { Instance, Service } from "../../../api/types";
+import {
+  useServices, useInstances, useNamespaces, useVolumes, useSecrets,
+  useConfigmaps, usePolicies, useRoles, usePrincipals, useNodes,
+} from "../../../api/hooks";
+import "./SearchPalette.css";
+
+interface PaletteCtx {
+  go: (id: string, arg?: Service) => void;
+  openSvc: (s: Service) => void;
+  openInst: (i: Instance) => void;
+}
+
+interface PaletteItem {
+  cat: string;
+  icon: IconName;
+  label: string;
+  sub: string;
+  status?: StatusKey;
+  mono?: boolean;
+  tag: string;
+  kw: string;
+  run: (ctx: PaletteCtx) => void;
+}
+
+const CAT_ORDER = [
+  "Pages", "Services", "Instances", "Namespaces", "Storage",
+  "Secrets & Config", "Networking", "Identity & RBAC", "Nodes",
+];
+
+export interface SearchPaletteProps {
+  nav: NavGroup[];
+  onClose: () => void;
+  go: (id: string, arg?: Service) => void;
+  openSvc: (s: Service) => void;
+  openInst: (i: Instance) => void;
+}
+
+function scoreItem(it: PaletteItem, q: string): number {
+  const l = it.label.toLowerCase();
+  if (l === q) return 100;
+  if (l.startsWith(q)) return 80;
+  if ((" " + it.kw).includes(" " + q)) return 60;
+  if (it.kw.includes(q)) return 40;
+  return -1;
+}
+
+export function SearchPalette({ nav, onClose, go, openSvc, openInst }: SearchPaletteProps) {
+  // Live data — these hooks fetch when the palette mounts (i.e. on open).
+  const services = useServices();
+  const instances = useInstances();
+  const namespaces = useNamespaces();
+  const volumes = useVolumes();
+  const secrets = useSecrets();
+  const configmaps = useConfigmaps();
+  const policies = usePolicies();
+  const roles = useRoles();
+  const principals = usePrincipals();
+  const nodes = useNodes();
+
+  const index = useMemo<PaletteItem[]>(() => {
+    const out: PaletteItem[] = [];
+    nav.forEach((g) =>
+      g.items.forEach((it) =>
+        out.push({
+          cat: "Pages", icon: it.icon, label: it.label, sub: g.group, tag: "page",
+          kw: `${it.label} ${g.group}`.toLowerCase(),
+          run: ({ go }) => go(it.id),
+        }),
+      ),
+    );
+    services.data.forEach((s) =>
+      out.push({
+        cat: "Services", icon: "services", label: s.name, sub: `${s.ns} · ${s.type}`, status: s.status, tag: s.type,
+        kw: `${s.name} ${s.ns} ${s.type} ${s.image}`.toLowerCase(),
+        run: ({ go, openSvc }) => { go("services"); openSvc(s); },
+      }),
+    );
+    instances.data.forEach((i) =>
+      out.push({
+        cat: "Instances", icon: "instances", label: i.id, sub: `${i.svc} · ${i.node}`, status: i.status, mono: true, tag: "instance",
+        kw: `${i.id} ${i.svc} ${i.node} ${i.ns}`.toLowerCase(),
+        run: ({ go, openInst }) => { go("instances"); openInst(i); },
+      }),
+    );
+    namespaces.data.forEach((n) =>
+      out.push({
+        cat: "Namespaces", icon: "namespaces", label: n.name, sub: `${n.services} services · ${n.instances} instances`, tag: "namespace",
+        kw: `${n.name} ${n.labels.join(" ")}`.toLowerCase(),
+        run: ({ go }) => go("namespaces"),
+      }),
+    );
+    volumes.data.forEach((v) =>
+      out.push({
+        cat: "Storage", icon: "storage", label: v.name, sub: `${v.size} · ${v.ns}`, tag: "volume",
+        kw: `${v.name} ${v.ns} ${v.svc} ${v.class}`.toLowerCase(),
+        run: ({ go }) => go("storage"),
+      }),
+    );
+    secrets.data.forEach((s) =>
+      out.push({
+        cat: "Secrets & Config", icon: "secrets", label: s.name, sub: `secret · ${s.ns}`, tag: "secret",
+        kw: `${s.name} ${s.ns} ${s.type} secret`.toLowerCase(),
+        run: ({ go }) => go("secrets"),
+      }),
+    );
+    configmaps.data.forEach((c) =>
+      out.push({
+        cat: "Secrets & Config", icon: "doc", label: c.name, sub: `configmap · ${c.ns}`, tag: "config",
+        kw: `${c.name} ${c.ns} configmap config`.toLowerCase(),
+        run: ({ go }) => go("secrets"),
+      }),
+    );
+    policies.data.forEach((p) =>
+      out.push({
+        cat: "Networking", icon: "network", label: p.name, sub: `${p.direction} · ${p.ns}`, tag: "policy",
+        kw: `${p.name} ${p.ns} ${p.direction} policy`.toLowerCase(),
+        run: ({ go }) => go("network"),
+      }),
+    );
+    roles.data.forEach((r) =>
+      out.push({
+        cat: "Identity & RBAC", icon: "shield", label: r.name, sub: `role · ${r.scope}`, tag: "role",
+        kw: `${r.name} role rbac ${r.scope}`.toLowerCase(),
+        run: ({ go }) => go("identity"),
+      }),
+    );
+    principals.data.forEach((p) =>
+      out.push({
+        cat: "Identity & RBAC", icon: p.type === "machine" ? "cube" : "identity", label: p.name,
+        sub: `${p.email || p.kind} · ${p.role}`, tag: p.kind,
+        kw: `${p.name} ${p.email} ${p.role} ${p.kind}`.toLowerCase(),
+        run: ({ go }) => go("identity"),
+      }),
+    );
+    nodes.data.forEach((n) =>
+      out.push({
+        cat: "Nodes", icon: "cube", label: n.name, sub: `${n.role} · ${n.addr}`, tag: "node",
+        kw: `${n.name} ${n.role} ${n.addr} node`.toLowerCase(),
+        run: ({ go }) => go("overview"),
+      }),
+    );
+    return out;
+  }, [nav, services.data, instances.data, namespaces.data, volumes.data, secrets.data, configmaps.data, policies.data, roles.data, principals.data, nodes.data]);
+
+  const [q, setQ] = useState("");
+  const [active, setActive] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  useEffect(() => {
+    const id = setTimeout(() => inputRef.current?.focus(), 20);
+    return () => clearTimeout(id);
+  }, []);
+
+  const groups = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    const buckets: Record<string, { it: PaletteItem; sc: number }[]> = {};
+    index.forEach((it) => {
+      const sc = query ? scoreItem(it, query) : it.cat === "Pages" ? 50 : -1;
+      if (sc < 0) return;
+      (buckets[it.cat] = buckets[it.cat] || []).push({ it, sc });
+    });
+    const res: { cat: string; items: PaletteItem[]; more: number }[] = [];
+    CAT_ORDER.forEach((cat) => {
+      if (!buckets[cat]) return;
+      buckets[cat].sort((a, b) => b.sc - a.sc || a.it.label.localeCompare(b.it.label));
+      res.push({ cat, items: buckets[cat].slice(0, 6).map((x) => x.it), more: Math.max(0, buckets[cat].length - 6) });
+    });
+    return res;
+  }, [q, index]);
+
+  const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  useEffect(() => { if (active >= flat.length) setActive(0); }, [flat.length, active]);
+  useEffect(() => {
+    const el = itemRefs.current[active];
+    const c = listRef.current;
+    if (el && c) {
+      const top = el.offsetTop, bot = top + el.offsetHeight;
+      if (top < c.scrollTop) c.scrollTop = top - 8;
+      else if (bot > c.scrollTop + c.clientHeight) c.scrollTop = bot - c.clientHeight + 8;
+    }
+  }, [active]);
+
+  function choose(it: PaletteItem | undefined) {
+    if (!it) return;
+    onClose();
+    it.run({ go, openSvc, openInst });
+  }
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => (flat.length ? (a + 1) % flat.length : 0)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => (flat.length ? (a - 1 + flat.length) % flat.length : 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); choose(flat[active]); }
+    else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+  }
+
+  let fi = -1;
+  return createPortal(
+    <div className="cmdk-scrim" onMouseDown={onClose}>
+      <div className="cmdk" role="dialog" aria-label="Search resources" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="cmdk-search">
+          <Icon name="search" size={16} style={{ color: "var(--text-3)", flex: "none" }} />
+          <input
+            ref={inputRef} value={q}
+            onChange={(e) => { setQ(e.target.value); setActive(0); }}
+            onKeyDown={onKey}
+            placeholder="Search services, instances, namespaces, secrets…"
+            spellCheck={false} autoComplete="off"
+          />
+          <kbd className="cmdk-esc">esc</kbd>
+        </div>
+        <div className="cmdk-list" ref={listRef}>
+          {flat.length === 0 && <div className="cmdk-empty">No resources match “{q}”.</div>}
+          {groups.map((g) => (
+            <div className="cmdk-group" key={g.cat}>
+              <div className="cmdk-grouplabel eyebrow">{g.cat}</div>
+              {g.items.map((it) => {
+                fi++;
+                const idx = fi;
+                return (
+                  <div
+                    key={g.cat + it.label + idx}
+                    ref={(el) => { itemRefs.current[idx] = el; }}
+                    className={"cmdk-item" + (active === idx ? " active" : "")}
+                    onMouseEnter={() => setActive(idx)}
+                    onClick={() => choose(it)}
+                  >
+                    <span className="cmdk-ico">{it.status ? <Dot s={it.status} /> : <Icon name={it.icon} size={15} />}</span>
+                    <span className={"cmdk-label" + (it.mono ? " mono" : "")}>{it.label}</span>
+                    <span className="cmdk-sub">{it.sub}</span>
+                    <span className="cmdk-tag">{it.tag}</span>
+                  </div>
+                );
+              })}
+              {g.more > 0 && <div className="cmdk-more">+{g.more} more — keep typing to narrow</div>}
+            </div>
+          ))}
+        </div>
+        <div className="cmdk-foot">
+          <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+          <span><kbd>↵</kbd> open</span>
+          <span><kbd>esc</kbd> close</span>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
