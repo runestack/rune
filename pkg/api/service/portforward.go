@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
@@ -27,13 +28,20 @@ type PortForwardService struct {
 
 	logger       log.Logger
 	orchestrator orchestrator.Orchestrator
+	// controlPlaneAddr is the loopback host:port of runed's own HTTP
+	// (dashboard) listener. Dialed for control_plane targets so `rune ui`
+	// can tunnel the dashboard. Empty when the HTTP server is disabled.
+	controlPlaneAddr string
 }
 
-// NewPortForwardService constructs a PortForwardService.
-func NewPortForwardService(logger log.Logger, orch orchestrator.Orchestrator) *PortForwardService {
+// NewPortForwardService constructs a PortForwardService. controlPlaneAddr is
+// the loopback address of runed's HTTP/dashboard listener (e.g.
+// "127.0.0.1:7861"), or "" if the HTTP server is not enabled.
+func NewPortForwardService(logger log.Logger, orch orchestrator.Orchestrator, controlPlaneAddr string) *PortForwardService {
 	return &PortForwardService{
-		logger:       logger.WithComponent("portforward-service"),
-		orchestrator: orch,
+		logger:           logger.WithComponent("portforward-service"),
+		orchestrator:     orch,
+		controlPlaneAddr: controlPlaneAddr,
 	}
 }
 
@@ -57,6 +65,20 @@ func (s *PortForwardService) StreamPortForward(stream generated.PortForwardServi
 	initReq, err := s.receiveInit(stream)
 	if err != nil {
 		return err
+	}
+
+	// Control-plane target: no instance to resolve — every Open dials
+	// runed's own HTTP listener (see handleOpen). Send a synthetic Ready
+	// and run the session.
+	if initReq.GetControlPlane() {
+		if err := stream.Send(&generated.PortForwardServerMessage{
+			Message: &generated.PortForwardServerMessage_Ready{
+				Ready: &generated.PortForwardReady{ServiceName: "control-plane"},
+			},
+		}); err != nil {
+			return err
+		}
+		return s.runSession(ctx, stream, initReq)
 	}
 
 	// 2. Resolve the target once for the Ready frame. The binding is
@@ -97,11 +119,24 @@ func (s *PortForwardService) receiveInit(stream generated.PortForwardService_Str
 	if init == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "first message must be Init")
 	}
-	if init.GetServiceName() == "" && init.GetInstanceId() == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "Init must specify service_name or instance_id")
+	targets := 0
+	if init.GetServiceName() != "" {
+		targets++
 	}
-	if init.GetServiceName() != "" && init.GetInstanceId() != "" {
-		return nil, status.Errorf(codes.InvalidArgument, "Init must not specify both service_name and instance_id")
+	if init.GetInstanceId() != "" {
+		targets++
+	}
+	if init.GetControlPlane() {
+		targets++
+	}
+	if targets == 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "Init must specify service_name, instance_id, or control_plane")
+	}
+	if targets > 1 {
+		return nil, status.Errorf(codes.InvalidArgument, "Init must specify exactly one target")
+	}
+	if init.GetControlPlane() && s.controlPlaneAddr == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "control-plane forwarding is unavailable (dashboard HTTP listener disabled)")
 	}
 	return init, nil
 }
@@ -305,16 +340,29 @@ func (s *PortForwardService) handleOpen(
 	}
 	mu.Unlock()
 
-	instance, err := s.resolveTarget(ctx, init)
-	if err != nil {
-		out <- closeMsg(open.ConnId, err.Error())
-		return
-	}
-
-	conn, _, err := s.orchestrator.DialInInstance(ctx, instance.Namespace, instance.ID, open.RemotePort)
-	if err != nil {
-		out <- closeMsg(open.ConnId, err.Error())
-		return
+	var conn net.Conn
+	if init.GetControlPlane() {
+		// Dial runed's own HTTP listener (loopback). remote_port is
+		// ignored — the dashboard lives on the server's configured port.
+		d := net.Dialer{Timeout: 10 * time.Second}
+		c, derr := d.DialContext(ctx, "tcp", s.controlPlaneAddr)
+		if derr != nil {
+			out <- closeMsg(open.ConnId, fmt.Sprintf("dial control-plane: %v", derr))
+			return
+		}
+		conn = c
+	} else {
+		instance, rerr := s.resolveTarget(ctx, init)
+		if rerr != nil {
+			out <- closeMsg(open.ConnId, rerr.Error())
+			return
+		}
+		c, _, derr := s.orchestrator.DialInInstance(ctx, instance.Namespace, instance.ID, open.RemotePort)
+		if derr != nil {
+			out <- closeMsg(open.ConnId, derr.Error())
+			return
+		}
+		conn = c
 	}
 
 	pc := &pfConn{id: open.ConnId, conn: conn}

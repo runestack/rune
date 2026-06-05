@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -68,7 +69,7 @@ func (s *fakePFStream) closeIn() { close(s.inCh) }
 func TestPortForward_InitValidation_NoTarget(t *testing.T) {
 	logger := log.NewLogger()
 	orch := orchestrator.NewFakeOrchestrator()
-	svc := NewPortForwardService(logger, orch)
+	svc := NewPortForwardService(logger, orch, "")
 
 	stream := newFakePFStream(context.Background())
 	stream.inCh <- &generated.PortForwardClientMessage{
@@ -87,7 +88,7 @@ func TestPortForward_InitValidation_NoTarget(t *testing.T) {
 func TestPortForward_InitValidation_BothTargets(t *testing.T) {
 	logger := log.NewLogger()
 	orch := orchestrator.NewFakeOrchestrator()
-	svc := NewPortForwardService(logger, orch)
+	svc := NewPortForwardService(logger, orch, "")
 
 	stream := newFakePFStream(context.Background())
 	stream.inCh <- &generated.PortForwardClientMessage{
@@ -112,7 +113,7 @@ func TestPortForward_InitValidation_BothTargets(t *testing.T) {
 func TestPortForward_NoInstance(t *testing.T) {
 	logger := log.NewLogger()
 	orch := orchestrator.NewFakeOrchestrator()
-	svc := NewPortForwardService(logger, orch)
+	svc := NewPortForwardService(logger, orch, "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -143,7 +144,7 @@ func TestPortForward_EndToEnd_OpenDataClose(t *testing.T) {
 	// finds it via the fake orchestrator's ListRunningInstances().
 	inst := makeFakeRunningInstance(orch, "svc")
 
-	svc := NewPortForwardService(logger, orch)
+	svc := NewPortForwardService(logger, orch, "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -227,6 +228,99 @@ func TestPortForward_EndToEnd_OpenDataClose(t *testing.T) {
 		t.Fatalf("server did not return after closeIn")
 	}
 	_ = inst
+}
+
+// TestPortForward_ControlPlane_Unavailable rejects a control-plane target when
+// no dashboard HTTP listener is configured.
+func TestPortForward_ControlPlane_Unavailable(t *testing.T) {
+	logger := log.NewLogger()
+	orch := orchestrator.NewFakeOrchestrator()
+	svc := NewPortForwardService(logger, orch, "") // no control-plane addr
+
+	stream := newFakePFStream(context.Background())
+	stream.inCh <- &generated.PortForwardClientMessage{
+		Message: &generated.PortForwardClientMessage_Init{
+			Init: &generated.PortForwardInit{
+				Target: &generated.PortForwardInit_ControlPlane{ControlPlane: true},
+			},
+		},
+	}
+
+	err := svc.StreamPortForward(stream)
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
+	}
+}
+
+// TestPortForward_ControlPlane_Dial forwards to a real loopback listener (the
+// stand-in for runed's own HTTP server), proving control_plane bypasses
+// instance resolution and dials the configured control-plane address.
+func TestPortForward_ControlPlane_Dial(t *testing.T) {
+	logger := log.NewLogger()
+	orch := orchestrator.NewFakeOrchestrator()
+
+	// A loopback echo server stands in for runed's HTTP listener.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, aerr := ln.Accept()
+		if aerr != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(conn, conn) // echo
+	}()
+
+	svc := NewPortForwardService(logger, orch, ln.Addr().String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := newFakePFStream(ctx)
+
+	done := make(chan error, 1)
+	go func() { done <- svc.StreamPortForward(stream) }()
+
+	// Init (control_plane) → synthetic Ready, no instance resolution.
+	stream.inCh <- &generated.PortForwardClientMessage{
+		Message: &generated.PortForwardClientMessage_Init{
+			Init: &generated.PortForwardInit{
+				Target: &generated.PortForwardInit_ControlPlane{ControlPlane: true},
+			},
+		},
+	}
+	if ready := mustRecv(t, stream).GetReady(); ready == nil || ready.GetServiceName() != "control-plane" {
+		t.Fatalf("expected control-plane Ready")
+	}
+
+	// Open + Data → echoed back as a Data frame (remote_port is ignored).
+	stream.inCh <- &generated.PortForwardClientMessage{
+		Message: &generated.PortForwardClientMessage_Open{
+			Open: &generated.PortForwardOpen{ConnId: 1, RemotePort: 7861},
+		},
+	}
+	payload := []byte("GET /ui HTTP/1.0\r\n\r\n")
+	stream.inCh <- &generated.PortForwardClientMessage{
+		Message: &generated.PortForwardClientMessage_Data{
+			Data: &generated.PortForwardData{ConnId: 1, Payload: payload},
+		},
+	}
+	out := mustRecv(t, stream)
+	if d := out.GetData(); d == nil || d.ConnId != 1 || string(d.Payload) != string(payload) {
+		t.Fatalf("expected echoed Data frame, got %v", out)
+	}
+
+	stream.closeIn()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("session: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("server did not return after closeIn")
+	}
 }
 
 // mustRecv reads one server-side message with a small timeout.

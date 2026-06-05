@@ -60,7 +60,7 @@ type APIServer struct {
 	// HTTP server for the embedded dashboard + gRPC-Web transcoder (RUNE-200)
 	httpServer *http.Server
 
-	// handoff backs the `rune ui login` CLI token-handoff flow (RUNE-200).
+	// handoff backs the `rune ui` CLI token-handoff flow (RUNE-200).
 	handoff *handoffStore
 
 	// refresh implements RUNE-201 refresh-token rotation (held here so its
@@ -188,7 +188,13 @@ func (s *APIServer) Start() error {
 	s.instanceService = service.NewInstanceService(s.store, s.runnerManager, s.logger)
 	s.logService = service.NewLogService(s.store, s.logger, s.orchestrator)
 	s.execService = service.NewExecService(s.logger, s.orchestrator)
-	s.portForwardService = service.NewPortForwardService(s.logger, s.orchestrator)
+	// control_plane port-forwarding (for `rune ui`) dials runed's own HTTP
+	// listener; only available when the dashboard HTTP server is enabled.
+	controlPlaneAddr := ""
+	if s.options.UI.Enabled {
+		controlPlaneAddr = loopbackDialAddr(s.options.HTTPAddr)
+	}
+	s.portForwardService = service.NewPortForwardService(s.logger, s.orchestrator, controlPlaneAddr)
 	s.healthService = service.NewHealthService(s.store, s.runnerManager, s.logger)
 	s.secretService = service.NewSecretService(s.store, s.logger)
 	s.configService = service.NewConfigmapService(s.store, s.logger)

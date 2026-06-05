@@ -42,6 +42,13 @@ message PortForwardInit {
   oneof target {
     string service_name = 1;
     string instance_id = 2;
+    // control_plane forwards to runed's own dashboard/HTTP listener
+    // (loopback) instead of a workload instance. Used by `rune ui` to
+    // tunnel the embedded dashboard over the authenticated control-plane
+    // stream, so the browser can reach it on localhost with no exposed
+    // port and no SSH. The Open frame's remote_port is ignored; the
+    // server always dials its own configured HTTP address.
+    bool control_plane = 6;
   }
 
   // Namespace of the service/instance. Empty string is treated as

@@ -29,12 +29,15 @@ func NewPortForwardClient(client *Client) *PortForwardClient {
 	}
 }
 
-// PortForwardTarget identifies the instance to bind a forward to.
-// Exactly one of Service or InstanceID must be non-empty.
+// PortForwardTarget identifies what to bind a forward to. Exactly one of
+// Service, InstanceID, or ControlPlane must be set.
 type PortForwardTarget struct {
 	Service    string
 	InstanceID string
 	Namespace  string
+	// ControlPlane forwards to runed's own dashboard/HTTP listener instead
+	// of a workload instance (used by `rune ui`).
+	ControlPlane bool
 	// Pin selects a specific instance when Service has scale>1.
 	Pin string
 	// Ports the client intends to forward (informational/audit).
@@ -66,11 +69,14 @@ type PortForwardReady struct {
 
 // Open opens a session and waits for the Ready frame.
 func (c *PortForwardClient) Open(ctx context.Context, target PortForwardTarget) (*PortForwardSession, *PortForwardReady, error) {
-	if target.Service == "" && target.InstanceID == "" {
-		return nil, nil, errors.New("PortForwardTarget requires Service or InstanceID")
+	set := 0
+	for _, on := range []bool{target.Service != "", target.InstanceID != "", target.ControlPlane} {
+		if on {
+			set++
+		}
 	}
-	if target.Service != "" && target.InstanceID != "" {
-		return nil, nil, errors.New("PortForwardTarget cannot specify both Service and InstanceID")
+	if set != 1 {
+		return nil, nil, errors.New("PortForwardTarget requires exactly one of Service, InstanceID, or ControlPlane")
 	}
 
 	stream, err := c.pf.StreamPortForward(ctx)
@@ -83,9 +89,12 @@ func (c *PortForwardClient) Open(ctx context.Context, target PortForwardTarget) 
 		Ports:            target.Ports,
 		InstanceSelector: target.Pin,
 	}
-	if target.Service != "" {
+	switch {
+	case target.ControlPlane:
+		init.Target = &generated.PortForwardInit_ControlPlane{ControlPlane: true}
+	case target.Service != "":
 		init.Target = &generated.PortForwardInit_ServiceName{ServiceName: target.Service}
-	} else {
+	default:
 		init.Target = &generated.PortForwardInit_InstanceId{InstanceId: target.InstanceID}
 	}
 
