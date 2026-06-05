@@ -238,7 +238,7 @@ proto-ts:
 ui:
 	@if [ -d web ] && [ -f web/package.json ]; then \
 		echo "Building dashboard SPA..."; \
-		cd web && npm ci && npm run build; \
+		cd web && npm ci && npm run gen && npm run build; \
 	else \
 		echo "web/ not scaffolded yet (Phase 2); using embedded placeholder."; \
 	fi
