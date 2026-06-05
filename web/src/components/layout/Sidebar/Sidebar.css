@@ -13,10 +13,45 @@
   transition: border-color 0.15s, background 0.15s; font: inherit; color: inherit; text-align: left;
 }
 .sb-context:hover, .sb-context.open { border-color: var(--border-strong); background: var(--surface-2); }
-.sb-ctx-menu { width: 224px; }
-.sb-ctx-head { padding: 7px 9px 5px; }
-.sb-ctx-label { padding: 4px 9px 6px; color: var(--text-3); }
-.sb-ctx-menu .ddi-sub { margin-left: auto; color: var(--accent-text); }
+.ctx-chev { margin-left: auto; color: var(--text-3); transition: transform 0.16s; }
+.sb-context.open .ctx-chev { transform: rotate(180deg); }
+
+/* ---------- namespace scope switcher popover ---------- */
+.ns-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; width: 264px; z-index: 40;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: var(--shadow-pop); padding: 6px;
+  opacity: 0; animation: fade 0.14s ease forwards;
+}
+.ns-head { padding: 11px 11px 12px; }
+.ns-cluster { font-weight: 600; font-size: 14px; color: var(--text); letter-spacing: -0.01em; }
+.ns-meta { display: flex; align-items: center; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+.ns-endpoint { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.ns-ver { font-family: var(--mono); font-size: 10px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px; white-space: nowrap; }
+.ns-scope { padding: 0 2px; }
+.ns-scope-label { padding: 8px 9px 6px; }
+.ns-list { max-height: 232px; overflow-y: auto; padding: 0 2px; }
+.ns-item { display: flex; align-items: center; gap: 10px; padding: 8px 9px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-2); }
+.ns-item:hover { background: var(--surface-2); color: var(--text); }
+.ns-item.sel { background: var(--accent-dim); color: var(--accent-text); }
+.ns-ico { color: var(--text-3); flex: none; }
+.ns-item.sel .ns-ico { color: var(--accent-text); }
+.ns-label { font-weight: 500; white-space: nowrap; }
+.ns-right { margin-left: auto; display: flex; align-items: center; flex: none; }
+.ns-count { font-family: var(--mono); font-size: 11px; color: var(--text-4); }
+.ns-count.ns-empty { font-style: italic; }
+.ns-check { color: var(--accent-text); }
+.ns-sep { height: 1px; background: var(--border-faint); margin: 5px 4px; }
+.ns-manage {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px; border-radius: 8px; cursor: pointer;
+  background: none; border: none; color: var(--text-2); font-family: var(--sans);
+  font-size: 13px; font-weight: 500; text-align: left; transition: background 0.13s, color 0.13s;
+}
+.ns-manage:hover { background: var(--surface-2); color: var(--text); }
+.ns-manage span { white-space: nowrap; }
+.ns-manage svg { color: var(--text-3); flex: none; }
+.ns-manage .ns-arrow { margin-left: auto; color: var(--text-3); font-size: 14px; }
 .sb-context .ctx-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); box-shadow: 0 0 0 3px var(--run-dim); flex: none; }
 .sb-context .ctx-name { font-weight: 600; font-size: 13px; color: var(--text); }
 .sb-context .ctx-sub { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

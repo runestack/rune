@@ -23,6 +23,7 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
 
   const activeLabel = ns === "all" ? "All namespaces" : ns;
   const pick = (v: string) => { setNs(v); setOpen(false); };
+  const nsWithServices = namespaces.filter((n) => n.services > 0).length;
 
   return (
     <div className="sb-ctx-wrap" ref={ref}>
@@ -33,40 +34,55 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
         aria-expanded={open}
       >
         <span className="ctx-dot" />
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, textAlign: "left" }}>
           <div className="ctx-name">{cluster.name}</div>
-          <div className="ctx-sub">{activeLabel}</div>
+          <div className="ctx-sub" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{activeLabel}</div>
         </div>
-        <Icon name="chevrond" size={15} style={{ marginLeft: "auto", color: "var(--text-3)" }} />
+        <Icon name="chevrond" size={15} className="ctx-chev" />
       </button>
 
       {open && (
-        <div className="dd-menu sb-ctx-menu" role="listbox">
-          <div className="sb-ctx-head">
-            <div className="ctx-name">{cluster.name}</div>
-            <div className="ctx-sub">{cluster.context} · {cluster.version}</div>
-          </div>
-          <div className="dd-sep" />
-          <div className="sb-ctx-label eyebrow">Namespace scope</div>
-          <div className="dd-list">
-            <div className={`dd-item${ns === "all" ? " sel" : ""}`} onClick={() => pick("all")}>
-              <Icon name="namespaces" size={14} /><span>All namespaces</span>
-              {ns === "all" && <Icon name="check" size={13} className="ddi-sub" />}
+        <div className="ns-pop" role="listbox">
+          <div className="ns-head">
+            <div className="ns-cluster">{cluster.name}</div>
+            <div className="ns-meta">
+              {cluster.context && <span className="ns-endpoint">{cluster.context}</span>}
+              {cluster.version && <span className="ns-ver">{cluster.version}</span>}
             </div>
-            <div className="dd-sep" />
+          </div>
+          <div className="ns-sep" />
+          <div className="ns-scope">
+            <div className="eyebrow ns-scope-label">Namespace scope</div>
+            <div className={`ns-item${ns === "all" ? " sel" : ""}`} onClick={() => pick("all")}>
+              <Icon name="namespaces" size={15} className="ns-ico" />
+              <span className="ns-label">All namespaces</span>
+              <span className="ns-right">{ns === "all" ? <Icon name="check" size={15} className="ns-check" /> : <span className="ns-count">{nsWithServices}</span>}</span>
+            </div>
+          </div>
+          <div className="ns-sep" />
+          <div className="ns-list">
             {namespaces.map((n) => (
-              <div key={n.name} className={`dd-item${ns === n.name ? " sel" : ""}`} onClick={() => pick(n.name)}>
-                <Dot s="run" /><span>{n.name}</span>
-                {ns === n.name && <Icon name="check" size={13} className="ddi-sub" />}
+              <div key={n.name} className={`ns-item${ns === n.name ? " sel" : ""}`} onClick={() => pick(n.name)}>
+                <Dot s={n.services > 0 ? "run" : "idle"} />
+                <span className="ns-label">{n.name}</span>
+                <span className="ns-right">
+                  {ns === n.name
+                    ? <Icon name="check" size={15} className="ns-check" />
+                    : n.services > 0
+                      ? <span className="ns-count">{n.services}</span>
+                      : <span className="ns-count ns-empty">empty</span>}
+                </span>
               </div>
             ))}
           </div>
           {go && (
             <>
-              <div className="dd-sep" />
-              <div className="dd-item" onClick={() => { setOpen(false); go("namespaces"); }}>
-                <Icon name="namespaces" size={14} /><span>Manage namespaces →</span>
-              </div>
+              <div className="ns-sep" />
+              <button className="ns-manage" onClick={() => { setOpen(false); go("namespaces"); }}>
+                <Icon name="namespaces" size={15} />
+                <span>Manage namespaces</span>
+                <span className="ns-arrow">→</span>
+              </button>
             </>
           )}
         </div>

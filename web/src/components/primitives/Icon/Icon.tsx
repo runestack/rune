@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 /** Line-glyph icon set (24×24, stroke-based). */
 export const ICON_PATHS = {
   overview: "M3 13h8V3H3v10zm10 8h8V11h-8v10zM3 21h8v-6H3v6zM13 3v6h8V3h-8z",
-  services: "M4 4h7v7H4zM13 13h7v7h-7zM13 4h7v5h-7zM4 13h7v7H4z",
+  services: "M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12.01l8.73-5.05M12 22.08V12",
   instances: "M3 6h18M3 12h18M3 18h18",
   namespaces: "M3 7l9-4 9 4-9 4-9-4zM3 12l9 4 9-4M3 17l9 4 9-4",
   storage:
