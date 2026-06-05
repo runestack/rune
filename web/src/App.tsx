@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  AppShell, Sidebar, Topbar, PageHead, TweaksPanel, TweakSection, TweakRadio, TweakColor, ConfirmProvider, ToastProvider,
+  AppShell, Sidebar, Topbar, SearchPalette, PageHead, TweaksPanel, TweakSection, TweakRadio, TweakColor, ConfirmProvider, ToastProvider,
 } from "./components";
 import type { NavGroup } from "./components";
 import { useTweaks } from "./lib/theme";
@@ -8,11 +8,12 @@ import { DEVTOOLS } from "./lib/devtools";
 import { ScopeProvider } from "./lib/scope";
 import { ContextSwitcher } from "./ContextSwitcher";
 import { ScopeIndicator } from "./ScopeIndicator";
-import type { Service } from "./api/types";
+import type { Instance, Service } from "./api/types";
 import { Overview } from "./screens/Overview";
 import { Services } from "./screens/Services";
 import { Instances } from "./screens/Instances";
 import { ServiceDrawer } from "./screens/ServiceDrawer";
+import { InstanceDrawer } from "./screens/InstanceDrawer";
 import { Namespaces } from "./screens/Namespaces";
 import { Storage } from "./screens/Storage";
 import { Networking } from "./screens/Networking";
@@ -77,22 +78,49 @@ export function App({ user, onLogout }: AppProps) {
   const [t, setTweak] = useTweaks();
   const [route, setRoute] = useState("overview");
   const [svc, setSvc] = useState<Service | null>(null);
+  const [inst, setInst] = useState<Instance | null>(null);
   const [logsSvc, setLogsSvc] = useState<string | null>(null);
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    try { return localStorage.getItem("rune-nav-collapsed") === "1"; } catch { return false; }
+  });
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem("rune-nav-collapsed", navCollapsed ? "1" : "0"); } catch { /* ignore */ }
+  }, [navCollapsed]);
+  const toggleNav = () => setNavCollapsed((v) => !v);
+
+  // ⌘K / Ctrl-K opens the command palette; "/" opens it when not typing.
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setSearchOpen(true); }
+      else if (e.key === "/" && !searchOpen) {
+        const el = e.target as HTMLElement | null;
+        const tag = el?.tagName;
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && !el?.isContentEditable) { e.preventDefault(); setSearchOpen(true); }
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [searchOpen]);
 
   function go(r: string, arg?: Service) {
     if (r === "logs" && arg) setLogsSvc(arg.name);
     setRoute(r);
     setSvc(null);
+    setInst(null);
     const c = document.querySelector(".content");
     if (c) c.scrollTop = 0;
   }
-  const openSvc = (s: Service) => setSvc(s);
+  // Service and instance drawers are mutually exclusive.
+  const openSvc = (s: Service) => { setInst(null); setSvc(s); };
+  const openInst = (i: Instance) => { setSvc(null); setInst(i); };
 
   let screen;
   switch (route) {
     case "overview": screen = <Overview go={go} openSvc={openSvc} />; break;
     case "services": screen = <Services openSvc={openSvc} />; break;
-    case "instances": screen = <Instances openSvc={openSvc} />; break;
+    case "instances": screen = <Instances openInst={openInst} />; break;
     case "namespaces": screen = <Namespaces go={go} />; break;
     case "storage": screen = <Storage />; break;
     case "secrets": screen = <Secrets />; break;
@@ -107,6 +135,8 @@ export function App({ user, onLogout }: AppProps) {
       <ConfirmProvider>
       <ToastProvider>
       <AppShell
+        collapsed={navCollapsed}
+        contentFlex={route === "logs"}
         sidebar={
           <Sidebar
             nav={NAV}
@@ -116,14 +146,28 @@ export function App({ user, onLogout }: AppProps) {
             context={<ContextSwitcher go={go} />}
             user={user}
             onLogout={onLogout}
+            onToggleNav={toggleNav}
           />
         }
-        topbar={<Topbar crumbs={CRUMBS[route] ?? ["Cluster"]} scope={<ScopeIndicator />} />}
+        topbar={
+          <Topbar
+            crumbs={CRUMBS[route] ?? ["Cluster"]}
+            scope={<ScopeIndicator />}
+            collapsed={navCollapsed}
+            onToggleNav={toggleNav}
+            onSearch={() => setSearchOpen(true)}
+          />
+        }
       >
         <div key={route} className="fadein">{screen}</div>
       </AppShell>
 
-      {svc && <ServiceDrawer svc={svc} onClose={() => setSvc(null)} go={go} />}
+      {searchOpen && (
+        <SearchPalette nav={NAV} onClose={() => setSearchOpen(false)} go={go} openSvc={openSvc} openInst={openInst} />
+      )}
+
+      {svc && <ServiceDrawer svc={svc} onClose={() => setSvc(null)} go={go} openInst={openInst} />}
+      {inst && <InstanceDrawer inst={inst} onClose={() => setInst(null)} go={go} openSvc={openSvc} />}
 
       {DEVTOOLS && (
         <TweaksPanel>

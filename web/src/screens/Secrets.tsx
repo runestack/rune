@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Card, CopyButton, Dot, Drawer, EmptyState, Field, Icon, KeyValue, PageHead, Segmented, Select, Spinner, Table, Tabs, Tag, TextInput, useToast } from "../components";
 import type { ConfigMap, Secret, SecretMount } from "../api/types";
 import { useConfigmaps, useNamespaces, useSecretVersions, useSecrets } from "../api/hooks";
+import { clients } from "../api/transport";
 import { useScope } from "../lib/scope";
 import "./Secrets.css";
 
@@ -115,13 +116,175 @@ function PendingBanner({ pend, version, color = "deploy" }: { pend: number; vers
   );
 }
 
+/* ---------------- inline editor (reveal → recast) ---------------- */
+function shellPreview(v: string) {
+  if (v.includes("\n")) return "@<file>";
+  if (v.length > 28) return `"${v.slice(0, 26)}…"`;
+  return /\s/.test(v) ? `"${v}"` : v;
+}
+
+/** Revealed value, full-width under its key label (multiline → scrollable block). */
+function ValueBox({ text }: { text: string }) {
+  if (text.includes("\n")) return <pre className="valbox">{text}</pre>;
+  return <div className="valbox one">{text}</div>;
+}
+
+interface EdRow { id: string; k: string; value: string; orig: boolean; origValue: string }
+
+/**
+ * Inline editor backing `rune {secret|config} cast` — it recasts the *entire*
+ * resource into a new version (not a per-key set/unset). Edited rows upsert,
+ * removed rows drop. onCast receives the full new data map.
+ */
+function DataEditor({ kind, name, ns, version, seedEntries, onCancel, onCast }: {
+  kind: "secret" | "config";
+  name: string; ns: string; version: number;
+  seedEntries: { k: string; value: string }[];
+  onCancel: () => void;
+  onCast: (data: Record<string, string>) => Promise<void>;
+}) {
+  const seed = useMemo<EdRow[]>(
+    () => seedEntries.map((e, i) => ({ id: `r${i}`, k: e.k, value: e.value, orig: true, origValue: e.value })),
+    [seedEntries],
+  );
+  const [rows, setRows] = useState<EdRow[]>(seed);
+  const [removed, setRemoved] = useState<string[]>([]);
+  const [casting, setCasting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const nextId = useRef(seed.length);
+  useEffect(() => { setRows(seed); setRemoved([]); }, [seed]);
+
+  const setRow = (id: string, patch: Partial<EdRow>) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const addRow = () => setRows((rs) => [...rs, { id: `n${nextId.current++}`, k: "", value: "", orig: false, origValue: "" }]);
+  const removeRow = (row: EdRow) => { setRows((rs) => rs.filter((r) => r.id !== row.id)); if (row.orig) setRemoved((rm) => [...rm, row.k]); };
+  const undoRemove = (k: string) => { setRemoved((rm) => rm.filter((x) => x !== k)); const o = seed.find((r) => r.k === k); if (o) setRows((rs) => [...rs, o]); };
+
+  const keys = rows.map((r) => r.k.trim());
+  const dupKey = keys.find((k, i) => k && keys.indexOf(k) !== i);
+  const upserts = rows.filter((r) => (r.orig ? r.value !== r.origValue : r.k.trim() && r.value !== ""));
+  const allNamed = rows.every((r) => r.k.trim());
+  const canCast = !dupKey && allNamed && !casting && (upserts.length > 0 || removed.length > 0);
+
+  const named = rows.filter((r) => r.k.trim());
+  const cli = canCast
+    ? `rune ${kind === "secret" ? "secret" : "config"} cast ${name} -n ${ns} ` +
+      named.map((r) => `${r.k.trim()}=${kind === "secret" ? "••••" : shellPreview(r.value)}`).join(" ")
+    : "";
+
+  async function cast() {
+    if (!canCast) return;
+    const data: Record<string, string> = {};
+    rows.forEach((r) => { if (r.k.trim()) data[r.k.trim()] = r.value; });
+    setCasting(true);
+    setErr(null);
+    try {
+      await onCast(data);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setCasting(false);
+    }
+  }
+
+  return (
+    <div className="fadein">
+      <div className="reveal-bar" style={{ borderColor: "var(--accent-line)", background: "var(--accent-dim)" }}>
+        <Icon name="bolt" size={14} style={{ color: "var(--accent-text)", flex: "none" }} />
+        <span style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.5 }}>
+          Editing <b style={{ color: "var(--text)" }}>{name}</b> — recasts the full {kind === "secret" ? "secret" : "configmap"} as <b style={{ color: "var(--text)" }}>v{version + 1}</b>.{kind === "secret" ? " Current values are revealed for editing (audited)." : ""}
+        </span>
+      </div>
+
+      {rows.map((row) => {
+        const multiline = row.value.includes("\n");
+        const changed = row.orig ? row.value !== row.origValue : row.k.trim() !== "" && row.value !== "";
+        return (
+          <div className="edrow" key={row.id}>
+            <div className="edrow-head">
+              {row.orig
+                ? <span className="kvr-name">{row.k}</span>
+                : <input className="finput edk" placeholder="NEW_KEY" value={row.k} spellCheck={false} onChange={(e) => setRow(row.id, { k: e.target.value })} />}
+              {row.orig ? <span className="edrow-tag">{changed ? "modified" : "unchanged"}</span> : <span className="edrow-tag new">new</span>}
+              <button className="edrow-del" title="Remove key (unset)" onClick={() => removeRow(row)}><Icon name="close" size={13} /></button>
+            </div>
+            {multiline
+              ? <textarea className="finput edv" rows={Math.min(12, Math.max(3, row.value.split("\n").length + 1))} value={row.value} spellCheck={false} onChange={(e) => setRow(row.id, { value: e.target.value })} />
+              : <input className="finput edv" value={row.value} spellCheck={false} placeholder="value" onChange={(e) => setRow(row.id, { value: e.target.value })} />}
+          </div>
+        );
+      })}
+
+      {removed.length > 0 && (
+        <div className="edremoved">
+          <span style={{ color: "var(--text-4)", fontSize: 11, fontFamily: "var(--mono)" }}>removed:</span>
+          {removed.map((k) => (
+            <button key={k} className="edchip" onClick={() => undoRemove(k)} title="Undo removal">
+              <span className="mono">{k}</span><Icon name="close" size={11} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      <Button size="sm" variant="ghost" className="edadd" onClick={addRow}><Icon name="plus" size={13} />Add key</Button>
+
+      {dupKey && <p className="fhint bad" style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 11, color: "#f2868a" }}>Duplicate key “{dupKey}”.</p>}
+      {err && <p className="fhint bad" style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 11, color: "#f2868a" }}>Cast failed: {err}</p>}
+
+      {cli && (
+        <div className="cmd-preview" style={{ marginTop: 14 }}>
+          <span className="c-cmd">{cli.split(" ").slice(0, 3).join(" ")}</span>{" " + cli.split(" ").slice(3).join(" ")}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 9, marginTop: 16 }}>
+        <Button size="sm" variant="primary" loading={casting} disabled={!canCast} onClick={cast} style={{ opacity: canCast ? 1 : 0.5 }}>
+          <Icon name="bolt" size={14} />{`Cast v${version + 1}`}
+        </Button>
+        <Button size="sm" onClick={onCancel} disabled={casting}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- SECRET DRAWER ---------------- */
-function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn }: { sec: Secret; onClose: () => void; onRestart: (n: string, svc: string) => void; fqdn: boolean; setFqdn: (v: boolean) => void }) {
+function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn, onCast }: { sec: Secret; onClose: () => void; onRestart: (n: string, svc: string) => void; fqdn: boolean; setFqdn: (v: boolean) => void; onCast: (name: string, ns: string, data: Record<string, string>) => Promise<void> }) {
   const [tab, setTab] = useState("overview");
+  const [reveal, setReveal] = useState<Record<string, string> | null>(null);
+  const [revealing, setRevealing] = useState(false);
+  const [revealErr, setRevealErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  // Re-seal (and drop any edit) whenever the open secret changes.
+  useEffect(() => { setReveal(null); setEditing(false); setRevealErr(null); setTab("overview"); }, [sec.name]);
+
   const keyNames = sec.keys.map((k) => k.k);
   const pend = pendingOf(sec);
-  const E = ENCRYPTION;
   const ref = (k: string) => (fqdn ? `secret:${sec.name}.${sec.ns}.rune/${k}` : `secret:${sec.name}/${k}`);
+
+  async function fetchReveal(): Promise<Record<string, string>> {
+    const r = await clients.secrets.revealSecret({ name: sec.name, namespace: sec.ns });
+    return r.secret?.data ?? {};
+  }
+  async function toggleReveal() {
+    if (reveal) { setReveal(null); return; }
+    setRevealing(true);
+    setRevealErr(null);
+    try { setReveal(await fetchReveal()); }
+    catch (e) { setRevealErr(e instanceof Error ? e.message : String(e)); }
+    finally { setRevealing(false); }
+  }
+  async function startEdit() {
+    setTab("keys");
+    if (!reveal) {
+      setRevealing(true);
+      setRevealErr(null);
+      try { setReveal(await fetchReveal()); }
+      catch (e) { setRevealErr(e instanceof Error ? e.message : String(e)); setRevealing(false); return; }
+      setRevealing(false);
+    }
+    setEditing(true);
+  }
+
+  const editSeed = sec.keys.map((k) => ({ k: k.k, value: reveal?.[k.k] ?? "" }));
+
   return (
     <Drawer onClose={onClose}>
       <div className="drawer-head">
@@ -133,9 +296,7 @@ function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn }: { sec: Secret;
           <Tag>v{sec.version}</Tag>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Button size="sm" variant="primary"><Icon name="refresh" size={14} />Rotate</Button>
-          <Button size="sm"><Icon name="bolt" size={14} />Cast new version</Button>
-          <Button size="sm"><Icon name="link" size={14} />Mount into service</Button>
+          <Button size="sm" variant="primary" onClick={startEdit}><Icon name="bolt" size={14} />Edit &amp; cast</Button>
         </div>
         {sec.auto && (
           <div style={{ marginTop: 13, padding: "8px 12px", background: "var(--net-dim)", border: "1px solid rgba(103,221,253,.25)", borderRadius: 8, fontSize: 12.5, color: "var(--net)", display: "flex", gap: 8, alignItems: "center" }}>
@@ -151,7 +312,6 @@ function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn }: { sec: Secret;
             { id: "keys", label: "Keys" },
             { id: "mounts", label: `Mounts (${sec.mounts.length})` },
             { id: "versions", label: "Versions" },
-            { id: "encryption", label: "Encryption" },
           ]}
           active={tab}
           onChange={setTab}
@@ -166,7 +326,7 @@ function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn }: { sec: Secret;
               <dt>Consumers</dt><dd>{sec.mounts.length} mount{sec.mounts.length === 1 ? "" : "s"}</dd>
               <dt>Last cast</dt><dd>{sec.updated} · by {sec.castBy}</dd>
               <dt>Created</dt><dd>{sec.age} ago</dd>
-              <dt>Encryption</dt><dd>{E.algo}</dd>
+              <dt>Encryption</dt><dd>{ENCRYPTION.algo}</dd>
             </KeyValue>
             <div className="divider" />
             <div className="eyebrow" style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}>
@@ -181,20 +341,49 @@ function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn }: { sec: Secret;
             </p>
           </div>
         )}
-        {tab === "keys" && (
+        {tab === "keys" && editing && (
+          <DataEditor
+            kind="secret" name={sec.name} ns={sec.ns} version={sec.version} seedEntries={editSeed}
+            onCancel={() => setEditing(false)}
+            onCast={async (data) => { await onCast(sec.name, sec.ns, data); setEditing(false); setReveal(null); }}
+          />
+        )}
+        {tab === "keys" && !editing && (
           <div className="fadein">
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, color: "var(--text-3)", fontSize: 12 }}>
-              <Icon name="secrets" size={14} style={{ color: "var(--accent-text)" }} />
-              Values are sealed — there is no API to read plaintext. Mount the secret into a service to use it.
+            <div className="reveal-bar">
+              <Icon name={reveal ? "eye" : "secrets"} size={14} style={{ color: reveal ? "var(--deploy)" : "var(--accent-text)", flex: "none" }} />
+              <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.5 }}>
+                {reveal
+                  ? <><b style={{ color: "#e8a06a" }}>Plaintext shown.</b> This read is decrypted via the KEK and written to the audit log.</>
+                  : <>Encrypted at rest. <b style={{ color: "var(--text-2)" }}>Reveal</b> decrypts the values — requires <span className="mono" style={{ color: "var(--text-2)" }}>secrets:reveal</span> and is audited.</>}
+              </span>
+              <Button size="sm" onClick={toggleReveal} loading={revealing} style={{ marginLeft: "auto", flex: "none", borderColor: reveal ? "rgba(247,104,9,.4)" : undefined, color: reveal ? "#e8a06a" : undefined }}>
+                <Icon name={reveal ? "eyeoff" : "eye"} size={14} />{reveal ? "Hide" : "Reveal"}
+              </Button>
             </div>
-            {sec.keys.map((k) => (
-              <div className="kvrow" key={k.k}>
-                <Icon name="secrets" size={13} className="seal-ico" style={{ color: "var(--accent-text)" }} />
-                <span className="kvr-name">{k.k}</span>
-                <span className="seal" style={{ marginLeft: "auto" }}><span className="seal-dots">••••••••••••••</span> sealed</span>
-                <span className="kvr-meta">{fmtBytes(k.bytes)}</span>
+            {revealErr && <p style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "#f2868a", margin: "0 0 12px" }}>Reveal failed: {revealErr}</p>}
+            {reveal && (
+              <div className="ref-field" style={{ marginBottom: 12 }}>
+                <span style={{ color: "var(--text-4)", fontSize: 11, flex: "none" }}>cli</span>
+                <code style={{ color: "var(--text-2)" }}>rune secret reveal {sec.name} -n {sec.ns} -o json</code>
+                <CopyButton value={`rune secret reveal ${sec.name} -n ${sec.ns} -o json`} />
               </div>
-            ))}
+            )}
+            {sec.keys.map((k) => {
+              const val = reveal ? reveal[k.k] ?? "" : null;
+              return (
+                <div className={"kvrow" + (reveal ? " kvrow-col" : "")} key={k.k}>
+                  <div className="kvrow-line">
+                    <Icon name={reveal ? "eye" : "secrets"} size={13} className="seal-ico" style={{ color: reveal ? "var(--deploy)" : "var(--accent-text)", flex: "none" }} />
+                    <span className="kvr-name">{k.k}</span>
+                    {!reveal && <span className="seal"><span className="seal-dots">••••••••••••••</span> sealed</span>}
+                    {reveal && val != null && <span style={{ marginLeft: "auto" }}><CopyButton value={val} /></span>}
+                    <span className="kvr-meta" style={reveal ? { marginLeft: 0 } : undefined}>{fmtBytes(k.bytes)}</span>
+                  </div>
+                  {reveal && val != null && <ValueBox text={val} />}
+                </div>
+              );
+            })}
           </div>
         )}
         {tab === "mounts" && (
@@ -210,46 +399,16 @@ function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn }: { sec: Secret;
           </div>
         )}
         {tab === "versions" && <SecretVersions sec={sec} />}
-        {tab === "encryption" && (
-          <div className="fadein">
-            <div className="envelope">
-              <div className="env-flow">
-                <span className="env-box">plaintext</span>
-                <span className="env-arrow">→</span>
-                <div style={{ textAlign: "center" }}><span className="env-box key">AES-256-GCM</span><div className="env-op">DEK</div></div>
-                <span className="env-arrow">→</span>
-                <span className="env-box cipher">ciphertext</span>
-              </div>
-              <div className="env-flow">
-                <span className="env-box key">DEK</span>
-                <span className="env-arrow">→</span>
-                <div style={{ textAlign: "center" }}><span className="env-box key">AES-256-GCM</span><div className="env-op">KEK</div></div>
-                <span className="env-arrow">→</span>
-                <span className="env-box">wrapped DEK</span>
-                <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-4)" }}>stored together</span>
-              </div>
-            </div>
-            <div className="divider" />
-            <KeyValue>
-              <dt>Scheme</dt><dd>{E.scheme}</dd>
-              <dt>Algorithm</dt><dd>{E.algo}</dd>
-              <dt>DEK</dt><dd>{E.dek}</dd>
-              <dt>KEK source</dt><dd>{E.kek.source} ({E.kek.mode})</dd>
-              <dt>Associated data</dt><dd>{E.aad}</dd>
-            </KeyValue>
-            <div style={{ marginTop: 14, padding: "10px 13px", background: "var(--warn-dim)", border: "1px solid rgba(217,154,62,.22)", borderRadius: 8, fontSize: 12.5, color: "#d9a94e", display: "flex", gap: 9, alignItems: "center" }}>
-              <Icon name="alert" size={15} />Associated data binds ciphertext to (namespace, name, version). Lose the KEK, lose every secret — back it up.
-            </div>
-          </div>
-        )}
       </div>
     </Drawer>
   );
 }
 
 /* ---------------- CONFIGMAP DRAWER ---------------- */
-function ConfigDrawer({ cm, onClose, onRestart }: { cm: ConfigMap; onClose: () => void; onRestart: (n: string, svc: string) => void }) {
+function ConfigDrawer({ cm, onClose, onRestart, onCast }: { cm: ConfigMap; onClose: () => void; onRestart: (n: string, svc: string) => void; onCast: (name: string, ns: string, data: Record<string, string>) => Promise<void> }) {
   const [tab, setTab] = useState("data");
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { setEditing(false); setTab("data"); }, [cm.name]);
   const keyNames = cm.data.map((d) => d.k);
   const pend = pendingOf(cm);
   return (
@@ -262,14 +421,21 @@ function ConfigDrawer({ cm, onClose, onRestart }: { cm: ConfigMap; onClose: () =
           <Tag>v{cm.version}</Tag>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Button size="sm" variant="primary"><Icon name="bolt" size={14} />Edit &amp; cast</Button>
-          <Button size="sm"><Icon name="link" size={14} />Mount into service</Button>
+          <Button size="sm" variant="primary" onClick={() => { setEditing(true); setTab("data"); }}><Icon name="bolt" size={14} />Edit &amp; cast</Button>
         </div>
         <PendingBanner pend={pend} version={cm.version} />
       </div>
       <div className="drawer-body">
         <Tabs tabs={[{ id: "data", label: "Data" }, { id: "mounts", label: `Mounts (${cm.mounts.length})` }, { id: "versions", label: "Versions" }]} active={tab} onChange={setTab} />
-        {tab === "data" && (
+        {tab === "data" && editing && (
+          <DataEditor
+            kind="config" name={cm.name} ns={cm.ns} version={cm.version}
+            seedEntries={cm.data.map((d) => ({ k: d.k, value: d.value }))}
+            onCancel={() => setEditing(false)}
+            onCast={async (data) => { await onCast(cm.name, cm.ns, data); setEditing(false); }}
+          />
+        )}
+        {tab === "data" && !editing && (
           <div className="fadein">
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, color: "var(--text-3)", fontSize: 12 }}>
               <Icon name="doc" size={14} />Plaintext — not encrypted. Use only for non-sensitive config.
@@ -427,7 +593,7 @@ function CreateDrawer({ onClose, onCreate }: { onClose: () => void; onCreate: (k
 /* ---------------- MAIN SCREEN ---------------- */
 export function Secrets() {
   const { data: liveSecrets, loading: sLoading, error: sError, reload: sReload } = useSecrets();
-  const { data: liveConfigs, loading: cLoading, error: cError } = useConfigmaps();
+  const { data: liveConfigs, loading: cLoading, error: cError, reload: cReload } = useConfigmaps();
   const loading = sLoading || cLoading;
   const error = sError || cError;
 
@@ -462,6 +628,20 @@ export function Secrets() {
 
   const restartSec = (resName: string, svc: string) => setSecrets((list) => list.map((r) => (r.name !== resName ? r : { ...r, mounts: r.mounts.map((m) => (m.svc === svc ? { ...m, v: r.version } : m)) })));
   const restartCm = (resName: string, svc: string) => setConfigs((list) => list.map((r) => (r.name !== resName ? r : { ...r, mounts: r.mounts.map((m) => (m.svc === svc ? { ...m, v: r.version } : m)) })));
+
+  // `rune secret|config cast` — recast the whole resource into a new version
+  // (UpdateSecret/UpdateConfigmap replace the data map). On success the live
+  // list reloads, bumping the version and re-seeding the drawer.
+  async function castSecret(name: string, ns: string, data: Record<string, string>) {
+    await clients.secrets.updateSecret({ secret: { name, namespace: ns, data } });
+    toast({ tone: "success", icon: "check", title: <><b>Secret recast</b> — {name}</>, message: `secret/${name} · ${ns} · new version sealed` });
+    sReload();
+  }
+  async function castConfig(name: string, ns: string, data: Record<string, string>) {
+    await clients.configmaps.updateConfigmap({ configmap: { name, namespace: ns, data } });
+    toast({ tone: "success", icon: "check", title: <><b>ConfigMap recast</b> — {name}</>, message: `configmap/${name} · ${ns} · new version applied` });
+    cReload();
+  }
 
   function create(kind: string, res: Secret | ConfigMap) {
     if (kind === "secret") { setSecrets((l) => [res as Secret, ...l]); setTab("secrets"); }
@@ -602,8 +782,8 @@ export function Secrets() {
         )
       )}
 
-      {secDetail && <SecretDrawer sec={secDetail} onClose={() => setOpenSec(null)} onRestart={restartSec} fqdn={fqdn} setFqdn={setFqdn} />}
-      {cmDetail && <ConfigDrawer cm={cmDetail} onClose={() => setOpenCm(null)} onRestart={restartCm} />}
+      {secDetail && <SecretDrawer sec={secDetail} onClose={() => setOpenSec(null)} onRestart={restartSec} fqdn={fqdn} setFqdn={setFqdn} onCast={castSecret} />}
+      {cmDetail && <ConfigDrawer cm={cmDetail} onClose={() => setOpenCm(null)} onRestart={restartCm} onCast={castConfig} />}
       {creating && <CreateDrawer onClose={() => setCreating(false)} onCreate={create} />}
     </div>
   );

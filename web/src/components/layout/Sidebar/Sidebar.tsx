@@ -17,15 +17,22 @@ export interface SidebarProps {
   context?: ReactNode;
   user: { name: string; role: string };
   onLogout?: () => void;
+  /** Collapse the sidebar (chevron in the header). */
+  onToggleNav?: () => void;
 }
 
-export function Sidebar({ nav, route, go, logoVariant, context, user, onLogout }: SidebarProps) {
+export function Sidebar({ nav, route, go, logoVariant, context, user, onLogout, onToggleNav }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sb-head">
-        <div onClick={() => go("overview")} style={{ cursor: "pointer" }}>
+        <div className="sb-brand" onClick={() => go("overview")} style={{ cursor: "pointer", minWidth: 0 }}>
           <Logo variant={logoVariant} />
         </div>
+        {onToggleNav && (
+          <button className="nav-toggle" title="Collapse sidebar" aria-label="Collapse sidebar" onClick={onToggleNav}>
+            <Icon name="chevleft" size={16} />
+          </button>
+        )}
       </div>
       {context}
       <nav className="sb-nav">

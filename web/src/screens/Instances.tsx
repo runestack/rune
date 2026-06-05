@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { Badge, Card, Dot, Dropdown, EmptyState, Icon, PageHead, Spinner, Table } from "../components";
-import { useInstances, useServices } from "../api/hooks";
+import { useInstances } from "../api/hooks";
 import { useScope } from "../lib/scope";
-import type { Service } from "../api/types";
+import type { Instance } from "../api/types";
 
-export function Instances({ openSvc }: { openSvc: (s: Service) => void }) {
+export function Instances({ openInst }: { openInst: (i: Instance) => void }) {
   const { data: instances, loading, error, reload } = useInstances();
-  const { data: services } = useServices();
   const { ns: scopeNs } = useScope();
   const [node, setNode] = useState("all");
 
@@ -58,9 +57,8 @@ export function Instances({ openSvc }: { openSvc: (s: Service) => void }) {
             <thead><tr><th>Instance</th><th>Service</th><th>Node</th><th>IP</th><th>CPU</th><th>Mem</th><th>Restarts</th><th>Uptime</th><th>Status</th></tr></thead>
             <tbody>
               {list.map((i) => {
-                const svc = services.find((s) => s.name === i.svc && s.ns === i.ns);
                 return (
-                  <tr key={i.id} onClick={() => svc && openSvc(svc)}>
+                  <tr key={i.id} onClick={() => openInst(i)}>
                     <td><div className="cell-name" style={{ fontWeight: 500 }}><Dot s={i.status} pulse={i.status === "deploy"} /><span className="mono" style={{ fontSize: 12 }}>{i.id}</span></div></td>
                     <td>{i.svc}</td>
                     <td className="cell-sub">{i.node}</td>
