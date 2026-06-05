@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -93,6 +94,89 @@ func (r *ConfigmapRepo) Update(ctx context.Context, namespace, name string, c *t
 
 func (r *ConfigmapRepo) Delete(ctx context.Context, namespace, name string) error {
 	return r.base.Delete(ctx, namespace, name)
+}
+
+// ListVersions returns every historical version of a configmap, newest first.
+// The core store keeps each Update as a distinct version row (the same
+// machinery that backs `rune secret versions`), so this just reads that history
+// — configmaps are plaintext, so no decryption is involved.
+func (r *ConfigmapRepo) ListVersions(ctx context.Context, namespace, name string) ([]*types.Configmap, error) {
+	hist, err := r.base.core.GetHistory(ctx, types.ResourceTypeConfigmap, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*types.Configmap, 0, len(hist))
+	for _, h := range hist {
+		c, err := historyToConfigmap(h.Resource)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	// Store order is newest-first by storage timestamp; ensure strict descending
+	// Version ordering for stable callers.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].Version > out[i].Version {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out, nil
+}
+
+// GetVersionN returns a specific historical version by its user-facing integer
+// Version (not the opaque store version ID).
+func (r *ConfigmapRepo) GetVersionN(ctx context.Context, namespace, name string, version int) (*types.Configmap, error) {
+	versions, err := r.ListVersions(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range versions {
+		if c.Version == version {
+			return c, nil
+		}
+	}
+	return nil, fmt.Errorf("version %d of configmap %s/%s not found", version, namespace, name)
+}
+
+// Rollback rewrites the configmap to the data of a prior version, producing a
+// NEW version (head+1). History is retained.
+func (r *ConfigmapRepo) Rollback(ctx context.Context, namespace, name string, toVersion int, opts ...store.UpdateOption) (*types.Configmap, error) {
+	prior, err := r.GetVersionN(ctx, namespace, name, toVersion)
+	if err != nil {
+		return nil, err
+	}
+	desired := &types.Configmap{Name: name, Namespace: namespace, Data: prior.Data}
+	if err := r.Update(ctx, namespace, name, desired, opts...); err != nil {
+		return nil, err
+	}
+	return r.Get(ctx, namespace, name)
+}
+
+// historyToConfigmap re-marshals an interface{} returned by Store.GetHistory
+// into a *types.Configmap. GetHistory hands back map[string]interface{} after
+// json.Unmarshal, so round-tripping through json recovers the typed shape.
+func historyToConfigmap(raw interface{}) (*types.Configmap, error) {
+	switch v := raw.(type) {
+	case types.Configmap:
+		c := v
+		return &c, nil
+	case *types.Configmap:
+		if v == nil {
+			return nil, fmt.Errorf("nil configmap in history")
+		}
+		return v, nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("re-marshal history entry: %w", err)
+	}
+	var c types.Configmap
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, fmt.Errorf("decode history entry: %w", err)
+	}
+	return &c, nil
 }
 
 func (r *ConfigmapRepo) validateConfigData(data map[string]string) error {

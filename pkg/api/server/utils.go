@@ -49,6 +49,14 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.HealthService/GetHealth"):
 		return "health", "get"
 
+	// Specific cases first: ListConfigmapVersions must not match the generic
+	// /List prefix below (versions is a read = get, not list).
+	case strings.HasPrefix(method, "/rune.api.ConfigmapService/ListConfigmapVersions"):
+		return "configmaps", "get"
+	case strings.HasPrefix(method, "/rune.api.ConfigmapService/PatchConfigmap"):
+		return "configmaps", "update"
+	case strings.HasPrefix(method, "/rune.api.ConfigmapService/RollbackConfigmap"):
+		return "configmaps", "update"
 	case strings.HasPrefix(method, "/rune.api.ConfigmapService/Get"):
 		return "configmaps", "get"
 	case strings.HasPrefix(method, "/rune.api.ConfigmapService/List"):

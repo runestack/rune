@@ -29,6 +29,36 @@ message ListConfigmapsRequest {
   PagingParams paging = 4;
 }
 
+// PatchConfigmapRequest performs a key-scoped merge update of a configmap's
+// data. Set entries upsert; unset keys are removed. The server reads the
+// current data map, applies the merge under a per-configmap lock, and writes a
+// new version atomically. If the result equals the current head it is a no-op.
+message PatchConfigmapRequest {
+  string name = 1;
+  string namespace = 2;
+  // Keys to upsert into the existing data map. Values are taken verbatim.
+  map<string, string> set = 3;
+  // Keys to remove from the existing data map. Missing keys are ignored.
+  repeated string unset = 4;
+}
+
+message ListConfigmapVersionsRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message ListConfigmapVersionsResponse {
+  // Versions are returned newest-first by Configmap.version.
+  repeated Configmap versions = 1;
+  Status status = 2;
+}
+
+message RollbackConfigmapRequest {
+  string name = 1;
+  string namespace = 2;
+  int32 to_version = 3;
+}
+
 message ConfigmapResponse { Configmap configmap = 1; Status status = 2; }
 message ListConfigmapsResponse { repeated Configmap configmaps = 1; Status status = 2; }
 
@@ -36,8 +66,11 @@ service ConfigmapService {
   rpc CreateConfigmap(CreateConfigmapRequest) returns (ConfigmapResponse);
   rpc GetConfigmap(GetConfigmapRequest) returns (ConfigmapResponse);
   rpc UpdateConfigmap(UpdateConfigmapRequest) returns (ConfigmapResponse);
+  rpc PatchConfigmap(PatchConfigmapRequest) returns (ConfigmapResponse);
   rpc DeleteConfigmap(DeleteConfigmapRequest) returns (Status);
   rpc ListConfigmaps(ListConfigmapsRequest) returns (ListConfigmapsResponse);
+  rpc ListConfigmapVersions(ListConfigmapVersionsRequest) returns (ListConfigmapVersionsResponse);
+  rpc RollbackConfigmap(RollbackConfigmapRequest) returns (ConfigmapResponse);
 }
 
 

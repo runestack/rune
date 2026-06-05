@@ -373,6 +373,245 @@ func (x *ListConfigmapsRequest) GetPaging() *PagingParams {
 	return nil
 }
 
+// PatchConfigmapRequest performs a key-scoped merge update of a configmap's
+// data. Set entries upsert; unset keys are removed. The server reads the
+// current data map, applies the merge under a per-configmap lock, and writes a
+// new version atomically. If the result equals the current head it is a no-op.
+type PatchConfigmapRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Name      string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	// Keys to upsert into the existing data map. Values are taken verbatim.
+	Set map[string]string `protobuf:"bytes,3,rep,name=set,proto3" json:"set,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Keys to remove from the existing data map. Missing keys are ignored.
+	Unset         []string `protobuf:"bytes,4,rep,name=unset,proto3" json:"unset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PatchConfigmapRequest) Reset() {
+	*x = PatchConfigmapRequest{}
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatchConfigmapRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatchConfigmapRequest) ProtoMessage() {}
+
+func (x *PatchConfigmapRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatchConfigmapRequest.ProtoReflect.Descriptor instead.
+func (*PatchConfigmapRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_configmap_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *PatchConfigmapRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PatchConfigmapRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *PatchConfigmapRequest) GetSet() map[string]string {
+	if x != nil {
+		return x.Set
+	}
+	return nil
+}
+
+func (x *PatchConfigmapRequest) GetUnset() []string {
+	if x != nil {
+		return x.Unset
+	}
+	return nil
+}
+
+type ListConfigmapVersionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListConfigmapVersionsRequest) Reset() {
+	*x = ListConfigmapVersionsRequest{}
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListConfigmapVersionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListConfigmapVersionsRequest) ProtoMessage() {}
+
+func (x *ListConfigmapVersionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListConfigmapVersionsRequest.ProtoReflect.Descriptor instead.
+func (*ListConfigmapVersionsRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_configmap_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ListConfigmapVersionsRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ListConfigmapVersionsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+type ListConfigmapVersionsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Versions are returned newest-first by Configmap.version.
+	Versions      []*Configmap `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`
+	Status        *Status      `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListConfigmapVersionsResponse) Reset() {
+	*x = ListConfigmapVersionsResponse{}
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListConfigmapVersionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListConfigmapVersionsResponse) ProtoMessage() {}
+
+func (x *ListConfigmapVersionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListConfigmapVersionsResponse.ProtoReflect.Descriptor instead.
+func (*ListConfigmapVersionsResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_configmap_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListConfigmapVersionsResponse) GetVersions() []*Configmap {
+	if x != nil {
+		return x.Versions
+	}
+	return nil
+}
+
+func (x *ListConfigmapVersionsResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+type RollbackConfigmapRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	ToVersion     int32                  `protobuf:"varint,3,opt,name=to_version,json=toVersion,proto3" json:"to_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RollbackConfigmapRequest) Reset() {
+	*x = RollbackConfigmapRequest{}
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RollbackConfigmapRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RollbackConfigmapRequest) ProtoMessage() {}
+
+func (x *RollbackConfigmapRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RollbackConfigmapRequest.ProtoReflect.Descriptor instead.
+func (*RollbackConfigmapRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_configmap_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RollbackConfigmapRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RollbackConfigmapRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *RollbackConfigmapRequest) GetToVersion() int32 {
+	if x != nil {
+		return x.ToVersion
+	}
+	return 0
+}
+
 type ConfigmapResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Configmap     *Configmap             `protobuf:"bytes,1,opt,name=configmap,proto3" json:"configmap,omitempty"`
@@ -383,7 +622,7 @@ type ConfigmapResponse struct {
 
 func (x *ConfigmapResponse) Reset() {
 	*x = ConfigmapResponse{}
-	mi := &file_pkg_api_proto_configmap_proto_msgTypes[6]
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -395,7 +634,7 @@ func (x *ConfigmapResponse) String() string {
 func (*ConfigmapResponse) ProtoMessage() {}
 
 func (x *ConfigmapResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_configmap_proto_msgTypes[6]
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -408,7 +647,7 @@ func (x *ConfigmapResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigmapResponse.ProtoReflect.Descriptor instead.
 func (*ConfigmapResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_configmap_proto_rawDescGZIP(), []int{6}
+	return file_pkg_api_proto_configmap_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ConfigmapResponse) GetConfigmap() *Configmap {
@@ -435,7 +674,7 @@ type ListConfigmapsResponse struct {
 
 func (x *ListConfigmapsResponse) Reset() {
 	*x = ListConfigmapsResponse{}
-	mi := &file_pkg_api_proto_configmap_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -447,7 +686,7 @@ func (x *ListConfigmapsResponse) String() string {
 func (*ListConfigmapsResponse) ProtoMessage() {}
 
 func (x *ListConfigmapsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_configmap_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_configmap_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -460,7 +699,7 @@ func (x *ListConfigmapsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConfigmapsResponse.ProtoReflect.Descriptor instead.
 func (*ListConfigmapsResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_configmap_proto_rawDescGZIP(), []int{7}
+	return file_pkg_api_proto_configmap_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListConfigmapsResponse) GetConfigmaps() []*Configmap {
@@ -515,7 +754,26 @@ const file_pkg_api_proto_configmap_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a@\n" +
 	"\x12FieldSelectorEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"p\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd3\x01\n" +
+	"\x15PatchConfigmapRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12:\n" +
+	"\x03set\x18\x03 \x03(\v2(.rune.api.PatchConfigmapRequest.SetEntryR\x03set\x12\x14\n" +
+	"\x05unset\x18\x04 \x03(\tR\x05unset\x1a6\n" +
+	"\bSetEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"P\n" +
+	"\x1cListConfigmapVersionsRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"z\n" +
+	"\x1dListConfigmapVersionsResponse\x12/\n" +
+	"\bversions\x18\x01 \x03(\v2\x13.rune.api.ConfigmapR\bversions\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"k\n" +
+	"\x18RollbackConfigmapRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x1d\n" +
+	"\n" +
+	"to_version\x18\x03 \x01(\x05R\ttoVersion\"p\n" +
 	"\x11ConfigmapResponse\x121\n" +
 	"\tconfigmap\x18\x01 \x01(\v2\x13.rune.api.ConfigmapR\tconfigmap\x12(\n" +
 	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"w\n" +
@@ -523,13 +781,16 @@ const file_pkg_api_proto_configmap_proto_rawDesc = "" +
 	"\n" +
 	"configmaps\x18\x01 \x03(\v2\x13.rune.api.ConfigmapR\n" +
 	"configmaps\x12(\n" +
-	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status2\x9e\x03\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status2\xae\x05\n" +
 	"\x10ConfigmapService\x12P\n" +
 	"\x0fCreateConfigmap\x12 .rune.api.CreateConfigmapRequest\x1a\x1b.rune.api.ConfigmapResponse\x12J\n" +
 	"\fGetConfigmap\x12\x1d.rune.api.GetConfigmapRequest\x1a\x1b.rune.api.ConfigmapResponse\x12P\n" +
-	"\x0fUpdateConfigmap\x12 .rune.api.UpdateConfigmapRequest\x1a\x1b.rune.api.ConfigmapResponse\x12E\n" +
+	"\x0fUpdateConfigmap\x12 .rune.api.UpdateConfigmapRequest\x1a\x1b.rune.api.ConfigmapResponse\x12N\n" +
+	"\x0ePatchConfigmap\x12\x1f.rune.api.PatchConfigmapRequest\x1a\x1b.rune.api.ConfigmapResponse\x12E\n" +
 	"\x0fDeleteConfigmap\x12 .rune.api.DeleteConfigmapRequest\x1a\x10.rune.api.Status\x12S\n" +
-	"\x0eListConfigmaps\x12\x1f.rune.api.ListConfigmapsRequest\x1a .rune.api.ListConfigmapsResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\x0eListConfigmaps\x12\x1f.rune.api.ListConfigmapsRequest\x1a .rune.api.ListConfigmapsResponse\x12h\n" +
+	"\x15ListConfigmapVersions\x12&.rune.api.ListConfigmapVersionsRequest\x1a'.rune.api.ListConfigmapVersionsResponse\x12T\n" +
+	"\x11RollbackConfigmap\x12\".rune.api.RollbackConfigmapRequest\x1a\x1b.rune.api.ConfigmapResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_configmap_proto_rawDescOnce sync.Once
@@ -543,48 +804,62 @@ func file_pkg_api_proto_configmap_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_configmap_proto_rawDescData
 }
 
-var file_pkg_api_proto_configmap_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_pkg_api_proto_configmap_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_pkg_api_proto_configmap_proto_goTypes = []any{
-	(*Configmap)(nil),              // 0: rune.api.Configmap
-	(*CreateConfigmapRequest)(nil), // 1: rune.api.CreateConfigmapRequest
-	(*GetConfigmapRequest)(nil),    // 2: rune.api.GetConfigmapRequest
-	(*UpdateConfigmapRequest)(nil), // 3: rune.api.UpdateConfigmapRequest
-	(*DeleteConfigmapRequest)(nil), // 4: rune.api.DeleteConfigmapRequest
-	(*ListConfigmapsRequest)(nil),  // 5: rune.api.ListConfigmapsRequest
-	(*ConfigmapResponse)(nil),      // 6: rune.api.ConfigmapResponse
-	(*ListConfigmapsResponse)(nil), // 7: rune.api.ListConfigmapsResponse
-	nil,                            // 8: rune.api.Configmap.DataEntry
-	nil,                            // 9: rune.api.ListConfigmapsRequest.LabelSelectorEntry
-	nil,                            // 10: rune.api.ListConfigmapsRequest.FieldSelectorEntry
-	(*PagingParams)(nil),           // 11: rune.api.PagingParams
-	(*Status)(nil),                 // 12: rune.api.Status
+	(*Configmap)(nil),                     // 0: rune.api.Configmap
+	(*CreateConfigmapRequest)(nil),        // 1: rune.api.CreateConfigmapRequest
+	(*GetConfigmapRequest)(nil),           // 2: rune.api.GetConfigmapRequest
+	(*UpdateConfigmapRequest)(nil),        // 3: rune.api.UpdateConfigmapRequest
+	(*DeleteConfigmapRequest)(nil),        // 4: rune.api.DeleteConfigmapRequest
+	(*ListConfigmapsRequest)(nil),         // 5: rune.api.ListConfigmapsRequest
+	(*PatchConfigmapRequest)(nil),         // 6: rune.api.PatchConfigmapRequest
+	(*ListConfigmapVersionsRequest)(nil),  // 7: rune.api.ListConfigmapVersionsRequest
+	(*ListConfigmapVersionsResponse)(nil), // 8: rune.api.ListConfigmapVersionsResponse
+	(*RollbackConfigmapRequest)(nil),      // 9: rune.api.RollbackConfigmapRequest
+	(*ConfigmapResponse)(nil),             // 10: rune.api.ConfigmapResponse
+	(*ListConfigmapsResponse)(nil),        // 11: rune.api.ListConfigmapsResponse
+	nil,                                   // 12: rune.api.Configmap.DataEntry
+	nil,                                   // 13: rune.api.ListConfigmapsRequest.LabelSelectorEntry
+	nil,                                   // 14: rune.api.ListConfigmapsRequest.FieldSelectorEntry
+	nil,                                   // 15: rune.api.PatchConfigmapRequest.SetEntry
+	(*PagingParams)(nil),                  // 16: rune.api.PagingParams
+	(*Status)(nil),                        // 17: rune.api.Status
 }
 var file_pkg_api_proto_configmap_proto_depIdxs = []int32{
-	8,  // 0: rune.api.Configmap.data:type_name -> rune.api.Configmap.DataEntry
+	12, // 0: rune.api.Configmap.data:type_name -> rune.api.Configmap.DataEntry
 	0,  // 1: rune.api.CreateConfigmapRequest.configmap:type_name -> rune.api.Configmap
 	0,  // 2: rune.api.UpdateConfigmapRequest.configmap:type_name -> rune.api.Configmap
-	9,  // 3: rune.api.ListConfigmapsRequest.label_selector:type_name -> rune.api.ListConfigmapsRequest.LabelSelectorEntry
-	10, // 4: rune.api.ListConfigmapsRequest.field_selector:type_name -> rune.api.ListConfigmapsRequest.FieldSelectorEntry
-	11, // 5: rune.api.ListConfigmapsRequest.paging:type_name -> rune.api.PagingParams
-	0,  // 6: rune.api.ConfigmapResponse.configmap:type_name -> rune.api.Configmap
-	12, // 7: rune.api.ConfigmapResponse.status:type_name -> rune.api.Status
-	0,  // 8: rune.api.ListConfigmapsResponse.configmaps:type_name -> rune.api.Configmap
-	12, // 9: rune.api.ListConfigmapsResponse.status:type_name -> rune.api.Status
-	1,  // 10: rune.api.ConfigmapService.CreateConfigmap:input_type -> rune.api.CreateConfigmapRequest
-	2,  // 11: rune.api.ConfigmapService.GetConfigmap:input_type -> rune.api.GetConfigmapRequest
-	3,  // 12: rune.api.ConfigmapService.UpdateConfigmap:input_type -> rune.api.UpdateConfigmapRequest
-	4,  // 13: rune.api.ConfigmapService.DeleteConfigmap:input_type -> rune.api.DeleteConfigmapRequest
-	5,  // 14: rune.api.ConfigmapService.ListConfigmaps:input_type -> rune.api.ListConfigmapsRequest
-	6,  // 15: rune.api.ConfigmapService.CreateConfigmap:output_type -> rune.api.ConfigmapResponse
-	6,  // 16: rune.api.ConfigmapService.GetConfigmap:output_type -> rune.api.ConfigmapResponse
-	6,  // 17: rune.api.ConfigmapService.UpdateConfigmap:output_type -> rune.api.ConfigmapResponse
-	12, // 18: rune.api.ConfigmapService.DeleteConfigmap:output_type -> rune.api.Status
-	7,  // 19: rune.api.ConfigmapService.ListConfigmaps:output_type -> rune.api.ListConfigmapsResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	13, // 3: rune.api.ListConfigmapsRequest.label_selector:type_name -> rune.api.ListConfigmapsRequest.LabelSelectorEntry
+	14, // 4: rune.api.ListConfigmapsRequest.field_selector:type_name -> rune.api.ListConfigmapsRequest.FieldSelectorEntry
+	16, // 5: rune.api.ListConfigmapsRequest.paging:type_name -> rune.api.PagingParams
+	15, // 6: rune.api.PatchConfigmapRequest.set:type_name -> rune.api.PatchConfigmapRequest.SetEntry
+	0,  // 7: rune.api.ListConfigmapVersionsResponse.versions:type_name -> rune.api.Configmap
+	17, // 8: rune.api.ListConfigmapVersionsResponse.status:type_name -> rune.api.Status
+	0,  // 9: rune.api.ConfigmapResponse.configmap:type_name -> rune.api.Configmap
+	17, // 10: rune.api.ConfigmapResponse.status:type_name -> rune.api.Status
+	0,  // 11: rune.api.ListConfigmapsResponse.configmaps:type_name -> rune.api.Configmap
+	17, // 12: rune.api.ListConfigmapsResponse.status:type_name -> rune.api.Status
+	1,  // 13: rune.api.ConfigmapService.CreateConfigmap:input_type -> rune.api.CreateConfigmapRequest
+	2,  // 14: rune.api.ConfigmapService.GetConfigmap:input_type -> rune.api.GetConfigmapRequest
+	3,  // 15: rune.api.ConfigmapService.UpdateConfigmap:input_type -> rune.api.UpdateConfigmapRequest
+	6,  // 16: rune.api.ConfigmapService.PatchConfigmap:input_type -> rune.api.PatchConfigmapRequest
+	4,  // 17: rune.api.ConfigmapService.DeleteConfigmap:input_type -> rune.api.DeleteConfigmapRequest
+	5,  // 18: rune.api.ConfigmapService.ListConfigmaps:input_type -> rune.api.ListConfigmapsRequest
+	7,  // 19: rune.api.ConfigmapService.ListConfigmapVersions:input_type -> rune.api.ListConfigmapVersionsRequest
+	9,  // 20: rune.api.ConfigmapService.RollbackConfigmap:input_type -> rune.api.RollbackConfigmapRequest
+	10, // 21: rune.api.ConfigmapService.CreateConfigmap:output_type -> rune.api.ConfigmapResponse
+	10, // 22: rune.api.ConfigmapService.GetConfigmap:output_type -> rune.api.ConfigmapResponse
+	10, // 23: rune.api.ConfigmapService.UpdateConfigmap:output_type -> rune.api.ConfigmapResponse
+	10, // 24: rune.api.ConfigmapService.PatchConfigmap:output_type -> rune.api.ConfigmapResponse
+	17, // 25: rune.api.ConfigmapService.DeleteConfigmap:output_type -> rune.api.Status
+	11, // 26: rune.api.ConfigmapService.ListConfigmaps:output_type -> rune.api.ListConfigmapsResponse
+	8,  // 27: rune.api.ConfigmapService.ListConfigmapVersions:output_type -> rune.api.ListConfigmapVersionsResponse
+	10, // 28: rune.api.ConfigmapService.RollbackConfigmap:output_type -> rune.api.ConfigmapResponse
+	21, // [21:29] is the sub-list for method output_type
+	13, // [13:21] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_configmap_proto_init() }
@@ -599,7 +874,7 @@ func file_pkg_api_proto_configmap_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_configmap_proto_rawDesc), len(file_pkg_api_proto_configmap_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

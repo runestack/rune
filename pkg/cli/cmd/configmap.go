@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/types"
@@ -11,11 +13,9 @@ import (
 )
 
 // newConfigmapCmd builds the `rune configmap` command group — the configmap
-// counterpart to `rune secret`. Configmaps are plaintext and unversioned-by-
-// reveal (there is no encryption, so no `reveal`; the server keeps no per-
-// version history RPC, so no `versions`/`rollback`). The lifecycle that does
-// apply — get/list/update/set/unset/delete — mirrors the secret group so the
-// two read the same.
+// counterpart to `rune secret`, at parity except for `reveal` (configmaps are
+// plaintext, so `get` already shows the data). get/list/update/set/unset/
+// versions/rollback/delete all mirror the secret group.
 //
 // The historical `rune get config` / `rune create config` / `rune delete
 // config` commands continue to work and share the same gRPC plumbing.
@@ -23,13 +23,15 @@ func newConfigmapCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "configmap",
 		Aliases: []string{"configmaps"},
-		Short:   "Manage configmaps (get, list, update, set, unset, delete)",
+		Short:   "Manage configmaps (get, list, update, set, unset, versions, rollback, delete)",
 	}
 	cmd.AddCommand(newConfigmapGetCmd())
 	cmd.AddCommand(newConfigmapListCmd())
 	cmd.AddCommand(newConfigmapUpdateCmd())
 	cmd.AddCommand(newConfigmapSetCmd())
 	cmd.AddCommand(newConfigmapUnsetCmd())
+	cmd.AddCommand(newConfigmapVersionsCmd())
+	cmd.AddCommand(newConfigmapRollbackCmd())
 	cmd.AddCommand(newConfigmapDeleteCmd())
 	return cmd
 }
@@ -129,25 +131,17 @@ without replacing the rest, use 'rune configmap set' / 'unset'.`,
 	return cmd
 }
 
-// --- set (read-merge-write upsert) ---
-//
-// Unlike `rune secret set` (a server-side atomic merge via PatchSecret), the
-// configmap API has no patch RPC, so `set` reads the current configmap, applies
-// the upserts client-side, and writes the merged map back with UpdateConfigmap.
-// Last-writer-wins under concurrent edits — acceptable for plaintext config.
+// --- set (server-side merge) ---
 
 func newConfigmapSetCmd() *cobra.Command {
 	var ns string
 	var fromFile []string
 	cmd := &cobra.Command{
 		Use:   "set <name> [KEY=VALUE ...]",
-		Short: "Upsert one or more keys in a configmap",
+		Short: "Upsert one or more keys in a configmap (server-side merge)",
 		Long: `Set upserts the given keys into an existing configmap's data map without
-touching the other keys. Each invocation creates a new version.
-
-Note: the configmap API has no server-side merge, so this reads the current
-configmap and writes back the merged map (last-writer-wins). Use this to
-change individual keys without re-specifying the whole map.
+touching the other keys. The server performs the merge atomically under a
+per-configmap lock and writes a new version.
 
 Examples:
   rune configmap set app-config -n prod LOG_LEVEL=debug
@@ -176,23 +170,13 @@ Examples:
 				return err
 			}
 			defer api.Close()
-			cc := client.NewConfigmapClient(api)
-			cfg, err := cc.GetConfigmap(ns, name)
+			out, err := client.NewConfigmapClient(api).PatchConfigmap(ns, name, set, nil)
 			if err != nil {
-				return err
-			}
-			if cfg.Data == nil {
-				cfg.Data = map[string]string{}
-			}
-			for k, v := range set {
-				cfg.Data[k] = v
-			}
-			if err := cc.UpdateConfigmap(cfg); err != nil {
 				return err
 			}
 			keys := keysOf(set)
 			sort.Strings(keys)
-			fmt.Printf("Configmap %s/%s set %s%s\n", ns, name, strings.Join(keys, ","), versionSuffix(cc, ns, name))
+			fmt.Printf("Configmap %s/%s patched (v%d): set %s\n", ns, name, out.Version, strings.Join(keys, ","))
 			return nil
 		},
 	}
@@ -201,19 +185,16 @@ Examples:
 	return cmd
 }
 
-// --- unset (read-merge-write removal, idempotent) ---
+// --- unset (server-side merge, idempotent) ---
 
 func newConfigmapUnsetCmd() *cobra.Command {
 	var ns string
 	cmd := &cobra.Command{
 		Use:   "unset <name> KEY [KEY ...]",
-		Short: "Remove one or more keys from a configmap",
+		Short: "Remove one or more keys from a configmap (server-side merge)",
 		Long: `Unset removes the listed keys from an existing configmap's data map without
 touching the other keys. Missing keys are silently ignored — re-running the
-same unset is safe.
-
-Note: the configmap API has no server-side merge, so this reads the current
-configmap and writes back the reduced map (last-writer-wins).
+same unset is safe. The server performs the merge atomically.
 
 Examples:
   rune configmap unset app-config -n prod LEGACY_FLAG
@@ -228,32 +209,107 @@ Examples:
 				return err
 			}
 			defer api.Close()
-			cc := client.NewConfigmapClient(api)
-			cfg, err := cc.GetConfigmap(ns, name)
+			out, err := client.NewConfigmapClient(api).PatchConfigmap(ns, name, nil, unset)
 			if err != nil {
 				return err
 			}
-			removed := false
-			for _, k := range unset {
-				if _, ok := cfg.Data[k]; ok {
-					delete(cfg.Data, k)
-					removed = true
-				}
-			}
-			if !removed {
-				fmt.Printf("Configmap %s/%s unchanged (no matching keys)\n", ns, name)
-				return nil
-			}
-			if err := cc.UpdateConfigmap(cfg); err != nil {
-				return err
-			}
 			sort.Strings(unset)
-			fmt.Printf("Configmap %s/%s unset %s%s\n", ns, name, strings.Join(unset, ","), versionSuffix(cc, ns, name))
+			fmt.Printf("Configmap %s/%s patched (v%d): unset %s\n", ns, name, out.Version, strings.Join(unset, ","))
 			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
 	return cmd
+}
+
+// --- versions ---
+
+func newConfigmapVersionsCmd() *cobra.Command {
+	var ns, format string
+	cmd := &cobra.Command{
+		Use:   "versions <name>",
+		Short: "List historical versions of a configmap",
+		Long: `Versions returns metadata for every historical version of a configmap,
+newest first.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			versions, err := client.NewConfigmapClient(api).ListConfigmapVersions(ns, args[0])
+			if err != nil {
+				return err
+			}
+			return renderConfigmapVersions(versions, format)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
+	cmd.Flags().StringVarP(&format, "output", "o", "table", "Output format: table|json|yaml")
+	return cmd
+}
+
+// --- rollback ---
+
+func newConfigmapRollbackCmd() *cobra.Command {
+	var ns string
+	var toVersion int
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "rollback <name>",
+		Short: "Rewrite a configmap's HEAD to the contents of a prior version",
+		Long: `Rollback fetches the named historical version and writes its data as a new
+HEAD version (head+1). Old versions are retained — rollback never deletes
+history.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			if toVersion <= 0 {
+				return fmt.Errorf("--to is required and must be > 0")
+			}
+			if !yes {
+				fmt.Fprintf(os.Stderr, "Rollback configmap %s/%s to version %d? Pass --yes to confirm.\n", ns, name, toVersion)
+				return fmt.Errorf("aborted: confirmation required")
+			}
+			api, err := newAPIClient("", "")
+			if err != nil {
+				return err
+			}
+			defer api.Close()
+			cfg, err := client.NewConfigmapClient(api).RollbackConfigmap(ns, name, toVersion)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Configmap %s/%s rolled back to version %d (new HEAD = v%d)\n", ns, name, toVersion, cfg.Version)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
+	cmd.Flags().IntVar(&toVersion, "to", 0, "Target historical version to roll back to")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm operation")
+	return cmd
+}
+
+// renderConfigmapVersions prints a configmap's version history. Configmaps are
+// plaintext, so data is available — but the version list shows metadata only
+// (key count); use `rune configmap get` for the current data.
+func renderConfigmapVersions(versions []*types.Configmap, format string) error {
+	switch strings.ToLower(format) {
+	case "json":
+		return writeJSON(versions)
+	case "yaml":
+		return writeYAML(versions)
+	case "", "table":
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "VERSION\tKEYS\tCREATED\tUPDATED")
+		for _, c := range versions {
+			fmt.Fprintf(w, "%d\t%d\t%s\t%s\n", c.Version, len(c.Data), formatTime(c.CreatedAt), formatTime(c.UpdatedAt))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unknown output format: %s", format)
+	}
 }
 
 // --- delete ---
@@ -273,14 +329,4 @@ Deletes are recorded in the audit log.`,
 	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace")
 	cmd.Flags().BoolVar(&opts.ignoreNotFound, "ignore-not-found", false, "Don't error if the configmap doesn't exist")
 	return cmd
-}
-
-// versionSuffix best-effort fetches the configmap's new version for the
-// confirmation line (e.g. " (v3)"). Returns "" if it can't be read — the
-// mutation already succeeded, so a missing version is cosmetic.
-func versionSuffix(cc *client.ConfigmapClient, ns, name string) string {
-	if cfg, err := cc.GetConfigmap(ns, name); err == nil && cfg.Version > 0 {
-		return fmt.Sprintf(" (v%d)", cfg.Version)
-	}
-	return ""
 }
