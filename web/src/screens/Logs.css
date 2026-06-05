@@ -1,3 +1,15 @@
+/* ---------- full-height (k8s-style) logs ---------- */
+.logs-screen {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  width: 100%; max-width: 1480px; margin: 0 auto; padding: 22px 32px 18px;
+}
+.logs-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.logs-head .lh-id { flex: 1 1 auto; min-width: 0; }
+.lh-title { font-family: var(--serif); font-size: 23px; font-weight: 400; letter-spacing: -0.015em; color: var(--text); margin: 2px 0 0; line-height: 1.1; }
+.lh-title em { font-style: italic; color: var(--accent-text); }
+.logsview, .execview { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.logwell.grow, .term.grow { flex: 1; height: auto; min-height: 120px; }
+
 /* ---------- command echo + exec terminal ---------- */
 .cmdline { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); padding: 2px 2px 9px; }
 .cmdline .c-prompt { color: var(--accent-text); }

@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  AppShell, Sidebar, Topbar, PageHead, TweaksPanel, TweakSection, TweakRadio, TweakColor, ConfirmProvider, ToastProvider,
+  AppShell, Sidebar, Topbar, SearchPalette, PageHead, TweaksPanel, TweakSection, TweakRadio, TweakColor, ConfirmProvider, ToastProvider,
 } from "./components";
 import type { NavGroup } from "./components";
 import { useTweaks } from "./lib/theme";
@@ -78,6 +78,29 @@ export function App({ user, onLogout }: AppProps) {
   const [route, setRoute] = useState("overview");
   const [svc, setSvc] = useState<Service | null>(null);
   const [logsSvc, setLogsSvc] = useState<string | null>(null);
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    try { return localStorage.getItem("rune-nav-collapsed") === "1"; } catch { return false; }
+  });
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem("rune-nav-collapsed", navCollapsed ? "1" : "0"); } catch { /* ignore */ }
+  }, [navCollapsed]);
+  const toggleNav = () => setNavCollapsed((v) => !v);
+
+  // ⌘K / Ctrl-K opens the command palette; "/" opens it when not typing.
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setSearchOpen(true); }
+      else if (e.key === "/" && !searchOpen) {
+        const el = e.target as HTMLElement | null;
+        const tag = el?.tagName;
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && !el?.isContentEditable) { e.preventDefault(); setSearchOpen(true); }
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [searchOpen]);
 
   function go(r: string, arg?: Service) {
     if (r === "logs" && arg) setLogsSvc(arg.name);
@@ -107,6 +130,8 @@ export function App({ user, onLogout }: AppProps) {
       <ConfirmProvider>
       <ToastProvider>
       <AppShell
+        collapsed={navCollapsed}
+        contentFlex={route === "logs"}
         sidebar={
           <Sidebar
             nav={NAV}
@@ -116,12 +141,25 @@ export function App({ user, onLogout }: AppProps) {
             context={<ContextSwitcher go={go} />}
             user={user}
             onLogout={onLogout}
+            onToggleNav={toggleNav}
           />
         }
-        topbar={<Topbar crumbs={CRUMBS[route] ?? ["Cluster"]} scope={<ScopeIndicator />} />}
+        topbar={
+          <Topbar
+            crumbs={CRUMBS[route] ?? ["Cluster"]}
+            scope={<ScopeIndicator />}
+            collapsed={navCollapsed}
+            onToggleNav={toggleNav}
+            onSearch={() => setSearchOpen(true)}
+          />
+        }
       >
         <div key={route} className="fadein">{screen}</div>
       </AppShell>
+
+      {searchOpen && (
+        <SearchPalette nav={NAV} onClose={() => setSearchOpen(false)} go={go} openSvc={openSvc} />
+      )}
 
       {svc && <ServiceDrawer svc={svc} onClose={() => setSvc(null)} go={go} />}
 

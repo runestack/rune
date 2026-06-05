@@ -294,6 +294,19 @@ export function usePrincipals(): Query<Principal[]> {
   );
 }
 
+/* ---------------- nodes ---------------- */
+
+/** Cluster nodes (health components), for the command palette. */
+export function useNodes(): Query<Node[]> {
+  return useQuery<Node[]>(
+    [],
+    async (signal) => {
+      const res = await clients.health.getHealth({ componentType: "node", includeChecks: false }, { signal });
+      return res.components.filter((c) => c.componentType === "node").map((c) => mapNodeHealth(c));
+    },
+  );
+}
+
 /* ---------------- overview ---------------- */
 
 export interface OverviewData {

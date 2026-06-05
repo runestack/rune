@@ -1,5 +1,11 @@
 .sidebar { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
-.sb-head { padding: 20px 18px 14px; }
+.sb-head { padding: 20px 18px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.nav-toggle {
+  display: grid; place-items: center; width: 30px; height: 30px; flex: none;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-3); cursor: pointer; transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.nav-toggle:hover { border-color: var(--accent-line); color: var(--accent-text); background: var(--surface); }
 .sb-ctx-wrap { position: relative; margin: 0 12px 12px; }
 .sb-context {
   width: 100%; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border);
