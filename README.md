@@ -13,6 +13,7 @@ Rune is a lightweight, powerful orchestration platform designed to simplify the 
 - **Dependency-aware**: Automatically manage service dependencies
 - **Multi-node**: Scale across multiple nodes
 - **Built-in security**: Authentication, authorization, and encryption
+- **Web dashboard**: Embedded browser dashboard for live cluster ops — services, logs, exec, secrets, RBAC
 - **Interactive debugging**: Exec into running services for real-time debugging
 - **Health monitoring**: Built-in health checks and probes
 - **Rollback support**: Version history and instant rollbacks
@@ -165,6 +166,21 @@ You now have a fully configured Rune system with:
 - Keep bootstrap tokens secure - they have full admin access
 - Delete bootstrap tokens after creating regular users
 - Implement least-privilege policies for production use
+
+## Dashboard
+
+Runed ships an embedded **web dashboard** (enabled by default) for live cluster
+operations — services, instances, logs, exec, secrets, networking and RBAC.
+Open it, signed in with your CLI session and tunnelled over your authenticated
+connection — no exposed port, no SSH:
+
+```bash
+rune ui
+```
+
+For ports, the `ui.*` config (`require_tls` and friends), accessing a remote
+server, and `rune ui --url` for TLS-fronted deployments, see
+**[The web dashboard](https://docs.runestack.io/guides/dashboard/)**.
 
 ## Core Concepts
 
@@ -557,9 +573,7 @@ User-facing documentation lives at **[docs.runestack.io](https://docs.runestack.
 Repo-local references:
 
 - [Examples](examples/README.md)
-- [Development Guide](.cursor/rules/development-guide.mdc)
-- [Architecture Guide](.cursor/rules/architecture-guide.mdc)
-- [CLI Commands](.cursor/rules/cli-commands.mdc)
+- [Contributing](CONTRIBUTING.md)
 
 ## Contributing
 
