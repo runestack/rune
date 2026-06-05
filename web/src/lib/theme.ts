@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { DEVTOOLS } from "./devtools";
 
 /* hex helpers for live accent recolor */
 export function hexToRgb(h: string): [number, number, number] {
@@ -63,17 +64,22 @@ export function applyTheme(t: Pick<Tweaks, "accent" | "edges">): void {
 /** Tweaks state, persisted to localStorage, applied to :root on change. */
 export function useTweaks(): [Tweaks, <K extends keyof Tweaks>(k: K, v: Tweaks[K]) => void] {
   const [t, setT] = useState<Tweaks>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) return { ...TWEAK_DEFAULTS, ...JSON.parse(raw) };
-    } catch {
-      /* ignore */
+    // Production always uses the canonical defaults — tweaks are a dev tool, so
+    // their persisted state is ignored unless dev tooling is enabled.
+    if (DEVTOOLS) {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return { ...TWEAK_DEFAULTS, ...JSON.parse(raw) };
+      } catch {
+        /* ignore */
+      }
     }
     return TWEAK_DEFAULTS;
   });
 
   useEffect(() => {
     applyTheme(t);
+    if (!DEVTOOLS) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(t));
     } catch {

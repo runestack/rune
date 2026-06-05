@@ -1,18 +1,15 @@
 /* ============================================================
    Data hooks — one per resource. Each returns { data, loading, error, reload }.
 
-   In demo mode (no backend session) the hook returns the bundled RUNE.* mock
-   synchronously. Otherwise it calls the live Connect client, maps the proto
-   response to the screen shape via ../api/map, and exposes loading/error.
+   Each hook calls the live Connect client, maps the proto response to the
+   screen shape via ../api/map, and exposes loading/error/reload.
    ============================================================ */
 import { useCallback, useEffect, useState } from "react";
 import { clients } from "./transport";
-import { useDemo } from "./demo";
-import { RUNE } from "../mock/data";
 import type {
   ConfigMap, Instance, Namespace, Node, Policy, Principal,
   Role, Secret, Service, StorageClass, Volume,
-} from "../mock/data";
+} from "./types";
 import {
   ageFrom, healthStatusKey, mapConfigmap, mapInstance, mapNamespace, mapNodeHealth,
   mapPolicy, mapPolicyToRole, mapPrincipal, mapSecret, mapService, mapStorageClass,
@@ -30,30 +27,23 @@ export interface Query<T> {
 const ALL_NS = "*";
 
 /**
- * useQuery is the shared engine. `mock` is returned synchronously in demo mode;
- * otherwise `live` is awaited, its result becomes `data`, and loading/error are
- * tracked. The effect re-runs when `deps` change or reload() is called.
+ * useQuery is the shared engine. `initial` seeds `data` before the first fetch
+ * resolves (an empty value); `live` is awaited and its result becomes `data`,
+ * with loading/error tracked. Re-runs when `deps` change or reload() is called.
  */
 function useQuery<T>(
-  mock: T,
+  initial: T,
   live: (signal: AbortSignal) => Promise<T>,
   deps: unknown[] = [],
 ): Query<T> {
-  const demo = useDemo();
-  const [data, setData] = useState<T>(mock);
-  const [loading, setLoading] = useState(!demo);
+  const [data, setData] = useState<T>(initial);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
-    if (demo) {
-      setData(mock);
-      setLoading(false);
-      setError(null);
-      return;
-    }
     const ctrl = new AbortController();
     let alive = true;
     setLoading(true);
@@ -74,16 +64,39 @@ function useQuery<T>(
       ctrl.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demo, nonce, ...deps]);
+  }, [nonce, ...deps]);
 
   return { data, loading, error, reload };
+}
+
+/* ---------------- cluster identity ---------------- */
+
+export interface ClusterInfo { name: string; context: string; version: string }
+
+/**
+ * Lightweight cluster identity for the sidebar context block. The backend has
+ * no "cluster name" RPC, so live identity is the connected host + real server
+ * version. Mounted once (in the sidebar), so this fetches once per session.
+ */
+export function useCluster(): Query<ClusterInfo> {
+  return useQuery<ClusterInfo>(
+    { name: "rune", context: "", version: "" },
+    async (signal) => {
+      const ver = await clients.health.getServerVersion({}, { signal }).catch(() => null);
+      return {
+        name: "rune",
+        context: window.location.host,
+        version: ver?.version ? `rune ${ver.version}` : "rune dev",
+      };
+    },
+  );
 }
 
 /* ---------------- namespaces ---------------- */
 
 export function useNamespaces(): Query<Namespace[]> {
   return useQuery<Namespace[]>(
-    RUNE.namespaces,
+    [],
     async (signal) => {
       const [nsRes, svcRes, instRes] = await Promise.all([
         clients.namespaces.listNamespaces({}, { signal }),
@@ -108,7 +121,7 @@ export function useNamespaces(): Query<Namespace[]> {
 
 export function useServices(ns?: string): Query<Service[]> {
   return useQuery<Service[]>(
-    RUNE.services,
+    [],
     async (signal) => {
       const res = await clients.services.listServices({ namespace: ns || ALL_NS }, { signal });
       return res.services.map(mapService);
@@ -121,7 +134,7 @@ export function useServices(ns?: string): Query<Service[]> {
 
 export function useInstances(node?: string): Query<Instance[]> {
   return useQuery<Instance[]>(
-    RUNE.instances,
+    [],
     async (signal) => {
       const [instRes, svcRes] = await Promise.all([
         clients.instances.listInstances({ namespace: ALL_NS, ...(node ? { nodeId: node } : {}) }, { signal }),
@@ -139,9 +152,8 @@ export function useInstances(node?: string): Query<Instance[]> {
 
 /** Instances for a single service (used by the service drawer). */
 export function useServiceInstances(svcName: string, ns: string): Query<Instance[]> {
-  const mock = RUNE.instances.filter((i) => i.svc === svcName);
   return useQuery<Instance[]>(
-    mock,
+    [],
     async (signal) => {
       const res = await clients.instances.listInstances(
         { serviceName: svcName, namespace: ns || "default" },
@@ -159,7 +171,7 @@ export function useServiceInstances(svcName: string, ns: string): Query<Instance
 
 export function useVolumes(): Query<Volume[]> {
   return useQuery<Volume[]>(
-    RUNE.volumes,
+    [],
     async (signal) => {
       const res = await clients.volumes.listVolumes({ namespace: ALL_NS }, { signal });
       return res.volumes.map(mapVolume);
@@ -169,7 +181,7 @@ export function useVolumes(): Query<Volume[]> {
 
 export function useStorageClasses(): Query<StorageClass[]> {
   return useQuery<StorageClass[]>(
-    RUNE.storageClasses,
+    [],
     async (signal) => {
       const [scRes, volRes] = await Promise.all([
         clients.storage.listStorageClasses({}, { signal }),
@@ -186,7 +198,7 @@ export function useStorageClasses(): Query<StorageClass[]> {
 
 export function useSecrets(): Query<Secret[]> {
   return useQuery<Secret[]>(
-    RUNE.secrets,
+    [],
     async (signal) => {
       const res = await clients.secrets.listSecrets({ namespace: ALL_NS }, { signal });
       return res.secrets.map(mapSecret);
@@ -196,7 +208,7 @@ export function useSecrets(): Query<Secret[]> {
 
 export function useConfigmaps(): Query<ConfigMap[]> {
   return useQuery<ConfigMap[]>(
-    RUNE.configmaps,
+    [],
     async (signal) => {
       const res = await clients.configmaps.listConfigmaps({ namespace: ALL_NS }, { signal });
       return res.configmaps.map(mapConfigmap);
@@ -204,11 +216,34 @@ export function useConfigmaps(): Query<ConfigMap[]> {
   );
 }
 
+export interface SecretVersion { version: number; when: string; keys: number; current: boolean }
+
+/** Real per-version history for one secret (ListSecretVersions, newest-first). */
+export function useSecretVersions(name: string, ns: string): Query<SecretVersion[]> {
+  return useQuery<SecretVersion[]>(
+    [],
+    async (signal) => {
+      const res = await clients.secrets.listSecretVersions({ name, namespace: ns || "default" }, { signal });
+      const latest = res.versions.reduce((m, v) => Math.max(m, v.version), 0);
+      return res.versions
+        .slice()
+        .sort((a, b) => b.version - a.version)
+        .map((v) => ({
+          version: v.version,
+          when: ageFrom(v.updatedAt || v.createdAt),
+          keys: v.dataKeys?.length ?? 0,
+          current: v.version === latest,
+        }));
+    },
+    [name, ns],
+  );
+}
+
 /* ---------------- networking (RBAC policies projected) ---------------- */
 
 export function usePolicies(): Query<Policy[]> {
   return useQuery<Policy[]>(
-    RUNE.policies,
+    [],
     async (signal) => {
       const res = await clients.admin.policyList({}, { signal });
       return res.policies.map(mapPolicy);
@@ -220,7 +255,7 @@ export function usePolicies(): Query<Policy[]> {
 
 export function useRoles(): Query<Role[]> {
   return useQuery<Role[]>(
-    RUNE.roles,
+    [],
     async (signal) => {
       const [polRes, userRes] = await Promise.all([
         clients.admin.policyList({}, { signal }),
@@ -239,7 +274,7 @@ export function useRoles(): Query<Role[]> {
 
 export function usePrincipals(): Query<Principal[]> {
   return useQuery<Principal[]>(
-    RUNE.principals,
+    [],
     async (signal) => {
       const [userRes, tokRes] = await Promise.all([
         clients.admin.userList({}, { signal }),
@@ -269,7 +304,7 @@ export interface OverviewData {
   };
   nodes: Node[];
   services: Service[];
-  events: typeof RUNE.events;
+  events: FeedItem[];
   cpuHistory: number[];
   memHistory: number[];
 }
@@ -277,16 +312,16 @@ export interface OverviewData {
 const GiB = 1024 ** 3;
 
 export function useOverview(): Query<OverviewData> {
-  const mock: OverviewData = {
-    cluster: RUNE.cluster,
-    totals: RUNE.totals,
-    nodes: RUNE.nodes,
-    services: RUNE.services,
-    events: RUNE.events,
-    cpuHistory: RUNE.cpuHistory,
-    memHistory: RUNE.memHistory,
+  const empty: OverviewData = {
+    cluster: { name: "rune", context: "", version: "", uptime: "—", nodes: 0 },
+    totals: { services: 0, healthy: 0, instances: 0, runningInstances: 0, namespaces: 0, cpu: 0, mem: 0, cpuCores: "—", memGi: "—" },
+    nodes: [],
+    services: [],
+    events: [],
+    cpuHistory: [],
+    memHistory: [],
   };
-  return useQuery<OverviewData>(mock, async (signal) => {
+  return useQuery<OverviewData>(empty, async (signal) => {
     const [healthRes, svcRes, instRes, nsRes, verRes] = await Promise.all([
       clients.health.getHealth({ componentType: "node", includeChecks: false }, { signal }),
       clients.services.listServices({ namespace: ALL_NS }, { signal }),
@@ -358,13 +393,13 @@ export function useOverview(): Query<OverviewData> {
 export interface FeedItem { t: string; kind: string; svc: string; ns: string; msg: string; status: string }
 
 /**
- * useAuditFeed maps recent audit events to the activity-feed shape. The mock
- * uses the rich, HTML-laden RUNE.events; live audit events render as plain
- * text (no HTML) so they are injection-safe via the Feed's innerHTML.
+ * useAuditFeed maps recent audit events to the activity-feed shape. Live audit
+ * events render as plain text (no HTML) so they are injection-safe via the
+ * Feed's innerHTML.
  */
 export function useAuditFeed(limit = 8): Query<FeedItem[]> {
   return useQuery<FeedItem[]>(
-    RUNE.events as unknown as FeedItem[],
+    [],
     async (signal) => {
       const res = await clients.audit.listAuditEvents({ limit }, { signal });
       return res.events.map((e) => {

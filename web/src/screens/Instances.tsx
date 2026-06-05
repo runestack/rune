@@ -1,25 +1,30 @@
 import { useState } from "react";
 import { Badge, Card, Dot, Dropdown, EmptyState, Icon, PageHead, Spinner, Table } from "../components";
 import { useInstances, useServices } from "../api/hooks";
-import type { Service } from "../mock/data";
+import { useScope } from "../lib/scope";
+import type { Service } from "../api/types";
 
 export function Instances({ openSvc }: { openSvc: (s: Service) => void }) {
   const { data: instances, loading, error, reload } = useInstances();
   const { data: services } = useServices();
+  const { ns: scopeNs } = useScope();
   const [node, setNode] = useState("all");
 
-  // node list derived from live instances
+  // Namespace scope is the base filter; node is a sub-filter within it.
+  const scoped = scopeNs === "all" ? instances : instances.filter((i) => i.ns === scopeNs);
+
+  // node list derived from the scoped instances
   const nodeCounts = new Map<string, number>();
-  for (const i of instances) nodeCounts.set(i.node, (nodeCounts.get(i.node) ?? 0) + 1);
+  for (const i of scoped) nodeCounts.set(i.node, (nodeCounts.get(i.node) ?? 0) + 1);
   const nodes = [...nodeCounts.keys()].filter((n) => n && n !== "—").sort();
 
-  const list = instances.filter((i) => node === "all" || i.node === node);
-  const running = instances.filter((i) => i.status === "run").length;
+  const list = scoped.filter((i) => node === "all" || i.node === node);
+  const running = scoped.filter((i) => i.status === "run").length;
 
   return (
     <div className="wrap">
       <PageHead
-        eyebrow={`${running} running · ${instances.length} total`}
+        eyebrow={`${running} running · ${scoped.length} total`}
         title="Instances"
         sub="Individual running copies of each service, scheduled across the cluster's nodes."
       />
@@ -28,7 +33,7 @@ export function Instances({ openSvc }: { openSvc: (s: Service) => void }) {
           {(close) => (
             <div className="dd-list">
               <div className={`dd-item${node === "all" ? " sel" : ""}`} onClick={() => { setNode("all"); close(); }}>
-                <Icon name="instances" size={14} /><span>All nodes</span><span className="tag ddi-sub">{instances.length}</span>
+                <Icon name="instances" size={14} /><span>All nodes</span><span className="tag ddi-sub">{scoped.length}</span>
               </div>
               <div className="dd-sep" />
               {nodes.map((n) => (
@@ -45,8 +50,8 @@ export function Instances({ openSvc }: { openSvc: (s: Service) => void }) {
         <Spinner label="Loading instances…" />
       ) : error ? (
         <EmptyState icon="instances" tone="error" title="Couldn't load instances" hint={error} action={{ label: "Retry", onClick: reload }} />
-      ) : instances.length === 0 ? (
-        <EmptyState icon="instances" title="No instances running" hint="Instances appear once a deployed service schedules its replicas." />
+      ) : scoped.length === 0 ? (
+        <EmptyState icon="instances" title="No instances running" hint={scopeNs === "all" ? "Instances appear once a deployed service schedules its replicas." : `No instances in the ${scopeNs} namespace.`} />
       ) : (
         <Card style={{ overflow: "hidden" }}>
           <Table>

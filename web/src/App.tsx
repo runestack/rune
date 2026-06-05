@@ -1,12 +1,14 @@
 import { useState } from "react";
 import {
-  AppShell, Sidebar, Topbar, PageHead, TweaksPanel, TweakSection, TweakRadio, TweakColor,
+  AppShell, Sidebar, Topbar, PageHead, TweaksPanel, TweakSection, TweakRadio, TweakColor, ConfirmProvider, ToastProvider,
 } from "./components";
 import type { NavGroup } from "./components";
 import { useTweaks } from "./lib/theme";
-import { DemoProvider } from "./api/demo";
-import { RUNE } from "./mock/data";
-import type { Service } from "./mock/data";
+import { DEVTOOLS } from "./lib/devtools";
+import { ScopeProvider } from "./lib/scope";
+import { ContextSwitcher } from "./ContextSwitcher";
+import { ScopeIndicator } from "./ScopeIndicator";
+import type { Service } from "./api/types";
 import { Overview } from "./screens/Overview";
 import { Services } from "./screens/Services";
 import { Instances } from "./screens/Instances";
@@ -23,24 +25,24 @@ const NAV: NavGroup[] = [
     group: "Cluster",
     items: [
       { id: "overview", label: "Overview", icon: "overview" },
-      { id: "services", label: "Services", icon: "services", count: RUNE.totals.services },
-      { id: "instances", label: "Instances", icon: "instances", count: RUNE.totals.instances },
-      { id: "namespaces", label: "Namespaces", icon: "namespaces", count: RUNE.namespaces.length },
+      { id: "services", label: "Services", icon: "services" },
+      { id: "instances", label: "Instances", icon: "instances" },
+      { id: "namespaces", label: "Namespaces", icon: "namespaces" },
     ],
   },
   {
     group: "Config & Data",
     items: [
-      { id: "storage", label: "Storage", icon: "storage", count: RUNE.volumes.length },
-      { id: "secrets", label: "Secrets & Config", icon: "secrets", count: RUNE.secrets.length + RUNE.configmaps.length },
-      { id: "network", label: "Networking", icon: "network", count: RUNE.policies.length },
+      { id: "storage", label: "Storage", icon: "storage" },
+      { id: "secrets", label: "Secrets & Config", icon: "secrets" },
+      { id: "network", label: "Networking", icon: "network" },
     ],
   },
   {
     group: "Operate",
     items: [
       { id: "logs", label: "Logs & Exec", icon: "logs" },
-      { id: "identity", label: "Identity & RBAC", icon: "identity", count: RUNE.principals.length },
+      { id: "identity", label: "Identity & RBAC", icon: "identity" },
     ],
   },
 ];
@@ -68,11 +70,10 @@ function Placeholder({ title }: { title: string }) {
 
 export interface AppProps {
   user: { name: string; role: string };
-  demo?: boolean;
   onLogout?: () => void;
 }
 
-export function App({ user, demo, onLogout }: AppProps) {
+export function App({ user, onLogout }: AppProps) {
   const [t, setTweak] = useTweaks();
   const [route, setRoute] = useState("overview");
   const [svc, setSvc] = useState<Service | null>(null);
@@ -102,7 +103,9 @@ export function App({ user, demo, onLogout }: AppProps) {
   }
 
   return (
-    <DemoProvider value={!!demo}>
+    <ScopeProvider>
+      <ConfirmProvider>
+      <ToastProvider>
       <AppShell
         sidebar={
           <Sidebar
@@ -110,26 +113,29 @@ export function App({ user, demo, onLogout }: AppProps) {
             route={route}
             go={go}
             logoVariant={t.logo}
-            cluster={RUNE.cluster}
+            context={<ContextSwitcher go={go} />}
             user={user}
-            demo={demo}
             onLogout={onLogout}
           />
         }
-        topbar={<Topbar crumbs={CRUMBS[route] ?? ["Cluster"]} />}
+        topbar={<Topbar crumbs={CRUMBS[route] ?? ["Cluster"]} scope={<ScopeIndicator />} />}
       >
         <div key={route} className="fadein">{screen}</div>
       </AppShell>
 
       {svc && <ServiceDrawer svc={svc} onClose={() => setSvc(null)} go={go} />}
 
-      <TweaksPanel>
-        <TweakSection label="Brand" />
-        <TweakRadio label="Logo" value={t.logo} options={["mark", "tile", "wordmark", "mono"]} onChange={(v) => setTweak("logo", v)} />
-        <TweakColor label="Accent" value={t.accent} options={["#9e8cfc", "#30a46c", "#67ddfd", "#f76809", "#d6409f", "#daa16e"]} onChange={(v) => setTweak("accent", v)} />
-        <TweakSection label="Surface" />
-        <TweakRadio label="Edges" value={t.edges} options={["soft", "crisp", "sharp"]} onChange={(v) => setTweak("edges", v)} />
-      </TweaksPanel>
-    </DemoProvider>
+      {DEVTOOLS && (
+        <TweaksPanel>
+          <TweakSection label="Brand" />
+          <TweakRadio label="Logo" value={t.logo} options={["mark", "tile", "wordmark", "mono"]} onChange={(v) => setTweak("logo", v)} />
+          <TweakColor label="Accent" value={t.accent} options={["#9e8cfc", "#30a46c", "#67ddfd", "#f76809", "#d6409f", "#daa16e"]} onChange={(v) => setTweak("accent", v)} />
+          <TweakSection label="Surface" />
+          <TweakRadio label="Edges" value={t.edges} options={["soft", "crisp", "sharp"]} onChange={(v) => setTweak("edges", v)} />
+        </TweaksPanel>
+      )}
+      </ToastProvider>
+      </ConfirmProvider>
+    </ScopeProvider>
   );
 }

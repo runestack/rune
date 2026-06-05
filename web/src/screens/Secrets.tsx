@@ -1,9 +1,20 @@
 import { useEffect, useState } from "react";
-import { Badge, Button, Card, Dot, Drawer, EmptyState, Icon, KeyValue, PageHead, Segmented, Spinner, Table, Tabs, Tag } from "../components";
-import { RUNE } from "../mock/data";
-import type { ConfigMap, Secret, SecretMount } from "../mock/data";
-import { useConfigmaps, useSecrets } from "../api/hooks";
+import { Badge, Button, Card, CopyButton, Dot, Drawer, EmptyState, Field, Icon, KeyValue, PageHead, Segmented, Select, Spinner, Table, Tabs, Tag, TextInput, useToast } from "../components";
+import type { ConfigMap, Secret, SecretMount } from "../api/types";
+import { useConfigmaps, useNamespaces, useSecretVersions, useSecrets } from "../api/hooks";
+import { useScope } from "../lib/scope";
 import "./Secrets.css";
+
+// How runed encrypts secrets at rest (envelope encryption). Static cluster
+// crypto config — there is no RPC for it, so it's surfaced as a constant.
+const ENCRYPTION = {
+  algo: "AES-256-GCM",
+  scheme: "envelope encryption",
+  kek: { source: "/etc/runed/kek.key", mode: "0600", bytes: 32, loaded: "on server start" },
+  dek: "fresh 256-bit DEK generated per secret version",
+  aad: "namespace · name · version",
+  versionsKept: 5,
+};
 
 const DNS1123 = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
@@ -11,14 +22,11 @@ const fmtBytes = (b: number) => (b < 1024 ? `${b} B` : `${(b / 1024).toFixed(1)}
 const pendingOf = (r: { mounts: SecretMount[]; version: number }) => (r.mounts || []).filter((m) => m.v < r.version).length;
 
 function CopyField({ text, label }: { text: string; label?: string }) {
-  const [done, setDone] = useState(false);
   return (
     <div className="ref-field">
       {label && <span style={{ color: "var(--text-4)", fontSize: 11 }}>{label}</span>}
       <code>{text}</code>
-      <button className={`ref-copy${done ? " done" : ""}`} title="Copy" onClick={() => { navigator.clipboard?.writeText(text); setDone(true); setTimeout(() => setDone(false), 1200); }}>
-        <Icon name={done ? "check" : "copy"} size={14} />
-      </button>
+      <CopyButton value={text} />
     </div>
   );
 }
@@ -66,35 +74,35 @@ function MountCard({ res, version, keyNames, onRestart }: { res: SecretMount; ve
   );
 }
 
-interface VHist { v: number; when: string; by: string; current: boolean }
-function versionHistory(r: { version: number; updated: string; castBy: string }): VHist[] {
-  const kept = RUNE.encryption.versionsKept;
-  const span = ["just now", r.updated, "9d ago", "17d ago", "24d ago", "29d ago"];
-  const who = [r.castBy, "ci-deployer", "ore", "ada.m", "ore", "ore"];
-  const out: VHist[] = [];
-  const start = r.version;
-  const min = Math.max(1, start - kept + 1);
-  for (let v = start; v >= min; v--) {
-    const i = start - v;
-    out.push({ v, when: i === 0 ? r.updated : span[Math.min(i + 1, span.length - 1)], by: i === 0 ? r.castBy : who[Math.min(i, who.length - 1)], current: v === start });
-  }
-  return out;
-}
+interface VRow { v: number; when: string; keys: number; current: boolean }
 
-function VersionList({ r }: { r: Secret | ConfigMap }) {
+// Presentational version list. Author isn't tracked server-side, so rows show
+// the version, key count and timestamp — no fabricated "cast by".
+function VersionRows({ rows, loading, error, note }: { rows: VRow[]; loading?: boolean; error?: string | null; note?: string }) {
+  if (loading) return <Spinner label="Loading versions…" height={120} />;
+  if (error) return <EmptyState icon="secrets" tone="error" title="Couldn't load versions" hint={error} />;
+  if (rows.length === 0) return <EmptyState icon="secrets" title="No version history" />;
   return (
     <div className="fadein">
-      {versionHistory(r).map((h) => (
+      {note && <p style={{ fontSize: 11.5, color: "var(--text-3)", margin: "0 0 12px", fontFamily: "var(--mono)" }}>{note}</p>}
+      {rows.map((h) => (
         <div key={h.v} style={{ display: "flex", alignItems: "center", gap: 13, padding: "13px 4px", borderBottom: "1px solid var(--border-faint)" }}>
           <span className="mono" style={{ fontSize: 13, fontWeight: 600, color: h.current ? "var(--accent-text)" : "var(--text-2)", width: 36 }}>v{h.v}</span>
           <Dot s={h.current ? "net" : "idle"} />
-          <span style={{ fontSize: 12.5, color: "var(--text-2)" }}>cast by <span className="mono" style={{ color: "var(--text)" }}>{h.by}</span></span>
+          <span style={{ fontSize: 12.5, color: "var(--text-2)" }}>{h.keys} {h.keys === 1 ? "key" : "keys"}</span>
           {h.current && <Badge s="accent">current</Badge>}
           <span className="mono" style={{ marginLeft: "auto", fontSize: 11.5, color: "var(--text-3)" }}>{h.when}</span>
         </div>
       ))}
     </div>
   );
+}
+
+// Secrets have a real per-version history RPC; configmaps don't, so we show
+// only the current version for those.
+function SecretVersions({ sec }: { sec: Secret }) {
+  const { data, loading, error } = useSecretVersions(sec.name, sec.ns);
+  return <VersionRows rows={data.map((v) => ({ v: v.version, when: v.when, keys: v.keys, current: v.current }))} loading={loading} error={error} />;
 }
 
 function PendingBanner({ pend, version, color = "deploy" }: { pend: number; version: number; color?: string }) {
@@ -112,7 +120,7 @@ function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn }: { sec: Secret;
   const [tab, setTab] = useState("overview");
   const keyNames = sec.keys.map((k) => k.k);
   const pend = pendingOf(sec);
-  const E = RUNE.encryption;
+  const E = ENCRYPTION;
   const ref = (k: string) => (fqdn ? `secret:${sec.name}.${sec.ns}.rune/${k}` : `secret:${sec.name}/${k}`);
   return (
     <Drawer onClose={onClose}>
@@ -201,7 +209,7 @@ function SecretDrawer({ sec, onClose, onRestart, fqdn, setFqdn }: { sec: Secret;
             )}
           </div>
         )}
-        {tab === "versions" && <VersionList r={sec} />}
+        {tab === "versions" && <SecretVersions sec={sec} />}
         {tab === "encryption" && (
           <div className="fadein">
             <div className="envelope">
@@ -293,7 +301,12 @@ function ConfigDrawer({ cm, onClose, onRestart }: { cm: ConfigMap; onClose: () =
             )}
           </div>
         )}
-        {tab === "versions" && <VersionList r={cm} />}
+        {tab === "versions" && (
+          <VersionRows
+            rows={[{ v: cm.version, when: cm.updated, keys: cm.data.length, current: true }]}
+            note="ConfigMap version history isn't retained — showing the current version."
+          />
+        )}
       </div>
     </Drawer>
   );
@@ -302,9 +315,10 @@ function ConfigDrawer({ cm, onClose, onRestart }: { cm: ConfigMap; onClose: () =
 /* ---------------- CREATE DRAWER ---------------- */
 interface Row { k: string; v: string; file: string; bytes: number }
 function CreateDrawer({ onClose, onCreate }: { onClose: () => void; onCreate: (kind: string, res: Secret | ConfigMap) => void }) {
+  const { data: namespaces } = useNamespaces();
   const [kind, setKind] = useState("secret");
   const [name, setName] = useState("");
-  const [ns, setNs] = useState("production");
+  const [ns, setNs] = useState("default");
   const [stype, setStype] = useState("Opaque");
   const [source, setSource] = useState("literal");
   const [rows, setRows] = useState<Row[]>([{ k: "", v: "", file: "", bytes: 0 }]);
@@ -345,31 +359,30 @@ function CreateDrawer({ onClose, onCreate }: { onClose: () => void; onCreate: (k
       </div>
       <div className="drawer-body">
         <div style={{ display: "grid", gridTemplateColumns: kind === "secret" ? "1.3fr 1fr 1fr" : "1.3fr 1fr", gap: 12, marginBottom: 20 }}>
-          <div>
-            <label className="flabel">Name</label>
-            <input className={`finput${nameTouched && !nameValid ? " bad" : ""}`} value={name} placeholder="db-credentials" autoFocus onChange={(e) => setName(e.target.value)} />
-            <div className={`fhint ${!nameTouched ? "" : nameValid ? "ok" : "bad"}`}>
-              {!nameTouched ? "DNS-1123: a–z, 0–9, hyphen" : nameValid ? "✓ valid name" : "must match [a-z0-9]([-a-z0-9]*[a-z0-9])?"}
-            </div>
-          </div>
-          <div>
-            <label className="flabel">Namespace</label>
-            <select className="finput" value={ns} onChange={(e) => setNs(e.target.value)} style={{ cursor: "pointer" }}>
-              {RUNE.NS.map((n) => <option key={n} value={n}>{n}</option>)}
-            </select>
-          </div>
+          <Field
+            label="Name"
+            hint={!nameTouched ? "DNS-1123: a–z, 0–9, hyphen" : undefined}
+            success={nameTouched && nameValid ? "✓ valid name" : undefined}
+            error={nameTouched && !nameValid ? "must match [a-z0-9]([-a-z0-9]*[a-z0-9])?" : undefined}
+          >
+            <TextInput value={name} placeholder="db-credentials" autoFocus invalid={nameTouched && !nameValid} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="Namespace">
+            <Select value={ns} onChange={(e) => setNs(e.target.value)}>
+              {namespaces.map((n) => <option key={n.name} value={n.name}>{n.name}</option>)}
+            </Select>
+          </Field>
           {kind === "secret" && (
-            <div>
-              <label className="flabel">Type</label>
-              <select className="finput" value={stype} onChange={(e) => setStype(e.target.value)} style={{ cursor: "pointer" }}>
+            <Field label="Type">
+              <Select value={stype} onChange={(e) => setStype(e.target.value)}>
                 {["Opaque", "tls", "dockerconfigjson"].map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
+              </Select>
+            </Field>
           )}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
-          <label className="flabel" style={{ margin: 0 }}>Data</label>
+          <label className="field-label" style={{ margin: 0 }}>Data</label>
           <span style={{ marginLeft: "auto" }}>
             <Segmented options={[{ value: "literal", label: "from literal" }, { value: "file", label: "from file" }]} value={source} onChange={setSource} />
           </span>
@@ -377,11 +390,11 @@ function CreateDrawer({ onClose, onCreate }: { onClose: () => void; onCreate: (k
 
         {rows.map((r, i) => (
           <div className="kentry" key={i}>
-            <input className="finput" placeholder={source === "file" ? "tls.crt" : "key"} value={r.k} onChange={(e) => setRow(i, { k: e.target.value })} />
+            <TextInput placeholder={source === "file" ? "tls.crt" : "key"} value={r.k} onChange={(e) => setRow(i, { k: e.target.value })} />
             {source === "literal" ? (
-              <input className="finput" type={kind === "secret" ? "password" : "text"} placeholder="value" value={r.v} onChange={(e) => setRow(i, { v: e.target.value })} />
+              <TextInput type={kind === "secret" ? "password" : "text"} placeholder="value" value={r.v} onChange={(e) => setRow(i, { v: e.target.value })} />
             ) : (
-              <label className="finput" style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 8, color: r.file ? "var(--text)" : "var(--text-3)" }}>
+              <label className="field-control" style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 8, color: r.file ? "var(--text)" : "var(--text-3)" }}>
                 <Icon name="doc" size={13} />
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.file ? `${r.file} · ${fmtBytes(r.bytes)}` : "Choose file…"}</span>
                 <input type="file" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (f) setRow(i, { file: f.name, bytes: f.size, k: r.k || f.name }); }} />
@@ -428,17 +441,24 @@ export function Secrets() {
   const [openCm, setOpenCm] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ kind: string; name: string; ns: string } | null>(null);
   const [fqdn, setFqdn] = useState(false);
+  const toast = useToast();
 
-  const E = RUNE.encryption;
+  const E = ENCRYPTION;
   const secDetail = secrets.find((s) => s.name === openSec);
   const cmDetail = configs.find((c) => c.name === openCm);
 
-  const pendingSec = secrets.reduce((a, s) => a + pendingOf(s), 0);
-  const pendingCm = configs.reduce((a, c) => a + pendingOf(c), 0);
-  const pendingTotal = pendingSec + pendingCm;
+  const pendingTotal = secrets.reduce((a, s) => a + pendingOf(s), 0) + configs.reduce((a, c) => a + pendingOf(c), 0);
   const pendingResCount = secrets.filter((s) => pendingOf(s)).length + configs.filter((c) => pendingOf(c)).length;
+
+  // Active namespace scope filters the list views (the roll-up banner above
+  // stays cluster-wide — it's a global rollout signal).
+  const { ns: scopeNs } = useScope();
+  const inScope = <T extends { ns: string }>(arr: T[]) => (scopeNs === "all" ? arr : arr.filter((r) => r.ns === scopeNs));
+  const shownSecrets = inScope(secrets);
+  const shownConfigs = inScope(configs);
+  const pendingSec = shownSecrets.reduce((a, s) => a + pendingOf(s), 0);
+  const pendingCm = shownConfigs.reduce((a, c) => a + pendingOf(c), 0);
 
   const restartSec = (resName: string, svc: string) => setSecrets((list) => list.map((r) => (r.name !== resName ? r : { ...r, mounts: r.mounts.map((m) => (m.svc === svc ? { ...m, v: r.version } : m)) })));
   const restartCm = (resName: string, svc: string) => setConfigs((list) => list.map((r) => (r.name !== resName ? r : { ...r, mounts: r.mounts.map((m) => (m.svc === svc ? { ...m, v: r.version } : m)) })));
@@ -448,9 +468,13 @@ export function Secrets() {
     else { setConfigs((l) => [res as ConfigMap, ...l]); setTab("config"); }
     setCreating(false);
     setFlash(res.name);
-    setToast({ kind, name: res.name, ns: res.ns });
     setTimeout(() => setFlash(null), 1300);
-    setTimeout(() => setToast(null), 4200);
+    toast({
+      tone: "success",
+      icon: "check",
+      title: <><b>{kind === "secret" ? "Secret" : "ConfigMap"} cast</b> — {res.name}</>,
+      message: `${kind}/${res.name} · ${res.ns} · ${kind === "secret" ? "sealed at v1" : "applied at v1"}`,
+    });
   }
 
   function consumerSummary(r: { mounts: SecretMount[] }) {
@@ -508,8 +532,8 @@ export function Secrets() {
 
       <Tabs
         tabs={[
-          { id: "secrets", label: `Secrets (${secrets.length})${pendingSec ? ` · ${pendingSec}` : ""}` },
-          { id: "config", label: `ConfigMaps (${configs.length})${pendingCm ? ` · ${pendingCm}` : ""}` },
+          { id: "secrets", label: `Secrets (${shownSecrets.length})${pendingSec ? ` · ${pendingSec}` : ""}` },
+          { id: "config", label: `ConfigMaps (${shownConfigs.length})${pendingCm ? ` · ${pendingCm}` : ""}` },
         ]}
         active={tab}
         onChange={setTab}
@@ -520,14 +544,14 @@ export function Secrets() {
           <Spinner label="Loading secrets…" />
         ) : error ? (
           <EmptyState icon="secrets" tone="error" title="Couldn't load secrets" hint={error} action={{ label: "Retry", onClick: sReload }} />
-        ) : secrets.length === 0 ? (
-          <EmptyState icon="secrets" title="No secrets" hint="Create a sealed secret — values are encrypted at rest and never revealed in the UI." />
+        ) : shownSecrets.length === 0 ? (
+          <EmptyState icon="secrets" title="No secrets" hint={scopeNs === "all" ? "Create a sealed secret — values are encrypted at rest and never revealed in the UI." : `No secrets in the ${scopeNs} namespace.`} />
         ) : (
         <Card className="fadein" style={{ overflow: "hidden" }}>
           <Table>
             <thead><tr><th>Secret</th><th>Type</th><th>Keys</th><th>Ver</th><th>Mounted by</th><th>Status</th><th>Last cast</th></tr></thead>
             <tbody>
-              {secrets.map((s) => (
+              {shownSecrets.map((s) => (
                 <tr key={`${s.ns}/${s.name}`} className={flash === s.name ? "row-flash" : ""} onClick={() => setOpenSec(s.name)}>
                   <td>
                     <div className="cell-name mono" style={{ fontSize: 13 }}><Icon name="secrets" size={15} style={{ color: "var(--accent-text)" }} />{s.name}</div>
@@ -552,14 +576,14 @@ export function Secrets() {
           <Spinner label="Loading configmaps…" />
         ) : error ? (
           <EmptyState icon="doc" tone="error" title="Couldn't load configmaps" hint={error} action={{ label: "Retry", onClick: sReload }} />
-        ) : configs.length === 0 ? (
-          <EmptyState icon="doc" title="No configmaps" hint="Cast a configmap to share plaintext configuration with services." />
+        ) : shownConfigs.length === 0 ? (
+          <EmptyState icon="doc" title="No configmaps" hint={scopeNs === "all" ? "Cast a configmap to share plaintext configuration with services." : `No configmaps in the ${scopeNs} namespace.`} />
         ) : (
         <Card className="fadein" style={{ overflow: "hidden" }}>
           <Table>
             <thead><tr><th>ConfigMap</th><th>Keys</th><th>Ver</th><th>Mounted by</th><th>Status</th><th>Last cast</th></tr></thead>
             <tbody>
-              {configs.map((c) => (
+              {shownConfigs.map((c) => (
                 <tr key={`${c.ns}/${c.name}`} className={flash === c.name ? "row-flash" : ""} onClick={() => setOpenCm(c.name)}>
                   <td>
                     <div className="cell-name mono" style={{ fontSize: 13 }}><Icon name="doc" size={15} style={{ color: "var(--text-3)" }} />{c.name}</div>
@@ -581,18 +605,6 @@ export function Secrets() {
       {secDetail && <SecretDrawer sec={secDetail} onClose={() => setOpenSec(null)} onRestart={restartSec} fqdn={fqdn} setFqdn={setFqdn} />}
       {cmDetail && <ConfigDrawer cm={cmDetail} onClose={() => setOpenCm(null)} onRestart={restartCm} />}
       {creating && <CreateDrawer onClose={() => setCreating(false)} onCreate={create} />}
-
-      {toast && (
-        <div className="toast-wrap">
-          <div className="toast">
-            <Icon name="check" size={17} className="t-ico" />
-            <div>
-              <div><b style={{ fontWeight: 600 }}>{toast.kind === "secret" ? "Secret" : "ConfigMap"} cast</b> — {toast.name}</div>
-              <div className="t-sub">{toast.kind}/{toast.name} · {toast.ns} · {toast.kind === "secret" ? "sealed at v1" : "applied at v1"}</div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

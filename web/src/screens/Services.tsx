@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Badge, Button, Card, Dot, Dropdown, EmptyState, Icon, PageHead, Replicas, Segmented, Spinner, Table, Tag, UsageBar } from "../components";
 import { useServices } from "../api/hooks";
-import type { Service } from "../mock/data";
+import { useScope } from "../lib/scope";
+import type { Service } from "../api/types";
 
 export function Services({ openSvc }: { openSvc: (s: Service) => void }) {
   const { data: services, loading, error, reload } = useServices();
   const [filter, setFilter] = useState("all");
-  const [ns, setNs] = useState("all");
+  const { ns, setNs } = useScope();
 
   // namespaces with their service counts, derived from the live list
   const nsCounts = new Map<string, number>();

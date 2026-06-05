@@ -16,6 +16,9 @@
     "@bufbuild/protobuf": "^1.10.0",
     "@connectrpc/connect": "^1.6.1",
     "@connectrpc/connect-web": "^1.6.1",
+    "@fontsource/hanken-grotesk": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/spectral": "^5.2.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -30,5 +33,10 @@
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vite": "^5.4.11"
+  },
+  "comment:overrides": "Patch transitive advisories in dev/build tooling only — these do not ship in the embedded browser bundle (esbuild via vite's dev server; undici via @connectrpc/connect-node, used only in test scripts).",
+  "overrides": {
+    "esbuild": "^0.25.10",
+    "undici": "^6.23.1"
   }
 }

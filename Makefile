@@ -244,6 +244,13 @@ ui:
 	fi
 	@test -f pkg/api/server/uiassets/dist/index.html || \
 		(echo "ERROR: embedded UI placeholder missing" && exit 1)
+	@# The committed index.html is a placeholder; a real build emits hashed
+	@# bundles into dist/assets. Fail loudly if the build did not produce them
+	@# so a release never embeds the placeholder by accident.
+	@if [ -d web ] && [ -f web/package.json ]; then \
+		ls pkg/api/server/uiassets/dist/assets/*.js >/dev/null 2>&1 || \
+			(echo "ERROR: dashboard bundle not built (dist/assets/*.js missing) — run 'make ui'" && exit 1); \
+	fi
 	@echo "UI assets ready."
 
 ## Run documentation server

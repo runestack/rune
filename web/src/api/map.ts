@@ -2,7 +2,7 @@
    proto → screen-shape mappers (pure, total, defensive).
 
    Every mapper takes a generated protobuf message and returns the
-   corresponding interface from ../mock/data so the screens render the same
+   corresponding interface from ./types so the screens render the same
    shape whether the data is mock or live. Missing fields degrade to sensible
    defaults; no mapper throws.
    ============================================================ */
@@ -10,7 +10,7 @@ import type { StatusKey } from "../lib/status";
 import type {
   ConfigMap, Instance, Namespace, Node, Policy, Principal,
   Role, Secret, Service, StorageClass, Volume,
-} from "../mock/data";
+} from "../api/types";
 
 import { Service as PbService, ServiceStatus } from "../gen/pkg/api/proto/service_pb";
 import { Instance as PbInstance, InstanceStatus } from "../gen/pkg/api/proto/instance_pb";

@@ -3,14 +3,26 @@ import {
   Replicas, Spark, Spinner, Table, Tag, UsageBar,
 } from "../components";
 import { useAuditFeed, useOverview } from "../api/hooks";
-import type { Service } from "../mock/data";
+import { useScope } from "../lib/scope";
+import type { Service } from "../api/types";
 
 export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => void; openSvc: (s: Service) => void }) {
   const { data, loading, error, reload } = useOverview();
   const { data: feed } = useAuditFeed(6);
+  const { ns: scopeNs } = useScope();
   const T = data.totals;
+
+  // The namespace scope filters the logical inventory (services & their
+  // replicas). Physical capacity — nodes, CPU, memory — is cluster-wide and
+  // stays unscoped (a namespace doesn't own hardware), so those are labelled.
+  const scoped = scopeNs === "all" ? data.services : data.services.filter((s) => s.ns === scopeNs);
+  const svcCount = scoped.length;
+  const healthyCount = scoped.filter((s) => s.status === "run").length;
+  const runInst = scoped.reduce((a, s) => a + s.ready, 0);
+  const wantInst = scoped.reduce((a, s) => a + s.want, 0);
+
   // Pick a few representative services to preview (prefer those needing attention).
-  const topSvc = [...data.services]
+  const topSvc = [...scoped]
     .sort((a, b) => (a.status === "run" ? 1 : 0) - (b.status === "run" ? 1 : 0))
     .slice(0, 7);
 
@@ -36,7 +48,9 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
       <PageHead
         eyebrow={`${data.cluster.name} · ${data.cluster.context} · ${data.cluster.version}`}
         title="Cluster <em>overview</em>"
-        sub={`${T.healthy} of ${T.services} services running, ${T.runningInstances} instances live across ${T.namespaces} namespace${T.namespaces === 1 ? "" : "s"}.`}
+        sub={scopeNs === "all"
+          ? `${T.healthy} of ${T.services} services running, ${T.runningInstances} instances live across ${T.namespaces} namespace${T.namespaces === 1 ? "" : "s"}.`
+          : `${scopeNs} · ${healthyCount} of ${svcCount} services running, ${runInst} of ${wantInst} replicas live.`}
         actions={
           <>
             <Button size="sm" onClick={reload}><Icon name="refresh" size={14} />Sync</Button>
@@ -47,28 +61,28 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
 
       {/* cluster summary — Legend-style KPI row */}
       <Card style={{ marginBottom: 16 }}>
-        <CardHead actions={<Tag>{data.cluster.uptime === "—" ? "live" : `up ${data.cluster.uptime}`}</Tag>}>Cluster summary</CardHead>
+        <CardHead actions={<>{scopeNs !== "all" && <Tag>scope · {scopeNs}</Tag>}<Tag>{data.cluster.uptime === "—" ? "live" : `up ${data.cluster.uptime}`}</Tag></>}>Cluster summary</CardHead>
         <KpiRow>
           <Kpi
             hero
-            label={<><span className="kpi-ico"><Icon name="health" size={15} /></span>Health<Badge s={T.healthy === T.services ? "run" : "warn"}>{T.healthy === T.services ? "Operational" : "Attention"}</Badge></>}
-            value={<>{T.healthy}<small>/ {T.services}</small></>}
-            sub={`${Math.max(0, T.services - T.healthy)} services need attention`}
+            label={<><span className="kpi-ico"><Icon name="health" size={15} /></span>Health<Badge s={healthyCount === svcCount ? "run" : "warn"}>{healthyCount === svcCount ? "Operational" : "Attention"}</Badge></>}
+            value={<>{healthyCount}<small>/ {svcCount}</small></>}
+            sub={`${Math.max(0, svcCount - healthyCount)} services need attention`}
           />
           <Kpi
-            label={<><span className="kpi-ico"><Icon name="instances" size={15} /></span>Instances</>}
-            value={<>{T.runningInstances}<small>/ {T.instances}</small></>}
-            sub={`live across ${data.nodes.length} node${data.nodes.length === 1 ? "" : "s"}`}
+            label={<><span className="kpi-ico"><Icon name="instances" size={15} /></span>{scopeNs === "all" ? "Instances" : "Replicas"}</>}
+            value={scopeNs === "all" ? <>{T.runningInstances}<small>/ {T.instances}</small></> : <>{runInst}<small>/ {wantInst}</small></>}
+            sub={scopeNs === "all" ? `live across ${data.nodes.length} node${data.nodes.length === 1 ? "" : "s"}` : `ready in ${scopeNs}`}
           />
           <Kpi
             label={<><span className="kpi-ico"><Icon name="cpu" size={15} /></span>CPU</>}
             value={<>{T.cpu}<small>%</small></>}
-            sub={T.cpuCores}
+            sub={scopeNs === "all" ? T.cpuCores : `${T.cpuCores} · cluster`}
           />
           <Kpi
             label={<><span className="kpi-ico"><Icon name="mem" size={15} /></span>Memory</>}
             value={<>{T.mem}<small>%</small></>}
-            sub={T.memGi}
+            sub={scopeNs === "all" ? T.memGi : `${T.memGi} · cluster`}
           />
         </KpiRow>
       </Card>
@@ -80,7 +94,7 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
             Services at a glance
           </CardHead>
           {topSvc.length === 0 ? (
-            <EmptyState icon="services" title="No services deployed" hint="Run rune cast to deploy a workload." />
+            <EmptyState icon="services" title="No services" hint={scopeNs === "all" ? "Run rune cast to deploy a workload." : `No services in the ${scopeNs} namespace.`} />
           ) : (
             <Table>
               <thead><tr><th>Service</th><th>Status</th><th>Replicas</th><th>CPU</th></tr></thead>

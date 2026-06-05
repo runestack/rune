@@ -15,19 +15,13 @@ export interface SessionState {
   phase: SessionPhase;
   who: WhoAmI | null;
   mode: "none" | "cookie" | "token";
-  /** demo = browsing mock data without a backend session. */
-  demo: boolean;
-  setDemo: (v: boolean) => void;
   reload: () => void;
   logout: () => void;
 }
 
-let demoFlag = false;
-
 export function useSession(): SessionState {
   const [phase, setPhase] = useState<SessionPhase>("loading");
   const [who, setWho] = useState<WhoAmI | null>(null);
-  const [demo, setDemoState] = useState(demoFlag);
   const [, force] = useState(0);
 
   useEffect(() => subscribe(() => force((n) => n + 1)), []);
@@ -57,10 +51,6 @@ export function useSession(): SessionState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase === "loading"]);
 
-  function setDemo(v: boolean) {
-    demoFlag = v;
-    setDemoState(v);
-  }
   function reload() {
     setWho(null);
     setPhase("loading");
@@ -68,9 +58,8 @@ export function useSession(): SessionState {
   function logout() {
     doLogout();
     setWho(null);
-    setDemo(false);
     setPhase("anon");
   }
 
-  return { phase, who, mode: sessionMode(), demo, setDemo, reload, logout };
+  return { phase, who, mode: sessionMode(), reload, logout };
 }

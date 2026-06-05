@@ -1,25 +1,20 @@
 import { useState } from "react";
-import { Badge, Button, Card, Dot, Drawer, Icon, KeyValue, Replicas, Spinner, Table, Tabs, Tag, UsageBar } from "../components";
-import type { Service } from "../mock/data";
+import { Alert, Badge, Button, Card, Dot, Drawer, Icon, KeyValue, Replicas, Spinner, Table, Tabs, Tag, UsageBar, useConfirm } from "../components";
+import type { Service } from "../api/types";
 import { useServiceInstances } from "../api/hooks";
-import { useDemo } from "../api/demo";
 import { clients } from "../api/transport";
 import { ScalingMode } from "../gen/pkg/api/proto/service_pb";
 
 export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () => void; go: (r: string, arg?: Service) => void }) {
-  const demo = useDemo();
   const [tab, setTab] = useState("overview");
   const { data: insts, loading: instLoading, reload: reloadInsts } = useServiceInstances(svc.name, svc.ns);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
+  const confirm = useConfirm();
 
-  async function withConfirm(label: string, fn: () => Promise<void>) {
-    if (demo) {
-      // No backend in demo mode — actions are illustrative only.
-      window.alert(`${label} is available in a live session against a real cluster.`);
-      return;
-    }
-    if (!window.confirm(`${label} ${svc.name} in ${svc.ns}?`)) return;
+  // Run an action with busy/error bookkeeping. `busy` doubles as the label of
+  // the in-flight action so the matching button shows its spinner.
+  async function perform(label: string, fn: () => Promise<void>) {
     setBusy(label);
     setActionErr(null);
     try {
@@ -32,24 +27,60 @@ export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () 
     }
   }
 
-  const onScale = () => {
-    const raw = window.prompt(`Scale ${svc.name} to how many instances?`, String(svc.want));
-    if (raw == null) return;
-    const scale = parseInt(raw, 10);
-    if (Number.isNaN(scale) || scale < 0) { window.alert("Enter a non-negative integer."); return; }
-    void withConfirm(`Scale to ${scale}`, async () => {
+  const onScale = async () => {
+    const res = await confirm({
+      title: `Scale ${svc.name}`,
+      message: <>Currently <b>{svc.want}</b> desired · namespace <b>{svc.ns}</b>.</>,
+      icon: "scale",
+      confirmLabel: "Scale",
+      input: {
+        label: "Target instances",
+        type: "number",
+        defaultValue: String(svc.want),
+        validate: (v) => {
+          const n = Number(v);
+          if (v.trim() === "" || Number.isNaN(n)) return "Enter a number";
+          if (!Number.isInteger(n) || n < 0) return "Whole number ≥ 0";
+          return null;
+        },
+      },
+    });
+    if (res === false) return;
+    const scale = parseInt(res as string, 10);
+    await perform("Scale", async () => {
       await clients.services.scaleService({ name: svc.name, namespace: svc.ns, scale, mode: ScalingMode.IMMEDIATE });
     });
   };
-  const onRestart = () => void withConfirm("Restart", async () => {
+
+  const onRestart = async () => {
+    const ok = await confirm({
+      title: `Restart ${svc.name}?`,
+      message: <>All instances in <b>{svc.ns}</b> roll. Non-HA services may be briefly unavailable.</>,
+      icon: "refresh",
+      confirmLabel: "Restart",
+    });
+    if (!ok) return;
     // Restart = scale to 0 then back to desired count (mirrors `rune restart`).
-    await clients.services.scaleService({ name: svc.name, namespace: svc.ns, scale: 0, mode: ScalingMode.IMMEDIATE });
-    await clients.services.scaleService({ name: svc.name, namespace: svc.ns, scale: svc.want || 1, mode: ScalingMode.IMMEDIATE });
-  });
-  const onDelete = () => void withConfirm("Delete", async () => {
-    await clients.services.deleteService({ name: svc.name, namespace: svc.ns });
-    onClose();
-  });
+    await perform("Restart", async () => {
+      await clients.services.scaleService({ name: svc.name, namespace: svc.ns, scale: 0, mode: ScalingMode.IMMEDIATE });
+      await clients.services.scaleService({ name: svc.name, namespace: svc.ns, scale: svc.want || 1, mode: ScalingMode.IMMEDIATE });
+    });
+  };
+
+  const onDelete = async () => {
+    const ok = await confirm({
+      title: `Delete ${svc.name}?`,
+      message: <>This permanently removes the service and its instances from <b>{svc.ns}</b>. This can't be undone.</>,
+      tone: "danger",
+      icon: "alert",
+      confirmLabel: "Delete service",
+    });
+    if (!ok) return;
+    await perform("Delete", async () => {
+      await clients.services.deleteService({ name: svc.name, namespace: svc.ns });
+      onClose();
+    });
+  };
 
   return (
     <Drawer onClose={onClose}>
@@ -62,28 +93,16 @@ export function ServiceDrawer({ svc, onClose, go }: { svc: Service; onClose: () 
           {svc.type === "process" && <Tag>process</Tag>}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Button size="sm" variant="primary" onClick={onScale} disabled={!!busy}><Icon name="scale" size={14} />Scale</Button>
-          <Button size="sm" onClick={onRestart} disabled={!!busy}><Icon name="refresh" size={14} />Restart</Button>
+          <Button size="sm" variant="primary" onClick={onScale} disabled={!!busy} loading={busy === "Scale"}><Icon name="scale" size={14} />Scale</Button>
+          <Button size="sm" onClick={onRestart} disabled={!!busy} loading={busy === "Restart"}><Icon name="refresh" size={14} />Restart</Button>
           <Button size="sm" onClick={() => { onClose(); go("logs", svc); }}><Icon name="logs" size={14} />Logs</Button>
           <Button size="sm" onClick={() => { onClose(); go("logs", svc); }}><Icon name="terminal" size={14} />Exec</Button>
-          <Button size="sm" onClick={onDelete} disabled={!!busy}><Icon name="close" size={14} />Delete</Button>
+          <Button size="sm" variant="danger" onClick={onDelete} disabled={!!busy} loading={busy === "Delete"}><Icon name="close" size={14} />Delete</Button>
         </div>
         {busy && <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--text-3)", display: "flex", gap: 8, alignItems: "center" }}><Dot s="deploy" pulse />{busy}…</div>}
-        {actionErr && (
-          <div style={{ marginTop: 12, padding: "9px 12px", background: "var(--fail-dim)", border: "1px solid rgba(229,72,77,.25)", borderRadius: 8, fontSize: 12.5, color: "#f2868a", display: "flex", gap: 8, alignItems: "center" }}>
-            <Icon name="alert" size={15} />{actionErr}
-          </div>
-        )}
+        {actionErr && <Alert tone="error" style={{ marginTop: 12 }}>{actionErr}</Alert>}
         {svc.note && !actionErr && (
-          <div style={{
-            marginTop: 14, padding: "9px 12px",
-            background: svc.status === "warn" ? "var(--fail-dim)" : "var(--deploy-dim)",
-            border: `1px solid ${svc.status === "warn" ? "rgba(229,72,77,.25)" : "rgba(247,104,9,.25)"}`,
-            borderRadius: 8, fontSize: 12.5, color: svc.status === "warn" ? "#f2868a" : "#f79050",
-            display: "flex", gap: 8, alignItems: "center",
-          }}>
-            <Icon name="health" size={15} />{svc.note}
-          </div>
+          <Alert tone={svc.status === "warn" ? "error" : "warn"} icon="health" style={{ marginTop: 14 }}>{svc.note}</Alert>
         )}
       </div>
       <div className="drawer-body">

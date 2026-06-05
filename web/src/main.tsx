@@ -1,13 +1,20 @@
-import { StrictMode } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
+import "./styles/fonts";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import { App } from "./App";
 import { Login } from "./screens/Login";
-import { Playground } from "./playground/Playground";
 import { useSession } from "./api/useSession";
 import { useTweaks } from "./lib/theme";
-import { Logo } from "./components";
+import { DEVTOOLS } from "./lib/devtools";
+import { ErrorBoundary, Logo } from "./components";
+
+// The component Playground is a dev-only surface. Lazy + gated so it is
+// tree-shaken out of production builds (no chunk emitted when DEVTOOLS is off).
+const Playground = DEVTOOLS
+  ? lazy(() => import("./playground/Playground").then((m) => ({ default: m.Playground })))
+  : null;
 
 function LoadingSplash() {
   return (
@@ -24,23 +31,32 @@ function Root() {
   useTweaks();
   const s = useSession();
 
-  if (window.location.hash.replace(/^#\/?/, "") === "playground") return <Playground />;
+  if (Playground && window.location.hash.replace(/^#\/?/, "") === "playground")
+    return <Suspense fallback={<LoadingSplash />}><Playground /></Suspense>;
 
   if (s.phase === "loading") return <LoadingSplash />;
 
-  if (s.phase === "authed" || s.demo) {
-    const user = s.demo
-      ? { name: "demo", role: "sample data" }
-      : { name: s.who?.subjectName || s.who?.subjectId || "user", role: s.who?.policies[0] || "authenticated" };
-    return <App user={user} demo={s.demo} onLogout={s.logout} />;
+  if (s.phase === "authed") {
+    const user = { name: s.who?.subjectName || s.who?.subjectId || "user", role: s.who?.policies[0] || "authenticated" };
+    return <App user={user} onLogout={s.logout} />;
   }
 
-  return <Login logoVariant="wordmark" onAuthed={s.reload} onDemo={() => s.setDemo(true)} />;
+  return <Login logoVariant="wordmark" onAuthed={s.reload} />;
 }
 
-createRoot(document.getElementById("root")!).render(
+// Cache the React root on the container element so Vite HMR re-evaluating this
+// entry module reuses it instead of calling createRoot() on an already-rooted
+// node — which logs "createRoot() on a container that has already been passed
+// to createRoot()" and leaks the previous root.
+const container = document.getElementById("root")! as HTMLElement & {
+  _reactRoot?: ReturnType<typeof createRoot>;
+};
+const root = container._reactRoot ?? (container._reactRoot = createRoot(container));
+root.render(
   <StrictMode>
-    <Root />
+    <ErrorBoundary>
+      <Root />
+    </ErrorBoundary>
   </StrictMode>,
 );
 

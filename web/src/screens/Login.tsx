@@ -5,7 +5,7 @@ import { clients } from "../api/transport";
 import type { LogoVariant } from "../lib/theme";
 import "./Login.css";
 
-export function Login({ logoVariant, onAuthed, onDemo }: { logoVariant: LogoVariant; onAuthed: () => void; onDemo: () => void }) {
+export function Login({ logoVariant, onAuthed }: { logoVariant: LogoVariant; onAuthed: () => void }) {
   const [token, setToken] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -63,10 +63,6 @@ export function Login({ logoVariant, onAuthed, onDemo }: { logoVariant: LogoVari
         <Button onClick={bootstrap} disabled={busy} style={{ width: "100%", justifyContent: "center" }}>
           <Icon name="bolt" size={14} />{busy ? "Bootstrapping…" : "Bootstrap cluster admin"}
         </Button>
-
-        <div className="login-foot">
-          <button onClick={onDemo}>Browse the demo with sample data →</button>
-        </div>
       </div>
     </div>
   );

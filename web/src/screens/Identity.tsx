@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Badge, Button, Card, EmptyState, Icon, PageHead, Spinner, Table, Tabs, Tag } from "../components";
+import { Avatar, Badge, Button, Card, EmptyState, Icon, PageHead, Spinner, Table, Tabs, Tag } from "../components";
 import { usePrincipals, useRoles } from "../api/hooks";
 
 export function Identity() {
@@ -39,19 +39,13 @@ export function Identity() {
                   <tr key={`${p.type}/${p.name}`}>
                     <td>
                       <div className="cell-name">
-                        <span style={{
-                          width: 26, height: 26, borderRadius: p.type === "machine" ? 7 : "50%", flex: "none",
-                          background: p.type === "machine" ? "var(--surface-3)" : "linear-gradient(135deg, var(--accent), #6f5be0)",
-                          display: "grid", placeItems: "center", fontSize: 11, fontWeight: 700, color: p.type === "machine" ? "var(--text-2)" : "#15121f",
-                        }}>
-                          {p.type === "machine" ? <Icon name="terminal" size={13} /> : (p.name[0] || "?").toUpperCase()}
-                        </span>
+                        <Avatar name={p.name} type={p.type === "machine" ? "machine" : "user"} />
                         {p.name}
                       </div>
                       <div className="cell-sub" style={{ marginLeft: 36 }}>{p.email}</div>
                     </td>
                     <td><Tag>{p.kind}</Tag></td>
-                    <td><span className="badge accent">{p.role}</span></td>
+                    <td><Badge s="accent">{p.role}</Badge></td>
                     <td>{p.mfa ? <Badge s="run">on</Badge> : <span className="tag" style={{ color: "var(--deploy)" }}>off</span>}</td>
                     <td className="cell-sub" style={{ color: p.last === "active now" ? "var(--run)" : "var(--text-3)" }}>{p.last}</td>
                   </tr>

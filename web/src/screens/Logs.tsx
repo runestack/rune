@@ -1,9 +1,6 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Dot, Dropdown, Icon, PageHead, Segmented } from "../components";
-import { RUNE } from "../mock/data";
-import type { Instance, Service } from "../mock/data";
-import { execBanner, execRun, type ExecLine } from "../lib/execEngine";
-import { useDemo } from "../api/demo";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { Dot, Dropdown, Icon, PageHead, Segmented, Tooltip } from "../components";
+import type { Instance, Service } from "../api/types";
 import { useInstances, useServices } from "../api/hooks";
 import { openExecSession, streamLogs, type ExecSession, type LiveLogLine } from "../api/streams";
 import "./Logs.css";
@@ -69,6 +66,19 @@ const ANSI_CSI = new RegExp(ESC + "\\[[0-9;?]*[ -/]*[@-~]", "g");
 const ANSI_OSC = new RegExp(ESC + "\\][^" + BEL + ESC + "]*(?:" + BEL + "|" + ESC + "\\\\)", "g");
 const ANSI_ESC = new RegExp(ESC + "[@-_]", "g");
 const C0 = new RegExp("[\\x00-\\x08\\x0b-\\x1f\\x7f]", "g");
+// Screen-clear sequences emitted by `clear` / Ctrl-L. Shells differ: ncurses
+// sends ESC[2J / ESC[3J (erase screen / scrollback), while xterm/busybox `clear`
+// sends a cursor-home (ESC[H, ESC[1;1H, …) immediately followed by an
+// erase-display (ESC[J / ESC[0-2J). We deliberately do NOT match a bare ESC[J,
+// which line editors emit on every prompt redraw — only the unambiguous
+// full-screen forms.
+const ANSI_CLEAR = new RegExp(ESC + "\\[[23]J|" + ESC + "\\[(?:\\d*;\\d*)?H" + ESC + "\\[[0-2]?J", "g");
+// A shell PS1 prompt at the start of an echoed line, e.g. "/etc # ls", "/ # ",
+// "~ $ cmd". Split the prompt prefix off the command so the prompt keeps its
+// accent color in scrollback (rendered as a `cmd` line) instead of going grey
+// like ordinary output. Anchored to an absolute path or "~" so real output
+// lines (`root`, `alpine-release`, …) don't match.
+const PROMPT_RE = new RegExp("^((?:/|~)\\S* [#$]) ?(.*)$");
 function stripAnsi(s: string): string {
   return s.replace(ANSI_CSI, "").replace(ANSI_OSC, "").replace(ANSI_ESC, "").replace(C0, "");
 }
@@ -77,48 +87,7 @@ function stripAnsi(s: string): string {
 type Fmt = "logfmt" | "json" | "clf" | "plain";
 interface RawLine { ts: string; level: string; raw: string; fmt: Fmt; origin: string }
 
-const LOGFMT_T: [string, string][] = [
-  ["info", "request completed method=GET path=/v1/orders status=200 dur=42ms"],
-  ["info", "request completed method=POST path=/v1/checkout status=201 dur=118ms"],
-  ["debug", "cache hit key=user:48211 ttl=290s"],
-  ["info", "request completed method=GET path=/healthz status=200 dur=1ms"],
-  ["warn", "upstream latency high service=payments p99=820ms"],
-  ["info", "db pool acquired conn=11/25 wait=0ms"],
-  ["error", "request failed method=POST path=/v1/pay status=503 upstream=payments retry=1/3"],
-  ["info", "grpc method=auth.Verify ok=true subject=user:48211 dur=8ms"],
-  ["warn", "rate limit applied client=10.244.1.18 bucket=api-anon remaining=0"],
-];
-const JSON_T: [string, string][] = [
-  ["info", '{"level":"info","msg":"job processed","queue":"emails","id":"j_8821","dur_ms":210}'],
-  ["info", '{"level":"info","msg":"job processed","queue":"webhooks","id":"j_8839","dur_ms":96}'],
-  ["warn", '{"level":"warn","msg":"retry scheduled","queue":"emails","attempt":2,"backoff_ms":500}'],
-  ["debug", '{"level":"debug","msg":"lease renewed","worker":"w-3","ttl_s":30}'],
-  ["error", '{"level":"error","msg":"handler panic","queue":"emails","err":"nil pointer deref"}'],
-];
-const CLF_T: [string, string][] = [
-  ["info", '10.244.1.18 - - [DATE] "GET /v1/orders HTTP/1.1" 200 1243 "-" "curl/8.4.0"'],
-  ["info", '10.244.1.20 - - [DATE] "POST /v1/checkout HTTP/1.1" 201 318 "-" "acme-web/2.3"'],
-  ["warn", '10.244.1.33 - - [DATE] "GET /v1/admin HTTP/1.1" 403 122 "-" "curl/8.4.0"'],
-  ["error", '10.244.1.18 - - [DATE] "GET /v1/pay HTTP/1.1" 502 0 "-" "acme-web/2.3"'],
-  ["info", '10.244.1.51 - - [DATE] "GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.0"'],
-];
-const SVC_LOG_FMT: Record<string, Fmt> = { "web-gateway": "clf", ingress: "clf", "worker-queue": "json" };
-const fmtFor = (svc: string): Fmt => SVC_LOG_FMT[svc] || "logfmt";
 const FMT_LABEL: Record<Fmt, string> = { logfmt: "logfmt", json: "JSON lines", clf: "access log (CLF)", plain: "plain text" };
-const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const fmtTs = (epoch: number) => new Date(epoch).toISOString().slice(11, 23);
-const clfDate = (epoch: number) => {
-  const d = new Date(epoch);
-  return `${String(d.getUTCDate()).padStart(2, "0")}/${MON[d.getUTCMonth()]}/${d.getUTCFullYear()}:${d.toISOString().slice(11, 19)} +0000`;
-};
-let seedCtr = 7;
-function genLine(fmt: Fmt, epoch: number): { level: string; raw: string; fmt: Fmt } {
-  const pool = fmt === "json" ? JSON_T : fmt === "clf" ? CLF_T : LOGFMT_T;
-  const [level, tmpl] = pool[(seedCtr++ * 13) % pool.length];
-  let raw = tmpl;
-  if (fmt === "clf") raw = raw.replace("DATE", clfDate(epoch));
-  return { level, raw, fmt };
-}
 function detectFormat(raw: string): Fmt {
   const s = (raw || "").trim();
   if (s.startsWith("{") && s.endsWith("}")) return "json";
@@ -181,120 +150,7 @@ function PrettyLine({ l }: { l: RawLine }) {
   return <span className="tok-msg">{l.raw}</span>;
 }
 
-/* ---------- logs view (demo / simulated) ---------- */
-function LogsView({ svc, instId, services, instances }: { svc: string; instId: string | null; services: Service[]; instances: Instance[] }) {
-  const fmt = fmtFor(svc);
-  const [level, setLevel] = useState("all");
-  const [tail, setTail] = useState(true);
-  const [pretty, setPretty] = useState(true);
-  const ns = services.find((s) => s.name === svc)?.ns;
-  const insts = instances.filter((i) => i.svc === svc);
-  const pickOrigin = (k?: number) => instId || (insts.length ? insts[(k ?? insts.length) % insts.length].id : svc);
-
-  const wellRef = useRef<HTMLDivElement>(null);
-  const oldestRef = useRef(Date.now() - 24 * 1400);
-  const pendRef = useRef<number | null>(null);
-  const loadingRef = useRef(false);
-  const nearBottomRef = useRef(true);
-  const [olderCount, setOlderCount] = useState(0);
-  const MAX_OLDER = 240;
-  const hasMore = olderCount < MAX_OLDER;
-
-  const [lines, setLines] = useState<RawLine[]>(() => {
-    const now = Date.now();
-    const arr: RawLine[] = [];
-    for (let k = 23; k >= 0; k--) { const ep = now - k * 1400; arr.push({ ts: fmtTs(ep), ...genLine(fmt, ep), origin: pickOrigin(23 - k) }); }
-    return arr;
-  });
-
-  useEffect(() => {
-    if (!tail) return;
-    const id = setInterval(() => {
-      const ep = Date.now();
-      setLines((prev) => [...prev, { ts: fmtTs(ep), ...genLine(fmt, ep), origin: pickOrigin() }]);
-    }, 1600);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tail, svc, instId]);
-
-  useEffect(() => {
-    if (tail && nearBottomRef.current && wellRef.current) wellRef.current.scrollTop = wellRef.current.scrollHeight;
-  }, [lines, tail]);
-
-  useLayoutEffect(() => {
-    if (pendRef.current != null && wellRef.current) {
-      wellRef.current.scrollTop += wellRef.current.scrollHeight - pendRef.current;
-      pendRef.current = null;
-      loadingRef.current = false;
-    }
-  }, [lines]);
-
-  function loadEarlier() {
-    if (loadingRef.current || !hasMore) return;
-    loadingRef.current = true;
-    pendRef.current = wellRef.current ? wellRef.current.scrollHeight : 0;
-    const end = oldestRef.current;
-    const batch: RawLine[] = [];
-    for (let k = 40; k >= 1; k--) { const ep = end - k * 1400; batch.push({ ts: fmtTs(ep), ...genLine(fmt, ep), origin: pickOrigin(k + olderCount) }); }
-    oldestRef.current = end - 40 * 1400;
-    setOlderCount((c) => c + 40);
-    setLines((prev) => [...batch, ...prev]);
-  }
-
-  function onScroll(e: React.UIEvent<HTMLDivElement>) {
-    const el = e.currentTarget;
-    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-    if (el.scrollTop < 28) loadEarlier();
-  }
-
-  const shown = lines.filter((l) => level === "all" || l.level === level);
-  const target = instId || svc;
-  const detected = detectFormat(lines.length ? lines[lines.length - 1].raw : "");
-
-  return (
-    <div className="fadein">
-      <div style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <Segmented options={["all", "info", "warn", "error", "debug"]} value={level} onChange={setLevel} />
-        <Segmented options={[{ value: "pretty", label: "Pretty" }, { value: "raw", label: "Raw" }]} value={pretty ? "pretty" : "raw"} onChange={(v) => setPretty(v === "pretty")} />
-        <span className="fmtbadge" style={{ marginLeft: "auto" }} title="Detected automatically from the stream">
-          <Icon name="health" size={12} style={{ color: "var(--text-3)" }} />detected <b>{FMT_LABEL[detected]}</b>
-        </span>
-        <button className="loadmore" onClick={() => setTail((t) => !t)} style={{ borderColor: tail ? "rgba(48,164,108,.45)" : "var(--border-strong)" }}>
-          <span className={`dot ${tail ? "run pulse" : "idle"}`} style={{ boxShadow: "none" }} />
-          <span style={{ color: tail ? "#6bd49b" : "var(--text-2)" }}>{tail ? "Tailing" : "Paused"}</span>
-        </button>
-      </div>
-      <div className="cmdline">
-        <span className="c-prompt">$</span> rune logs {target} --follow{level !== "all" ? ` --grep=${level}` : ""}{!pretty ? " -o raw" : ""}{olderCount ? ` --since=${Math.round(((olderCount + 24) * 1.4) / 60) + 1}m` : ""}{" "}
-        <span style={{ color: "var(--text-4)" }}># {instId ? "single instance" : `aggregated across ${insts.length} instances`}</span>
-      </div>
-      <div className="logwell" ref={wellRef} onScroll={onScroll} style={{ height: 430, overflowY: "auto" }}>
-        <div className="logtop">
-          {hasMore ? (
-            <button className="loadmore" onClick={loadEarlier} disabled={loadingRef.current}><Icon name="arrowup" size={12} />Load earlier lines</button>
-          ) : (
-            <span className="logtop-end">— beginning of retained logs —<br />runed streams from the runner; older history isn't retained. Ship to RuneSight for retention.</span>
-          )}
-        </div>
-        {shown.map((l, i) => (
-          <div className="logline" key={i}>
-            <span className="lt">{l.ts}</span>
-            <span className={`lv ${l.level}`}>{l.level.toUpperCase()}</span>
-            <span className="lsvc">{l.origin}</span>
-            <span className="lm">{pretty ? <PrettyLine l={l} /> : l.raw}</span>
-          </div>
-        ))}
-      </div>
-      <div className="logmeta">
-        <span>{shown.length} lines{olderCount ? ` · +${olderCount} earlier` : ""}</span>
-        <span style={{ color: "var(--text-4)" }}>·</span>
-        <span>{instId ? `instance ${instId}` : `${svc}.${ns}.rune.local`}</span>
-        <span style={{ marginLeft: "auto", color: tail ? "var(--run)" : "var(--text-3)" }}>{tail ? "● streaming" : "○ paused"}</span>
-      </div>
-    </div>
-  );
-}
-
+/* ---------- logs view (live · GetLogs server-stream) ---------- */
 /* ---------- logs view (live · GetLogs server-stream) ---------- */
 function LiveLogsView({ svc, instId, ns }: { svc: string; instId: string | null; ns: string }) {
   const [level, setLevel] = useState("all");
@@ -353,8 +209,12 @@ function LiveLogsView({ svc, instId, ns }: { svc: string; instId: string | null;
       <div style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         <Segmented options={["all", "info", "warn", "error", "debug"]} value={level} onChange={setLevel} />
         <Segmented options={[{ value: "pretty", label: "Pretty" }, { value: "raw", label: "Raw" }]} value={pretty ? "pretty" : "raw"} onChange={(v) => setPretty(v === "pretty")} />
-        <span className="fmtbadge" style={{ marginLeft: "auto" }} title="Detected automatically from the stream">
-          <Icon name="health" size={12} style={{ color: "var(--text-3)" }} />detected <b>{FMT_LABEL[detected]}</b>
+        <span style={{ marginLeft: "auto" }}>
+          <Tooltip label="Detected automatically from the stream">
+            <span className="fmtbadge">
+              <Icon name="health" size={12} style={{ color: "var(--text-3)" }} />detected <b>{FMT_LABEL[detected]}</b>
+            </span>
+          </Tooltip>
         </span>
         <button className="loadmore" onClick={() => setTail((t) => !t)} style={{ borderColor: tail ? "rgba(48,164,108,.45)" : "var(--border-strong)" }}>
           <span className={`dot ${tail ? "run pulse" : "idle"}`} style={{ boxShadow: "none" }} />
@@ -390,91 +250,14 @@ function LiveLogsView({ svc, instId, ns }: { svc: string; instId: string | null;
   );
 }
 
-/* ---------- exec terminal ---------- */
-function TermLine({ item }: { item: ExecLine }) {
+/* ---------- exec terminal (live · WS bridge) ---------- */
+interface LiveLine { type: "cmd" | "out" | "sys" | "err"; text: string; prompt?: string }
+
+function TermLine({ item }: { item: LiveLine }) {
   if (item.type === "cmd") return <div className="term-line"><span className="term-prompt">{item.prompt}</span> <span className="term-cmd">{item.text}</span></div>;
   const cls = item.type === "sys" ? "term-sys" : item.type === "err" ? "term-err" : "term-out";
   return <div className={`term-line ${cls}`}>{item.text}</div>;
 }
-
-function ExecTerminal({ svc, instId, services, instances }: { svc: string; instId: string | null; services: Service[]; instances: Instance[] }) {
-  const inst: Instance | undefined = instId
-    ? instances.find((i) => i.id === instId)
-    : instances.find((i) => i.svc === svc && i.status === "run") || instances.find((i) => i.svc === svc);
-  const host = inst ? inst.id : instId || svc + "-x7f2a";
-  const ns = services.find((s) => s.name === svc)?.ns;
-  const [cwd, setCwd] = useState("/app");
-  const [closed, setClosed] = useState(false);
-  const [hist, setHist] = useState<ExecLine[]>(() => execBanner(svc, host, inst, instId));
-  const [input, setInput] = useState("");
-  const [cmdHist, setCmdHist] = useState<string[]>([]);
-  const [histIdx, setHistIdx] = useState(-1);
-  const wellRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { if (wellRef.current) wellRef.current.scrollTop = wellRef.current.scrollHeight; }, [hist]);
-  useEffect(() => { if (inputRef.current && !closed) inputRef.current.focus(); }, [closed]);
-
-  function run(cmdRaw: string) {
-    const cmd = cmdRaw.trim();
-    const prompt = `root@${host}:${cwd}#`;
-    setHist((h) => [...h, { type: "cmd", prompt, text: cmdRaw }]);
-    if (cmd) { setCmdHist((c) => [...c, cmd]); setHistIdx(-1); }
-    if (cmd === "") return;
-    if (cmd === "clear") { setHist([]); return; }
-    if (cmd === "exit" || cmd === "logout") {
-      setHist((h) => [...h, { type: "sys", text: `logout\nConnection to ${host} closed.` }]);
-      setClosed(true);
-      return;
-    }
-    const res = execRun(cmd, { svc, host, ns, inst, cwd, setCwd });
-    if (res && res.length) setHist((h) => [...h, ...res]);
-  }
-  function onKey(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") { e.preventDefault(); const v = input; setInput(""); run(v); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); navHist(-1); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); navHist(1); }
-  }
-  function navHist(dir: number) {
-    if (!cmdHist.length) return;
-    let idx = histIdx === -1 ? cmdHist.length : histIdx;
-    idx = Math.max(0, Math.min(cmdHist.length, idx + dir));
-    setHistIdx(idx >= cmdHist.length ? -1 : idx);
-    setInput(idx >= cmdHist.length ? "" : cmdHist[idx]);
-  }
-  const promptStr = `root@${host}:${cwd}#`;
-
-  return (
-    <div className="fadein">
-      <div className="cmdline"><span className="c-prompt">$</span> rune exec {instId || svc} <span style={{ color: "var(--text-4)" }}># {instId ? "pinned instance" : "attaches to a healthy instance"}</span></div>
-      <div className="term" ref={wellRef} onClick={() => inputRef.current?.focus()}>
-        {hist.map((h, i) => <TermLine key={i} item={h} />)}
-        {!closed ? (
-          <div className="term-input-row">
-            <span className="term-prompt">{promptStr}</span>
-            <input ref={inputRef} className="term-input" value={input} spellCheck={false} autoComplete="off" onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} aria-label="exec command" />
-          </div>
-        ) : (
-          <div className="term-closed">session closed · <span style={{ color: "var(--accent-text)", cursor: "pointer" }} onClick={() => { setClosed(false); setHist(execBanner(svc, host, inst, instId)); setCwd("/app"); }}>reconnect</span></div>
-        )}
-      </div>
-      <div className="logmeta">
-        <span>exec · {svc}</span><span style={{ color: "var(--text-4)" }}>·</span>
-        <span>instance {host}</span><span style={{ color: "var(--text-4)" }}>·</span>
-        <span>{inst ? inst.node : "—"}</span>
-        <span style={{ marginLeft: "auto", color: closed ? "var(--text-3)" : "var(--run)" }}>{closed ? "○ disconnected" : "● connected · root"}</span>
-      </div>
-      <div style={{ marginTop: 11, color: "var(--text-3)", fontSize: 12 }}>
-        {["ls /etc/secrets/db", "cat /etc/config/log-level", "env | grep LOG", "nc -zv postgres 5432", "ps aux", "help"].map((c) => (
-          <code className="hint" key={c} onClick={() => { setInput(""); run(c); inputRef.current?.focus(); }}>{c}</code>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ---------- exec terminal (live · WS bridge) ---------- */
-interface LiveLine { type: "cmd" | "out" | "sys" | "err"; text: string; prompt?: string }
 
 function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | null; ns: string }) {
   const host = instId || svc;
@@ -484,20 +267,52 @@ function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | n
   const [histIdx, setHistIdx] = useState(-1);
   const [connected, setConnected] = useState(false);
   const [closed, setClosed] = useState(false);
+  // The shell's live prompt: the trailing, not-yet-newlined bytes the PTY has
+  // emitted (e.g. "/var # "). We render this on the input row instead of a fake
+  // static prompt so it tracks the real cwd the way a terminal does.
+  const [pending, setPending] = useState("");
   const sessionRef = useRef<ExecSession | null>(null);
   const wellRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Accumulate raw stdout and flush it as output lines.
+  // Accumulate raw stdout, flush completed lines, and keep the partial tail as
+  // the live prompt.
   const bufRef = useRef("");
 
   function pushBuf(text: string) {
-    bufRef.current += text;
+    let buf = bufRef.current + text;
+    // Honor screen-clear escapes (`clear`, Ctrl-L). Find the last clear in the
+    // buffer, wipe the rendered scrollback, and keep only what the shell drew
+    // afterwards (a fresh prompt). Without this the codes are stripped and
+    // `clear` is a no-op. See ANSI_CLEAR for the sequences matched.
+    let ci = -1;
+    ANSI_CLEAR.lastIndex = 0;
+    for (let m: RegExpExecArray | null; (m = ANSI_CLEAR.exec(buf)); ) ci = m.index;
+    if (ci !== -1) { setHist([]); buf = buf.slice(ci); }
     // Normalize CRLF, then split into lines.
-    const norm = bufRef.current.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const norm = buf.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const parts = norm.split("\n");
     bufRef.current = parts.pop() ?? "";
-    const clean = parts.map((t) => ({ type: "out" as const, text: stripAnsi(t) }));
+    const clean: LiveLine[] = [];
+    for (const t of parts) {
+      const s = stripAnsi(t);
+      const m = PROMPT_RE.exec(s);
+      if (m) {
+        // A prompt with no command is the shell redrawing its prompt (cursor
+        // query timeout on connect, empty Enter, …). The live prompt already
+        // lives on the input row, so a bare prompt in scrollback is just noise —
+        // drop it. Keep prompts that carry an actual command.
+        if (m[2] === "") continue;
+        clean.push({ type: "cmd", prompt: m[1], text: m[2] }); // accent prompt + plain command
+      } else {
+        clean.push({ type: "out", text: s });
+      }
+    }
     if (clean.length) setHist((h) => [...h, ...clean]);
+    // Surface the partial tail as the prompt. Only update when non-empty so the
+    // prompt stays stable in the brief gap between echoing a command and the
+    // shell redrawing the next prompt (avoids a flicker to blank).
+    const tail = stripAnsi(bufRef.current);
+    if (tail) setPending(tail);
   }
 
   useEffect(() => {
@@ -516,7 +331,9 @@ function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | n
           onData: (text) => { if (live) pushBuf(text); },
           onExit: (code) => {
             if (!live) return;
-            if (bufRef.current) { setHist((h) => [...h, { type: "out", text: bufRef.current }]); bufRef.current = ""; }
+            // The tail is the shell's dangling prompt, not output — drop it.
+            bufRef.current = "";
+            setPending("");
             setHist((h) => [...h, { type: "sys", text: `Session closed${code ? ` (exit ${code})` : ""}.` }]);
             setClosed(true);
             setConnected(false);
@@ -541,8 +358,9 @@ function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | n
   useEffect(() => { if (inputRef.current && !closed) inputRef.current.focus(); }, [closed]);
 
   function run(raw: string) {
-    const prompt = `${host}:~#`;
-    setHist((h) => [...h, { type: "cmd", prompt, text: raw }]);
+    // Don't echo locally: the PTY echoes input and renders its own prompt, so a
+    // synthetic line here would duplicate every command. Just record it for
+    // ↑/↓ history and hand it to the shell.
     if (raw.trim()) { setCmdHist((c) => [...c, raw]); setHistIdx(-1); }
     sessionRef.current?.send(raw + "\n");
   }
@@ -559,16 +377,14 @@ function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | n
     setHistIdx(idx >= cmdHist.length ? -1 : idx);
     setInput(idx >= cmdHist.length ? "" : cmdHist[idx]);
   }
-  const promptStr = `${host}:~#`;
-
   return (
     <div className="fadein">
       <div className="cmdline"><span className="c-prompt">$</span> rune exec {instId || svc} <span style={{ color: "var(--text-4)" }}># {instId ? "pinned instance" : "attaches to a healthy instance"} · WS bridge</span></div>
       <div className="term" ref={wellRef} onClick={() => inputRef.current?.focus()}>
-        {hist.map((h, i) => <TermLine key={i} item={h as ExecLine} />)}
+        {hist.map((h, i) => <TermLine key={i} item={h} />)}
         {!closed ? (
           <div className="term-input-row">
-            <span className="term-prompt">{promptStr}</span>
+            <span className="term-prompt">{pending}</span>
             <input ref={inputRef} className="term-input" value={input} spellCheck={false} autoComplete="off" disabled={!connected} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} aria-label="exec command" />
           </div>
         ) : (
@@ -585,11 +401,8 @@ function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | n
 }
 
 export function Logs({ initialSvc }: { initialSvc?: string | null }) {
-  const demo = useDemo();
-  const { data: liveServices } = useServices();
-  const { data: liveInstances } = useInstances();
-  const services = demo ? RUNE.services : liveServices;
-  const instances = demo ? RUNE.instances : liveInstances;
+  const { data: services } = useServices();
+  const { data: instances } = useInstances();
 
   const svcNames = services.filter((s) => s.ports.length || s.type === "container").map((s) => s.name);
   const fallback = svcNames[0] || services[0]?.name || "";
@@ -599,14 +412,14 @@ export function Logs({ initialSvc }: { initialSvc?: string | null }) {
   const pickSvc = (n: string) => { setSvc(n); setInst(null); };
 
   // Once live data arrives, snap the selection to a real service if the
-  // current pick isn't present (e.g. the mock default "api-core").
+  // current pick isn't present yet.
   useEffect(() => {
-    if (!demo && services.length && !services.some((s) => s.name === svc)) {
+    if (services.length && !services.some((s) => s.name === svc)) {
       setSvc(initialSvc && svcNames.includes(initialSvc) ? initialSvc : fallback);
       setInst(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demo, services.length]);
+  }, [services.length]);
 
   const ns = services.find((s) => s.name === svc)?.ns || "default";
 
@@ -623,13 +436,9 @@ export function Logs({ initialSvc }: { initialSvc?: string | null }) {
         <ScopePicker mode={mode} svc={svc} inst={inst} setInst={setInst} instances={instances} />
       </div>
       {mode === "logs" ? (
-        demo
-          ? <LogsView svc={svc} instId={inst} services={services} instances={instances} key={"l-" + svc + (inst || "")} />
-          : <LiveLogsView svc={svc} instId={inst} ns={ns} key={"ll-" + svc + (inst || "")} />
+        <LiveLogsView svc={svc} instId={inst} ns={ns} key={"ll-" + svc + (inst || "")} />
       ) : (
-        demo
-          ? <ExecTerminal svc={svc} instId={inst} services={services} instances={instances} key={"e-" + svc + (inst || "")} />
-          : <LiveExecTerminal svc={svc} instId={inst} ns={ns} key={"le-" + svc + (inst || "")} />
+        <LiveExecTerminal svc={svc} instId={inst} ns={ns} key={"le-" + svc + (inst || "")} />
       )}
     </div>
   );

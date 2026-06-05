@@ -1,14 +1,18 @@
 import { Badge, Button, Card, CardHead, EmptyState, Icon, PageHead, Spinner, Table, Tag, UsageBar } from "../components";
 import { useStorageClasses, useVolumes } from "../api/hooks";
+import { useScope } from "../lib/scope";
 
 export function Storage() {
   const { data: volumes, loading: vLoading, error: vError, reload: vReload } = useVolumes();
   const { data: classes, loading: cLoading, error: cError, reload: cReload } = useStorageClasses();
+  const { ns: scopeNs } = useScope();
+  // Volumes are namespaced; storage classes are cluster-scoped (left unfiltered).
+  const shownVolumes = scopeNs === "all" ? volumes : volumes.filter((v) => v.ns === scopeNs);
 
   return (
     <div className="wrap">
       <PageHead
-        eyebrow={`${volumes.length} volumes · ${classes.length} storage classes`}
+        eyebrow={`${shownVolumes.length} volumes · ${classes.length} storage classes`}
         title="Storage"
         sub="Persistent volumes backing stateful services, and the storage classes that provision them."
         actions={<Button size="sm" variant="primary"><Icon name="plus" size={14} />New volume</Button>}
@@ -19,13 +23,13 @@ export function Storage() {
           <Spinner label="Loading volumes…" height={160} />
         ) : vError ? (
           <EmptyState icon="storage" tone="error" title="Couldn't load volumes" hint={vError} action={{ label: "Retry", onClick: vReload }} />
-        ) : volumes.length === 0 ? (
-          <EmptyState icon="storage" title="No volumes" hint="Cast a volume spec or a stateful service to provision persistent storage." />
+        ) : shownVolumes.length === 0 ? (
+          <EmptyState icon="storage" title="No volumes" hint={scopeNs === "all" ? "Cast a volume spec or a stateful service to provision persistent storage." : `No volumes in the ${scopeNs} namespace.`} />
         ) : (
           <Table>
             <thead><tr><th>Volume</th><th>Namespace</th><th>Bound to</th><th>Capacity</th><th>Used</th><th>Class</th><th>Mode</th><th>Status</th></tr></thead>
             <tbody>
-              {volumes.map((v) => (
+              {shownVolumes.map((v) => (
                 <tr key={`${v.ns}/${v.name}`}>
                   <td><div className="cell-name"><Icon name="storage" size={15} style={{ color: "var(--text-3)" }} />{v.name}</div></td>
                   <td><Tag>{v.ns}</Tag></td>
