@@ -26,7 +26,7 @@ export function Login({ logoVariant, onAuthed }: { logoVariant: LogoVariant; onA
     } catch (e) {
       setErr(
         "Bootstrap failed — a cluster admin already exists, or this isn't first run. " +
-          "Paste a token from `rune admin token create`, or run `rune ui login`.",
+          "Paste a token from `rune admin token create`, or run `rune ui`.",
       );
       setBusy(false);
     }
@@ -56,7 +56,7 @@ export function Login({ logoVariant, onAuthed }: { logoVariant: LogoVariant; onA
 
         <div className="login-handoff">
           <b style={{ color: "var(--text)" }}>From the CLI</b><br />
-          Run <code>rune ui login</code> — it opens this page with a one-time handoff and sets a secure session cookie. No token copy-paste.
+          Run <code>rune ui</code> — it opens this page with a one-time handoff and sets a secure session cookie. No token copy-paste.
         </div>
 
         <div className="login-or">first run?</div>

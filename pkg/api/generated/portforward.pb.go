@@ -260,6 +260,7 @@ type PortForwardInit struct {
 	//
 	//	*PortForwardInit_ServiceName
 	//	*PortForwardInit_InstanceId
+	//	*PortForwardInit_ControlPlane
 	Target isPortForwardInit_Target `protobuf_oneof:"target"`
 	// Namespace of the service/instance. Empty string is treated as
 	// "default".
@@ -331,6 +332,15 @@ func (x *PortForwardInit) GetInstanceId() string {
 	return ""
 }
 
+func (x *PortForwardInit) GetControlPlane() bool {
+	if x != nil {
+		if x, ok := x.Target.(*PortForwardInit_ControlPlane); ok {
+			return x.ControlPlane
+		}
+	}
+	return false
+}
+
 func (x *PortForwardInit) GetNamespace() string {
 	if x != nil {
 		return x.Namespace
@@ -364,9 +374,21 @@ type PortForwardInit_InstanceId struct {
 	InstanceId string `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3,oneof"`
 }
 
+type PortForwardInit_ControlPlane struct {
+	// control_plane forwards to runed's own dashboard/HTTP listener
+	// (loopback) instead of a workload instance. Used by `rune ui` to
+	// tunnel the embedded dashboard over the authenticated control-plane
+	// stream, so the browser can reach it on localhost with no exposed
+	// port and no SSH. The Open frame's remote_port is ignored; the
+	// server always dials its own configured HTTP address.
+	ControlPlane bool `protobuf:"varint,6,opt,name=control_plane,json=controlPlane,proto3,oneof"`
+}
+
 func (*PortForwardInit_ServiceName) isPortForwardInit_Target() {}
 
 func (*PortForwardInit_InstanceId) isPortForwardInit_Target() {}
+
+func (*PortForwardInit_ControlPlane) isPortForwardInit_Target() {}
 
 // PortForwardReady is sent once after Init succeeds and the server has
 // resolved the target instance. All subsequent Open frames are dialed
@@ -611,11 +633,12 @@ const file_pkg_api_proto_portforward_proto_rawDesc = "" +
 	"\x04data\x18\x02 \x01(\v2\x19.rune.api.PortForwardDataH\x00R\x04data\x122\n" +
 	"\x05close\x18\x03 \x01(\v2\x1a.rune.api.PortForwardCloseH\x00R\x05close\x12*\n" +
 	"\x06status\x18\x04 \x01(\v2\x10.rune.api.StatusH\x00R\x06statusB\t\n" +
-	"\amessage\"\xc4\x01\n" +
+	"\amessage\"\xeb\x01\n" +
 	"\x0fPortForwardInit\x12#\n" +
 	"\fservice_name\x18\x01 \x01(\tH\x00R\vserviceName\x12!\n" +
 	"\vinstance_id\x18\x02 \x01(\tH\x00R\n" +
-	"instanceId\x12\x1c\n" +
+	"instanceId\x12%\n" +
+	"\rcontrol_plane\x18\x06 \x01(\bH\x00R\fcontrolPlane\x12\x1c\n" +
 	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12\x14\n" +
 	"\x05ports\x18\x04 \x03(\rR\x05ports\x12+\n" +
 	"\x11instance_selector\x18\x05 \x01(\tR\x10instanceSelectorB\b\n" +
@@ -700,6 +723,7 @@ func file_pkg_api_proto_portforward_proto_init() {
 	file_pkg_api_proto_portforward_proto_msgTypes[2].OneofWrappers = []any{
 		(*PortForwardInit_ServiceName)(nil),
 		(*PortForwardInit_InstanceId)(nil),
+		(*PortForwardInit_ControlPlane)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

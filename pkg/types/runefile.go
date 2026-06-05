@@ -127,7 +127,7 @@ type UIConfig struct {
 	Enabled bool `yaml:"enabled,omitempty"`
 	// Path is the dashboard mount point (default /ui).
 	Path string `yaml:"path,omitempty"`
-	// HandoffEnabled allows the `rune ui login` token-handoff flow.
+	// HandoffEnabled allows the `rune ui` token-handoff flow.
 	HandoffEnabled bool `yaml:"handoff_enabled,omitempty"`
 	// HandoffTTL bounds a one-time handoff code's lifetime.
 	HandoffTTL time.Duration `yaml:"handoff_ttl,omitempty"`

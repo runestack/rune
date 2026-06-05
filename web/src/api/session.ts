@@ -5,7 +5,7 @@
  * exchange the cookie for a fresh one via POST /v1/auth/refresh.
  *
  * Login paths:
- *   - handoff:  `rune ui login` sets the refresh cookie; ?handoff=<code> on the
+ *   - handoff:  `rune ui` sets the refresh cookie; ?handoff=<code> on the
  *               login page claims it, then we refresh.
  *   - cookie:   a prior session's cookie is still valid → refresh on load.
  *   - token:    pasted static/access token, held in memory (no refresh).

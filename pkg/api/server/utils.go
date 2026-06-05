@@ -190,4 +190,19 @@ func isLocalhost(addr string) bool {
 	return ip.IsLoopback()
 }
 
+// loopbackDialAddr converts an HTTP listen address (e.g. ":7861" or
+// "0.0.0.0:7861") into a loopback dial target ("127.0.0.1:7861") for
+// control-plane port-forwarding. A concrete non-wildcard host is preserved.
+func loopbackDialAddr(listenAddr string) string {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return listenAddr
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
+
 func statusPermissionDenied(msg string) error { return status.Error(codes.PermissionDenied, msg) }
