@@ -22,10 +22,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Setup protoc
+        # `make ui` runs `npm run gen`, which invokes protoc with the
+        # npm-installed protoc-gen-es / protoc-gen-connect-es plugins to
+        # generate the TS Connect clients (web/src/gen is gitignored).
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '29.3'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build dashboard bundle
-        # Emits the hashed Vite bundle into pkg/api/server/uiassets/dist/assets
-        # so the following `go build` embeds the real dashboard, not the
-        # committed placeholder index.html (dist/assets is gitignored).
+        # Generates the TS Connect clients then emits the hashed Vite bundle
+        # into pkg/api/server/uiassets/dist/assets, so the following `go build`
+        # embeds the real dashboard, not the committed placeholder index.html
+        # (both dist/assets and web/src/gen are gitignored).
         run: make ui
       - name: Determine release type
         id: release-type
