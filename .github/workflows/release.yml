@@ -50,8 +50,11 @@ jobs:
           echo "Is prerelease: ${{ steps.release-type.outputs.is-prerelease }}"
       - name: Build all platforms
         run: |
-          # Build for all target platforms using Makefile
-          make build-all
+          # Build for all target platforms using Makefile.
+          # Pin VERSION to the tag so the embedded version is clean: the prior
+          # `make ui` step rewrites the tracked placeholder dist/index.html,
+          # which would otherwise make `git describe --dirty` stamp "-dirty".
+          make build-all VERSION="${{ github.ref_name }}"
           
           # Create dist directories and copy binaries
           mkdir -p dist/linux_amd64 dist/linux_arm64 dist/darwin_amd64 dist/darwin_arm64
