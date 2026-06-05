@@ -1,0 +1,7 @@
+.copy-btn {
+  background: none; border: none; cursor: pointer; color: var(--text-3);
+  padding: 3px; border-radius: var(--radius-sm); display: grid; place-items: center;
+  transition: color 0.12s, background 0.12s;
+}
+.copy-btn:hover { color: var(--text); background: var(--surface-3); }
+.copy-btn.done { color: var(--run); }

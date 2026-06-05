@@ -1,0 +1,18 @@
+/* Sits above the Drawer (z 40/41). */
+.modal-scrim {
+  position: fixed; inset: 0; background: rgba(8, 7, 6, 0.6);
+  backdrop-filter: blur(2px); z-index: 60; opacity: 0; animation: modal-fade 0.16s forwards;
+}
+@keyframes modal-fade { to { opacity: 1; } }
+.modal-wrap {
+  position: fixed; inset: 0; z-index: 61; display: grid; place-items: center;
+  padding: 24px; pointer-events: none;
+}
+.modal {
+  pointer-events: auto; background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop); max-width: 92vw; max-height: 86vh; overflow: auto;
+  outline: none; opacity: 0; transform: translateY(6px) scale(0.985);
+  animation: modal-in 0.18s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+@keyframes modal-in { to { opacity: 1; transform: none; } }

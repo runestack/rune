@@ -1,0 +1,24 @@
+/* Shared form-control styling for Field / TextInput / Select / Textarea.
+   Imported by each control; Vite dedupes the module so it lands once. */
+.field { display: block; }
+.field-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 7px; }
+.field-hint { font-family: var(--mono); font-size: 11px; margin-top: 6px; color: var(--text-3); }
+.field-hint.bad { color: #f2868a; }
+.field-hint.ok { color: var(--run); }
+
+.field-control {
+  width: 100%; background: var(--inset); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 11px; color: var(--text);
+  font-family: var(--mono); font-size: 12.5px; outline: none; transition: border-color 0.14s;
+}
+.field-control:focus { border-color: var(--accent-line); }
+.field-control.bad { border-color: rgba(229, 72, 77, 0.5); }
+.field-control:disabled { opacity: 0.55; cursor: default; }
+.field-control::placeholder { color: var(--text-4); }
+
+/* Select: native control + custom chevron affordance */
+.field-select { position: relative; display: block; }
+.field-select > svg { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-3); }
+select.field-control { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 28px; }
+
+textarea.field-control { resize: vertical; min-height: 76px; line-height: 1.5; }

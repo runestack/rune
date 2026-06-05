@@ -1,6 +1,6 @@
 import {
-  Badge, Button, Card, CardHead, Dot, Dropdown, Icon, ICON_PATHS, Logo, PageHead,
-  Replicas, Search, Segmented, Spark, Tabs, Tag, UsageBar,
+  Badge, Button, Card, CardHead, Checkbox, CopyButton, Dot, Dropdown, Field, Icon, ICON_PATHS, Logo, PageHead,
+  Replicas, Search, Segmented, Select, Spark, Switch, Tabs, Tag, TextInput, Tooltip, UsageBar,
   TweaksPanel, TweakSection, TweakRadio, TweakColor,
 } from "../components";
 import type { IconName } from "../components";
@@ -24,6 +24,9 @@ export function Playground() {
   const [t, setTweak] = useTweaks();
   const [seg, setSeg] = useState("all");
   const [tab, setTab] = useState("overview");
+  const [tail, setTail] = useState(true);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [name, setName] = useState("");
 
   return (
     <div className="pg">
@@ -129,6 +132,46 @@ export function Playground() {
               active={tab}
               onChange={setTab}
             />
+          </Spec>
+          <Spec name="Field" note="label + validation states">
+            <div style={{ width: 240 }}>
+              <Field
+                label="Service name"
+                hint={!name ? "DNS-1123: a–z, 0–9, hyphen" : undefined}
+                success={name && /^[a-z0-9-]+$/.test(name) ? "✓ valid name" : undefined}
+                error={name && !/^[a-z0-9-]+$/.test(name) ? "lowercase, digits, hyphen only" : undefined}
+              >
+                <TextInput value={name} placeholder="web-gateway" invalid={!!name && !/^[a-z0-9-]+$/.test(name)} onChange={(e) => setName(e.target.value)} />
+              </Field>
+            </div>
+          </Spec>
+          <Spec name="Select" note="native + chevron">
+            <Select defaultValue="production" style={{ width: 200 }}>
+              {["production", "staging", "observability", "default"].map((n) => <option key={n} value={n}>{n}</option>)}
+            </Select>
+          </Spec>
+          <Spec name="Switch" note="immediate on/off">
+            <Switch checked={tail} onChange={setTail} label={tail ? "Tailing" : "Paused"} />
+            <Switch checked disabled onChange={() => {}} label="Disabled" />
+          </Spec>
+          <Spec name="Checkbox">
+            <Checkbox checked={confirmDel} onChange={setConfirmDel} label="I understand this is permanent" />
+          </Spec>
+        </section>
+
+        <section className="pg-sect">
+          <h2>Feedback</h2>
+          <Spec name="Tooltip" note="hover / focus">
+            <Tooltip label="Detected automatically from the stream">
+              <Button size="sm" variant="ghost"><Icon name="health" size={13} />hover me</Button>
+            </Tooltip>
+            <Tooltip label="Below" placement="bottom"><Tag>bottom</Tag></Tooltip>
+          </Spec>
+          <Spec name="CopyButton" note="copies + confirms">
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: "var(--mono)", fontSize: 12.5, color: "var(--accent-text)" }}>
+              secret:db-credentials/password
+              <CopyButton value="secret:db-credentials/password" />
+            </span>
           </Spec>
         </section>
 

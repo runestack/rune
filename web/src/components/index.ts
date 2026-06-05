@@ -8,11 +8,20 @@ export * from "./primitives/Button";
 export * from "./primitives/UsageBar";
 export * from "./primitives/Spark";
 export * from "./primitives/Replicas";
+export * from "./primitives/Avatar";
+export * from "./primitives/Tooltip";
+export * from "./primitives/CopyButton";
 // Inputs
 export * from "./inputs/Dropdown";
 export * from "./inputs/Segmented";
 export * from "./inputs/Tabs";
 export * from "./inputs/Search";
+export * from "./inputs/Field";
+export * from "./inputs/TextInput";
+export * from "./inputs/Select";
+export * from "./inputs/Textarea";
+export * from "./inputs/Switch";
+export * from "./inputs/Checkbox";
 // Layout
 export * from "./layout/Card";
 export * from "./layout/PageHead";
@@ -32,3 +41,8 @@ export * from "./data/Kpi";
 // Feedback
 export * from "./feedback/Spinner";
 export * from "./feedback/EmptyState";
+export * from "./feedback/ErrorBoundary";
+export * from "./feedback/Modal";
+export * from "./feedback/Confirm";
+export * from "./feedback/Alert";
+export * from "./feedback/Toast";

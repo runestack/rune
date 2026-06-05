@@ -1,0 +1,11 @@
+.checkbox { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.checkbox.disabled { opacity: 0.5; cursor: default; }
+.checkbox-box {
+  flex: none; width: 18px; height: 18px; padding: 0; color: #15121f;
+  border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--inset);
+  display: grid; place-items: center; cursor: pointer; transition: background 0.14s, border-color 0.14s;
+}
+.checkbox-box.on { background: var(--accent); border-color: var(--accent); }
+.checkbox-box:disabled { cursor: default; }
+.checkbox-box:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.checkbox-label { font-size: 13px; color: var(--text); }
