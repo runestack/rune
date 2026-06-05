@@ -1,0 +1,3 @@
+.kv { display: grid; grid-template-columns: 150px 1fr; gap: 0; }
+.kv > dt { font-size: 12.5px; color: var(--text-3); padding: 9px 0; border-bottom: 1px solid var(--border-faint); }
+.kv > dd { font-size: 13px; color: var(--text); margin: 0; padding: 9px 0; border-bottom: 1px solid var(--border-faint); font-family: var(--mono); }

@@ -1,0 +1,26 @@
+.confirm { padding: 20px 22px 18px; }
+.confirm-head { display: flex; align-items: center; gap: 11px; }
+.confirm-icon {
+  display: grid; place-items: center; width: 32px; height: 32px; flex: none;
+  border-radius: 9px; background: var(--accent-dim); color: var(--accent-text);
+}
+.confirm-icon.danger { background: var(--fail-dim); color: #f2868a; }
+.confirm-title {
+  font-family: var(--serif); font-size: 19px; font-weight: 500; margin: 0;
+  letter-spacing: -0.01em; color: var(--text);
+}
+.confirm-msg { margin-top: 12px; font-size: 13px; line-height: 1.55; color: var(--text-2); }
+.confirm-msg b, .confirm-msg strong { color: var(--text); font-weight: 600; }
+
+.confirm-field { margin-top: 16px; }
+.confirm-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 7px; }
+.confirm-input {
+  width: 100%; background: var(--inset); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 11px; color: var(--text);
+  font-family: var(--mono); font-size: 12.5px; outline: none; transition: border-color 0.14s;
+}
+.confirm-input:focus { border-color: var(--accent-line); }
+.confirm-input.bad { border-color: rgba(229, 72, 77, 0.5); }
+.confirm-err { font-family: var(--mono); font-size: 11px; margin-top: 6px; color: #f2868a; }
+
+.confirm-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }

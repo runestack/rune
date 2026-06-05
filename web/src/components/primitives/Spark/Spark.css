@@ -1,0 +1,9 @@
+.spark { display: flex; align-items: flex-end; gap: 3px; height: 46px; }
+.spark > i {
+  flex: 1;
+  background: var(--accent-line);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  transition: height 0.5s;
+}
+.spark > i.hi { background: var(--accent); }

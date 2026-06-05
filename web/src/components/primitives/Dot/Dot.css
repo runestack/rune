@@ -1,0 +1,42 @@
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  display: inline-block;
+}
+.dot.run {
+  background: var(--run);
+  box-shadow: 0 0 0 2px rgba(48, 164, 108, 0.1);
+}
+.dot.fail {
+  background: var(--fail);
+  box-shadow: 0 0 0 2px rgba(229, 72, 77, 0.12);
+}
+.dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px rgba(246, 217, 8, 0.1);
+}
+.dot.deploy {
+  background: var(--deploy);
+  box-shadow: 0 0 0 2px rgba(247, 104, 9, 0.12);
+}
+.dot.idle {
+  background: var(--idle);
+}
+.dot.net {
+  background: var(--net);
+  box-shadow: 0 0 0 2px rgba(103, 221, 253, 0.1);
+}
+.dot.pulse {
+  animation: dotpulse 1.8s ease-in-out infinite;
+}
+@keyframes dotpulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

@@ -1,0 +1,7 @@
+.page-head { margin-bottom: 26px; }
+.page-title {
+  font-family: var(--serif); font-size: 34px; line-height: 1.05; letter-spacing: -0.015em;
+  color: var(--text); margin: 6px 0 0; font-weight: 400;
+}
+.page-title em { font-style: italic; color: var(--accent-text); }
+.page-sub { color: var(--text-2); font-size: 14px; margin-top: 9px; max-width: 620px; }

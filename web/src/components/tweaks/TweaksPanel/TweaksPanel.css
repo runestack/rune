@@ -1,0 +1,39 @@
+.twk {
+  position: fixed; right: 18px; bottom: 18px; z-index: 50; width: 248px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
+  font-family: var(--sans); overflow: hidden;
+}
+.twk-hd {
+  display: flex; align-items: center; gap: 8px; padding: 11px 14px;
+  border-bottom: 1px solid var(--border-faint); cursor: default; user-select: none;
+}
+.twk-hd b { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.twk-hd .twk-ico { color: var(--accent-text); }
+.twk-hd .twk-x { margin-left: auto; color: var(--text-3); background: none; border: none; cursor: pointer; display: flex; padding: 2px; }
+.twk-hd .twk-x:hover { color: var(--text); }
+.twk-body { padding: 6px 14px 16px; display: flex; flex-direction: column; gap: 2px; }
+.twk-sect {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-3); padding: 14px 0 6px; font-weight: 500;
+}
+.twk-row { display: flex; flex-direction: column; gap: 7px; padding: 4px 0; }
+.twk-lbl { font-size: 12px; color: var(--text-2); font-weight: 500; }
+.twk-seg { display: flex; background: var(--inset); border: 1px solid var(--border); border-radius: 7px; padding: 3px; gap: 2px; }
+.twk-seg button {
+  flex: 1; font-family: var(--sans); font-size: 11.5px; font-weight: 600; color: var(--text-3);
+  background: none; border: none; padding: 5px 4px; border-radius: 5px; cursor: pointer; transition: all 0.13s; text-transform: capitalize;
+}
+.twk-seg button:hover { color: var(--text); }
+.twk-seg button.on { background: var(--surface-3); color: var(--text); }
+.twk-sw { display: flex; gap: 8px; flex-wrap: wrap; }
+.twk-sw button {
+  width: 26px; height: 26px; border-radius: 7px; border: 2px solid transparent; cursor: pointer; padding: 0;
+  transition: transform 0.1s; position: relative;
+}
+.twk-sw button:hover { transform: scale(1.08); }
+.twk-sw button.on { border-color: var(--text); }
+.twk-preview {
+  margin: 6px 0 2px; padding: 14px 18px; background: var(--inset); border: 1px solid var(--border);
+  border-radius: var(--radius); display: grid; place-items: center;
+}

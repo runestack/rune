@@ -1,0 +1,36 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 13px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  transition: background 0.14s, border-color 0.14s, transform 0.05s;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--surface-3); border-color: #46413a; }
+.btn:active { transform: translateY(1px); }
+.btn svg { width: 15px; height: 15px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #15121f; }
+.btn.primary:hover { background: var(--accent-text); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+/* destructive: quiet by default (tinted), commits to red on hover */
+.btn.danger { background: var(--fail-dim); border-color: rgba(229, 72, 77, 0.32); color: #f2868a; }
+.btn.danger:hover { background: var(--fail); border-color: var(--fail); color: #fff; }
+.btn.sm { padding: 5px 9px; font-size: 12px; }
+.btn.icon { padding: 6px; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.loading { cursor: default; }
+.btn-spin {
+  width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  opacity: 0.85; animation: btn-spin 0.6s linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }

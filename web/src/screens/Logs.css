@@ -1,0 +1,42 @@
+/* ---------- command echo + exec terminal ---------- */
+.cmdline { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); padding: 2px 2px 9px; }
+.cmdline .c-prompt { color: var(--accent-text); }
+.logmeta { display: flex; gap: 14px; margin-top: 12px; color: var(--text-3); font-size: 12px; font-family: var(--mono); flex-wrap: wrap; }
+.term {
+  background: var(--inset); border: 1px solid var(--border); border-radius: var(--radius);
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.7; padding: 14px 16px;
+  height: 440px; overflow-y: auto; color: var(--text); cursor: text;
+}
+.term-line { white-space: pre-wrap; word-break: break-word; }
+.term-out { color: var(--text-2); }
+.term-sys { color: var(--text-3); }
+.term-err { color: #f2868a; }
+.term-prompt { color: var(--accent-text); flex: none; }
+.term-cmd { color: var(--text); }
+.term-input-row { display: flex; align-items: baseline; gap: 9px; }
+.term-input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--text); font-family: var(--mono); font-size: 12.5px; caret-color: var(--accent); padding: 0; }
+.term-closed { color: var(--text-3); margin-top: 8px; }
+.hint { background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px; margin-right: 6px; color: var(--text-2); font-family: var(--mono); font-size: 11.5px; cursor: pointer; transition: border-color 0.12s, color 0.12s; }
+.hint:hover { border-color: var(--accent-line); color: var(--accent-text); }
+
+/* ---------- log pagination ---------- */
+.logtop { display: flex; justify-content: center; padding: 4px 0 12px; }
+.loadmore { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; padding: 5px 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; transition: border-color 0.14s, color 0.14s; white-space: nowrap; }
+.loadmore:hover { border-color: var(--accent-line); color: var(--accent-text); }
+.loadmore:disabled { opacity: 0.55; cursor: default; }
+.logtop-end { font-family: var(--mono); font-size: 10.5px; color: var(--text-4); text-align: center; max-width: 580px; line-height: 1.5; }
+
+/* ---------- log token highlighting ---------- */
+.tok-key { color: var(--text-3); }
+.tok-val { color: var(--text); }
+.tok-msg { color: var(--text); }
+.tok-num { color: var(--accent-text); }
+.tok-str { color: #9cbf96; }
+.tok-punc { color: var(--text-4); }
+.tok-ip { color: var(--text-2); }
+.tok-meth { color: var(--accent-text); font-weight: 600; }
+.tok-ok { color: var(--run); }
+.tok-warn { color: #d9a94e; }
+.tok-err { color: #f2868a; }
+.fmtbadge { font-family: var(--mono); font-size: 10.5px; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.fmtbadge b { color: var(--accent-text); font-weight: 600; }
