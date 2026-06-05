@@ -3,7 +3,7 @@ import { Icon } from "../../primitives/Icon";
 import { Search } from "../../inputs/Search";
 import "./Topbar.css";
 
-export function Topbar({ crumbs, actions }: { crumbs: string[]; actions?: ReactNode }) {
+export function Topbar({ crumbs, scope, actions }: { crumbs: string[]; scope?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="topbar">
       <div className="crumb">
@@ -14,6 +14,7 @@ export function Topbar({ crumbs, actions }: { crumbs: string[]; actions?: ReactN
           </Fragment>
         ))}
       </div>
+      {scope}
       <div className="spacer" />
       <Search />
       {actions}

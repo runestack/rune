@@ -1,11 +1,16 @@
 .sidebar { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .sb-head { padding: 20px 18px 14px; }
+.sb-ctx-wrap { position: relative; margin: 0 12px 12px; }
 .sb-context {
-  margin: 0 12px 12px; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border);
+  width: 100%; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius-sm); display: flex; align-items: center; gap: 9px; cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s; font: inherit; color: inherit; text-align: left;
 }
-.sb-context:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.sb-context:hover, .sb-context.open { border-color: var(--border-strong); background: var(--surface-2); }
+.sb-ctx-menu { width: 224px; }
+.sb-ctx-head { padding: 7px 9px 5px; }
+.sb-ctx-label { padding: 4px 9px 6px; color: var(--text-3); }
+.sb-ctx-menu .ddi-sub { margin-left: auto; color: var(--accent-text); }
 .sb-context .ctx-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); box-shadow: 0 0 0 3px var(--run-dim); flex: none; }
 .sb-context .ctx-name { font-weight: 600; font-size: 13px; color: var(--text); }
 .sb-context .ctx-sub { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -24,9 +29,6 @@
 .nav-item .nav-count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); font-weight: 500; }
 .nav-item.active .nav-count { color: var(--accent-text); }
 .sb-foot { border-top: 1px solid var(--border); padding: 11px 14px; display: flex; align-items: center; gap: 10px; }
-.sb-foot .avatar {
-  width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), #6f5be0);
-  display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #14121f; flex: none;
-}
+/* avatar styling now lives in the Avatar primitive (components/primitives/Avatar) */
 .sb-foot .who { font-size: 12.5px; font-weight: 600; min-width: 0; }
 .sb-foot .who small { display: block; font-family: var(--mono); font-size: 10px; color: var(--text-3); font-weight: 400; white-space: nowrap; }

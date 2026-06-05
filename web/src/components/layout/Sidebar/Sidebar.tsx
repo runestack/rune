@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import { Icon, type IconName } from "../../primitives/Icon";
+import { Avatar } from "../../primitives/Avatar";
 import { Logo } from "../../primitives/Logo";
 import type { LogoVariant } from "../../../lib/theme";
 import "./Sidebar.css";
@@ -11,13 +13,13 @@ export interface SidebarProps {
   route: string;
   go: (id: string) => void;
   logoVariant: LogoVariant;
-  cluster: { name: string; context: string; version: string };
+  /** The cluster/namespace context block (see ContextSwitcher). */
+  context?: ReactNode;
   user: { name: string; role: string };
-  demo?: boolean;
   onLogout?: () => void;
 }
 
-export function Sidebar({ nav, route, go, logoVariant, cluster, user, demo, onLogout }: SidebarProps) {
+export function Sidebar({ nav, route, go, logoVariant, context, user, onLogout }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sb-head">
@@ -25,14 +27,7 @@ export function Sidebar({ nav, route, go, logoVariant, cluster, user, demo, onLo
           <Logo variant={logoVariant} />
         </div>
       </div>
-      <div className="sb-context" onClick={() => go("namespaces")}>
-        <span className="ctx-dot" />
-        <div style={{ minWidth: 0 }}>
-          <div className="ctx-name">{cluster.name}</div>
-          <div className="ctx-sub">{cluster.context} · {cluster.version}</div>
-        </div>
-        <Icon name="chevrond" size={15} style={{ marginLeft: "auto", color: "var(--text-3)" }} />
-      </div>
+      {context}
       <nav className="sb-nav">
         {nav.map((grp) => (
           <div key={grp.group}>
@@ -48,10 +43,10 @@ export function Sidebar({ nav, route, go, logoVariant, cluster, user, demo, onLo
         ))}
       </nav>
       <div className="sb-foot">
-        <div className="avatar">{(user.name[0] || "?").toUpperCase()}</div>
+        <Avatar name={user.name} size={28} />
         <div className="who">
           {user.name}
-          <small>{demo ? "demo session" : user.role}</small>
+          <small>{user.role}</small>
         </div>
         <button
           className="sb-logout"
