@@ -24,8 +24,9 @@ import (
 // versions, rollback) and offers a one-stop subcommand tree for operators.
 func newSecretCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "secret",
-		Short: "Manage secrets (get, list, reveal, update, versions, rollback)",
+		Use:     "secret",
+		Aliases: []string{"secrets"},
+		Short:   "Manage secrets (get, list, reveal, update, versions, rollback)",
 	}
 	cmd.AddCommand(newSecretGetCmd())
 	cmd.AddCommand(newSecretListCmd())

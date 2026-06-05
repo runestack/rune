@@ -165,6 +165,68 @@ func (c *ConfigmapClient) ListConfigmaps(namespace string, labelSelector string,
 	return filtered, nil
 }
 
+// PatchConfigmap applies a server-side key-scoped merge (set/unset), creating
+// a new version, and returns the updated configmap.
+func (c *ConfigmapClient) PatchConfigmap(namespace, name string, set map[string]string, unset []string) (*types.Configmap, error) {
+	c.logger.Debug("Patching configmap", log.Str("name", name), log.Str("namespace", namespace), log.Int("set", len(set)), log.Int("unset", len(unset)))
+	req := &generated.PatchConfigmapRequest{Name: name, Namespace: namespace, Set: set, Unset: unset}
+	ctx, cancel := c.client.Context()
+	defer cancel()
+	resp, err := c.svc.PatchConfigmap(ctx, req)
+	if err != nil {
+		return nil, convertGRPCError("patch configmap", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	return c.protoToConfigmap(resp.Configmap)
+}
+
+// ListConfigmapVersions returns the configmap's version history, newest first.
+func (c *ConfigmapClient) ListConfigmapVersions(namespace, name string) ([]*types.Configmap, error) {
+	c.logger.Debug("Listing configmap versions", log.Str("name", name), log.Str("namespace", namespace))
+	req := &generated.ListConfigmapVersionsRequest{Name: name, Namespace: namespace}
+	ctx, cancel := c.client.Context()
+	defer cancel()
+	resp, err := c.svc.ListConfigmapVersions(ctx, req)
+	if err != nil {
+		statusErr, ok := status.FromError(err)
+		if ok && statusErr.Code() == codes.NotFound {
+			return nil, fmt.Errorf("configmap not found: %s/%s", namespace, name)
+		}
+		return nil, convertGRPCError("list configmap versions", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	out := make([]*types.Configmap, 0, len(resp.Versions))
+	for _, p := range resp.Versions {
+		cfg, err := c.protoToConfigmap(p)
+		if err != nil {
+			c.logger.Warn("Failed to convert configmap version", log.Err(err))
+			continue
+		}
+		out = append(out, cfg)
+	}
+	return out, nil
+}
+
+// RollbackConfigmap rewrites HEAD to the data of a prior version (head+1).
+func (c *ConfigmapClient) RollbackConfigmap(namespace, name string, toVersion int) (*types.Configmap, error) {
+	c.logger.Debug("Rolling back configmap", log.Str("name", name), log.Int("toVersion", toVersion))
+	req := &generated.RollbackConfigmapRequest{Name: name, Namespace: namespace, ToVersion: int32(toVersion)} //nolint:gosec // G115: rollback target bounded by caller; proto field is int32
+	ctx, cancel := c.client.Context()
+	defer cancel()
+	resp, err := c.svc.RollbackConfigmap(ctx, req)
+	if err != nil {
+		return nil, convertGRPCError("rollback configmap", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	return c.protoToConfigmap(resp.Configmap)
+}
+
 // Converters
 func (c *ConfigmapClient) configToProto(cfg *types.Configmap) *generated.Configmap {
 	if cfg == nil {

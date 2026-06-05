@@ -19,11 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ConfigmapService_CreateConfigmap_FullMethodName = "/rune.api.ConfigmapService/CreateConfigmap"
-	ConfigmapService_GetConfigmap_FullMethodName    = "/rune.api.ConfigmapService/GetConfigmap"
-	ConfigmapService_UpdateConfigmap_FullMethodName = "/rune.api.ConfigmapService/UpdateConfigmap"
-	ConfigmapService_DeleteConfigmap_FullMethodName = "/rune.api.ConfigmapService/DeleteConfigmap"
-	ConfigmapService_ListConfigmaps_FullMethodName  = "/rune.api.ConfigmapService/ListConfigmaps"
+	ConfigmapService_CreateConfigmap_FullMethodName       = "/rune.api.ConfigmapService/CreateConfigmap"
+	ConfigmapService_GetConfigmap_FullMethodName          = "/rune.api.ConfigmapService/GetConfigmap"
+	ConfigmapService_UpdateConfigmap_FullMethodName       = "/rune.api.ConfigmapService/UpdateConfigmap"
+	ConfigmapService_PatchConfigmap_FullMethodName        = "/rune.api.ConfigmapService/PatchConfigmap"
+	ConfigmapService_DeleteConfigmap_FullMethodName       = "/rune.api.ConfigmapService/DeleteConfigmap"
+	ConfigmapService_ListConfigmaps_FullMethodName        = "/rune.api.ConfigmapService/ListConfigmaps"
+	ConfigmapService_ListConfigmapVersions_FullMethodName = "/rune.api.ConfigmapService/ListConfigmapVersions"
+	ConfigmapService_RollbackConfigmap_FullMethodName     = "/rune.api.ConfigmapService/RollbackConfigmap"
 )
 
 // ConfigmapServiceClient is the client API for ConfigmapService service.
@@ -33,8 +36,11 @@ type ConfigmapServiceClient interface {
 	CreateConfigmap(ctx context.Context, in *CreateConfigmapRequest, opts ...grpc.CallOption) (*ConfigmapResponse, error)
 	GetConfigmap(ctx context.Context, in *GetConfigmapRequest, opts ...grpc.CallOption) (*ConfigmapResponse, error)
 	UpdateConfigmap(ctx context.Context, in *UpdateConfigmapRequest, opts ...grpc.CallOption) (*ConfigmapResponse, error)
+	PatchConfigmap(ctx context.Context, in *PatchConfigmapRequest, opts ...grpc.CallOption) (*ConfigmapResponse, error)
 	DeleteConfigmap(ctx context.Context, in *DeleteConfigmapRequest, opts ...grpc.CallOption) (*Status, error)
 	ListConfigmaps(ctx context.Context, in *ListConfigmapsRequest, opts ...grpc.CallOption) (*ListConfigmapsResponse, error)
+	ListConfigmapVersions(ctx context.Context, in *ListConfigmapVersionsRequest, opts ...grpc.CallOption) (*ListConfigmapVersionsResponse, error)
+	RollbackConfigmap(ctx context.Context, in *RollbackConfigmapRequest, opts ...grpc.CallOption) (*ConfigmapResponse, error)
 }
 
 type configmapServiceClient struct {
@@ -75,6 +81,16 @@ func (c *configmapServiceClient) UpdateConfigmap(ctx context.Context, in *Update
 	return out, nil
 }
 
+func (c *configmapServiceClient) PatchConfigmap(ctx context.Context, in *PatchConfigmapRequest, opts ...grpc.CallOption) (*ConfigmapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigmapResponse)
+	err := c.cc.Invoke(ctx, ConfigmapService_PatchConfigmap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *configmapServiceClient) DeleteConfigmap(ctx context.Context, in *DeleteConfigmapRequest, opts ...grpc.CallOption) (*Status, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Status)
@@ -95,6 +111,26 @@ func (c *configmapServiceClient) ListConfigmaps(ctx context.Context, in *ListCon
 	return out, nil
 }
 
+func (c *configmapServiceClient) ListConfigmapVersions(ctx context.Context, in *ListConfigmapVersionsRequest, opts ...grpc.CallOption) (*ListConfigmapVersionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListConfigmapVersionsResponse)
+	err := c.cc.Invoke(ctx, ConfigmapService_ListConfigmapVersions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configmapServiceClient) RollbackConfigmap(ctx context.Context, in *RollbackConfigmapRequest, opts ...grpc.CallOption) (*ConfigmapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigmapResponse)
+	err := c.cc.Invoke(ctx, ConfigmapService_RollbackConfigmap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ConfigmapServiceServer is the server API for ConfigmapService service.
 // All implementations must embed UnimplementedConfigmapServiceServer
 // for forward compatibility.
@@ -102,8 +138,11 @@ type ConfigmapServiceServer interface {
 	CreateConfigmap(context.Context, *CreateConfigmapRequest) (*ConfigmapResponse, error)
 	GetConfigmap(context.Context, *GetConfigmapRequest) (*ConfigmapResponse, error)
 	UpdateConfigmap(context.Context, *UpdateConfigmapRequest) (*ConfigmapResponse, error)
+	PatchConfigmap(context.Context, *PatchConfigmapRequest) (*ConfigmapResponse, error)
 	DeleteConfigmap(context.Context, *DeleteConfigmapRequest) (*Status, error)
 	ListConfigmaps(context.Context, *ListConfigmapsRequest) (*ListConfigmapsResponse, error)
+	ListConfigmapVersions(context.Context, *ListConfigmapVersionsRequest) (*ListConfigmapVersionsResponse, error)
+	RollbackConfigmap(context.Context, *RollbackConfigmapRequest) (*ConfigmapResponse, error)
 	mustEmbedUnimplementedConfigmapServiceServer()
 }
 
@@ -123,11 +162,20 @@ func (UnimplementedConfigmapServiceServer) GetConfigmap(context.Context, *GetCon
 func (UnimplementedConfigmapServiceServer) UpdateConfigmap(context.Context, *UpdateConfigmapRequest) (*ConfigmapResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateConfigmap not implemented")
 }
+func (UnimplementedConfigmapServiceServer) PatchConfigmap(context.Context, *PatchConfigmapRequest) (*ConfigmapResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PatchConfigmap not implemented")
+}
 func (UnimplementedConfigmapServiceServer) DeleteConfigmap(context.Context, *DeleteConfigmapRequest) (*Status, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteConfigmap not implemented")
 }
 func (UnimplementedConfigmapServiceServer) ListConfigmaps(context.Context, *ListConfigmapsRequest) (*ListConfigmapsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListConfigmaps not implemented")
+}
+func (UnimplementedConfigmapServiceServer) ListConfigmapVersions(context.Context, *ListConfigmapVersionsRequest) (*ListConfigmapVersionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListConfigmapVersions not implemented")
+}
+func (UnimplementedConfigmapServiceServer) RollbackConfigmap(context.Context, *RollbackConfigmapRequest) (*ConfigmapResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RollbackConfigmap not implemented")
 }
 func (UnimplementedConfigmapServiceServer) mustEmbedUnimplementedConfigmapServiceServer() {}
 func (UnimplementedConfigmapServiceServer) testEmbeddedByValue()                          {}
@@ -204,6 +252,24 @@ func _ConfigmapService_UpdateConfigmap_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ConfigmapService_PatchConfigmap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PatchConfigmapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigmapServiceServer).PatchConfigmap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigmapService_PatchConfigmap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigmapServiceServer).PatchConfigmap(ctx, req.(*PatchConfigmapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ConfigmapService_DeleteConfigmap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteConfigmapRequest)
 	if err := dec(in); err != nil {
@@ -240,6 +306,42 @@ func _ConfigmapService_ListConfigmaps_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ConfigmapService_ListConfigmapVersions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListConfigmapVersionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigmapServiceServer).ListConfigmapVersions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigmapService_ListConfigmapVersions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigmapServiceServer).ListConfigmapVersions(ctx, req.(*ListConfigmapVersionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigmapService_RollbackConfigmap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RollbackConfigmapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigmapServiceServer).RollbackConfigmap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigmapService_RollbackConfigmap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigmapServiceServer).RollbackConfigmap(ctx, req.(*RollbackConfigmapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ConfigmapService_ServiceDesc is the grpc.ServiceDesc for ConfigmapService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -260,12 +362,24 @@ var ConfigmapService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ConfigmapService_UpdateConfigmap_Handler,
 		},
 		{
+			MethodName: "PatchConfigmap",
+			Handler:    _ConfigmapService_PatchConfigmap_Handler,
+		},
+		{
 			MethodName: "DeleteConfigmap",
 			Handler:    _ConfigmapService_DeleteConfigmap_Handler,
 		},
 		{
 			MethodName: "ListConfigmaps",
 			Handler:    _ConfigmapService_ListConfigmaps_Handler,
+		},
+		{
+			MethodName: "ListConfigmapVersions",
+			Handler:    _ConfigmapService_ListConfigmapVersions_Handler,
+		},
+		{
+			MethodName: "RollbackConfigmap",
+			Handler:    _ConfigmapService_RollbackConfigmap_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
