@@ -1,9 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <!-- Rune mark: serif "r." echoing the "rune." wordmark — cream r + accent dot
-       on the warm near-black brand surface. -->
-  <rect width="32" height="32" rx="7" fill="#161513"/>
-  <text x="9" y="23"
-        font-family="Spectral, Georgia, 'Times New Roman', serif"
-        font-size="22" font-weight="500" letter-spacing="-0.5"
-        fill="#ece8e1">r<tspan fill="#9e8cfc">.</tspan></text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#1e1d1b"></rect>
+  <text x="17" y="45" font-family="Georgia, &#39;Times New Roman&#39;, &#39;Spectral&#39;, serif" font-size="42" font-weight="500" fill="#ece8e1">r</text>
+  <rect x="37" y="36.5" width="9" height="9" rx="1.6" fill="#9e8cfc"></rect>
 </svg>
