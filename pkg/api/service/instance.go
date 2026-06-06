@@ -384,6 +384,7 @@ func (s *InstanceService) instanceModelToProto(instance *types.Instance) (*gener
 		ContainerId:   instance.ContainerID,
 		Pid:           utils.ToInt32NonNegative(instance.PID),
 		Environment:   instance.Environment,
+		Labels:        instance.Labels,
 		Metadata: &generated.InstanceMetadata{
 			Generation:   utils.ToInt32NonNegative64(instance.Metadata.ServiceGeneration),
 			RestartCount: utils.ToInt32NonNegative(instance.Metadata.RestartCount),

@@ -139,6 +139,9 @@ type Instance struct {
 	// (e.g. "HealthCheckFailure", "ImagePullFailed", "OOMKilled"). Set at
 	// the moment of the Failed transition; empty otherwise.
 	FailureReason string `protobuf:"bytes,19,opt,name=failure_reason,json=failureReason,proto3" json:"failure_reason,omitempty"`
+	// Labels denormalized from the parent Service (and, in future, node topology
+	// labels at placement). User-defined stream dimensions for the instance.
+	Labels        map[string]string `protobuf:"bytes,20,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -304,6 +307,13 @@ func (x *Instance) GetFailureReason() string {
 		return x.FailureReason
 	}
 	return ""
+}
+
+func (x *Instance) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
 }
 
 // InstanceMetadata represents metadata for an instance.
@@ -1068,7 +1078,7 @@ var File_pkg_api_proto_instance_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_instance_proto_rawDesc = "" +
 	"\n" +
-	"\x1cpkg/api/proto/instance.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\xd1\x05\n" +
+	"\x1cpkg/api/proto/instance.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\xc4\x06\n" +
 	"\bInstance\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06runner\x18\x02 \x01(\tR\x06runner\x12\x1c\n" +
@@ -1092,8 +1102,12 @@ const file_pkg_api_proto_instance_proto_rawDesc = "" +
 	"\venvironment\x18\x10 \x03(\v2#.rune.api.Instance.EnvironmentEntryR\venvironment\x126\n" +
 	"\bmetadata\x18\x11 \x01(\v2\x1a.rune.api.InstanceMetadataR\bmetadata\x12\x1b\n" +
 	"\tfailed_at\x18\x12 \x01(\tR\bfailedAt\x12%\n" +
-	"\x0efailure_reason\x18\x13 \x01(\tR\rfailureReason\x1a>\n" +
+	"\x0efailure_reason\x18\x13 \x01(\tR\rfailureReason\x126\n" +
+	"\x06labels\x18\x14 \x03(\v2\x1e.rune.api.Instance.LabelsEntryR\x06labels\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8e\x02\n" +
 	"\x10InstanceMetadata\x12\x1e\n" +
@@ -1202,7 +1216,7 @@ func file_pkg_api_proto_instance_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_instance_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_api_proto_instance_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_pkg_api_proto_instance_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_pkg_api_proto_instance_proto_goTypes = []any{
 	(InstanceStatus)(0),            // 0: rune.api.InstanceStatus
 	(*Instance)(nil),               // 1: rune.api.Instance
@@ -1218,59 +1232,61 @@ var file_pkg_api_proto_instance_proto_goTypes = []any{
 	(*WatchInstancesRequest)(nil),  // 11: rune.api.WatchInstancesRequest
 	(*WatchInstancesResponse)(nil), // 12: rune.api.WatchInstancesResponse
 	nil,                            // 13: rune.api.Instance.EnvironmentEntry
-	nil,                            // 14: rune.api.ResolvedSecretMount.DataEntry
-	nil,                            // 15: rune.api.ResolvedConfigMount.DataEntry
-	nil,                            // 16: rune.api.ListInstancesRequest.LabelSelectorEntry
-	nil,                            // 17: rune.api.ListInstancesRequest.FieldSelectorEntry
-	nil,                            // 18: rune.api.WatchInstancesRequest.LabelSelectorEntry
-	nil,                            // 19: rune.api.WatchInstancesRequest.FieldSelectorEntry
-	(*Resources)(nil),              // 20: rune.api.Resources
-	(*Status)(nil),                 // 21: rune.api.Status
-	(*PagingParams)(nil),           // 22: rune.api.PagingParams
-	(EventType)(0),                 // 23: rune.api.EventType
+	nil,                            // 14: rune.api.Instance.LabelsEntry
+	nil,                            // 15: rune.api.ResolvedSecretMount.DataEntry
+	nil,                            // 16: rune.api.ResolvedConfigMount.DataEntry
+	nil,                            // 17: rune.api.ListInstancesRequest.LabelSelectorEntry
+	nil,                            // 18: rune.api.ListInstancesRequest.FieldSelectorEntry
+	nil,                            // 19: rune.api.WatchInstancesRequest.LabelSelectorEntry
+	nil,                            // 20: rune.api.WatchInstancesRequest.FieldSelectorEntry
+	(*Resources)(nil),              // 21: rune.api.Resources
+	(*Status)(nil),                 // 22: rune.api.Status
+	(*PagingParams)(nil),           // 23: rune.api.PagingParams
+	(EventType)(0),                 // 24: rune.api.EventType
 }
 var file_pkg_api_proto_instance_proto_depIdxs = []int32{
 	0,  // 0: rune.api.Instance.status:type_name -> rune.api.InstanceStatus
-	20, // 1: rune.api.Instance.resources:type_name -> rune.api.Resources
+	21, // 1: rune.api.Instance.resources:type_name -> rune.api.Resources
 	13, // 2: rune.api.Instance.environment:type_name -> rune.api.Instance.EnvironmentEntry
 	2,  // 3: rune.api.Instance.metadata:type_name -> rune.api.InstanceMetadata
-	3,  // 4: rune.api.InstanceMetadata.secret_mounts:type_name -> rune.api.ResolvedSecretMount
-	4,  // 5: rune.api.InstanceMetadata.config_mounts:type_name -> rune.api.ResolvedConfigMount
-	14, // 6: rune.api.ResolvedSecretMount.data:type_name -> rune.api.ResolvedSecretMount.DataEntry
-	5,  // 7: rune.api.ResolvedSecretMount.items:type_name -> rune.api.KeyToPath
-	15, // 8: rune.api.ResolvedConfigMount.data:type_name -> rune.api.ResolvedConfigMount.DataEntry
-	5,  // 9: rune.api.ResolvedConfigMount.items:type_name -> rune.api.KeyToPath
-	1,  // 10: rune.api.InstanceResponse.instance:type_name -> rune.api.Instance
-	21, // 11: rune.api.InstanceResponse.status:type_name -> rune.api.Status
-	0,  // 12: rune.api.ListInstancesRequest.status:type_name -> rune.api.InstanceStatus
-	22, // 13: rune.api.ListInstancesRequest.paging:type_name -> rune.api.PagingParams
-	16, // 14: rune.api.ListInstancesRequest.label_selector:type_name -> rune.api.ListInstancesRequest.LabelSelectorEntry
-	17, // 15: rune.api.ListInstancesRequest.field_selector:type_name -> rune.api.ListInstancesRequest.FieldSelectorEntry
-	1,  // 16: rune.api.ListInstancesResponse.instances:type_name -> rune.api.Instance
-	21, // 17: rune.api.ListInstancesResponse.status:type_name -> rune.api.Status
-	22, // 18: rune.api.ListInstancesResponse.paging:type_name -> rune.api.PagingParams
-	18, // 19: rune.api.WatchInstancesRequest.label_selector:type_name -> rune.api.WatchInstancesRequest.LabelSelectorEntry
-	19, // 20: rune.api.WatchInstancesRequest.field_selector:type_name -> rune.api.WatchInstancesRequest.FieldSelectorEntry
-	1,  // 21: rune.api.WatchInstancesResponse.instance:type_name -> rune.api.Instance
-	23, // 22: rune.api.WatchInstancesResponse.event_type:type_name -> rune.api.EventType
-	21, // 23: rune.api.WatchInstancesResponse.status:type_name -> rune.api.Status
-	6,  // 24: rune.api.InstanceService.GetInstance:input_type -> rune.api.GetInstanceRequest
-	8,  // 25: rune.api.InstanceService.ListInstances:input_type -> rune.api.ListInstancesRequest
-	10, // 26: rune.api.InstanceService.StartInstance:input_type -> rune.api.InstanceActionRequest
-	10, // 27: rune.api.InstanceService.StopInstance:input_type -> rune.api.InstanceActionRequest
-	10, // 28: rune.api.InstanceService.RestartInstance:input_type -> rune.api.InstanceActionRequest
-	11, // 29: rune.api.InstanceService.WatchInstances:input_type -> rune.api.WatchInstancesRequest
-	7,  // 30: rune.api.InstanceService.GetInstance:output_type -> rune.api.InstanceResponse
-	9,  // 31: rune.api.InstanceService.ListInstances:output_type -> rune.api.ListInstancesResponse
-	7,  // 32: rune.api.InstanceService.StartInstance:output_type -> rune.api.InstanceResponse
-	7,  // 33: rune.api.InstanceService.StopInstance:output_type -> rune.api.InstanceResponse
-	7,  // 34: rune.api.InstanceService.RestartInstance:output_type -> rune.api.InstanceResponse
-	12, // 35: rune.api.InstanceService.WatchInstances:output_type -> rune.api.WatchInstancesResponse
-	30, // [30:36] is the sub-list for method output_type
-	24, // [24:30] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	14, // 4: rune.api.Instance.labels:type_name -> rune.api.Instance.LabelsEntry
+	3,  // 5: rune.api.InstanceMetadata.secret_mounts:type_name -> rune.api.ResolvedSecretMount
+	4,  // 6: rune.api.InstanceMetadata.config_mounts:type_name -> rune.api.ResolvedConfigMount
+	15, // 7: rune.api.ResolvedSecretMount.data:type_name -> rune.api.ResolvedSecretMount.DataEntry
+	5,  // 8: rune.api.ResolvedSecretMount.items:type_name -> rune.api.KeyToPath
+	16, // 9: rune.api.ResolvedConfigMount.data:type_name -> rune.api.ResolvedConfigMount.DataEntry
+	5,  // 10: rune.api.ResolvedConfigMount.items:type_name -> rune.api.KeyToPath
+	1,  // 11: rune.api.InstanceResponse.instance:type_name -> rune.api.Instance
+	22, // 12: rune.api.InstanceResponse.status:type_name -> rune.api.Status
+	0,  // 13: rune.api.ListInstancesRequest.status:type_name -> rune.api.InstanceStatus
+	23, // 14: rune.api.ListInstancesRequest.paging:type_name -> rune.api.PagingParams
+	17, // 15: rune.api.ListInstancesRequest.label_selector:type_name -> rune.api.ListInstancesRequest.LabelSelectorEntry
+	18, // 16: rune.api.ListInstancesRequest.field_selector:type_name -> rune.api.ListInstancesRequest.FieldSelectorEntry
+	1,  // 17: rune.api.ListInstancesResponse.instances:type_name -> rune.api.Instance
+	22, // 18: rune.api.ListInstancesResponse.status:type_name -> rune.api.Status
+	23, // 19: rune.api.ListInstancesResponse.paging:type_name -> rune.api.PagingParams
+	19, // 20: rune.api.WatchInstancesRequest.label_selector:type_name -> rune.api.WatchInstancesRequest.LabelSelectorEntry
+	20, // 21: rune.api.WatchInstancesRequest.field_selector:type_name -> rune.api.WatchInstancesRequest.FieldSelectorEntry
+	1,  // 22: rune.api.WatchInstancesResponse.instance:type_name -> rune.api.Instance
+	24, // 23: rune.api.WatchInstancesResponse.event_type:type_name -> rune.api.EventType
+	22, // 24: rune.api.WatchInstancesResponse.status:type_name -> rune.api.Status
+	6,  // 25: rune.api.InstanceService.GetInstance:input_type -> rune.api.GetInstanceRequest
+	8,  // 26: rune.api.InstanceService.ListInstances:input_type -> rune.api.ListInstancesRequest
+	10, // 27: rune.api.InstanceService.StartInstance:input_type -> rune.api.InstanceActionRequest
+	10, // 28: rune.api.InstanceService.StopInstance:input_type -> rune.api.InstanceActionRequest
+	10, // 29: rune.api.InstanceService.RestartInstance:input_type -> rune.api.InstanceActionRequest
+	11, // 30: rune.api.InstanceService.WatchInstances:input_type -> rune.api.WatchInstancesRequest
+	7,  // 31: rune.api.InstanceService.GetInstance:output_type -> rune.api.InstanceResponse
+	9,  // 32: rune.api.InstanceService.ListInstances:output_type -> rune.api.ListInstancesResponse
+	7,  // 33: rune.api.InstanceService.StartInstance:output_type -> rune.api.InstanceResponse
+	7,  // 34: rune.api.InstanceService.StopInstance:output_type -> rune.api.InstanceResponse
+	7,  // 35: rune.api.InstanceService.RestartInstance:output_type -> rune.api.InstanceResponse
+	12, // 36: rune.api.InstanceService.WatchInstances:output_type -> rune.api.WatchInstancesResponse
+	31, // [31:37] is the sub-list for method output_type
+	25, // [25:31] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_instance_proto_init() }
@@ -1285,7 +1301,7 @@ func file_pkg_api_proto_instance_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_instance_proto_rawDesc), len(file_pkg_api_proto_instance_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
