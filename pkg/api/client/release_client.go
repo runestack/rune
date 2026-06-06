@@ -2,15 +2,28 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/release"
 	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// CastPayloads carries the rendered resource objects for a Cast, keyed by
+// OwnerRef.Key(). The CLI renders the castfile set into these before calling
+// Cast; the server stamps ownership and applies them.
+type CastPayloads struct {
+	Services   map[string]*types.Service
+	Secrets    map[string]*types.Secret
+	Configmaps map[string]*types.Configmap
+	Volumes    map[string]*types.Volume
+}
 
 // ReleaseClient talks to the ReleaseService for stateful runeset releases
 // (RUNESET_STATEFUL_RELEASES.md): list, get, history, diff (Plan), uninstall
@@ -141,6 +154,155 @@ func (c *ReleaseClient) Diff(namespace, name string, resources []types.OwnerRef)
 		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
 	}
 	return protoToPlan(resp.Plan), nil
+}
+
+// ErrDetachWouldPrune mirrors release.ErrDetachWouldPrune for callers that want
+// to detect a refused-detach precondition without string matching.
+var ErrDetachWouldPrune = release.ErrDetachWouldPrune
+
+// Cast runs a server-side reconcile for a fully-rendered release spec + payloads
+// (C1: client renders, server plans+applies). It returns the recorded Release
+// and the executed Plan. A plan with unresolved ownership conflicts, or a detach
+// that would prune, surfaces as a FailedPrecondition carrying the Plan.
+func (c *ReleaseClient) Cast(spec release.ReleaseSpec, payloads CastPayloads, timeout time.Duration) (*types.Release, *Plan, error) {
+	pspec := specToProto(spec)
+	pspec.Payloads = payloadsToProto(payloads)
+	req := &generated.CastRequest{Spec: pspec}
+	// Bound the whole release by the caller's --timeout (aggregate, §4) rather
+	// than the default per-call timeout.
+	ctx, cancel := c.client.ContextWithTimeout(timeout)
+	defer cancel()
+	resp, err := c.svc.Cast(ctx, req)
+	if err != nil {
+		// FailedPrecondition carries an actionable plan (conflicts / detach-prune).
+		var plan *Plan
+		if resp != nil {
+			plan = protoToPlan(resp.GetPlan())
+		}
+		return nil, plan, classifyCastError("cast", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, protoToPlan(resp.GetPlan()), fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	rel, err := protoToRelease(resp.GetRelease())
+	if err != nil {
+		return nil, protoToPlan(resp.GetPlan()), err
+	}
+	return rel, protoToPlan(resp.GetPlan()), nil
+}
+
+// PlanSpec computes the reconcile plan for a fully-rendered spec WITHOUT applying
+// it — the online dry-run / `release diff` path (C4). Unlike Diff (which plans
+// against a recorded release's owned set), this plans the freshly-rendered
+// desired set from source.
+func (c *ReleaseClient) PlanSpec(spec release.ReleaseSpec) (*Plan, error) {
+	req := &generated.PlanRequest{Spec: specToProto(spec)}
+	ctx, cancel := c.client.Context()
+	defer cancel()
+	resp, err := c.svc.Plan(ctx, req)
+	if err != nil {
+		return nil, convertGRPCError("plan", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	return protoToPlan(resp.Plan), nil
+}
+
+// classifyCastError maps a Cast gRPC error to a stable client error. The server
+// reports detach-would-prune and conflicts as FailedPrecondition with the cause
+// in the message; we re-surface ErrDetachWouldPrune as the typed sentinel.
+func classifyCastError(op string, err error) error {
+	if st, ok := status.FromError(err); ok {
+		if st.Code() == codes.FailedPrecondition && strings.Contains(st.Message(), "detach") && strings.Contains(st.Message(), "prune") {
+			return ErrDetachWouldPrune
+		}
+		if st.Code() == codes.FailedPrecondition {
+			return errors.New(st.Message())
+		}
+	}
+	return convertGRPCError(op, err)
+}
+
+// specToProto converts a pure-core release.ReleaseSpec into its proto form
+// (without payloads — Cast adds those separately).
+func specToProto(spec release.ReleaseSpec) *generated.ReleaseSpec {
+	out := &generated.ReleaseSpec{
+		Name:           spec.Name,
+		Namespace:      spec.Namespace,
+		Source:         sourceToProto(spec.Source),
+		Manifest:       manifestToProto(spec.Manifest),
+		RenderedDigest: spec.RenderedDigest,
+		Adopt:          spec.Options.Adopt,
+		Detach:         spec.Detach,
+	}
+	if len(spec.Values) > 0 {
+		if b, err := json.Marshal(spec.Values); err == nil {
+			out.ValuesJson = string(b)
+		}
+	}
+	for _, d := range spec.Resources {
+		out.Resources = append(out.Resources, &generated.OwnerRef{
+			ResourceType: string(d.Ref.ResourceType),
+			Namespace:    d.Ref.Namespace,
+			Name:         d.Ref.Name,
+		})
+	}
+	return out
+}
+
+func sourceToProto(s types.ReleaseSource) *generated.ReleaseSource {
+	return &generated.ReleaseSource{
+		Type:     string(s.Type),
+		Location: s.Location,
+		Ref:      s.Ref,
+		Digest:   s.Digest,
+	}
+}
+
+func manifestToProto(m types.RunesetManifest) *generated.RunesetManifest {
+	out := &generated.RunesetManifest{
+		Name:        m.Name,
+		Version:     m.Version,
+		Description: m.Description,
+		Namespace:   m.Namespace,
+	}
+	if len(m.Defaults) > 0 {
+		if b, err := json.Marshal(m.Defaults); err == nil {
+			out.DefaultsJson = string(b)
+		}
+	}
+	return out
+}
+
+func payloadsToProto(p CastPayloads) *generated.RenderedPayloads {
+	out := &generated.RenderedPayloads{
+		Services:   map[string]string{},
+		Secrets:    map[string]string{},
+		Configmaps: map[string]string{},
+		Volumes:    map[string]string{},
+	}
+	for k, v := range p.Services {
+		if b, err := json.Marshal(v); err == nil {
+			out.Services[k] = string(b)
+		}
+	}
+	for k, v := range p.Secrets {
+		if b, err := json.Marshal(v); err == nil {
+			out.Secrets[k] = string(b)
+		}
+	}
+	for k, v := range p.Configmaps {
+		if b, err := json.Marshal(v); err == nil {
+			out.Configmaps[k] = string(b)
+		}
+	}
+	for k, v := range p.Volumes {
+		if b, err := json.Marshal(v); err == nil {
+			out.Volumes[k] = string(b)
+		}
+	}
+	return out
 }
 
 // DeleteRelease uninstalls a release (soft by default; purge to forget — D4).

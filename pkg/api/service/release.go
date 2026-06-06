@@ -158,15 +158,15 @@ func (s *ReleaseService) DeleteRelease(ctx context.Context, req *generated.Delet
 
 // Rollback rolls a release forward to a prior revision.
 //
-// TODO(cast-PR): rollback re-applies a prior revision's rendered set as a new
-// revision (forward-rolling). That requires re-rendering the historical
-// runeset source (stored Values + Manifest + Source) into resource payloads —
-// the render pipeline lands with the cast UX PR. Until then this is a
-// documented Unimplemented stub so the RPC + CLI surface exists and clients
-// get a clear signal rather than a missing method.
+// Rollback is driven CLIENT-SIDE (see pkg/cli/cmd/cast_rollback.go): because
+// rendering is client-side (C1), the CLI re-materializes the historical
+// revision's reproducible source, re-renders it with the stored values, and
+// casts it forward through the normal Cast RPC. The server therefore does not
+// re-render here; this RPC remains Unimplemented as a deliberate signal that
+// rollback orchestration lives in the client, not the server.
 func (s *ReleaseService) Rollback(ctx context.Context, req *generated.RollbackReleaseRequest) (*generated.ReleaseResponse, error) {
 	return nil, status.Error(codes.Unimplemented,
-		"release rollback is not yet implemented: it requires re-rendering the historical runeset source, which lands with the cast PR")
+		"release rollback is driven client-side (rune release rollback); the server does not re-render historical sources")
 }
 
 // --- conversions ---

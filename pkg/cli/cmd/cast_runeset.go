@@ -19,8 +19,6 @@ import (
 )
 
 func runRunesetCast(root string, opts *castOptions) error {
-	startTime := time.Now()
-
 	// Read manifest
 	manifestPath := filepath.Join(root, "runeset.yaml")
 	mf, err := types.ParseRunesetManifest(manifestPath)
@@ -132,37 +130,13 @@ func runRunesetCast(root string, opts *castOptions) error {
 	printCastBanner([]string{root}, opts.detach)
 	printResourceInfo(info, opts)
 
-	// If dry-run only
-	if opts.dryRun {
-		fmt.Println("✅ Validation successful!")
-		fmt.Println("💬 Use without --dry-run to deploy.")
-		return nil
-	}
-
-	// Create API client
-	apiClient, err := newAPIClient("", "")
-	if err != nil {
-		return fmt.Errorf("failed to connect to API server: %w", err)
-	}
-	defer apiClient.Close()
-
-	fmt.Println("🚀 Preparing deployment plan...")
-
-	deploymentResults, err := deployResources(apiClient, info, mustParseDuration(opts.timeoutStr), opts)
-	if err != nil {
-		return err
-	}
-	if opts.detach {
-		printDetachedModeSummary(deploymentResults, startTime)
-	} else {
-		printWatchModeSummary(deploymentResults, startTime, opts)
-	}
+	// runRunesetCast now only renders + validates a runeset directory; the apply
+	// path moved to the unified Cast pipeline (runCast → resolve → render → Cast
+	// RPC). It is retained as the render/lint helper exercised by --render and
+	// --dry-run.
+	fmt.Println("✅ Validation successful!")
+	fmt.Println("💬 Use 'rune cast' (without --render/--dry-run) to deploy.")
 	return nil
-}
-
-func mustParseDuration(s string) time.Duration {
-	d, _ := time.ParseDuration(s)
-	return d
 }
 
 // mergeInto merges src into dst (map[string]interface{}), overwriting on conflict.
@@ -617,108 +591,4 @@ func resolveGitHubRuneset(ref string) (string, error) {
 		return "", fmt.Errorf("runeset.yaml not found under %s (check path/ref)", root)
 	}
 	return root, nil
-}
-
-// getRunesetSourceType checks args for runeset sources (dir, archive, https, GitHub shorthand)
-// and returns the source type.
-func getRunesetSourceType(args []string) types.RunesetSourceType {
-	if len(args) == 0 && utils.FileExists("runeset.yaml") {
-		return types.RunesetSourceTypeDirectory
-	}
-
-	if len(args) > 1 {
-		return types.RunesetSourceTypeUnknown
-	}
-
-	arg := args[0]
-	// Remote URL (.runeset.tgz)
-	if strings.HasPrefix(arg, "https://") {
-		if strings.HasSuffix(strings.ToLower(arg), ".runeset.tgz") {
-			return types.RunesetSourceTypeRemoteArchive
-		}
-		if strings.Contains(arg, "github.com/") {
-			return types.RunesetSourceTypeGitHub
-		}
-	}
-	// Directory runeset
-	if utils.IsDirectory(arg) && utils.FileExists(filepath.Join(arg, "runeset.yaml")) {
-		return types.RunesetSourceTypeDirectory
-	}
-	// Package runeset (.runeset.tgz)
-	if utils.FileExists(arg) && strings.HasSuffix(strings.ToLower(arg), ".runeset.tgz") {
-		return types.RunesetSourceTypePackageArchive
-	}
-	// GitHub-style shorthand: github.com/org/repo/path@ref
-	if strings.HasPrefix(arg, "github.com/") {
-		return types.RunesetSourceTypeGitHub
-	}
-	return types.RunesetSourceTypeUnknown
-}
-
-// handleRunesetCastSource handles a runeset source and runs the runeset cast.
-func handleRunesetCastSource(args []string, sourceType types.RunesetSourceType, opts *castOptions) error {
-	arg := args[0]
-	if len(args) == 0 && sourceType == types.RunesetSourceTypeDirectory {
-		arg = "."
-	}
-	fmt.Printf("- Runeset source: %s (%s)\n", sourceType, arg)
-	// switch remains
-	switch sourceType {
-	case types.RunesetSourceTypeRemoteArchive:
-		return handleRunesetCastSourceRemoteArchive(arg, opts)
-	case types.RunesetSourceTypeGitHub:
-		return handleRunesetCastSourceGitHub(arg, opts)
-	case types.RunesetSourceTypePackageArchive:
-		return handleRunesetCastSourcePackageArchive(arg, opts)
-	case types.RunesetSourceTypeDirectory:
-		return handleRunesetCastSourceDirectory(arg, opts)
-	}
-	return fmt.Errorf("unknown runeset source: %s", sourceType)
-}
-
-// handleRunesetCastSourceRemoteArchive downloads a remote archive and runs the runeset cast.
-// It downloads the tarball and extracts the specified subdirectory.
-// It is used for remote archives (e.g., https://example.com/runeset.tgz) and package archives
-// (e.g., ./runeset.tgz).
-func handleRunesetCastSourceRemoteArchive(source string, opts *castOptions) error {
-	tmpFile, err := downloadRunesetArchive(source)
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmpFile)
-	tmpDir, err := extractRunesetArchive(tmpFile)
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-	return runRunesetCast(tmpDir, opts)
-}
-
-// handleRunesetCastSourceGitHub resolves a GitHub shorthand
-// (e.g., github.com/org/repo/path@ref) and runs the runeset cast.
-// It downloads the tarball for the given ref and extracts the specified subdirectory.
-func handleRunesetCastSourceGitHub(source string, opts *castOptions) error {
-	root, err := resolveGitHubRuneset(source)
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(root)
-	return runRunesetCast(root, opts)
-}
-
-// handleRunesetCastSourcePackageArchive extracts a package archive and runs the runeset cast.
-// It is used for package archives (e.g., ./runeset.tgz).
-func handleRunesetCastSourcePackageArchive(source string, opts *castOptions) error {
-	tmpDir, err := extractRunesetArchive(source)
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-	return runRunesetCast(tmpDir, opts)
-}
-
-// handleRunesetCastSourceDirectory runs the runeset cast from a directory.
-// It is used for directory with a runeset.yaml file (e.g., ./runeset).
-func handleRunesetCastSourceDirectory(source string, opts *castOptions) error {
-	return runRunesetCast(source, opts)
 }
