@@ -213,6 +213,42 @@ type Storage struct {
 	Drivers map[string]map[string]any `yaml:"drivers,omitempty"`
 }
 
+// Observability holds the native observability (RuneSight) subsystem config.
+// Mirrors pkg/types.ObservabilityConfig. The runefile schema is:
+//
+//	observability:
+//	  enabled: true
+//	  backend: embedded        # embedded | clickhouse | loki
+//	  retention_days: 7
+//	  objectStore:
+//	    enabled: false
+//	    endpoint: ""
+type Observability struct {
+	// Enabled turns the agent forwarder + log store on. Default false
+	// (opt-in): a bare install stays on the live ephemeral log stream.
+	Enabled bool `yaml:"enabled,omitempty"`
+
+	// Backend selects the log store: embedded (default), clickhouse, or loki.
+	Backend string `yaml:"backend,omitempty"`
+
+	// RetentionDays bounds the embedded store's record age. 0 => store
+	// default (7d). External backends manage their own retention.
+	RetentionDays int `yaml:"retention_days,omitempty"`
+
+	// ObjectStore configures an optional S3-compatible cold tier for the
+	// external backends.
+	ObjectStore ObjectStore `yaml:"objectStore,omitempty"`
+}
+
+// ObjectStore configures the optional S3-compatible cold tier (DigitalOcean
+// Spaces / MinIO / R2) for the external observability backends.
+type ObjectStore struct {
+	Enabled  bool   `yaml:"enabled,omitempty"`
+	Endpoint string `yaml:"endpoint,omitempty"`
+	Bucket   string `yaml:"bucket,omitempty"`
+	Region   string `yaml:"region,omitempty"`
+}
+
 type Config struct {
 	Server    Server    `yaml:"server"`
 	UI        UI        `yaml:"ui"`
@@ -237,6 +273,10 @@ type Config struct {
 	Ingress    Ingress    `yaml:"ingress"`
 	ACME       ACME       `yaml:"acme"`
 	Storage    Storage    `yaml:"storage"`
+
+	// Observability is the native observability (RuneSight) subsystem
+	// config. When Enabled, runed wires the log store + agent forwarder.
+	Observability Observability `yaml:"observability"`
 
 	// FailedInstanceRetention controls how long failed-but-preserved
 	// instance containers stick around for postmortem (logs, exec --debug)

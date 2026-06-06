@@ -8,6 +8,7 @@ import (
 	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/observe"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/orchestrator/controllers"
 	"github.com/runestack/rune/pkg/runner"
@@ -97,6 +98,15 @@ type Options struct {
 	// controllers so status transitions surface in `rune describe`.
 	// Nil disables emission.
 	EventLog events.EventLog
+
+	// ObserveStore is the native observability (RuneSight) log store
+	// selected by the runefile [observability] block. When set, the
+	// ObserveService serves history queries and the agent forwarder's
+	// in-process ingest path writes to it. Nil means observability is
+	// disabled — ObserveService still registers but reports enabled=false
+	// so `rune logs` falls back to the live ephemeral stream. Wired by
+	// cmd/runed via WithObserveStore.
+	ObserveStore observe.LogStore
 
 	// UI configures the embedded dashboard and the HTTP serving layer it
 	// rides on (RUNE-200). When UI.Enabled is false the HTTP server is not
@@ -300,6 +310,17 @@ func WithInitialMountResolver(resolver controllers.MountResolver) Option {
 func WithEventLog(eventLog events.EventLog) Option {
 	return func(opts *Options) {
 		opts.EventLog = eventLog
+	}
+}
+
+// WithObserveStore wires the native observability (RuneSight) log store
+// selected by the runefile [observability] block. When set, the ObserveService
+// serves history queries and the agent forwarder's in-process ingest writes to
+// it. Nil disables observability (the service still registers but reports
+// enabled=false).
+func WithObserveStore(store observe.LogStore) Option {
+	return func(opts *Options) {
+		opts.ObserveStore = store
 	}
 }
 

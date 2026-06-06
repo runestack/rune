@@ -157,6 +157,17 @@ func runLogs(cmd *cobra.Command, args []string, opts *logsOptions) error {
 		cancel()
 	}()
 
+	// History path (RUNE-200 / RuneSight): on the non-follow path, query the
+	// native ObserveService for persisted history when observability is
+	// enabled. Falls through to the live ephemeral stream when disabled,
+	// unreachable, or in follow mode. No new verb.
+	if !opts.follow {
+		handled, err := tryObserveHistory(ctx, apiClient, resourceArg, opts)
+		if handled {
+			return err
+		}
+	}
+
 	return streamLogs(ctx, apiClient, resourceArg, opts)
 }
 
@@ -255,6 +266,67 @@ func streamLogs(ctx context.Context, apiClient *client.Client, targetName string
 		return handleNonStreamingLogs(ctx, stream, opts)
 	}
 	return handleStreamingLogs(ctx, stream, opts)
+}
+
+// tryObserveHistory queries the native observability (RuneSight) ObserveService
+// for persisted log history when it is enabled. It is used only on the
+// non-follow path (history is a point-in-time query, not a tail). Returns
+// (handled=false, nil) when observability is disabled or unreachable so the
+// caller falls back to the live ephemeral stream; returns (true, err) once it
+// has taken ownership of output. No new verb — same `rune logs` surface
+// (plan §4.6).
+func tryObserveHistory(ctx context.Context, apiClient *client.Client, targetName string, opts *logsOptions) (bool, error) {
+	obs := client.NewObserveClient(apiClient)
+	caps, err := obs.Capabilities(ctx)
+	if err != nil || caps == nil || !caps.GetEnabled() {
+		// Disabled or unreachable — fall back to the live stream.
+		return false, nil
+	}
+
+	// Build a Core-tier LogQL query from the resource target. `rune logs api`
+	// selects the service stream; the embedded store also accepts instance
+	// matches, but the CLI resolves by service name for parity with the live
+	// path's service-level default.
+	logql := fmt.Sprintf("{service=%q}", targetName)
+	if opts.pattern != "" {
+		logql += fmt.Sprintf(" |= %q", opts.pattern)
+	}
+
+	rows, err := obs.QueryLogs(ctx, logql, opts.namespace, opts.since, opts.until, opts.tail, false /* newest-first */)
+	if err != nil {
+		// Surface the error rather than silently degrading: the operator
+		// explicitly has observability on and asked for history.
+		return true, fmt.Errorf("query log history: %w", err)
+	}
+
+	// Print oldest-first for readability (query returned newest-first).
+	for i := len(rows) - 1; i >= 0; i-- {
+		processObserveRow(rows[i], targetName, opts)
+	}
+	return true, nil
+}
+
+// processObserveRow renders a persisted LogRow through the same formatting path
+// as live log responses by adapting it into a generated.LogResponse.
+func processObserveRow(row *generated.LogRow, serviceName string, opts *logsOptions) {
+	if row == nil {
+		return
+	}
+	resp := &generated.LogResponse{
+		ServiceName:  serviceName,
+		InstanceId:   row.GetLabels()["instance"],
+		InstanceName: row.GetLabels()["instance"],
+		Timestamp:    row.GetTimestamp(),
+		Content:      row.GetLine(),
+		Stream:       row.GetStream(),
+		LogLevel:     row.GetLevel(),
+	}
+	if !shouldProcessLog(resp, opts) {
+		return
+	}
+	if err := processLogResponse(resp, opts); err != nil {
+		fmt.Fprintf(os.Stderr, "Error processing log: %v\n", err)
+	}
 }
 
 // addCommonRequestParams adds common parameters to the log request

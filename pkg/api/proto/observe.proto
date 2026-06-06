@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package rune.api;
+
+import "pkg/api/proto/common.proto";
+
+option go_package = "github.com/runestack/rune/pkg/api/generated";
+
+// ObserveService is the native observability (RuneSight) query + ingest seam.
+// It serves the dashboard Logs screen and the `rune logs` history path, and
+// receives forwarded batches from the agent forwarder. It inherits the API
+// server's bearer-token auth + RBAC (resource "logs", verb "observe").
+//
+// Timestamps are RFC3339 strings (matching the rest of the rune API surface,
+// e.g. secret.proto); empty means "unset".
+
+// LogRecord mirrors observe.LogRecord: an enriched log line on the wire. The
+// fixed dimensions (namespace/service/instance/node) are Rune-native identity
+// stamped by the forwarder; labels carries arbitrary stream labels.
+message LogRecord {
+  string timestamp = 1; // RFC3339
+  string line = 2;
+  string stream = 3; // "stdout" | "stderr" | "event"
+  string level = 4;  // "info" | "warn" | "error" | ... ("" if unclassified)
+
+  string namespace = 5;
+  string service = 6;
+  string instance = 7;
+  string node = 8;
+  map<string, string> labels = 9;
+}
+
+// --- Ingest (forwarder -> control plane) ---
+
+message PushLogsRequest {
+  repeated LogRecord records = 1;
+}
+
+message PushLogsResponse {
+  // Number of records accepted and durably enqueued for write.
+  uint32 accepted = 1;
+  Status status = 2;
+}
+
+// --- Query ---
+
+// ObserveQuery carries LogQL text plus the time window. The server parses the
+// LogQL subset into the observe.Query AST (clients never send the AST).
+message ObserveQuery {
+  string logql = 1;
+  string start = 2; // RFC3339
+  string end = 3;   // RFC3339
+  uint32 limit = 4;
+  bool forward = 5; // true => oldest-first
+  string namespace = 6;
+}
+
+message LogRow {
+  string timestamp = 1; // RFC3339
+  string line = 2;
+  string stream = 3;
+  string level = 4;
+  map<string, string> labels = 5;
+}
+
+message MetricSample {
+  string timestamp = 1; // RFC3339 (bucket left edge)
+  double value = 2;
+  map<string, string> group_labels = 3;
+}
+
+// QueryResult is one streamed result element: exactly one of row/sample is set,
+// matching the observe.ResultStream IsMetric contract.
+message QueryResult {
+  oneof result {
+    LogRow row = 1;
+    MetricSample sample = 2;
+  }
+}
+
+message CapabilitiesRequest {}
+
+// ObserveCapabilities mirrors observe.Capabilities for the dashboard handshake.
+message ObserveCapabilities {
+  string backend = 1;
+  string max_tier = 2; // "core" | "advanced"
+  bool raw_sql = 3;
+  bool percentiles = 4;
+  bool high_cardinality_filters = 5;
+  bool enabled = 6; // false when observability is disabled (no backend wired)
+}
+
+service ObserveService {
+  // Execute parses the LogQL subset, runs it, and server-streams results.
+  rpc Execute(ObserveQuery) returns (stream QueryResult);
+
+  // GetCapabilities reports the backend handshake for dashboard feature-flags.
+  rpc GetCapabilities(CapabilitiesRequest) returns (ObserveCapabilities);
+
+  // PushLogs ingests forwarded batches. In single-node deployments the agent
+  // forwarder writes through an in-process path instead; this RPC is the
+  // multi-node transport.
+  rpc PushLogs(PushLogsRequest) returns (PushLogsResponse);
+}

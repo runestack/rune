@@ -55,6 +55,7 @@ type APIServer struct {
 	describeService     *service.DescribeService
 	eventService        *service.EventService
 	releaseService      *service.ReleaseService
+	observeService      *service.ObserveService
 
 	// gRPC server
 	grpcServer *grpc.Server
@@ -219,6 +220,11 @@ func (s *APIServer) Start() error {
 	// it's wired here alongside the other services rather than in main.go.
 	releaseController := releasectl.NewController(s.orchestrator, s.store, s.logger)
 	s.releaseService = service.NewReleaseService(releaseController, s.store, s.logger)
+	// Native observability (RuneSight). A nil ObserveStore means the
+	// runefile [observability] block was absent or disabled; the service
+	// still registers but reports enabled=false so clients fall back to the
+	// live ephemeral log stream.
+	s.observeService = service.NewObserveService(s.options.ObserveStore, s.logger)
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
@@ -313,6 +319,7 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterDescribeServiceServer(s.grpcServer, s.describeService)
 	generated.RegisterEventServiceServer(s.grpcServer, s.eventService)
 	generated.RegisterReleaseServiceServer(s.grpcServer, s.releaseService)
+	generated.RegisterObserveServiceServer(s.grpcServer, s.observeService)
 
 	// Extra registrars (e.g. WatchService wired by runed for RUNE-028).
 	for _, reg := range s.options.ExtraGRPCRegistrars {
@@ -660,6 +667,15 @@ func (s *APIServer) logUnaryInterceptor() grpc.UnaryServerInterceptor {
 // GetStore returns the store instance.
 func (s *APIServer) GetStore() store.Store {
 	return s.store
+}
+
+// GetObserveService returns the native observability service, or nil if the
+// server has not started yet. Used by runed to wire the agent forwarder's
+// in-process ingest path (single-node) to LogStore.Write. Returns nil when
+// observability is disabled is the caller's responsibility to check via
+// ObserveService.Enabled.
+func (s *APIServer) GetObserveService() *service.ObserveService {
+	return s.observeService
 }
 
 // GetOrchestrator returns the orchestrator instance. Used by runed
