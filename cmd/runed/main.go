@@ -21,6 +21,7 @@ import (
 	"github.com/runestack/rune/internal/agent"
 	"github.com/runestack/rune/internal/agent/dataplane"
 	dnssub "github.com/runestack/rune/internal/agent/dns"
+	"github.com/runestack/rune/internal/agent/forwarder"
 	"github.com/runestack/rune/internal/agent/ingressctl"
 	volsub "github.com/runestack/rune/internal/agent/volumes"
 	"github.com/runestack/rune/internal/config"
@@ -32,6 +33,8 @@ import (
 	acmesvc "github.com/runestack/rune/pkg/networking/acme"
 	"github.com/runestack/rune/pkg/networking/ingress"
 	"github.com/runestack/rune/pkg/networking/vip"
+	"github.com/runestack/rune/pkg/observe"
+	observebackend "github.com/runestack/rune/pkg/observe/backend"
 	"github.com/runestack/rune/pkg/runner/docker/bridges"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/storage/driverparams"
@@ -523,7 +526,23 @@ func main() {
 		appCfg.UI.Path = *uiPath
 	}
 
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, eventLog, watchRegistrar)...)
+	// Native observability (RuneSight). When [observability] is enabled, build
+	// the configured log store once and share it between the ObserveService
+	// (query + ingest) and the agent forwarder (in-process ingest). Disabled
+	// (the default) leaves observeStore nil; the ObserveService then reports
+	// enabled=false and `rune logs` stays on the live ephemeral stream.
+	var observeStore observe.LogStore
+	if appCfg != nil && appCfg.Observability.Enabled {
+		observeStore, err = buildObserveStore(appCfg, logger)
+		if err != nil {
+			logger.Error("Failed to construct observability store", log.Err(err))
+			os.Exit(1)
+		}
+		logger.Info("Native observability enabled",
+			log.Str("backend", observeStore.Capabilities().Backend))
+	}
+
+	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)
@@ -617,6 +636,35 @@ func main() {
 		// controller's resolveVolumeMount asks it for a mount target
 		// before falling back to Volume.Handle.
 		apiServer.GetOrchestrator().SetMountResolver(volSub)
+
+		// Native observability forwarder (RuneSight, plan §4.1). OFF unless
+		// [observability].enabled — only registered when a store was wired
+		// above. Dual tap: workload logs via the orchestrator (which fans out
+		// to runner.GetLogs) + the agent Outbox for system events. Pushes to
+		// the in-process ObserveService ingest path (single-node), buffered
+		// through a disk spool for at-least-once delivery.
+		if observeStore != nil {
+			obsSvc := apiServer.GetObserveService()
+			spoolPath := filepath.Join(*dataDir, "observe-spool.jsonl")
+			spool, serr := forwarder.NewDiskSpool(spoolPath, 0, logger.WithComponent("agent.forwarder.spool"))
+			if serr != nil {
+				return fmt.Errorf("forwarder spool: %w", serr)
+			}
+			fwd, ferr := forwarder.New(forwarder.Config{
+				Source:   apiServer.GetOrchestrator(),
+				Ingester: obsSvc,
+				Outbox:   a.Outbox(),
+				NodeID:   a.Identity().NodeID,
+				Spool:    spool,
+				Logger:   logger.WithComponent("agent.forwarder"),
+			})
+			if ferr != nil {
+				return fmt.Errorf("forwarder: %w", ferr)
+			}
+			if err := a.Register(fwd); err != nil {
+				return err
+			}
+		}
 
 		// Embedded DNS subsystem (RUNE-063). Registers itself with
 		// the agent so it inherits supervised lifecycle. The
@@ -997,7 +1045,7 @@ func makeAgentDriverLookup(st store.Store, driverConfigs map[string]map[string]a
 	}
 }
 
-func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, eventLog events.EventLog, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, eventLog events.EventLog, observeStore observe.LogStore, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
 	opts := []server.Option{
 		server.WithGRPCAddr(grpcAddress),
 		server.WithHTTPAddr(httpAddress),
@@ -1006,6 +1054,9 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 	}
 	if eventLog != nil {
 		opts = append(opts, server.WithEventLog(eventLog))
+	}
+	if observeStore != nil {
+		opts = append(opts, server.WithObserveStore(observeStore))
 	}
 	// Token-based auth (MVP)
 	opts = append(opts, server.WithAuth(nil))
@@ -1061,6 +1112,26 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 		opts = append(opts, server.WithExtraGRPCRegistrar(r))
 	}
 	return opts
+}
+
+// buildObserveStore constructs the native observability (RuneSight) log store
+// from the runefile [observability] block (plan §5). Only called when
+// observability is enabled. An empty/embedded backend yields the in-process
+// store; clickhouse/loki yield the optional-sink skeletons.
+func buildObserveStore(appCfg *config.Config, logger log.Logger) (observe.LogStore, error) {
+	o := appCfg.Observability
+	return observebackend.Open(observebackend.Backend(o.Backend), observebackend.Options{
+		Embedded: observebackend.EmbeddedConfig{
+			RetentionDays: o.RetentionDays,
+		},
+		Loki: observebackend.LokiConfig{
+			BaseURL: o.ObjectStore.Endpoint,
+		},
+		ClickHouse: observebackend.ClickHouseConfig{
+			DSN: o.ObjectStore.Endpoint,
+		},
+		Logger: logger.WithComponent("observe"),
+	})
 }
 
 // startAgent boots the per-node agent against an already-open

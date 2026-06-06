@@ -151,6 +151,15 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.ReleaseService/Rollback"):
 		return "releases", "update"
 
+	// Observability (RuneSight, native). Execute/GetCapabilities are reads of
+	// the log store; PushLogs is the agent forwarder's ingest path on
+	// multi-node. All map to resource "logs" so an existing logs reader can
+	// query history without a new policy.
+	case strings.HasPrefix(method, "/rune.api.ObserveService/PushLogs"):
+		return "logs", "observe"
+	case strings.HasPrefix(method, "/rune.api.ObserveService/"):
+		return "logs", "observe"
+
 	case strings.HasPrefix(method, "/rune.api.EventService/"):
 		// RUNE-126 Phase 2. Reading the event log is the same privilege
 		// shape as describe — both are diagnostic reads across kinds.

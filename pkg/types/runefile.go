@@ -115,6 +115,13 @@ type RuneFile struct {
 	// internal/config.UI.
 	UI *UIConfig `yaml:"ui,omitempty"`
 
+	// Observability configures the native observability subsystem
+	// (RuneSight): the agent forwarder, the log store backend, and
+	// retention. Mirrors internal/config.Observability. When absent or
+	// disabled, runed forwards no logs and `rune logs` falls back to the
+	// live ephemeral stream.
+	Observability *ObservabilityConfig `yaml:"observability,omitempty"`
+
 	// Internal tracking for line numbers (not serialized)
 	lineInfo map[string]int `json:"-" yaml:"-"`
 	rawNode  *yaml.Node     `json:"-" yaml:"-"`
@@ -347,6 +354,48 @@ type StorageConfig struct {
 	Drivers map[string]map[string]any `yaml:"drivers,omitempty"`
 }
 
+// ObservabilityConfig is the runefile-side view of the native observability
+// (RuneSight) subsystem. Parallel to internal/config.Observability.
+//
+// Example:
+//
+//	observability:
+//	  enabled: true
+//	  backend: embedded        # embedded | clickhouse | loki
+//	  retention_days: 7
+//	  objectStore:             # only for clickhouse/loki cold tier
+//	    enabled: false
+//	    endpoint: ""
+type ObservabilityConfig struct {
+	// Enabled turns the forwarder + log store on. Default false (opt-in):
+	// the embedded store is lightweight but logging every workload line is
+	// an operator choice, so a bare install stays on the live ephemeral
+	// stream until [observability] is switched on.
+	Enabled bool `yaml:"enabled,omitempty"`
+
+	// Backend selects the log store: embedded (default, in-process), or the
+	// optional clickhouse / loki sinks.
+	Backend string `yaml:"backend,omitempty"`
+
+	// RetentionDays bounds how long the embedded store keeps records. 0 uses
+	// the store default (7 days). Ignored by external backends, which manage
+	// their own retention.
+	RetentionDays int `yaml:"retention_days,omitempty"`
+
+	// ObjectStore configures an optional S3-compatible cold tier for the
+	// clickhouse/loki backends. Ignored by the embedded backend.
+	ObjectStore *ObjectStoreConfig `yaml:"objectStore,omitempty"`
+}
+
+// ObjectStoreConfig configures the optional S3-compatible cold tier for the
+// external observability backends (DigitalOcean Spaces / MinIO / R2).
+type ObjectStoreConfig struct {
+	Enabled  bool   `yaml:"enabled,omitempty"`
+	Endpoint string `yaml:"endpoint,omitempty"`
+	Bucket   string `yaml:"bucket,omitempty"`
+	Region   string `yaml:"region,omitempty"`
+}
+
 // ParseRuneFile parses a Rune configuration file from the given file
 // path. Both YAML and TOML are accepted (TOML is detected via the
 // `.toml` extension and transcoded to YAML before parsing — see
@@ -418,6 +467,7 @@ func validateRuneFileTopLevelKeys(node *yaml.Node) error {
 		"acme":                      true,
 		"storage":                   true,
 		"failed_instance_retention": true,
+		"observability":             true,
 	}
 
 	for i := 0; i < len(root.Content); i += 2 {
@@ -648,6 +698,17 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 		"handoff_enabled": true,
 		"handoff_ttl":     true,
 		"require_tls":     true,
+
+		// native observability (RuneSight): observability.{enabled,backend,
+		// retention_days, objectStore.{enabled,endpoint,bucket,region}}.
+		// "enabled"/"endpoint" are shared with other blocks.
+		// ("region" is already accepted via the docker-registry keys below.)
+		"observability":  true,
+		"backend":        true,
+		"retention_days": true,
+		"objectstore":    true,
+		"endpoint":       true,
+		"bucket":         true,
 
 		// storage.* (typed knobs + opaque per-driver maps; key names
 		// under .drivers are driver-specific so we accept anything
