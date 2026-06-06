@@ -294,6 +294,7 @@ func (r *SecretRepo) encryptSecret(s types.Secret, version int) (types.StoredSec
 		UpdatedAt:  s.UpdatedAt,
 		Ciphertext: ct,
 		WrappedDEK: wrapped,
+		OwnedBy:    s.OwnedBy,
 	}, nil
 }
 
@@ -330,6 +331,7 @@ func (r *SecretRepo) decryptSecret(rec types.StoredSecret) (*types.Secret, error
 		CreatedAt: rec.CreatedAt,
 		UpdatedAt: rec.UpdatedAt,
 		Type:      "static",
+		OwnedBy:   rec.OwnedBy,
 	}, nil
 }
 

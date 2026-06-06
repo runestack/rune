@@ -166,3 +166,52 @@ func TestReconcile_ConflictIsNotApplied(t *testing.T) {
 		t.Errorf("want ErrConflicts, got %v", err)
 	}
 }
+
+// Prepare records the pending intent before any apply; Execute then deploys.
+// This split is what lets --detach return the pending release immediately and
+// run Execute in the background (C3-a).
+func TestPrepare_RecordsPendingThenExecuteDeploys(t *testing.T) {
+	a := svcRef("default", "web")
+	recs := newFakeRecords()
+	prep, err := Prepare(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Resources: desired(a),
+	}, recs, fakeLive{})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if prep.Release == nil || prep.Release.Status != types.ReleaseStatusPending {
+		t.Fatalf("want pending release, got %+v", prep.Release)
+	}
+	// Pending intent must be persisted before any apply (so a detached caller's
+	// `release get` sees it immediately).
+	if got := recs.rels["default/rel"]; got == nil || got.Status != types.ReleaseStatusPending {
+		t.Errorf("pending record not persisted: %+v", got)
+	}
+	applier := &fakeApplier{}
+	rel, err := prep.Execute(context.Background(), applier)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if rel.Status != types.ReleaseStatusDeployed {
+		t.Errorf("want deployed after execute, got %q", rel.Status)
+	}
+	if !applier.verified {
+		t.Errorf("execute should have verified owned resources")
+	}
+}
+
+// A detach plan that would prune is rejected at Prepare time, before any
+// background handoff (C3).
+func TestPrepare_DetachWithPruneRefused(t *testing.T) {
+	a, b := svcRef("default", "a"), svcRef("default", "b")
+	recs := newFakeRecords()
+	recs.rels["default/rel"] = &types.Release{
+		Name: "rel", Namespace: "default", Revision: 1, Owns: []types.OwnerRef{a, b},
+	}
+	_, err := Prepare(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Resources: desired(a), Detach: true,
+	}, recs, fakeLive{})
+	if !errors.Is(err, ErrDetachWouldPrune) {
+		t.Errorf("want ErrDetachWouldPrune, got %v", err)
+	}
+}

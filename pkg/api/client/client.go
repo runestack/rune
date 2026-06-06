@@ -136,6 +136,17 @@ func (c *Client) Context() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), c.options.CallTimeout)
 }
 
+// ContextWithTimeout returns a context bounded by the given timeout, falling
+// back to the configured call timeout when timeout <= 0. Used by long-running
+// calls (e.g. a release Cast) that need an aggregate, caller-supplied deadline
+// rather than the default per-call timeout.
+func (c *Client) ContextWithTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		timeout = c.options.CallTimeout
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
 // Bearer credentials + transparent refresh live in refresh.go (authState).
 
 // parseTimestamp parses a timestamp string into a time.Time.

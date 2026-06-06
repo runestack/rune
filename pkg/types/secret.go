@@ -73,6 +73,12 @@ type StoredSecret struct {
 
 	// Wrapped DEK of the secret
 	WrappedDEK []byte `json:"wrappedDEK"`
+
+	// OwnedBy is the system ownership stamp. It is plaintext metadata (NOT part
+	// of the encrypted payload) so a runeset release's ownership of a secret
+	// survives storage and is visible to drift/adoption checks. Round-tripped by
+	// encryptSecret/decryptSecret. See RUNESET_STATEFUL_RELEASES.md.
+	OwnedBy *OwnedBy `json:"ownedBy,omitempty"`
 }
 
 // SecretEngine defines a dynamic secret engine configuration.

@@ -12,8 +12,6 @@ import (
 
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/cli/format"
-	"github.com/runestack/rune/pkg/cli/utils"
-	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/cobra"
 )
@@ -30,11 +28,17 @@ type castOptions struct {
 	forceGeneration bool
 	createNamespace bool
 
-	// Runeset flags
+	// Runeset / release flags
 	valuesFiles []string
 	setValues   []string
 	renderOnly  bool
 	releaseName string
+
+	// Stateful-release flags (CAST_REFACTOR_PLAN §7)
+	adopt      bool   // take over unmanaged / foreign-owned resources (--adopt)
+	yes        bool   // skip the confirm prompt for prune/adopt plans (--yes)
+	outputJSON bool   // emit structured plan + result (--output json)
+	output     string // raw --output value
 }
 
 // ResourceInfo holds information about resources to be deployed
@@ -47,12 +51,6 @@ type ResourceInfo struct {
 	VolumesByFile        map[string][]*types.Volume
 	TotalResources       int
 	SourceArguments      []string
-}
-
-// DeploymentResult holds results of a deployment
-type DeploymentResult struct {
-	SuccessfulResources map[string][]string
-	FailedResources     map[string]string
 }
 
 // createCmd is the umbrella command for quick create
@@ -78,7 +76,13 @@ func newCastCmd() *cobra.Command {
 		Args:         cobra.MinimumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Resolve the release's home namespace: --namespace flag, else the
+			// current context's defaultNamespace (from config), else "default".
+			// A release record requires a namespace, so this must never be empty.
 			opts.namespace = effectiveCmdNS(opts.namespace)
+			if opts.namespace == "" {
+				opts.namespace = "default"
+			}
 			return runCast(cmd.Context(), args, opts)
 		},
 	}
@@ -93,121 +97,233 @@ func newCastCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.forceGeneration, "force", false, "Force generation increment even if no changes are detected")
 	cmd.Flags().BoolVar(&opts.createNamespace, "create-namespace", false, "Create the namespace if it doesn't exist")
 
-	// Runeset-related flags
+	// Runeset / release flags
 	cmd.Flags().StringArrayVarP(&opts.valuesFiles, "values", "f", []string{}, "Values file(s) to merge (repeatable; last wins)")
 	cmd.Flags().StringArrayVar(&opts.setValues, "set", []string{}, "Set values on the command line (key=value; repeatable)")
-	cmd.Flags().BoolVar(&opts.renderOnly, "render", false, "Render runeset casts and print to stdout without applying")
-	cmd.Flags().StringVar(&opts.releaseName, "release", "", "Override name used in runeset manifest")
+	cmd.Flags().BoolVar(&opts.renderOnly, "render", false, "Render casts and print to stdout without applying")
+	cmd.Flags().StringVar(&opts.releaseName, "release", "", "Release name (overrides the runeset manifest name / derived basename)")
+
+	// Stateful-release flags (CAST_REFACTOR_PLAN §7)
+	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "Take over resources that are unmanaged or owned by another release")
+	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip the confirmation prompt for plans that prune or adopt")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", "", "Output format: json (emit structured plan + result)")
 	return cmd
 }
 
 func init() { rootCmd.AddCommand(newCastCmd()) }
 
+// runCast is the unified cast pipeline (CAST_REFACTOR_PLAN §3): resolve source →
+// render → [render-only] → plan → [dry-run] → confirm → Cast RPC. Every cast
+// produces a tracked Release; the server owns the 3-way reconcile (C1).
 func runCast(ctx context.Context, args []string, opts *castOptions) error {
-	// Parse timeout duration
-	timeout, err := time.ParseDuration(opts.timeoutStr)
-	if err != nil {
+	startTime := time.Now()
+
+	// Validate --output up front.
+	switch strings.ToLower(opts.output) {
+	case "", "json":
+		opts.outputJSON = strings.EqualFold(opts.output, "json")
+	default:
+		return fmt.Errorf("unsupported --output %q (supported: json)", opts.output)
+	}
+
+	if _, err := time.ParseDuration(opts.timeoutStr); err != nil {
 		return fmt.Errorf("invalid timeout value: %w", err)
 	}
 
-	// Delegate runeset/remote handling
-	if sourceType := getRunesetSourceType(args); sourceType != types.RunesetSourceTypeUnknown {
-		return handleRunesetCastSource(args, sourceType, opts)
+	// 1) Resolve the source to a single (ReleaseSource, releaseName, renderPlan).
+	rc, err := resolveCastSource(args, opts)
+	if err != nil {
+		return err
+	}
+	if rc.cleanup != nil {
+		defer rc.cleanup()
 	}
 
-	// --render and --release require a manifest (i.e. a runeset) — they
-	// have no defined semantics on a bare cast file. --values and --set,
-	// on the other hand, are useful for parameterising a single cast
-	// file too (CI overlays, per-env values, etc.), so we now accept
-	// them on the non-runeset path as well.
-	var badFlags []string
+	// Warn when the release name was auto-derived (C2: derive + warn).
+	if rc.nameDerived && !opts.outputJSON {
+		fmt.Fprintf(os.Stderr, "%s release name derived as %q from the source; pin it with --release to make it permanent\n",
+			format.Warning("warning:"), rc.releaseName)
+	}
+
+	// --render: print rendered casts and stop (no server contact, no resource
+	// extraction). Short-circuits before the full render so it stays cheap.
 	if opts.renderOnly {
-		badFlags = append(badFlags, "--render")
-	}
-	if opts.releaseName != "" {
-		badFlags = append(badFlags, "--release")
-	}
-	if len(badFlags) > 0 {
-		return fmt.Errorf("the following flag(s) are only valid when casting a runeset: %s\n"+
-			"hint: pass a runeset directory, archive, or remote URL — or remove these flags",
-			strings.Join(badFlags, ", "))
+		return printRenderedCasts(rc, opts)
 	}
 
-	return runCastNonRuneset(args, timeout, opts)
-}
-
-func runCastNonRuneset(args []string, timeout time.Duration, opts *castOptions) error {
-	startTime := time.Now()
-
-	// Fallback to existing behaviors (single files or arbitrary folders)
-	// Expand file paths (including directories and glob patterns)
-	filePaths, err := utils.ExpandFilePaths(args, opts.recursiveDir)
+	// 2) Render → desired resource set + payloads (client renders; C1).
+	rendered, err := renderResolvedCast(rc, opts)
 	if err != nil {
 		return err
 	}
 
-	if len(filePaths) == 0 {
-		return fmt.Errorf("no service files found")
+	if rendered.totalResources() == 0 {
+		return fmt.Errorf("no resources found to deploy in %s", rc.source.Location)
 	}
 
-	// Print initial cast banner
-	printCastBanner(args, opts.detach)
-
-	// Build the values map (--values + --set + RUNE_VALUES_ env). Empty
-	// when the operator passed none of those, in which case the cast
-	// files are loaded verbatim with zero templating cost.
-	values, err := mergeCastFileValues(opts)
-	if err != nil {
+	// Lint the fully-rendered resources (names are final here) so malformed
+	// manifests fail fast with a clear error, before planning or applying.
+	if err := rendered.lint(); err != nil {
 		return err
 	}
 
-	// Load, categorize, and validate resources using CastFile
-	resourceInfo, err := parseCastFilesResources(filePaths, args, opts, values)
-	if err != nil {
-		return err
-	}
+	spec := rendered.toReleaseSpec(rc.releaseName, rc.source, opts)
 
-	// If dry-run is enabled, we're done here
-	if opts.dryRun {
-		fmt.Println("✅ Validation successful!")
-		fmt.Println("💬 Use without --dry-run to deploy.")
-		return nil
-	}
-
-	// Create API client
+	// 3) Connect and compute the plan (online — needed by dry-run, confirm,
+	// detach pre-check, and JSON output; C4/C5).
 	apiClient, err := newAPIClient("", "")
 	if err != nil {
 		return fmt.Errorf("failed to connect to API server: %w", err)
 	}
 	defer apiClient.Close()
+	rcl := client.NewReleaseClient(apiClient)
 
-	// Print deployment preparation
-	fmt.Println("🚀 Preparing deployment plan...")
-	fmt.Println()
+	// Resolve cast-time `{{ secret:... }}` templates in secret payloads before
+	// shipping them (RUNE-105). Out-of-release components are revealed via the API.
+	if err := rendered.resolveSecretTemplates(apiClient); err != nil {
+		return err
+	}
 
-	// Deploy resources
-	deploymentResults, err := deployResources(apiClient, resourceInfo, timeout, opts)
+	plan, err := rcl.PlanSpec(spec)
 	if err != nil {
 		return err
 	}
 
-	// Print summary based on deployment mode
-	if opts.detach {
-		printDetachedModeSummary(deploymentResults, startTime)
-	} else {
-		printWatchModeSummary(deploymentResults, startTime, opts)
+	// 4) --dry-run: render the plan block and stop (applies nothing — C4).
+	if opts.dryRun {
+		if opts.outputJSON {
+			return writeCastJSON(buildCastJSON(rc.releaseName, rendered.namespace, true, plan, nil))
+		}
+		printCastBanner([]string{rc.source.Location}, opts.detach)
+		renderPlanBlock(os.Stdout, rc.releaseName, rendered.namespace, 0, plan)
+		fmt.Println()
+		fmt.Println(format.Dim("dry-run: nothing was applied. Re-run without --dry-run to apply."))
+		return nil
 	}
 
-	// Capacity and allocation summary (single-node, best-effort)
-	if verbose {
-		// Pass namespace for capacity summary (empty string means all namespaces)
-		if err := printCapacityAndAllocationSummary(apiClient, opts.namespace); err != nil {
-			// Non-fatal; log and continue
-			fmt.Println("Note: capacity/allocation summary unavailable:", err.Error())
+	// 5) Detach pre-check (C3): refuse --detach when the plan prunes. We surface
+	// it here (before any mutation) rather than letting the server reject mid-flight.
+	if opts.detach && planHasPrune(plan) {
+		return fmt.Errorf("--detach is not allowed: this plan prunes resources (detach is create/update-only)\n"+
+			"hint: drop --detach to apply the destructive plan, or run 'rune release diff %s' to inspect it", rc.releaseName)
+	}
+
+	// 6) Display the plan, then confirm before applying anything destructive (C5).
+	if !opts.outputJSON {
+		printCastBanner([]string{rc.source.Location}, opts.detach)
+		renderPlanBlock(os.Stdout, rc.releaseName, rendered.namespace, 0, plan)
+		fmt.Println()
+	}
+	if !plan.Applyable {
+		return fmt.Errorf("plan has unresolved ownership conflicts; pass --adopt to take ownership")
+	}
+	ok, err := confirmApply(plan, opts)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		fmt.Fprintln(os.Stderr, "aborted.")
+		return fmt.Errorf("cast aborted by user")
+	}
+
+	// 7) Apply via the Cast RPC (server reconciles: create → update → verify →
+	// prune-last; C1). A spinner shows activity while the blocking reconcile runs
+	// (rune-scale-style loading UX); detach returns near-instantly.
+	timeout, _ := time.ParseDuration(opts.timeoutStr) // validated above
+	payloads := client.CastPayloads{
+		Services:   rendered.payloads.services,
+		Secrets:    rendered.payloads.secrets,
+		Configmaps: rendered.payloads.configmaps,
+		Volumes:    rendered.payloads.volumes,
+	}
+	applyLabel := "Applying…"
+	if opts.detach {
+		applyLabel = "Submitting…"
+	}
+	var rel *types.Release
+	var appliedPlan *client.Plan
+	apply := func() error {
+		var e error
+		rel, appliedPlan, e = rcl.Cast(spec, payloads, timeout)
+		return e
+	}
+	if opts.outputJSON {
+		err = apply()
+	} else {
+		err = runWithSpinner(applyLabel, apply)
+	}
+	if err != nil {
+		if errors.Is(err, client.ErrDetachWouldPrune) {
+			return fmt.Errorf("--detach is not allowed: this plan prunes resources (detach is create/update-only)")
+		}
+		return err
+	}
+	if appliedPlan != nil {
+		plan = appliedPlan
+	}
+
+	// 8) Emit result.
+	if opts.outputJSON {
+		return writeCastJSON(buildCastJSON(rc.releaseName, rendered.namespace, false, plan, releaseToResult(rel)))
+	}
+	printCastReleaseSummary(rel, startTime, opts)
+	return nil
+}
+
+// releaseToResult projects an applied Release for the JSON output.
+func releaseToResult(rel *types.Release) *castReleaseResult {
+	if rel == nil {
+		return nil
+	}
+	out := &castReleaseResult{Revision: rel.Revision, Status: string(rel.Status)}
+	for _, o := range rel.Owns {
+		out.Owns = append(out.Owns, castJSONResource{
+			ResourceType: string(o.ResourceType),
+			Namespace:    o.Namespace,
+			Name:         o.Name,
+		})
+	}
+	return out
+}
+
+// printRenderedCasts prints the rendered castfile set to stdout (the --render
+// path), re-rendering bytes so the output mirrors what the server would apply.
+func printRenderedCasts(rc *resolvedCast, opts *castOptions) error {
+	blocks, err := renderCastBytes(rc, opts)
+	if err != nil {
+		return err
+	}
+	for _, b := range blocks {
+		fmt.Println(string(b))
+		fmt.Println("---")
+	}
+	return nil
+}
+
+// printCastReleaseSummary prints the post-apply summary (C5 step 4): revision,
+// owned resources, timing, and the follow-up command hints.
+func printCastReleaseSummary(rel *types.Release, startTime time.Time, opts *castOptions) {
+	if rel == nil {
+		return
+	}
+	fmt.Println()
+	if opts.detach {
+		fmt.Printf("%s Release %q accepted (revision %d) — completing in background.\n",
+			format.Success("✓"), rel.Name, rel.Revision)
+	} else {
+		fmt.Printf("%s Release %q deployed (revision %d, status %s)\n",
+			format.Success("✓"), rel.Name, rel.Revision, rel.Status)
+	}
+	if len(rel.Owns) > 0 {
+		fmt.Println("\nOwned resources:")
+		for _, o := range rel.Owns {
+			fmt.Printf("  - %s %s/%s\n", o.ResourceType, o.Namespace, o.Name)
 		}
 	}
-
-	return nil
+	fmt.Println("\nNext:")
+	fmt.Printf("  rune release status %s -n %s\n", rel.Name, rel.Namespace)
+	fmt.Printf("  rune release history %s -n %s\n", rel.Name, rel.Namespace)
+	fmt.Printf("\n%s\n", format.Dim("done in %.1fs", time.Since(startTime).Seconds()))
 }
 
 // processResourceFiles loads, categorizes, and validates resources from files
@@ -399,261 +515,6 @@ func parseCastFilesResources(filePaths []string, sourceArgs []string, opts *cast
 	return info, nil
 }
 
-func deployResources(apiClient *client.Client, info *ResourceInfo, timeout time.Duration, opts *castOptions) (*DeploymentResult, error) {
-	results := &DeploymentResult{
-		SuccessfulResources: make(map[string][]string),
-		FailedResources:     make(map[string]string),
-	}
-
-	// Initialize resource type maps
-	results.SuccessfulResources["Service"] = []string{}
-	results.SuccessfulResources["Secret"] = []string{}
-	results.SuccessfulResources["Configmap"] = []string{}
-	results.SuccessfulResources["StorageClass"] = []string{}
-	results.SuccessfulResources["Volume"] = []string{}
-
-	// Safety check: ensure we have resources to deploy
-	if info.TotalResources == 0 {
-		return results, fmt.Errorf("no resources found to deploy")
-	}
-
-	// Deploy storage prerequisites first (cluster-scoped StorageClasses,
-	// then namespaced Volumes), then Configmaps and Secrets, then Services.
-	if err := deployStorageClasses(apiClient, info, results, opts); err != nil {
-		return results, err
-	}
-	if err := deployVolumes(apiClient, info, results, opts); err != nil {
-		return results, err
-	}
-	if err := deployConfigmaps(apiClient, info, results, opts); err != nil {
-		return results, err
-	}
-	// Render cast-time `{{ secret:... }}` templates in secret data values
-	// before writing them. Components defined in the same castfile are
-	// rendered in topo order; out-of-castfile components are revealed via
-	// the API. (RUNE-105)
-	if err := renderSecretTemplates(apiClient, info); err != nil {
-		return results, err
-	}
-	if err := deploySecrets(apiClient, info, results, opts); err != nil {
-		return results, err
-	}
-	if err := deployServices(apiClient, info, results, timeout, opts); err != nil {
-		return results, err
-	}
-
-	return results, nil
-}
-
-func deployServices(apiClient *client.Client, info *ResourceInfo, results *DeploymentResult, timeout time.Duration, opts *castOptions) error {
-	serviceClient := client.NewServiceClient(apiClient)
-	// Calculate actual resource count safely
-	resourceCount := 0
-	for _, services := range info.ServicesByFile {
-		resourceCount += len(services)
-	}
-
-	// Safety check: no services to deploy
-	if resourceCount == 0 {
-		return nil
-	}
-
-	resourceIndex := 0
-
-	for _, services := range info.ServicesByFile {
-		for _, service := range services {
-			resourceIndex++
-
-			// Determine resource type for display
-			resourceType := "Service"
-
-			// Check if service already exists - determine if creating or updating
-			action := "Creating"
-			_, err := serviceClient.GetService(service.Namespace, service.Name)
-			if err == nil {
-				action = "Deploying"
-			}
-
-			fmt.Printf("  [%d/%d] %s Service \"%s\" ", resourceIndex, resourceCount, action, format.Highlight("%s", service.Name))
-			fmt.Print(strings.Repeat(".", 25-len(service.Name)))
-
-			// Deploy the service; server handles update-on-exists
-			if err := serviceClient.CreateService(service, opts.createNamespace); err != nil {
-				fmt.Println(" ❌")
-				results.FailedResources[service.Name] = err.Error()
-				return fmt.Errorf("failed to apply service %s: %w", service.Name, err)
-			}
-			fmt.Println(" ✓")
-
-			// Add to successful resources
-			results.SuccessfulResources[resourceType] = append(results.SuccessfulResources[resourceType], service.Name)
-
-			// If detach is not enabled, wait for the service to be ready
-			if !opts.detach {
-				fmt.Printf("    Waiting for service to be ready...")
-				if err := waitForServiceReady(serviceClient, service.Namespace, service.Name, timeout); err != nil {
-					fmt.Println(" ❌")
-					// If the wait surfaced a structured failure (the
-					// reconciler reported Failed with a reason), print
-					// the developer-facing block inline so the
-					// operator never has to type a second command.
-					var fe *castFailureError
-					if errors.As(err, &fe) {
-						printCastFailure(fe.Service)
-					}
-					results.FailedResources[service.Name] = err.Error()
-					return fmt.Errorf("service %s failed to become ready: %w", service.Name, err)
-				}
-				fmt.Println(" ✓")
-			}
-		}
-	}
-	return nil
-}
-
-func deploySecrets(apiClient *client.Client, info *ResourceInfo, results *DeploymentResult, opts *castOptions) error {
-	secretClient := client.NewSecretClient(apiClient)
-	// Calculate actual resource count safely
-	resourceCount := 0
-	for _, secrets := range info.SecretsByFile {
-		resourceCount += len(secrets)
-	}
-
-	// Safety check: no secrets to deploy
-	if resourceCount == 0 {
-		return nil
-	}
-
-	resourceIndex := 0
-
-	for _, secrets := range info.SecretsByFile {
-		for _, secret := range secrets {
-			resourceIndex++
-
-			fmt.Printf("  [%d/%d] Creating Secret \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", secret.Name))
-			fmt.Print(strings.Repeat(".", 25-len(secret.Name)))
-
-			if err := secretClient.CreateSecret(secret, opts.createNamespace); err != nil {
-				if uerr := secretClient.UpdateSecret(secret, true); uerr != nil {
-					fmt.Println(" ❌")
-					results.FailedResources[secret.Name] = uerr.Error()
-					return fmt.Errorf("failed to apply secret %s: %w", secret.Name, uerr)
-				}
-			}
-			fmt.Println(" ✓")
-			results.SuccessfulResources["Secret"] = append(results.SuccessfulResources["Secret"], secret.Name)
-		}
-	}
-	return nil
-}
-
-func deployConfigmaps(apiClient *client.Client, info *ResourceInfo, results *DeploymentResult, opts *castOptions) error {
-	configClient := client.NewConfigmapClient(apiClient)
-	// Calculate actual resource count safely
-	resourceCount := 0
-	for _, configmaps := range info.ConfigmapsByFile {
-		resourceCount += len(configmaps)
-	}
-
-	// Safety check: no config maps to deploy
-	if resourceCount == 0 {
-		return nil
-	}
-
-	resourceIndex := 0
-
-	for _, configmaps := range info.ConfigmapsByFile {
-		for _, configmap := range configmaps {
-			resourceIndex++
-
-			fmt.Printf("  [%d/%d] Creating Config \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", configmap.Name))
-			fmt.Print(strings.Repeat(".", 25-len(configmap.Name)))
-			if err := configClient.CreateConfigmap(configmap, opts.createNamespace); err != nil {
-				if uerr := configClient.UpdateConfigmap(configmap); uerr != nil {
-					fmt.Println(" ❌")
-					results.FailedResources[configmap.Name] = uerr.Error()
-					return fmt.Errorf("failed to apply config %s: %w", configmap.Name, uerr)
-				}
-			}
-			fmt.Println(" ✓")
-			results.SuccessfulResources["Configmap"] = append(results.SuccessfulResources["Configmap"], configmap.Name)
-		}
-	}
-	return nil
-}
-
-// deployStorageClasses creates or updates StorageClass definitions discovered
-// in the cast file (RUNE-072). StorageClasses are cluster-scoped: an existing
-// class with the same name is updated in place.
-func deployStorageClasses(apiClient *client.Client, info *ResourceInfo, results *DeploymentResult, opts *castOptions) error {
-	scClient := client.NewStorageClassClient(apiClient)
-	resourceCount := 0
-	for _, classes := range info.StorageClassesByFile {
-		resourceCount += len(classes)
-	}
-	if resourceCount == 0 {
-		return nil
-	}
-	resourceIndex := 0
-	for _, classes := range info.StorageClassesByFile {
-		for _, sc := range classes {
-			resourceIndex++
-			fmt.Printf("  [%d/%d] Creating StorageClass \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", sc.Name))
-			pad := 25 - len(sc.Name)
-			if pad < 1 {
-				pad = 1
-			}
-			fmt.Print(strings.Repeat(".", pad))
-			if err := scClient.CreateStorageClass(sc); err != nil {
-				if uerr := scClient.UpdateStorageClass(sc); uerr != nil {
-					fmt.Println(" ❌")
-					results.FailedResources[sc.Name] = uerr.Error()
-					return fmt.Errorf("failed to apply storageclass %s: %w", sc.Name, uerr)
-				}
-			}
-			fmt.Println(" ✓")
-			results.SuccessfulResources["StorageClass"] = append(results.SuccessfulResources["StorageClass"], sc.Name)
-		}
-	}
-	return nil
-}
-
-// deployVolumes creates or updates Volume definitions discovered in the
-// cast file (RUNE-072). Volumes are namespace-scoped; the namespace must
-// already exist (or --create-namespace must have been passed).
-func deployVolumes(apiClient *client.Client, info *ResourceInfo, results *DeploymentResult, opts *castOptions) error {
-	vClient := client.NewVolumeClient(apiClient)
-	resourceCount := 0
-	for _, vols := range info.VolumesByFile {
-		resourceCount += len(vols)
-	}
-	if resourceCount == 0 {
-		return nil
-	}
-	resourceIndex := 0
-	for _, vols := range info.VolumesByFile {
-		for _, v := range vols {
-			resourceIndex++
-			fmt.Printf("  [%d/%d] Creating Volume \"%s\" ", resourceIndex, resourceCount, format.Highlight("%s", v.Name))
-			pad := 25 - len(v.Name)
-			if pad < 1 {
-				pad = 1
-			}
-			fmt.Print(strings.Repeat(".", pad))
-			if err := vClient.CreateVolume(v, opts.createNamespace); err != nil {
-				if uerr := vClient.UpdateVolume(v); uerr != nil {
-					fmt.Println(" ❌")
-					results.FailedResources[v.Name] = uerr.Error()
-					return fmt.Errorf("failed to apply volume %s: %w", v.Name, uerr)
-				}
-			}
-			fmt.Println(" ✓")
-			results.SuccessfulResources["Volume"] = append(results.SuccessfulResources["Volume"], v.Name)
-		}
-	}
-	return nil
-}
-
 // printCastBanner prints the initial banner for the cast command
 func printCastBanner(args []string, isDetached bool) {
 	if isDetached {
@@ -692,160 +553,6 @@ func printResourceInfo(info *ResourceInfo, opts *castOptions) {
 	}
 }
 
-// printDetachedModeSummary prints a summary for detached mode
-func printDetachedModeSummary(results *DeploymentResult, startTime time.Time) {
-	fmt.Println("🛫 Deployment initiated (no watch mode).")
-	fmt.Println()
-	fmt.Println("💬 Status commands:")
-
-	// Suggest some commands for checking status
-	for resourceType, names := range results.SuccessfulResources {
-		if resourceType == "Service" || resourceType == "Function" {
-			for _, name := range names {
-				fmt.Printf("- rune trace %s\n", name)
-			}
-		}
-	}
-	fmt.Println("- rune status")
-	fmt.Println("- rune list")
-
-	elapsedTime := time.Since(startTime).Seconds()
-	fmt.Printf("\n🏁 Done in %.1fs (deployment is ongoing in background).\n", elapsedTime)
-}
-
-// printWatchModeSummary prints a summary for watch mode
-func printWatchModeSummary(results *DeploymentResult, startTime time.Time, opts *castOptions) {
-	fmt.Println("✅ Successfully deployed:")
-
-	// Show resources with endpoints where applicable
-	for resourceType, names := range results.SuccessfulResources {
-		for _, name := range names {
-			endpoint := ""
-			switch resourceType {
-			case "Service":
-				if opts.namespace != "" {
-					endpoint = fmt.Sprintf(" (endpoint: http://%s.%s.rune)", name, opts.namespace)
-				} else {
-					endpoint = " (endpoint: namespace from resource definition)"
-				}
-			case "Function":
-				if opts.namespace != "" {
-					endpoint = fmt.Sprintf(" (endpoint: http://%s.%s.rune)", name, opts.namespace)
-				} else {
-					endpoint = " (endpoint: namespace from resource definition)"
-				}
-			}
-			fmt.Printf("- %s: %s%s\n", resourceType, name, endpoint)
-		}
-	}
-
-	// Show tips
-	fmt.Println()
-	fmt.Println("🪄 Tips:")
-
-	// Add service-specific tips
-	for resourceType, names := range results.SuccessfulResources {
-		switch resourceType {
-		case "Service":
-			for _, name := range names {
-				fmt.Printf("- Monitor: rune trace %s\n", name)
-				fmt.Printf("- Scale Service: rune scale %s --replicas=2\n", name)
-			}
-		case "Function":
-			for _, name := range names {
-				fmt.Printf("- Function Logs: rune trace %s\n", name)
-			}
-		}
-	}
-
-	fmt.Println("- List Resources: rune list")
-
-	elapsedTime := time.Since(startTime).Seconds()
-	fmt.Printf("\n🎉 All resources ready in %.1fs\n", elapsedTime)
-}
-
-// printCapacityAndAllocationSummary prints single-node capacity and allocated requests summary
-func printCapacityAndAllocationSummary(apiClient *client.Client, namespace string) error {
-	fmt.Println()
-	fmt.Println("📊 Node capacity and allocation (MVP, best-effort)")
-	// Fetch capacity from server health (cached at startup)
-	hc := client.NewHealthClient(apiClient)
-	cpuCapacity, memCapacity, err := hc.GetAPIServerCapacity()
-	if err != nil {
-		return err
-	}
-
-	// Sum allocated (Requests) across active instances in the namespace
-	instClient := client.NewInstanceClient(apiClient)
-
-	// Handle empty namespace - list instances from all namespaces
-	var instances []*types.Instance
-	if namespace != "" {
-		instances, err = instClient.ListInstances(namespace, "", "", "")
-	} else {
-		instances, err = instClient.ListInstances("", "", "", "")
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to list instances: %w", err)
-	}
-
-	var cpuAllocated float64
-	var memAllocated int64
-	for _, inst := range instances {
-		if !isInstanceCounted(inst) {
-			continue
-		}
-		if inst.Resources != nil {
-			if inst.Resources.CPU.Request != "" {
-				if v, err := types.ParseCPU(inst.Resources.CPU.Request); err == nil {
-					cpuAllocated += v
-				}
-			}
-			if inst.Resources.Memory.Request != "" {
-				if v, err := types.ParseMemory(inst.Resources.Memory.Request); err == nil {
-					memAllocated += v
-				}
-			}
-		}
-	}
-
-	cpuRemaining := cpuCapacity - cpuAllocated
-	if cpuRemaining < 0 {
-		cpuRemaining = 0
-	}
-	memRemaining := memCapacity - memAllocated
-	if memRemaining < 0 {
-		memRemaining = 0
-	}
-
-	// Print summary
-	fmt.Printf("Capacity: CPU %.1f cores, Allocated %.1f, Remaining %.1f | Mem %s, Allocated %s, Remaining %s\n",
-		cpuCapacity, cpuAllocated, cpuRemaining,
-		types.FormatMemory(memCapacity), types.FormatMemory(memAllocated), types.FormatMemory(memRemaining))
-
-	// Warn on over-allocation
-	if cpuAllocated > cpuCapacity {
-		fmt.Printf("Warning: requested CPU %.1f cores exceeds capacity %.1f cores (deployment allowed in MVP)\n", cpuAllocated, cpuCapacity)
-	}
-	if memAllocated > memCapacity {
-		fmt.Printf("Warning: requested memory %s exceeds capacity %s (deployment allowed in MVP)\n",
-			types.FormatMemory(memAllocated), types.FormatMemory(memCapacity))
-	}
-
-	return nil
-}
-
-// isInstanceCounted returns true if the instance should count toward allocated resources
-func isInstanceCounted(inst *types.Instance) bool {
-	switch inst.Status {
-	case types.InstanceStatusRunning, types.InstanceStatusPending, types.InstanceStatusStarting, types.InstanceStatusCreated:
-		return true
-	default:
-		return false
-	}
-}
-
 // contains checks if a string slice contains a specific value
 func stringSliceContains(slice []string, value string) bool {
 	for _, item := range slice {
@@ -854,126 +561,6 @@ func stringSliceContains(slice []string, value string) bool {
 		}
 	}
 	return false
-}
-
-// waitForServiceReady waits for a service to be fully deployed.
-//
-// Returns:
-//   - nil when the service reaches ServiceStatusRunning with all instances ready.
-//   - A *castFailureError when the reconciler reports ServiceStatusFailed
-//     (the caller renders a developer-friendly failure block from this).
-//   - A plain error on timeout.
-//
-// The early exit on Failed is the whole point: we want the developer
-// to see "✗ ImagePullBackOff: pull access denied …" in the same scroll
-// as their `rune cast`, not a generic "timeout waiting for service".
-func waitForServiceReady(serviceClient *client.ServiceClient, namespace, name string, timeout time.Duration) error {
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	// Poll interval
-	pollInterval := 1 * time.Second
-
-	// Create a ticker for polling
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-
-	// initStepProgress tracks the most recent printed (instance, step,
-	// status) tuple per instance so we only emit a transition line
-	// once per state change. Keyed by "<instance>/<step>" -> status.
-	initStepProgress := map[string]types.InitStepStatus{}
-
-	for {
-		select {
-		case <-ctx.Done():
-			// Timeout
-			return fmt.Errorf("timeout waiting for service %s to be ready", name)
-		case <-ticker.C:
-			// Poll the service status
-			service, err := serviceClient.GetService(namespace, name)
-
-			if err != nil {
-				log.Debug("Error getting service status", log.Err(err))
-				continue
-			}
-
-			// RUNE-121 S6: surface init step transitions while any
-			// instance is in Initializing. Done before the failure /
-			// ready checks so the developer always sees "▶ format..."
-			// before they see the success or failure of the service.
-			printInitStepProgress(os.Stderr, service, initStepProgress)
-
-			// Fail fast: the reconciler has rolled the worst instance's
-			// reason/message up to the service. Surface it now instead
-			// of timing out with no context.
-			if service.Status == types.ServiceStatusFailed {
-				return &castFailureError{Service: service}
-			}
-
-			// Check if the service is running
-			if service.Status == types.ServiceStatusRunning {
-				// Check that all instances are ready
-				allReady := true
-				readyCount := 0
-
-				for _, instance := range service.Instances {
-					if instance.Status == "Running" || instance.Status == "Ready" {
-						readyCount++
-					} else {
-						allReady = false
-					}
-				}
-
-				// If all instances are ready, or at least some are ready and the service scale is met
-				if (allReady && len(service.Instances) > 0) || (readyCount >= service.Scale) {
-					return nil
-				}
-			}
-		}
-	}
-}
-
-// castFailureError carries the failed Service so the caller can render
-// a rich, in-line failure block (image, reason, message, hint) instead
-// of a flat one-line error.
-type castFailureError struct {
-	Service *types.Service
-}
-
-func (e *castFailureError) Error() string {
-	if e == nil || e.Service == nil {
-		return "service failed"
-	}
-	if e.Service.StatusReason != "" {
-		return fmt.Sprintf("service %s/%s failed: %s", e.Service.Namespace, e.Service.Name, e.Service.StatusReason)
-	}
-	return fmt.Sprintf("service %s/%s failed", e.Service.Namespace, e.Service.Name)
-}
-
-// printCastFailure prints the developer-facing failure block when
-// `rune cast` discovers a service entered Failed during its wait.
-// One paragraph, one hint command — same shape as `rune get service`.
-func printCastFailure(svc *types.Service) {
-	if svc == nil {
-		return
-	}
-	fmt.Println()
-	reason := svc.StatusReason
-	if reason == "" {
-		reason = "Failed"
-	}
-	fmt.Printf("    ✗ %s\n", reason)
-	if svc.StatusMessage != "" {
-		fmt.Printf("      %s\n", svc.StatusMessage)
-	}
-	fmt.Println()
-	if svc.Image != "" {
-		fmt.Printf("      image:  %s\n", svc.Image)
-	}
-	fmt.Printf("      service: %s/%s\n", svc.Namespace, svc.Name)
-	fmt.Println()
-	fmt.Printf("      rune get service %s -n %s\n", svc.Name, svc.Namespace)
 }
 
 // printInitStepProgress emits one line per init-step transition

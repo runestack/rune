@@ -223,32 +223,31 @@ Referenced shared kinds (StorageClass, Namespace) are never deleted (D2).`,
 func newReleaseRollbackCmd() *cobra.Command {
 	var ns string
 	var revision int
+	var yes bool
 	cmd := &cobra.Command{
 		Use:   "rollback <name>",
 		Short: "Roll a release forward to a prior revision",
 		Long: `Rollback re-applies a prior revision's rendered set as a new revision
 (forward-rolling, never mutating history).
 
-Currently the server returns Unimplemented: rollback needs to re-render the
-historical runeset source, which lands with the cast PR. The command is wired
-so the surface exists and reports the deferral clearly.`,
+It re-renders the target revision's stored source + values and casts it forward
+through the same plan→apply→verify→prune pipeline as a normal cast. This works
+for reproducible sources (tgz, github, url). A revision whose source was a local
+directory is no longer reproducible and fails with a clear error — re-cast from
+the runeset source instead.
+
+  --to <rev>   target revision (0 = the immediately-preceding revision)`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			api, err := newAPIClient("", "")
-			if err != nil {
-				return err
-			}
-			defer api.Close()
-			rel, err := client.NewReleaseClient(api).Rollback(ns, args[0], revision)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Release %s/%s rolled back (revision %d)\n", ns, args[0], rel.Revision)
-			return nil
+			opts := &castOptions{yes: yes}
+			opts.namespace = ns
+			opts.timeoutStr = "5m"
+			return runReleaseRollback(ns, args[0], revision, opts)
 		},
 	}
 	addReleaseNamespaceFlag(cmd, &ns)
 	cmd.Flags().IntVar(&revision, "to", 0, "Target revision to roll back to (0 = previous revision)")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt for plans that prune or adopt")
 	return cmd
 }
 
