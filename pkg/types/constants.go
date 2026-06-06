@@ -53,6 +53,11 @@ const (
 
 	// ResourceTypeSnapshot represents volume snapshots (RUNE-071).
 	ResourceTypeSnapshot ResourceType = "snapshot"
+
+	// ResourceTypeRelease represents a stateful runeset release: the tracked,
+	// revisioned record of what a `rune cast` installed, used for list / diff /
+	// rollback / clean uninstall. See _docs/plugins/RUNESET_STATEFUL_RELEASES.md.
+	ResourceTypeRelease ResourceType = "release"
 )
 
 // RunnerType is the type of runner for an instance.

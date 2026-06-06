@@ -44,6 +44,11 @@ type Secret struct {
 
 	// Last rotation timestamp
 	LastRotated *time.Time `json:"lastRotated,omitempty" yaml:"lastRotated,omitempty"`
+
+	// OwnedBy is the system ownership stamp set when a runeset release manages
+	// this secret. Distinct from user data; used for GC and drift detection.
+	// See _docs/plugins/RUNESET_STATEFUL_RELEASES.md.
+	OwnedBy *OwnedBy `json:"ownedBy,omitempty" yaml:"ownedBy,omitempty"`
 }
 
 // StoredSecret is the persisted encrypted form of a Secret

@@ -18,6 +18,7 @@ import (
 	"github.com/runestack/rune/pkg/api/session"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
+	"github.com/runestack/rune/pkg/releasectl"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
@@ -53,6 +54,7 @@ type APIServer struct {
 	snapshotService     *service.SnapshotService
 	describeService     *service.DescribeService
 	eventService        *service.EventService
+	releaseService      *service.ReleaseService
 
 	// gRPC server
 	grpcServer *grpc.Server
@@ -212,6 +214,11 @@ func (s *APIServer) Start() error {
 		service.WithSnapshotDriverConfigs(s.options.StorageDriverConfigs))
 	s.describeService = service.NewDescribeService(s.store, s.options.EventLog, s.logger)
 	s.eventService = service.NewEventService(s.options.EventLog, s.logger)
+	// Stateful runeset releases (RUNESET_STATEFUL_RELEASES.md). The controller
+	// needs the live orchestrator (constructed just above) + store + logger, so
+	// it's wired here alongside the other services rather than in main.go.
+	releaseController := releasectl.NewController(s.orchestrator, s.store, s.logger)
+	s.releaseService = service.NewReleaseService(releaseController, s.store, s.logger)
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
@@ -305,6 +312,7 @@ func (s *APIServer) startGRPCServer() error {
 	generated.RegisterSnapshotServiceServer(s.grpcServer, s.snapshotService)
 	generated.RegisterDescribeServiceServer(s.grpcServer, s.describeService)
 	generated.RegisterEventServiceServer(s.grpcServer, s.eventService)
+	generated.RegisterReleaseServiceServer(s.grpcServer, s.releaseService)
 
 	// Extra registrars (e.g. WatchService wired by runed for RUNE-028).
 	for _, reg := range s.options.ExtraGRPCRegistrars {

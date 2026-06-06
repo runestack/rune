@@ -133,6 +133,24 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.SnapshotService/RestoreVolume"):
 		return "volumes", "create"
 
+	// Releases: stateful runeset releases (RUNESET_STATEFUL_RELEASES.md).
+	// Cast is the install/upgrade write; Plan is a dry-run read; Rollback is a
+	// re-apply write; DeleteRelease is the uninstall.
+	case strings.HasPrefix(method, "/rune.api.ReleaseService/Cast"):
+		return "releases", "create"
+	case strings.HasPrefix(method, "/rune.api.ReleaseService/Plan"):
+		return "releases", "get"
+	case strings.HasPrefix(method, "/rune.api.ReleaseService/ListReleases"):
+		return "releases", "list"
+	case strings.HasPrefix(method, "/rune.api.ReleaseService/GetRelease"):
+		return "releases", "get"
+	case strings.HasPrefix(method, "/rune.api.ReleaseService/History"):
+		return "releases", "get"
+	case strings.HasPrefix(method, "/rune.api.ReleaseService/DeleteRelease"):
+		return "releases", "delete"
+	case strings.HasPrefix(method, "/rune.api.ReleaseService/Rollback"):
+		return "releases", "update"
+
 	case strings.HasPrefix(method, "/rune.api.EventService/"):
 		// RUNE-126 Phase 2. Reading the event log is the same privilege
 		// shape as describe — both are diagnostic reads across kinds.

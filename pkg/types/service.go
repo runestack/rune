@@ -175,6 +175,10 @@ type ServiceMetadata struct {
 	// Generation of the service
 	Generation int64 `json:"generation,omitempty" yaml:"generation,omitempty"`
 
+	// OwnedBy is the system ownership stamp set when a runeset release manages
+	// this service. See _docs/plugins/RUNESET_STATEFUL_RELEASES.md.
+	OwnedBy *OwnedBy `json:"ownedBy,omitempty" yaml:"ownedBy,omitempty"`
+
 	// LastNonZeroScale tracks the most recent non-zero scale to support restart semantics
 	LastNonZeroScale int `json:"lastNonZeroScale,omitempty" yaml:"lastNonZeroScale,omitempty"`
 }

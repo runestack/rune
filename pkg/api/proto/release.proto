@@ -1,0 +1,206 @@
+syntax = "proto3";
+
+package rune.api;
+
+import "pkg/api/proto/common.proto";
+
+option go_package = "github.com/runestack/rune/pkg/api/generated";
+
+// ReleaseService is the stateful runeset release API. A Release is the tracked,
+// revisioned record of what a `rune cast` installed: which resources it owns,
+// the merged values used, and the revision history — enabling list, diff
+// (Plan), upgrade-with-prune (Cast), rollback, and clean uninstall (Delete).
+//
+// Design: _docs/plugins/RUNESET_STATEFUL_RELEASES.md (decisions D1–D4) and
+// CAST_REFACTOR_PLAN.md (C1 = server-side reconcile).
+
+// OwnerRef points to a single resource owned (or referenced) by a Release. The
+// namespace is carried per-ref so a release can span namespaces (Decision D1).
+message OwnerRef {
+  string resource_type = 1; // service | secret | configmap | volume | storageclass | namespace
+  string namespace = 2;
+  string name = 3;
+}
+
+// ReleaseSource records the provenance of a runeset deployment so a revision is
+// reproducible.
+message ReleaseSource {
+  string type = 1;     // directory | package-archive | github | url
+  string location = 2; // raw source argument (path, URL, github shorthand)
+  string ref = 3;      // resolved version reference (git ref, tag)
+  string digest = 4;   // archive/content checksum where available
+}
+
+// RunesetManifest mirrors types.RunesetManifest — the runeset.yaml deployed for
+// a revision. Defaults is JSON-encoded since proto3 lacks an arbitrary map.
+message RunesetManifest {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  string namespace = 4;
+  string defaults_json = 5; // JSON-encoded map<string, any>
+}
+
+// Release mirrors types.Release.
+message Release {
+  string id = 1;
+  string name = 2;
+  string namespace = 3;
+  string status = 4;   // pending | deployed | superseded | failed | uninstalling | uninstalled
+  int32 revision = 5;
+  ReleaseSource source = 6;
+  RunesetManifest manifest = 7;
+  // values_json is the fully-merged value set used to render this revision,
+  // JSON-encoded (kept for diff and rollback).
+  string values_json = 8;
+  string rendered_digest = 9;
+  repeated OwnerRef owns = 10;       // authoritative owned set
+  repeated OwnerRef references = 11; // shared kinds depended on but not owned (D2)
+  string created_at = 12;
+  string updated_at = 13;
+}
+
+// Resource payloads carried by a Cast, keyed by OwnerRef.Key()
+// ("type/namespace/name"). Each is a JSON-encoded rendered resource so the
+// proto need not mirror every workload type field-for-field.
+message RenderedPayloads {
+  map<string, string> services = 1;   // key -> JSON of types.Service
+  map<string, string> secrets = 2;    // key -> JSON of types.Secret
+  map<string, string> configmaps = 3; // key -> JSON of types.Configmap
+  map<string, string> volumes = 4;    // key -> JSON of types.Volume
+}
+
+// ReleaseSpec is the rendered, ready-to-apply description of a release: identity
+// + provenance + values + the desired resource ref set. For Cast it additionally
+// carries the rendered payloads; Plan needs only the refs.
+message ReleaseSpec {
+  string name = 1;
+  string namespace = 2;
+  ReleaseSource source = 3;
+  RunesetManifest manifest = 4;
+  string values_json = 5;
+  string rendered_digest = 6;
+  repeated OwnerRef resources = 7; // desired resource refs
+  bool adopt = 8;                  // take over unmanaged / foreign-owned resources
+  bool detach = 9;                 // create/update-only async completion (C3)
+  RenderedPayloads payloads = 10;  // populated for Cast; ignored by Plan
+}
+
+// Action mirrors release.Action — the reconcile verb for a single resource.
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  ACTION_CREATE = 1;
+  ACTION_UPDATE = 2;
+  ACTION_PRUNE = 3;
+  ACTION_ADOPT = 4;
+  ACTION_REFERENCE = 5;
+}
+
+// PlannedChange pairs a resource ref with its planned action and, when the
+// change is blocked, a human-readable conflict reason.
+message PlannedChange {
+  OwnerRef ref = 1;
+  Action action = 2;
+  string conflict_reason = 3; // empty unless the change conflicts (needs --adopt)
+}
+
+// Plan is the full set of changes a cast revision would make, in apply order.
+message Plan {
+  string release = 1;
+  string namespace = 2;
+  repeated PlannedChange changes = 3;
+  bool applyable = 4; // false if any change carries a conflict_reason
+}
+
+message CastRequest {
+  ReleaseSpec spec = 1;
+}
+
+message CastResponse {
+  Release release = 1;
+  Plan plan = 2;
+  Status status = 3;
+}
+
+// PlanRequest computes the reconcile plan for a spec WITHOUT applying it
+// (dry-run / diff). Payloads are not required.
+message PlanRequest {
+  ReleaseSpec spec = 1;
+}
+
+message PlanResponse {
+  Plan plan = 1;
+  Status status = 2;
+}
+
+message ListReleasesRequest {
+  // namespace scopes the list; empty lists across all namespaces.
+  string namespace = 1;
+  // include_uninstalled also returns soft tombstone records (Decision D4).
+  bool include_uninstalled = 2;
+}
+
+message ListReleasesResponse {
+  repeated Release releases = 1;
+  Status status = 2;
+}
+
+message GetReleaseRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message ReleaseResponse {
+  Release release = 1;
+  Status status = 2;
+}
+
+message HistoryRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message HistoryResponse {
+  // Revisions are returned as full Release records, newest first.
+  repeated Release revisions = 1;
+  Status status = 2;
+}
+
+// DeleteReleaseRequest uninstalls a release: deletes owned resources in
+// dependency order then soft-marks the record uninstalled (Decision D4).
+message DeleteReleaseRequest {
+  string name = 1;
+  string namespace = 2;
+  // keep_volumes overrides reclaim to retain volume data on uninstall.
+  bool keep_volumes = 3;
+  // purge removes the tombstone record entirely instead of soft-marking it.
+  bool purge = 4;
+}
+
+message RollbackReleaseRequest {
+  string name = 1;
+  string namespace = 2;
+  // revision is the prior revision to roll forward to. 0 means the immediately
+  // preceding revision.
+  int32 revision = 3;
+}
+
+service ReleaseService {
+  // Cast creates or upgrades a release: server-side 3-way reconcile
+  // (create → update → verify → prune-last), persisting a tracked Release.
+  rpc Cast(CastRequest) returns (CastResponse);
+  // Plan computes the reconcile plan without applying it (dry-run / diff).
+  rpc Plan(PlanRequest) returns (PlanResponse);
+  // ListReleases returns releases, optionally across all namespaces.
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+  // GetRelease returns a single release record.
+  rpc GetRelease(GetReleaseRequest) returns (ReleaseResponse);
+  // History returns the revision log of a release.
+  rpc History(HistoryRequest) returns (HistoryResponse);
+  // DeleteRelease uninstalls a release (soft by default; --purge to forget).
+  rpc DeleteRelease(DeleteReleaseRequest) returns (Status);
+  // Rollback rolls a release forward to a prior revision. Currently
+  // Unimplemented: it requires re-rendering historical source, which lands
+  // with the cast PR.
+  rpc Rollback(RollbackReleaseRequest) returns (ReleaseResponse);
+}
