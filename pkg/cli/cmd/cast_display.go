@@ -8,11 +8,47 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/cli/format"
 	"golang.org/x/term"
 )
+
+// runWithSpinner runs fn while showing a loading indicator, matching the
+// rune-scale UX (wait_render.go): on a TTY it animates an in-place braille
+// spinner (`spinnerFrames`) so the user sees activity during the blocking
+// reconcile; on a non-TTY it prints the label once. The spinner line is cleared
+// before fn's result is rendered. fn's error is returned unchanged.
+func runWithSpinner(label string, fn func() error) error {
+	out := os.Stdout
+	if !term.IsTerminal(int(out.Fd())) {
+		fmt.Fprintln(out, format.Info("%s", label))
+		return fn()
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		frame := 0
+		for {
+			select {
+			case <-stop:
+				fmt.Fprint(out, "\r\033[K") // clear the spinner line
+				return
+			case <-ticker.C:
+				fmt.Fprintf(out, "\r%s %s", spinnerFrames[frame%len(spinnerFrames)], label)
+				frame++
+			}
+		}
+	}()
+	err := fn()
+	close(stop)
+	<-done
+	return err
+}
 
 // planActionGlyph maps a plan action to its terraform-style glyph + label.
 // Prune is destructive and is flagged as such in the block.

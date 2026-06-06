@@ -76,7 +76,13 @@ func newCastCmd() *cobra.Command {
 		Args:         cobra.MinimumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Resolve the release's home namespace: --namespace flag, else the
+			// current context's defaultNamespace (from config), else "default".
+			// A release record requires a namespace, so this must never be empty.
 			opts.namespace = effectiveCmdNS(opts.namespace)
+			if opts.namespace == "" {
+				opts.namespace = "default"
+			}
 			return runCast(cmd.Context(), args, opts)
 		},
 	}
@@ -215,17 +221,31 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 	}
 
 	// 7) Apply via the Cast RPC (server reconciles: create → update → verify →
-	// prune-last; C1).
-	if !opts.outputJSON {
-		fmt.Println(format.Info("Applying..."))
-	}
+	// prune-last; C1). A spinner shows activity while the blocking reconcile runs
+	// (rune-scale-style loading UX); detach returns near-instantly.
 	timeout, _ := time.ParseDuration(opts.timeoutStr) // validated above
-	rel, appliedPlan, err := rcl.Cast(spec, client.CastPayloads{
+	payloads := client.CastPayloads{
 		Services:   rendered.payloads.services,
 		Secrets:    rendered.payloads.secrets,
 		Configmaps: rendered.payloads.configmaps,
 		Volumes:    rendered.payloads.volumes,
-	}, timeout)
+	}
+	applyLabel := "Applying…"
+	if opts.detach {
+		applyLabel = "Submitting…"
+	}
+	var rel *types.Release
+	var appliedPlan *client.Plan
+	apply := func() error {
+		var e error
+		rel, appliedPlan, e = rcl.Cast(spec, payloads, timeout)
+		return e
+	}
+	if opts.outputJSON {
+		err = apply()
+	} else {
+		err = runWithSpinner(applyLabel, apply)
+	}
 	if err != nil {
 		if errors.Is(err, client.ErrDetachWouldPrune) {
 			return fmt.Errorf("--detach is not allowed: this plan prunes resources (detach is create/update-only)")
