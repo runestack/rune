@@ -30,6 +30,14 @@ type Instance struct {
 	// Name of the service this instance belongs to
 	ServiceName string `json:"serviceName" yaml:"serviceName"`
 
+	// Labels are denormalized from the parent Service's user labels at creation
+	// (and, once a placement scheduler exists, will also carry the assigned
+	// node's topology labels — see CreateInstance). They form the user-defined
+	// LogQL stream dimensions for this instance's logs and the substrate for
+	// future node-affinity / topology-spread scheduling. Low-cardinality only —
+	// high-cardinality data belongs in log content/fields, not stream labels.
+	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+
 	// ID of the node running this instance
 	NodeID string `json:"nodeId" yaml:"nodeId"`
 
