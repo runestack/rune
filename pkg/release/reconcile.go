@@ -54,17 +54,31 @@ type ReleaseRecords interface {
 	Save(ctx context.Context, rel *types.Release) error
 }
 
-// Reconcile executes a release spec end to end:
+// PreparedCast is the outcome of planning a cast and recording its pending
+// intent: the pending release, the computed plan, and an Execute closure that
+// performs apply → verify → prune-last → deployed against the cluster.
 //
-//	plan → write pending intent → apply (ordered) → verify → prune-last → deployed
-//
-// On apply/verify failure it records the release as failed and returns; nothing
-// is pruned (Decision D3: prune only after a clean apply). The previous revision
-// remains recoverable from store history.
-func Reconcile(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live LiveLookup, applier Applier) (*types.Release, *Plan, error) {
+// Synchronous callers run Execute inline (see Reconcile). Detach callers (C3-a)
+// return the pending release immediately and run Execute in the background with
+// a detached context.
+type PreparedCast struct {
+	Release *types.Release
+	Plan    *Plan
+	// Execute applies the prepared change set and returns the final release
+	// record (deployed, or failed with the cause). Safe to call from a
+	// background goroutine with a detached context.
+	Execute func(ctx context.Context, applier Applier) (*types.Release, error)
+}
+
+// Prepare runs the 3-way plan, validates it (conflicts, detach-prune), and
+// writes the pending release intent. It does NOT mutate the cluster — that is
+// the returned PreparedCast.Execute closure's job. On a validation error it
+// still returns a PreparedCast carrying the Plan (Release nil) so callers can
+// surface it.
+func Prepare(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live LiveLookup) (*PreparedCast, error) {
 	current, found, err := recs.Get(ctx, spec.Namespace, spec.Name)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var prev *types.Release
 	if found {
@@ -73,23 +87,23 @@ func Reconcile(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live 
 
 	plan, err := BuildPlan(spec.Name, spec.Namespace, spec.Resources, prev, live, spec.Options)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if !plan.Applyable() {
-		return nil, plan, ErrConflicts
+		return &PreparedCast{Plan: plan}, ErrConflicts
 	}
 	if spec.Detach && plan.HasPrune() {
-		return nil, plan, ErrDetachWouldPrune
+		return &PreparedCast{Plan: plan}, ErrDetachWouldPrune
 	}
 
 	revision := 1
 	if prev != nil {
 		revision = prev.Revision + 1
 	}
-
 	owns, refs := partitionOwnership(plan)
 
-	// 1) Record intent up front so a crash is recoverable.
+	// Record intent up front so a crash — or the async detach handoff — is
+	// recoverable.
 	rel := &types.Release{
 		Name:           spec.Name,
 		Namespace:      spec.Namespace,
@@ -106,43 +120,66 @@ func Reconcile(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live 
 		rel.ID = current.ID
 	}
 	if err := recs.Save(ctx, rel); err != nil {
-		return nil, plan, err
+		return &PreparedCast{Plan: plan}, err
 	}
 
 	applies, prunes := splitForExecution(plan)
 
-	// 2) Apply create/update/adopt/reference in dependency order.
-	for _, change := range applies {
-		if err := applier.Apply(ctx, change); err != nil {
+	exec := func(ctx context.Context, applier Applier) (*types.Release, error) {
+		// Apply create/update/adopt/reference in dependency order.
+		for _, change := range applies {
+			if err := applier.Apply(ctx, change); err != nil {
+				return failRelease(ctx, recs, rel, err)
+			}
+		}
+		// Verify owned resources are healthy before any destructive step.
+		if err := applier.Verify(ctx, owns); err != nil {
 			return failRelease(ctx, recs, rel, err)
 		}
-	}
-
-	// 3) Verify owned resources are healthy before any destructive step.
-	if err := applier.Verify(ctx, owns); err != nil {
-		return failRelease(ctx, recs, rel, err)
-	}
-
-	// 4) Prune last (never reached on a failed apply/verify).
-	for _, change := range prunes {
-		if err := applier.Prune(ctx, change.Ref); err != nil {
-			return failRelease(ctx, recs, rel, err)
+		// Prune last (never reached on a failed apply/verify).
+		for _, change := range prunes {
+			if err := applier.Prune(ctx, change.Ref); err != nil {
+				return failRelease(ctx, recs, rel, err)
+			}
 		}
+		rel.Status = types.ReleaseStatusDeployed
+		if err := recs.Save(ctx, rel); err != nil {
+			return rel, err
+		}
+		return rel, nil
 	}
 
-	// 5) Mark deployed.
-	rel.Status = types.ReleaseStatusDeployed
-	if err := recs.Save(ctx, rel); err != nil {
-		return nil, plan, err
-	}
-	return rel, plan, nil
+	return &PreparedCast{Release: rel, Plan: plan, Execute: exec}, nil
 }
 
-func failRelease(ctx context.Context, recs ReleaseRecords, rel *types.Release, cause error) (*types.Release, *Plan, error) {
+// Reconcile executes a release spec end to end (synchronous):
+//
+//	plan → write pending intent → apply (ordered) → verify → prune-last → deployed
+//
+// It is Prepare followed by Execute. On apply/verify failure it records the
+// release as failed and returns; nothing is pruned (Decision D3). Detach callers
+// use Prepare + a background Execute instead (see releasectl.Controller.Cast).
+func Reconcile(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live LiveLookup, applier Applier) (*types.Release, *Plan, error) {
+	prep, err := Prepare(ctx, spec, recs, live)
+	if err != nil {
+		if prep != nil {
+			return nil, prep.Plan, err
+		}
+		return nil, nil, err
+	}
+	rel, err := prep.Execute(ctx, applier)
+	if err != nil {
+		return rel, nil, err
+	}
+	return rel, prep.Plan, nil
+}
+
+// failRelease marks the release failed (best-effort persist) and returns the
+// record plus the original cause.
+func failRelease(ctx context.Context, recs ReleaseRecords, rel *types.Release, cause error) (*types.Release, error) {
 	rel.Status = types.ReleaseStatusFailed
-	// Best-effort persist of the failed status; surface the original cause.
 	_ = recs.Save(ctx, rel)
-	return rel, nil, cause
+	return rel, cause
 }
 
 // partitionOwnership splits a plan's resources into owned (create/update/adopt)

@@ -74,7 +74,34 @@ func (c *Controller) Cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 			Manager:  types.ManagerRuneset,
 		},
 	}
-	return release.Reconcile(ctx, spec, &records{repo: c.releases}, &liveLookup{c: c}, a)
+	recs := &records{repo: c.releases}
+	live := &liveLookup{c: c}
+
+	if !spec.Detach {
+		return release.Reconcile(ctx, spec, recs, live, a)
+	}
+
+	// Detach (C3-a): plan + record the pending intent synchronously, then hand
+	// the apply→verify reconcile to a background goroutine with a DETACHED
+	// context (the request ctx is cancelled once Cast returns), and return the
+	// pending release immediately. Prepare already rejects a detach plan that
+	// prunes (ErrDetachWouldPrune), so the background half is never destructive.
+	prep, err := release.Prepare(ctx, spec, recs, live)
+	if err != nil {
+		if prep != nil {
+			return nil, prep.Plan, err
+		}
+		return nil, nil, err
+	}
+	go func() {
+		if _, e := prep.Execute(context.Background(), a); e != nil {
+			c.log.Warn("detached release reconcile failed",
+				log.Str("release", spec.Name),
+				log.Str("namespace", spec.Namespace),
+				log.Err(e))
+		}
+	}()
+	return prep.Release, prep.Plan, nil
 }
 
 // --- ReleaseRecords adapter over ReleaseRepo ---
