@@ -66,8 +66,8 @@ func (c *Controller) Cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 	}
 
 	a := &applier{
-		c:    c,
-		p:    p,
+		c: c,
+		p: p,
 		stamp: types.OwnedBy{
 			Release:  spec.Name,
 			Revision: revision,
