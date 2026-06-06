@@ -60,6 +60,8 @@ type Docker struct {
 	APIVersion                string                 `yaml:"api_version"`
 	FallbackAPIVersion        string                 `yaml:"fallback_api_version"`
 	NegotiationTimeoutSeconds int                    `yaml:"negotiation_timeout_seconds"`
+	LogMaxSize                string                 `yaml:"log_max_size"`
+	LogMaxFile                int                    `yaml:"log_max_file"`
 	Registries                []DockerRegistryConfig `yaml:"registries"`
 }
 

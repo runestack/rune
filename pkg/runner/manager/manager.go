@@ -72,6 +72,14 @@ func getDockerConfig() *docker.DockerConfig {
 		config.NegotiationTimeoutSeconds = viper.GetInt("docker.negotiation_timeout_seconds")
 	}
 
+	// Container log rotation (json-file). Defaults come from DefaultDockerConfig.
+	if viper.IsSet("docker.log_max_size") {
+		config.LogMaxSize = viper.GetString("docker.log_max_size")
+	}
+	if viper.IsSet("docker.log_max_file") {
+		config.LogMaxFile = viper.GetInt("docker.log_max_file")
+	}
+
 	// Optional mount permission settings
 	if viper.IsSet("docker.secret_dir_mode") {
 		config.SecretDirMode = os.FileMode(utils.ToUint32NonNegative(viper.GetInt("docker.secret_dir_mode")))
