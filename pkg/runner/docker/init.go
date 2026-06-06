@@ -184,7 +184,7 @@ func (r *DockerRunner) initStepToContainerConfig(instance *runetypes.Instance, s
 		Tty: false,
 	}
 
-	hostConfig := &container.HostConfig{}
+	hostConfig := &container.HostConfig{LogConfig: r.config.logConfig()}
 
 	// Apply resources: step override wins, otherwise inherit from instance.
 	res := instance.Resources

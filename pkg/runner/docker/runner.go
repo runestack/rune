@@ -50,6 +50,14 @@ type DockerConfig struct {
 
 	// Registry authentication configuration loaded from runefile
 	Registries []RegistryConfig
+
+	// Container log rotation for the json-file driver. Caps per-container log
+	// growth on the host — the agent log forwarder reads container logs but does
+	// not truncate them, so without this the daemon's logs grow unbounded.
+	// LogMaxSize empty disables rotation (inherit the daemon default);
+	// LogMaxFile <= 0 omits max-file.
+	LogMaxSize string // e.g. "10m"
+	LogMaxFile int    // e.g. 3
 }
 
 // DefaultDockerConfig returns the default Docker configuration
@@ -65,7 +73,24 @@ func DefaultDockerConfig() *DockerConfig {
 		ConfigDirMode:  0o755,
 		ConfigFileMode: 0o644,
 		Registries:     nil,
+		// Cap per-container logs at 3×10m by default so the host doesn't fill up.
+		LogMaxSize: "10m",
+		LogMaxFile: 3,
 	}
+}
+
+// logConfig returns the json-file log-rotation config applied to new containers.
+// When LogMaxSize is empty an empty LogConfig is returned, so the container
+// inherits the daemon's default logging (no rotation imposed by Rune).
+func (c *DockerConfig) logConfig() container.LogConfig {
+	if c == nil || c.LogMaxSize == "" {
+		return container.LogConfig{}
+	}
+	opts := map[string]string{"max-size": c.LogMaxSize}
+	if c.LogMaxFile > 0 {
+		opts["max-file"] = strconv.Itoa(c.LogMaxFile)
+	}
+	return container.LogConfig{Type: "json-file", Config: opts}
 }
 
 // RegistryConfig defines a registry auth entry
@@ -977,8 +1002,9 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 		containerConfig.Cmd = instance.Exec.Command
 	}
 
-	// Configure host config with mounts and resources
-	hostConfig := &container.HostConfig{}
+	// Configure host config with mounts and resources. LogConfig caps
+	// per-container log growth on the host (json-file rotation).
+	hostConfig := &container.HostConfig{LogConfig: r.config.logConfig()}
 
 	// Map resource requests/limits to Docker host config if provided
 	if instance != nil && instance.Resources != nil {

@@ -187,6 +187,8 @@ type DockerConfig struct {
 	APIVersion                string                 `yaml:"api_version,omitempty"`
 	FallbackAPIVersion        string                 `yaml:"fallback_api_version,omitempty"`
 	NegotiationTimeoutSeconds int                    `yaml:"negotiation_timeout_seconds,omitempty"`
+	LogMaxSize                string                 `yaml:"log_max_size,omitempty"`
+	LogMaxFile                int                    `yaml:"log_max_file,omitempty"`
 	Registries                []DockerRegistryConfig `yaml:"registries,omitempty"`
 }
 
