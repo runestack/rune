@@ -474,11 +474,14 @@ func (c *instanceController) ListRunningInstances(ctx context.Context, namespace
 		return nil, fmt.Errorf("failed to list instances: %w", err)
 	}
 
-	// filter instances by running instances
+	// filter instances by running instances. An empty namespace means "all
+	// namespaces" (matching the store.List semantics above) — the agent log
+	// forwarder relies on this to tap running instances across every namespace.
 	runningInstancesPointers := make([]*types.Instance, 0, len(runningInstances))
 	for _, instance := range runningInstances {
-		for _, storeInstance := range storeInstances {
-			if instance.Instance.ID == storeInstance.ID && storeInstance.Namespace == namespace {
+		for i := range storeInstances {
+			storeInstance := storeInstances[i]
+			if instance.Instance.ID == storeInstance.ID && (namespace == "" || storeInstance.Namespace == namespace) {
 				runningInstancesPointers = append(runningInstancesPointers, &storeInstance)
 			}
 		}
