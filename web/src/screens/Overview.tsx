@@ -3,12 +3,16 @@ import {
   Replicas, Spark, Spinner, Table, Tag, UsageBar,
 } from "../components";
 import { useAuditFeed, useOverview } from "../api/hooks";
+import { useObserveOverview } from "../api/observe";
+import type { Bucket } from "../api/observe";
 import { useScope } from "../lib/scope";
 import type { Service } from "../api/types";
+import "./runesight/RuneSight.css";
 
 export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => void; openSvc: (s: Service) => void }) {
   const { data, loading, error, reload } = useOverview();
   const { data: feed } = useAuditFeed(6);
+  const { data: observe } = useObserveOverview("1h");
   const { ns: scopeNs } = useScope();
   const T = data.totals;
 
@@ -135,6 +139,33 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
         </Card>
       </div>
 
+      {/* observability — RuneSight error volume (core, not a plugin) */}
+      {observe.enabled && (
+        <Card style={{ marginBottom: 16 }}>
+          <CardHead actions={<Button size="sm" variant="ghost" onClick={() => go("runesight")}>Open RuneSight <Icon name="chevron" size={13} /></Button>}>
+            Log activity · last 1h
+          </CardHead>
+          <div style={{ padding: "6px 20px 18px" }}>
+            <RuneSightSpark buckets={observe.buckets} />
+            <div className="rs-ov-axis"><span>1h ago</span><span>now</span></div>
+            <div className="rs-ov-stats" style={{ marginTop: 14 }}>
+              <div className="rs-ov-stat">
+                <div className={"rs-ov-num" + (observe.errors > 0 ? " error" : "")}>{observe.errors.toLocaleString()}</div>
+                <div className="rs-ov-lbl">errors</div>
+              </div>
+              <div className="rs-ov-stat">
+                <div className={"rs-ov-num" + (observe.warns > 0 ? " warn" : "")}>{observe.warns.toLocaleString()}</div>
+                <div className="rs-ov-lbl">warnings</div>
+              </div>
+              <div className="rs-ov-stat">
+                <div className="rs-ov-num">{observe.total.toLocaleString()}</div>
+                <div className="rs-ov-lbl">lines</div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* activity + usage */}
       <div className="grid g-2-1">
         <Card>
@@ -161,6 +192,27 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
           <Spark data={data.memHistory} />
         </Card>
       </div>
+    </div>
+  );
+}
+
+/** Stacked level histogram for the Overview RuneSight card (info/warn/error). */
+function RuneSightSpark({ buckets }: { buckets: Bucket[] }) {
+  const sorted = buckets.map((b) => b.total).filter((x) => x > 0).sort((a, b) => b - a);
+  const max = Math.max(1, sorted[Math.floor(sorted.length * 0.08)] || sorted[0] || 1);
+  return (
+    <div className="rs-ov-spark">
+      {buckets.map((b, i) => (
+        <div key={i} className="rs-ov-bar">
+          {b.total === 0 ? <span className="rs-ov-empty" /> : (
+            <>
+              {b.info + b.debug > 0 && <span className="rs-ov-seg info" style={{ height: `${Math.min(100, ((b.info + b.debug) / max) * 100)}%` }} />}
+              {b.warn > 0 && <span className="rs-ov-seg warn" style={{ height: `${Math.min(100, (b.warn / max) * 100)}%` }} />}
+              {b.error > 0 && <span className="rs-ov-seg error" style={{ height: `${Math.min(100, (b.error / max) * 100)}%` }} />}
+            </>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

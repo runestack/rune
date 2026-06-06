@@ -20,6 +20,7 @@ import { Networking } from "./screens/Networking";
 import { Identity } from "./screens/Identity";
 import { Logs } from "./screens/Logs";
 import { Secrets } from "./screens/Secrets";
+import { RuneSight } from "./screens/runesight/RuneSight";
 
 const NAV: NavGroup[] = [
   {
@@ -40,6 +41,12 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    group: "Observe",
+    items: [
+      { id: "runesight", label: "RuneSight", icon: "search" },
+    ],
+  },
+  {
     group: "Operate",
     items: [
       { id: "logs", label: "Logs & Exec", icon: "logs" },
@@ -56,6 +63,7 @@ const CRUMBS: Record<string, string[]> = {
   storage: ["Data", "Storage"],
   secrets: ["Data", "Secrets & Config"],
   network: ["Data", "Networking"],
+  runesight: ["Observe", "RuneSight"],
   logs: ["Operate", "Logs & Exec"],
   identity: ["Operate", "Identity & RBAC"],
 };
@@ -125,6 +133,7 @@ export function App({ user, onLogout }: AppProps) {
     case "storage": screen = <Storage />; break;
     case "secrets": screen = <Secrets />; break;
     case "network": screen = <Networking />; break;
+    case "runesight": screen = <RuneSight />; break;
     case "logs": screen = <Logs initialSvc={logsSvc} />; break;
     case "identity": screen = <Identity />; break;
     default: screen = <Placeholder title={NAV.flatMap((g) => g.items).find((i) => i.id === route)?.label ?? route} />;
@@ -136,7 +145,7 @@ export function App({ user, onLogout }: AppProps) {
       <ToastProvider>
       <AppShell
         collapsed={navCollapsed}
-        contentFlex={route === "logs"}
+        contentFlex={route === "logs" || route === "runesight"}
         sidebar={
           <Sidebar
             nav={NAV}
