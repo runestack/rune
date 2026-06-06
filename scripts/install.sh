@@ -1,12 +1,15 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-# Rune binary-only server installer for Ubuntu or Amazon Linux
+# Rune server installer — the script behind
+#   curl -fsSL https://install.runestack.io | sudo sh
 # - Installs Docker (if missing)
-# - Creates rune user and directories
-# - Installs rune/runed (from release or source)
-# - Installs and enables systemd unit
+# - Creates the rune user and directories
+# - Installs rune/runed (latest release by default; --version to pin)
+# - Installs and enables the systemd unit
+# Building from source is opt-in (--from-source). Requires root.
 
+REPO="runestack/rune"
 RUNE_USER="rune"
 RUNE_GROUP="rune"
 DATA_DIR="/var/lib/rune"
@@ -19,6 +22,24 @@ BRANCH="master"
 log() { echo "[install] $*"; }
 die() { echo "[install] ERROR: $*" >&2; exit 1; }
 
+# resolve_latest returns the newest release tag (currently includes prereleases
+# — every release today is v0.0.1-dev.*, so releases/latest 404s).
+# TODO(stable): switch to the releases/latest endpoint once a stable tag exists.
+resolve_latest() {
+  tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" 2>/dev/null \
+    | grep -m1 '"tag_name"' \
+    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+  [ -n "$tag" ] || die "could not resolve the latest release (GitHub API unreachable or rate-limited). Pass --version vX.Y.Z."
+  echo "$tag"
+}
+
+# sha256 prints the hex digest of a file, or "" if no tool is available.
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else echo ""; fi
+}
+
 usage() {
   cat <<USAGE
 Usage: $0 [--version vX.Y.Z | --from-source] [--branch NAME] [--grpc-port N] [--http-port N]
@@ -30,8 +51,9 @@ Options:
   --http-port N      HTTP port (default: 7861)
   -h, --help         Show help
 
-This installer sets up the full Rune server stack (API, Agent, CLI).
-For CLI-only installation, use: curl -fsSL https://rune.sh/install-cli.sh | bash
+This installer sets up the full Rune server stack (API, Agent, CLI) and requires root.
+  curl -fsSL https://install.runestack.io | sudo sh
+For the CLI only (no root, no server), use: curl -fsSL https://get.runestack.io | sh
 USAGE
 }
 
@@ -45,8 +67,10 @@ arch_normalize() {
 }
 
 ensure_root() {
-  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-    die "Please run as root (use sudo)"
+  if [ "$(id -u)" -ne 0 ]; then
+    die "the server installer must run as root — pipe into sudo, e.g.:
+  curl -fsSL https://install.runestack.io | sudo sh
+(to install just the CLI without root, use https://get.runestack.io instead)"
   fi
 }
 
@@ -95,13 +119,25 @@ ensure_user() {
 }
 
 install_from_release() {
-  local arch url tmp
+  local arch asset url tmp have want
   arch=$(arch_normalize)
+  asset="rune_linux_${arch}.tar.gz"
   tmp=$(mktemp -d)
-  url="https://github.com/runestack/rune/releases/download/${RUNE_VERSION}/rune_linux_${arch}.tar.gz"
-  log "Downloading $url"
-  curl -fsSL -o "$tmp/rune.tgz" "$url"
-  tar -C /usr/local/bin -xzf "$tmp/rune.tgz" rune runed
+  url="https://github.com/${REPO}/releases/download/${RUNE_VERSION}/${asset}"
+  log "Downloading $asset (${RUNE_VERSION})"
+  curl -fsSL -o "$tmp/$asset" "$url" || { rm -rf "$tmp"; die "download failed: $url"; }
+
+  # Verify against the release checksums.txt (best-effort; a real mismatch aborts).
+  if curl -fsSL -o "$tmp/checksums.txt" "https://github.com/${REPO}/releases/download/${RUNE_VERSION}/checksums.txt" 2>/dev/null; then
+    have=$(sha256 "$tmp/$asset")
+    want=$(grep "$asset" "$tmp/checksums.txt" | awk '{print $1}' | head -1)
+    if [ -n "$have" ] && [ -n "$want" ]; then
+      [ "$have" = "$want" ] || { rm -rf "$tmp"; die "checksum mismatch for $asset (expected $want, got $have)"; }
+      log "checksum verified"
+    fi
+  fi
+
+  tar -C /usr/local/bin -xzf "$tmp/$asset" rune runed
   rm -rf "$tmp"
 }
 
@@ -200,13 +236,12 @@ main() {
   install_docker
   ensure_user
 
-  if [ -n "$RUNE_VERSION" ]; then
-    install_from_release || { log "Release install failed; falling back to source"; install_from_source; }
-  elif [ "$FROM_SOURCE" = true ]; then
+  if [ "$FROM_SOURCE" = true ]; then
     install_from_source
   else
-    log "No version specified; installing from source"
-    install_from_source
+    [ -n "$RUNE_VERSION" ] || RUNE_VERSION=$(resolve_latest)
+    log "Installing rune server $RUNE_VERSION"
+    install_from_release
   fi
 
   install_systemd

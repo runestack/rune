@@ -1,19 +1,41 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-# Rune CLI-only installer
-# - Installs only the rune CLI binary (no server components)
-# - Works on Linux, macOS, and Windows
-# - Downloads from GitHub releases or builds from source
+# Rune CLI installer — the script behind `curl -fsSL https://get.runestack.io | sh`.
+# - Installs the rune CLI binary (no server components).
+# - Works on Linux and macOS, amd64/arm64.
+# - Defaults to the latest release; downloads a prebuilt, checksum-verified
+#   binary. Building from source is opt-in (--from-source).
 
+REPO="runestack/rune"
 RUNE_VERSION=""
 FROM_SOURCE=false
 BRANCH="master"
 INSTALL_DIR="/usr/local/bin"
-FORCE=false
+FORCE=true
 
 log() { echo "[install-cli] $*"; }
 die() { echo "[install-cli] ERROR: $*" >&2; exit 1; }
+
+# resolve_latest returns the newest release tag.
+# NOTE: this currently includes prereleases (every release today is a
+# v0.0.1-dev.* prerelease, so GitHub's releases/latest endpoint 404s).
+# TODO(stable): once a non-prerelease release exists, switch to:
+#   curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | tag_name
+resolve_latest() {
+  tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" 2>/dev/null \
+    | grep -m1 '"tag_name"' \
+    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+  [ -n "$tag" ] || die "could not resolve the latest release (GitHub API unreachable or rate-limited). Pass --version vX.Y.Z."
+  echo "$tag"
+}
+
+# sha256 prints the hex digest of a file, or "" if no tool is available.
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else echo ""; fi
+}
 
 usage() {
   cat <<USAGE
@@ -47,48 +69,50 @@ os_normalize() {
 }
 
 ensure_install_dir() {
-  if [ ! -d "$INSTALL_DIR" ]; then
-    if [ "$(id -u)" -eq 0 ]; then
-      mkdir -p "$INSTALL_DIR"
-    else
-      die "Install directory $INSTALL_DIR does not exist and you don't have permission to create it"
-    fi
+  # Friendly default for `curl | sh`: if the default dir isn't writable and we
+  # aren't root, fall back to a user-owned dir instead of demanding sudo.
+  if [ "$INSTALL_DIR" = "/usr/local/bin" ] && [ "$(id -u)" -ne 0 ] && [ ! -w "$INSTALL_DIR" ]; then
+    INSTALL_DIR="$HOME/.local/bin"
+    log "Not root; installing to $INSTALL_DIR"
   fi
-  
-  if [ ! -w "$INSTALL_DIR" ]; then
-    die "No write permission to $INSTALL_DIR. Try running with sudo or use --install-dir to specify a writable location"
-  fi
+  mkdir -p "$INSTALL_DIR" 2>/dev/null || die "cannot create install dir $INSTALL_DIR (try sudo, or --install-dir PATH)"
+  [ -w "$INSTALL_DIR" ] || die "no write permission to $INSTALL_DIR (try sudo, or --install-dir PATH)"
+}
+
+# path_hint warns if INSTALL_DIR isn't on PATH so the user knows to add it.
+path_hint() {
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *) log "Note: $INSTALL_DIR is not on your PATH. Add it, e.g.: export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
+  esac
 }
 
 install_from_release() {
-  local arch os url tmp
+  local arch os asset url tmp have want
   arch=$(arch_normalize)
   os=$(os_normalize)
+  asset="rune-cli_${os}_${arch}.tar.gz"
   tmp=$(mktemp -d)
-  
-  url="https://github.com/runestack/rune/releases/download/${RUNE_VERSION}/rune-cli_${os}_${arch}.tar.gz"
-  log "Downloading CLI-only release from $url"
-  
-  if ! curl -fsSL -o "$tmp/rune-cli.tgz" "$url"; then
-    die "Failed to download CLI-only release from ${RUNE_VERSION}. CLI-only releases are required for this installer."
+
+  url="https://github.com/${REPO}/releases/download/${RUNE_VERSION}/${asset}"
+  log "Downloading $asset (${RUNE_VERSION})"
+  curl -fsSL -o "$tmp/$asset" "$url" || { rm -rf "$tmp"; die "download failed: $url"; }
+
+  # Verify against the release checksums.txt. Best-effort: skipped only when no
+  # sha256 tool is present or the asset's line is absent; a real mismatch aborts.
+  if curl -fsSL -o "$tmp/checksums.txt" "https://github.com/${REPO}/releases/download/${RUNE_VERSION}/checksums.txt" 2>/dev/null; then
+    have=$(sha256 "$tmp/$asset")
+    want=$(grep "$asset" "$tmp/checksums.txt" | awk '{print $1}' | head -1)
+    if [ -n "$have" ] && [ -n "$want" ]; then
+      [ "$have" = "$want" ] || { rm -rf "$tmp"; die "checksum mismatch for $asset (expected $want, got $have)"; }
+      log "checksum verified"
+    fi
   fi
-  
-  if [ -f "$INSTALL_DIR/rune" ] && [ "$FORCE" != "true" ]; then
-    log "Binary already exists at $INSTALL_DIR/rune. Use --force to overwrite"
-    return 1
-  fi
-  
-  # Extract the rune binary from CLI-only release
-  tar -C "$tmp" -xzf "$tmp/rune-cli.tgz" rune
-  if [ "$(id -u)" -eq 0 ]; then
-    install -m 0755 "$tmp/rune" "$INSTALL_DIR/rune"
-  else
-    cp "$tmp/rune" "$INSTALL_DIR/rune"
-    chmod +x "$INSTALL_DIR/rune"
-  fi
-  
+
+  tar -C "$tmp" -xzf "$tmp/$asset" rune
+  install -m 0755 "$tmp/rune" "$INSTALL_DIR/rune" 2>/dev/null || { cp "$tmp/rune" "$INSTALL_DIR/rune"; chmod 0755 "$INSTALL_DIR/rune"; }
   rm -rf "$tmp"
-  log "Installed rune CLI to $INSTALL_DIR/rune"
+  log "Installed rune CLI ${RUNE_VERSION} to $INSTALL_DIR/rune"
 }
 
 install_from_source() {
@@ -217,11 +241,13 @@ install_dev_tools() {
 }
 
 verify_installation() {
-  if command -v rune >/dev/null 2>&1; then
-    log "Installation verified successfully"
-    rune version
+  # Check the binary we just installed directly — it may not be on PATH yet
+  # (e.g. a ~/.local/bin fallback install), which path_hint already flagged.
+  if [ -x "$INSTALL_DIR/rune" ]; then
+    log "Installation verified:"
+    "$INSTALL_DIR/rune" --version || true
   else
-    die "Installation verification failed - 'rune' command not found in PATH"
+    die "Installation verification failed - $INSTALL_DIR/rune not found"
   fi
 }
 
@@ -240,19 +266,18 @@ main() {
 
   ensure_install_dir
 
-  if [ -n "$RUNE_VERSION" ]; then
-    install_from_release || { log "Release install failed; falling back to source"; install_from_source; }
-  elif [ "$FROM_SOURCE" = true ]; then
+  if [ "$FROM_SOURCE" = true ]; then
     install_from_source
   else
-    log "No version specified; installing from source"
-    install_from_source
+    [ -n "$RUNE_VERSION" ] || RUNE_VERSION=$(resolve_latest)
+    log "Installing rune CLI $RUNE_VERSION"
+    install_from_release
   fi
 
+  path_hint
   verify_installation
-  
-  log "Rune CLI installation complete!"
-  log "You can now use: rune --help"
+
+  log "Rune CLI installation complete! Run: rune --help"
 }
 
 main "$@"

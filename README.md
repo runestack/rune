@@ -31,18 +31,28 @@ Rune is a lightweight, powerful orchestration platform designed to simplify the 
 #### Quick Install (Recommended)
 
 ```bash
-# Install CLI only (for developers)
-curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-cli.sh | bash
+# CLI (your machine) — latest release, no root needed
+curl -fsSL https://get.runestack.io | sh
 
-# Install complete server environment (recommended for most users)
-curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-server.sh | sudo bash -s -- --version v0.1.0
-
-# Install binary-only (assumes Docker already configured)
-curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install.sh | sudo bash -s -- --version v0.1.0
-
-# For automated deployment (cloud-init, CI/CD) - runs as root automatically
-curl -fsSL https://raw.githubusercontent.com/runestack/rune/master/scripts/install-server.sh | bash -s -- --version v0.1.0
+# Server (a node) — Docker + runed + systemd; latest release, requires root
+curl -fsSL https://install.runestack.io | sudo sh
 ```
+
+Both default to the latest release. Pin a version or tweak options by passing
+flags after `-s --`:
+
+```bash
+# Pin the CLI to a specific release, or install somewhere on your PATH
+curl -fsSL https://get.runestack.io | sh -s -- --version v0.0.1-dev.116
+curl -fsSL https://get.runestack.io | sh -s -- --install-dir ~/.local/bin
+
+# Pin the server version / set ports
+curl -fsSL https://install.runestack.io | sudo sh -s -- --version v0.0.1-dev.116 --http-port 7861
+```
+
+> The one-liners are served from `get.runestack.io` / `install.runestack.io`,
+> which front `scripts/install-cli.sh` and `scripts/install.sh` in this repo.
+> You can always pipe those raw URLs directly instead.
 
 #### From Source
 
