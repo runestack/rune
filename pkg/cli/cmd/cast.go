@@ -161,6 +161,12 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 		return fmt.Errorf("no resources found to deploy in %s", rc.source.Location)
 	}
 
+	// Lint the fully-rendered resources (names are final here) so malformed
+	// manifests fail fast with a clear error, before planning or applying.
+	if err := rendered.lint(); err != nil {
+		return err
+	}
+
 	spec := rendered.toReleaseSpec(rc.releaseName, rc.source, opts)
 
 	// 3) Connect and compute the plan (online — needed by dry-run, confirm,

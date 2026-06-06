@@ -48,6 +48,53 @@ func newCastPayloads() castPayloads {
 	}
 }
 
+// lint validates the FULLY-RENDERED resources (templates already resolved, so
+// names are final) before planning. This makes malformed manifests — e.g. an
+// invalid DNS-1123 name — fail fast with a clear error, instead of passing the
+// plan and failing part-way through apply server-side. Errors are aggregated and
+// sorted for deterministic output.
+func (r *renderedRelease) lint() error {
+	var errs []string
+	check := func(kind, namespace, name string) {
+		if name == "" {
+			errs = append(errs, fmt.Sprintf("%s in namespace %q has an empty name", kind, namespace))
+			return
+		}
+		if err := utils.ValidateDNS1123Name(name); err != nil {
+			errs = append(errs, fmt.Sprintf("%s %q: invalid name: %v", kind, name, err))
+		}
+		if namespace != "" {
+			if err := utils.ValidateDNS1123Name(namespace); err != nil {
+				errs = append(errs, fmt.Sprintf("%s %q: invalid namespace %q: %v", kind, name, namespace, err))
+			}
+		}
+	}
+	for _, s := range r.payloads.services {
+		check("service", s.Namespace, s.Name)
+		// Services carry a richer schema; reuse the same Validate the server runs
+		// at create time so we fail fast on it too.
+		if s.Name != "" {
+			if err := s.Validate(); err != nil {
+				errs = append(errs, fmt.Sprintf("service %q: %v", s.Name, err))
+			}
+		}
+	}
+	for _, s := range r.payloads.secrets {
+		check("secret", s.Namespace, s.Name)
+	}
+	for _, c := range r.payloads.configmaps {
+		check("configmap", c.Namespace, c.Name)
+	}
+	for _, v := range r.payloads.volumes {
+		check("volume", v.Namespace, v.Name)
+	}
+	if len(errs) > 0 {
+		sort.Strings(errs)
+		return fmt.Errorf("rendered cast has invalid resource(s):\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return nil
+}
+
 // renderResolvedCast renders a resolvedCast into a renderedRelease. It reuses
 // the existing render + castfile-parse logic (runeset path for kindRuneset, the
 // inline render-bytes path for kindInline) so behavior matches today, but emits
