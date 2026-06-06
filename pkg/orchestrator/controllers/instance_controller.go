@@ -512,6 +512,21 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 		Metadata:    &types.InstanceMetadata{},
 	}
 
+	// Denormalize the parent service's user labels onto the instance so they
+	// become queryable LogQL stream dimensions (e.g. {app="web"}) and the
+	// substrate for future affinity/topology-spread scheduling. A copy keeps the
+	// instance independent of later mutations to the service spec.
+	//
+	// TODO(scheduler): once a placement scheduler assigns NodeID (instead of the
+	// hardcoded "local"), merge the chosen Node's topology labels here too, so
+	// instances carry region/zone for region-aware log queries and spread.
+	if len(service.Labels) > 0 {
+		instance.Labels = make(map[string]string, len(service.Labels))
+		for k, v := range service.Labels {
+			instance.Labels[k] = v
+		}
+	}
+
 	// Propagate resolved resource constraints from service to instance
 	// Use a pointer so runners can access limits/requests directly
 	instance.Resources = &service.Resources

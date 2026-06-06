@@ -393,6 +393,7 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		ImagePull:     service.ImagePull,
 		StatusReason:  service.StatusReason,
 		StatusMessage: service.StatusMessage,
+		Labels:        service.Labels,
 	}
 
 	if service.Metadata != nil {
@@ -679,6 +680,7 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		ImagePull:     proto.ImagePull,
 		StatusReason:  proto.StatusReason,
 		StatusMessage: proto.StatusMessage,
+		Labels:        proto.Labels,
 	}
 
 	// Convert metadata
@@ -978,6 +980,7 @@ func embeddedInstanceToProto(i *types.Instance) *generated.Instance {
 		ServiceId:     i.ServiceID,
 		ServiceName:   i.ServiceName,
 		NodeId:        i.NodeID,
+		Labels:        i.Labels,
 		Ip:            i.IP,
 		Status:        instanceStatusToProto(i.Status),
 		StatusMessage: i.StatusMessage,
@@ -1009,6 +1012,7 @@ func embeddedInstanceFromProto(p *generated.Instance) *types.Instance {
 		ServiceID:     p.ServiceId,
 		ServiceName:   p.ServiceName,
 		NodeID:        p.NodeId,
+		Labels:        p.Labels,
 		IP:            p.Ip,
 		Status:        instanceStatusFromProto(p.Status),
 		StatusMessage: p.StatusMessage,

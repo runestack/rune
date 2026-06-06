@@ -84,6 +84,10 @@ message Instance {
   // (e.g. "HealthCheckFailure", "ImagePullFailed", "OOMKilled"). Set at
   // the moment of the Failed transition; empty otherwise.
   string failure_reason = 19;
+
+  // Labels denormalized from the parent Service (and, in future, node topology
+  // labels at placement). User-defined stream dimensions for the instance.
+  map<string, string> labels = 20;
 }
 
 // InstanceMetadata represents metadata for an instance.

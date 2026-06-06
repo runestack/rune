@@ -395,6 +395,7 @@ func (i *InstanceClient) protoToInstance(proto *generated.Instance) (*types.Inst
 		ContainerID:   proto.ContainerId,
 		PID:           int(proto.Pid),
 		Environment:   proto.Environment,
+		Labels:        proto.Labels,
 		Metadata: &types.InstanceMetadata{
 			ServiceGeneration: int64(proto.Metadata.Generation),
 			RestartCount:      int(proto.Metadata.RestartCount),

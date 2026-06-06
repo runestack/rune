@@ -326,6 +326,10 @@ func (s *Subsystem) recordFromInstanceLine(inst *types.Instance, line string) ob
 		Service:   inst.ServiceName,
 		Instance:  inst.ID,
 		Node:      s.cfg.NodeID,
+		// User labels denormalized from the parent service (e.g. app, tier),
+		// so workload logs are queryable as {app="web"}. Read-only shared
+		// reference — the instance's label map is immutable after creation.
+		Labels: inst.Labels,
 	}
 }
 
