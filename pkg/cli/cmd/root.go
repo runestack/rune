@@ -81,6 +81,8 @@ func init() {
 	rootCmd.AddCommand(newSecretCmd())
 	// Configmap management (get, list, update, set, unset, delete)
 	rootCmd.AddCommand(newConfigmapCmd())
+	// Stateful runeset releases (list, status, history, diff, delete, rollback)
+	rootCmd.AddCommand(newReleaseCmd())
 	// One-shot resource diagnostics (RUNE-126)
 	rootCmd.AddCommand(newDescribeCmd())
 	// Storage management noun-trees (RUNE-072)

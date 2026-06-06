@@ -68,6 +68,10 @@ type Volume struct {
 	// Labels attached to the volume for organization.
 	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
 
+	// OwnedBy is the system ownership stamp set when a runeset release manages
+	// this volume. See _docs/plugins/RUNESET_STATEFUL_RELEASES.md.
+	OwnedBy *OwnedBy `json:"ownedBy,omitempty" yaml:"ownedBy,omitempty"`
+
 	// StorageClassName references the StorageClass used to provision this
 	// volume. The class's driver, parameters, reclaimPolicy and
 	// allowedTopologies are inherited unless overridden on the Volume.

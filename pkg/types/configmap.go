@@ -24,4 +24,8 @@ type Configmap struct {
 
 	// Last update timestamp
 	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt"`
+
+	// OwnedBy is the system ownership stamp set when a runeset release manages
+	// this configmap. See _docs/plugins/RUNESET_STATEFUL_RELEASES.md.
+	OwnedBy *OwnedBy `json:"ownedBy,omitempty" yaml:"ownedBy,omitempty"`
 }
