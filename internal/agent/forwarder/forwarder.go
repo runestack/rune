@@ -324,8 +324,10 @@ func (s *Subsystem) recordFromInstanceLine(inst *types.Instance, line string) ob
 		Level:     level,
 		Namespace: inst.Namespace,
 		Service:   inst.ServiceName,
-		Instance:  inst.ID,
-		Node:      s.cfg.NodeID,
+		// Stamp the friendly instance name (e.g. web-gateway-0) rather than the
+		// opaque UUID, so logs/facets/drawer surface a readable instance label.
+		Instance: inst.Name,
+		Node:     s.cfg.NodeID,
 		// User labels denormalized from the parent service (e.g. app, tier),
 		// so workload logs are queryable as {app="web"}. Read-only shared
 		// reference — the instance's label map is immutable after creation.

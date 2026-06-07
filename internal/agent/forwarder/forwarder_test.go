@@ -53,7 +53,7 @@ func (c *captureIngester) all() []observe.LogRecord {
 func TestForwarder_DualTap(t *testing.T) {
 	src := &fakeSource{
 		instances: []*types.Instance{
-			{ID: "api-1", Namespace: "default", ServiceName: "api"},
+			{ID: "api-1", Name: "api-1", Namespace: "default", ServiceName: "api"},
 		},
 		lines: map[string]string{
 			"api-1": "hello world\nerror: boom\n",

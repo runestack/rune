@@ -19,9 +19,12 @@ export interface RuneSightProps {
   live: boolean;
   setLive: (fn: (l: boolean) => boolean) => void;
   loadView: (q: Partial<LogQuery>) => void;
+  // Cross-surface back-links into the main dashboard (by friendly name + namespace).
+  openInstance: (name: string, ns?: string) => void;
+  openService: (name: string, ns?: string) => void;
 }
 
-export function RuneSight({ tab, go, query, setQuery, range, setRange, live, setLive, loadView }: RuneSightProps) {
+export function RuneSight({ tab, go, query, setQuery, range, setRange, live, setLive, loadView, openInstance, openService }: RuneSightProps) {
   const { data: caps, loading, error, reload } = useCapabilities();
 
   if (loading) {
@@ -67,6 +70,8 @@ export function RuneSight({ tab, go, query, setQuery, range, setRange, live, set
       setLive={setLive}
       go={go}
       loadView={loadView}
+      openInstance={openInstance}
+      openService={openService}
     />
   );
 }

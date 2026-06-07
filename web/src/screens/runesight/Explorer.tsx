@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Drawer, Icon } from "../../components";
 import {
   emptyQuery, facetsFromLines, runQuery, toggleFacet, toLogQL, normQuery, LABEL_KEYS,
+  parseLogfmt, extractTraceId,
 } from "../../api/observe";
 import type { Bucket, Facet, LogLine, LogQuery, Range, RunResult } from "../../api/observe";
 import { LogQLBar } from "./LogQLBar";
@@ -245,17 +246,31 @@ function QueriesRail({ loadView, history, currentQuery, extraViews, onSave, remo
 }
 
 /* ---------- detail drawer ---------- */
-function LogDetail({ line, onClose, onFilter, contextLines }: {
+function LogDetail({ line, onClose, onFilter, contextLines, openInstance, openService }: {
   line: LogLine; onClose: () => void; onFilter: (qf: keyof LogQuery | "text", v: string) => void; contextLines: LogLine[];
+  openInstance: (name: string, ns?: string) => void; openService: (name: string, ns?: string) => void;
 }) {
-  const Row = ({ k, v, qf, val }: { k: string; v: string; qf?: keyof LogQuery; val?: string }) => (
+  // A label row: the value can be a plain string, a filter affordance, an
+  // out-of-RuneSight back-link, or a free-text search action.
+  const Row = ({ k, v, qf, val, searchVal, onLink }: {
+    k: string; v: string; qf?: keyof LogQuery; val?: string; searchVal?: string; onLink?: () => void;
+  }) => (
     <div className="rs-d-row">
       <span className="rs-d-k">{k}</span>
-      <span className="rs-d-v mono">{v}</span>
+      {onLink
+        ? <button className="rs-d-link mono" onClick={onLink} title={`Open ${k} "${v}" in Rune`}>{v}<Icon name="external" size={11} /></button>
+        : <span className="rs-d-v mono">{v}</span>}
       {qf && val && <button className="rs-d-add" title={`Filter ${k}="${val}"`} onClick={() => onFilter(qf, val)}><Icon name="filter" size={12} /></button>}
+      {searchVal && <button className="rs-d-add" title={`Search "${searchVal}"`} onClick={() => onFilter("text", searchVal)}><Icon name="search" size={12} /></button>}
     </div>
   );
   const extra = Object.entries(line.labels).filter(([k]) => !LABEL_KEYS.includes(k as never) && k !== "pod_ip");
+  // Parse the raw message as logfmt and detect a trace id (parsed fields first,
+  // then the raw line). Memoised against the message so we don't re-parse on
+  // every render of the drawer.
+  const fields = useMemo(() => parseLogfmt(line.msg), [line.msg]);
+  const fieldEntries = useMemo(() => Object.entries(fields), [fields]);
+  const traceId = useMemo(() => extractTraceId(fields, line.msg), [fields, line.msg]);
   return (
     <Drawer onClose={onClose}>
       <div className="drawer-head">
@@ -270,12 +285,28 @@ function LogDetail({ line, onClose, onFilter, contextLines }: {
         <div className="rs-d-sec eyebrow">Labels</div>
         <div className="rs-d-grid">
           {line.ns && <Row k="namespace" v={line.ns} qf="namespaces" val={line.ns} />}
-          {line.svc && <Row k="service" v={line.svc} qf="services" val={line.svc} />}
+          {line.svc && <Row k="service" v={line.svc} qf="services" val={line.svc} onLink={() => openService(line.svc, line.ns || undefined)} />}
           <Row k="level" v={line.level} qf="levels" val={line.level} />
           {line.node && <Row k="node" v={line.node} qf="nodes" val={line.node} />}
-          {line.inst && <Row k="instance" v={line.inst} qf="instances" val={line.inst} />}
+          {line.inst && <Row k="instance" v={line.inst} qf="instances" val={line.inst} onLink={() => openInstance(line.inst, line.ns || undefined)} />}
           {line.stream && <Row k="stream" v={line.stream} />}
         </div>
+        {fieldEntries.length > 0 && (
+          <>
+            <div className="rs-d-sec eyebrow">Parsed fields</div>
+            <div className="rs-d-grid">
+              {fieldEntries.map(([k, v]) => <Row key={k} k={k} v={v} searchVal={v} />)}
+            </div>
+          </>
+        )}
+        {traceId && (
+          <>
+            <div className="rs-d-sec eyebrow">Trace</div>
+            <div className="rs-d-grid">
+              <Row k="trace_id" v={traceId} searchVal={traceId} />
+            </div>
+          </>
+        )}
         {extra.length > 0 && (
           <>
             <div className="rs-d-sec eyebrow">Stream labels</div>
@@ -296,6 +327,13 @@ function LogDetail({ line, onClose, onFilter, contextLines }: {
             </div>
           </>
         )}
+        {line.inst && (
+          <div className="rs-d-foot">
+            <button className="rs-paneltgl" onClick={() => openInstance(line.inst, line.ns || undefined)}>
+              <Icon name="instances" size={14} />Open instance in Rune<Icon name="external" size={13} />
+            </button>
+          </div>
+        )}
       </div>
     </Drawer>
   );
@@ -311,9 +349,11 @@ export interface ExplorerProps {
   setLive: (fn: (l: boolean) => boolean) => void;
   go: (tab: RsTab) => void;
   loadView: (q: Partial<LogQuery>) => void;
+  openInstance: (name: string, ns?: string) => void;
+  openService: (name: string, ns?: string) => void;
 }
 
-export function Explorer({ query, setQuery, range, setRange, live, setLive, go, loadView }: ExplorerProps) {
+export function Explorer({ query, setQuery, range, setRange, live, setLive, go, loadView, openInstance, openService }: ExplorerProps) {
   const [sel, setSel] = useState<LogLine | null>(null);
   const [limit, setLimit] = useState(120);
   const [activeBucket, setActiveBucket] = useState<number | null>(null);
@@ -513,7 +553,16 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive, go, 
         )}
       </div>
 
-      {sel && <LogDetail line={sel} onClose={() => setSel(null)} onFilter={applyFilter} contextLines={contextLines} />}
+      {sel && (
+        <LogDetail
+          line={sel}
+          onClose={() => setSel(null)}
+          onFilter={applyFilter}
+          contextLines={contextLines}
+          openInstance={openInstance}
+          openService={openService}
+        />
+      )}
     </div>
   );
 }

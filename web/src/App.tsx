@@ -9,6 +9,9 @@ import { ScopeProvider } from "./lib/scope";
 import { ContextSwitcher } from "./ContextSwitcher";
 import { ScopeIndicator } from "./ScopeIndicator";
 import type { Instance, Service } from "./api/types";
+import { clients } from "./api/transport";
+import { mapInstance, mapService } from "./api/map";
+import { InstanceStatus } from "./gen/pkg/api/proto/instance_pb";
 import { Overview } from "./screens/Overview";
 import { Services } from "./screens/Services";
 import { Instances } from "./screens/Instances";
@@ -149,6 +152,35 @@ export function App({ user, onLogout }: AppProps) {
   const openSvc = (s: Service) => { setInst(null); setSvc(s); };
   const openInst = (i: Instance) => { setSvc(null); setInst(i); };
 
+  // Cross-surface back-links (e.g. from a RuneSight log line into the main
+  // dashboard): resolve a friendly instance/service name to its live record and
+  // open the matching drawer. If the lookup can't resolve it, fall back to
+  // routing to the list view so the operator still lands somewhere useful.
+  async function openInstanceByName(name: string, ns?: string) {
+    try {
+      const res = await clients.instances.listInstances({ namespace: "*" });
+      const svcRes = await clients.services.listServices({ namespace: "*" });
+      const svcNameById = new Map<string, string>();
+      for (const s of svcRes.services) svcNameById.set(s.id, s.name);
+      const match = res.instances
+        .filter((i) => i.status !== InstanceStatus.DELETED)
+        .map((i) => mapInstance(i, svcNameById))
+        .find((i) => i.id === name && (!ns || i.ns === ns));
+      if (match) { go("instances"); openInst(match); return; }
+    } catch { /* fall through to the list view */ }
+    go("instances");
+  }
+  async function openServiceByName(name: string, ns?: string) {
+    try {
+      const res = await clients.services.listServices({ namespace: "*" });
+      const match = res.services
+        .map(mapService)
+        .find((s) => s.name === name && (!ns || s.ns === ns));
+      if (match) { go("services"); openSvc(match); return; }
+    } catch { /* fall through to the list view */ }
+    go("services");
+  }
+
   let screen;
   switch (route) {
     case "overview": screen = <Overview go={go} openSvc={openSvc} />; break;
@@ -173,6 +205,8 @@ export function App({ user, onLogout }: AppProps) {
             live={rsLive}
             setLive={setRsLive}
             loadView={(q) => { setRsQuery(normQuery(q)); go("rs-explore"); }}
+            openInstance={openInstanceByName}
+            openService={openServiceByName}
           />
         );
       } else {

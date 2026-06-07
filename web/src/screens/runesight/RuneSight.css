@@ -230,6 +230,12 @@ mark.rs-mark { background: rgba(246,217,8,.26); color: var(--text); border-radiu
 .rs-d-row:hover .rs-d-add { color: var(--text-3); border-color: var(--border); }
 .rs-d-add:hover { color: var(--accent-text) !important; border-color: var(--accent-line) !important; background: var(--accent-dim); }
 .rs-d-src { color: var(--accent-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* clickable label value that links out of RuneSight into the main dashboard */
+.rs-d-link { display: inline-flex; align-items: center; gap: 5px; flex: 1; min-width: 0; padding: 0; background: none; border: none; cursor: pointer; font-family: var(--mono); font-size: 12.5px; color: var(--accent-text); text-align: left; word-break: break-all; transition: color .13s; }
+.rs-d-link:hover { color: var(--accent-text); text-decoration: underline; }
+.rs-d-link svg { flex: none; opacity: .65; }
+.rs-d-foot { margin-top: 22px; display: flex; }
+.rs-d-foot .rs-paneltgl { width: 100%; height: 38px; justify-content: center; gap: 8px; }
 
 /* ===== Saved Views screen (card grid) ===== */
 .rs-vgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }

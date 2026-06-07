@@ -377,6 +377,62 @@ export function toggleFacet(q: LogQuery, qf: keyof LogQuery, v: string): LogQuer
 
 export const FIELD_QF = QF;
 
+/* ---------------- derived: parsed fields + trace ---------------- */
+
+/**
+ * parseLogfmt extracts `key=value` tokens from a log message into an object.
+ * Quoted values (`key="a b c"`) are unquoted (with `\"` and `\\` unescaped);
+ * bare values run to the next whitespace. Bare flags without `=` are ignored.
+ * Best-effort: never throws, returns {} when nothing parses.
+ */
+export function parseLogfmt(msg: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!msg) return out;
+  // key = ident-ish (letters, digits, _, -, ., /); value = quoted or bare.
+  const re = /([A-Za-z0-9_.\-/]+)=("(?:[^"\\]|\\.)*"|[^\s"]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(msg))) {
+    const key = m[1];
+    let val = m[2];
+    if (val.startsWith('"') && val.endsWith('"')) {
+      val = val.slice(1, -1).replace(/\\(["\\])/g, "$1");
+    }
+    // First occurrence wins; don't let a later dup clobber it.
+    if (!(key in out)) out[key] = val;
+  }
+  return out;
+}
+
+const TRACE_KEYS = ["trace_id", "traceid", "trace-id", "traceparent"] as const;
+
+/**
+ * extractTraceId pulls a trace id out of parsed fields (preferred) or, failing
+ * that, the raw message. traceparent's W3C form is `version-traceid-...`; we
+ * surface the 32-hex trace-id segment. Returns "" when no trace id is present —
+ * callers should hide the Trace section entirely in that case.
+ */
+export function extractTraceId(fields: Record<string, string>, msg: string): string {
+  for (const k of TRACE_KEYS) {
+    const v = fields[k];
+    if (v) return normTrace(k, v);
+  }
+  // Fallback: scan the raw line for a traceparent-style or trace_id= token.
+  const m = msg.match(/\btrace[_-]?id\s*[=:]\s*"?([0-9a-fA-F]{8,})"?/);
+  if (m) return m[1];
+  const tp = msg.match(/\btraceparent\s*[=:]\s*"?([0-9a-fA-F-]{40,})"?/);
+  if (tp) return normTrace("traceparent", tp[1]);
+  return "";
+}
+
+function normTrace(key: string, val: string): string {
+  if (key === "traceparent") {
+    // W3C: 00-<32 hex trace-id>-<16 hex span-id>-<flags>
+    const parts = val.split("-");
+    if (parts.length >= 2 && /^[0-9a-fA-F]{32}$/.test(parts[1])) return parts[1];
+  }
+  return val;
+}
+
 /* ---------------- overview widget ---------------- */
 
 export interface ObserveOverview {
