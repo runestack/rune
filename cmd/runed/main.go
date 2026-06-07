@@ -1136,7 +1136,13 @@ func buildObserveStore(appCfg *config.Config, dataDir string, logger log.Logger)
 			BaseURL: o.ObjectStore.Endpoint,
 		},
 		ClickHouse: observebackend.ClickHouseConfig{
-			DSN: o.ObjectStore.Endpoint,
+			DSN:           o.ObjectStore.Endpoint,
+			RetentionDays: o.RetentionDays,
+			// Create the schema on first use so the analytical backend works
+			// zero-config. S3 tiering (storage policy / hot-days) is operator-
+			// configured server-side and plumbed via ClickHouseConfig directly;
+			// a dedicated runefile block is deferred (snake_case config gap).
+			AutoMigrate: true,
 		},
 		Logger: logger.WithComponent("observe"),
 	})

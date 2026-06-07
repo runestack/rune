@@ -56,6 +56,18 @@ type ClickHouseConfig struct {
 	DSN      string
 	Database string
 	Table    string
+
+	// RetentionDays sets the table's DELETE TTL (drop parts older than N days).
+	RetentionDays int
+	// AutoMigrate runs CREATE DATABASE/TABLE on first connect (zero-config).
+	AutoMigrate bool
+
+	// S3 tiering (see clickhouse/schema.go). StoragePolicy is the server-
+	// configured policy naming the hot+s3 volumes; HotDays moves parts older
+	// than N to S3Volume. Empty StoragePolicy disables tiering.
+	StoragePolicy string
+	S3Volume      string
+	HotDays       int
 }
 
 // Options bundle every backend's config; Open uses the one matching the
@@ -88,9 +100,14 @@ func Open(b Backend, opts Options) (observe.LogStore, error) {
 		return loki.New(loki.Config{BaseURL: opts.Loki.BaseURL, TenantID: opts.Loki.TenantID})
 	case BackendClickHouse:
 		return clickhouse.New(clickhouse.Config{
-			DSN:      opts.ClickHouse.DSN,
-			Database: opts.ClickHouse.Database,
-			Table:    opts.ClickHouse.Table,
+			DSN:           opts.ClickHouse.DSN,
+			Database:      opts.ClickHouse.Database,
+			Table:         opts.ClickHouse.Table,
+			RetentionDays: opts.ClickHouse.RetentionDays,
+			AutoMigrate:   opts.ClickHouse.AutoMigrate,
+			StoragePolicy: opts.ClickHouse.StoragePolicy,
+			S3Volume:      opts.ClickHouse.S3Volume,
+			HotDays:       opts.ClickHouse.HotDays,
 		})
 	default:
 		return nil, fmt.Errorf("unknown observability backend %q (want embedded|loki|clickhouse)", b)
