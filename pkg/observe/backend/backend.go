@@ -36,6 +36,12 @@ const (
 type EmbeddedConfig struct {
 	RetentionDays int
 	MaxRecords    int
+	// Dir enables disk persistence: a node-local WAL under this directory (set
+	// to <data-dir>/observe by runed) so logs survive a restart. Empty =
+	// in-memory only.
+	Dir string
+	// MaxDiskBytes caps WAL disk usage (drop-oldest); 0 uses the embedded default.
+	MaxDiskBytes int64
 }
 
 // LokiConfig mirrors loki.Config so callers can configure the Loki backend
@@ -72,9 +78,11 @@ func Open(b Backend, opts Options) (observe.LogStore, error) {
 			retention = time.Duration(opts.Embedded.RetentionDays) * 24 * time.Hour
 		}
 		return embedded.New(embedded.Config{
-			Retention:  retention,
-			MaxRecords: opts.Embedded.MaxRecords,
-			Logger:     opts.Logger,
+			Retention:    retention,
+			MaxRecords:   opts.Embedded.MaxRecords,
+			Dir:          opts.Embedded.Dir,
+			MaxDiskBytes: opts.Embedded.MaxDiskBytes,
+			Logger:       opts.Logger,
 		}), nil
 	case BackendLoki:
 		return loki.New(loki.Config{BaseURL: opts.Loki.BaseURL, TenantID: opts.Loki.TenantID})

@@ -533,7 +533,7 @@ func main() {
 	// enabled=false and `rune logs` stays on the live ephemeral stream.
 	var observeStore observe.LogStore
 	if appCfg != nil && appCfg.Observability.Enabled {
-		observeStore, err = buildObserveStore(appCfg, logger)
+		observeStore, err = buildObserveStore(appCfg, *dataDir, logger)
 		if err != nil {
 			logger.Error("Failed to construct observability store", log.Err(err))
 			os.Exit(1)
@@ -1118,11 +1118,19 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 // from the runefile [observability] block (plan §5). Only called when
 // observability is enabled. An empty/embedded backend yields the in-process
 // store; clickhouse/loki yield the optional-sink skeletons.
-func buildObserveStore(appCfg *config.Config, logger log.Logger) (observe.LogStore, error) {
+func buildObserveStore(appCfg *config.Config, dataDir string, logger log.Logger) (observe.LogStore, error) {
 	o := appCfg.Observability
+	// Persist the embedded store to node-local disk under the runed data dir so
+	// logs survive a restart. Derived from --data-dir (not a runefile key) to
+	// dodge the snake_case config-parsing gap; empty dataDir => in-memory only.
+	var embeddedDir string
+	if dataDir != "" {
+		embeddedDir = filepath.Join(dataDir, "observe")
+	}
 	return observebackend.Open(observebackend.Backend(o.Backend), observebackend.Options{
 		Embedded: observebackend.EmbeddedConfig{
 			RetentionDays: o.RetentionDays,
+			Dir:           embeddedDir,
 		},
 		Loki: observebackend.LokiConfig{
 			BaseURL: o.ObjectStore.Endpoint,
