@@ -1,0 +1,15 @@
+{
+  // Deploy from this directory:  cd deploy/cloudflare && npx wrangler@latest deploy
+  // Binds the installer Worker to both hostnames via Custom Domains, which makes
+  // Cloudflare create + manage the proxied DNS records and TLS automatically —
+  // no manual "dummy proxied record" needed (that's only required for plain
+  // route patterns). The zone runestack.io must already be on this account.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "runestack-installer",
+  "main": "installer-worker.js",
+  "compatibility_date": "2026-06-01",
+  "routes": [
+    { "pattern": "get.runestack.io", "custom_domain": true },
+    { "pattern": "install.runestack.io", "custom_domain": true }
+  ]
+}
