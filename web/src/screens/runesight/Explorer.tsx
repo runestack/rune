@@ -327,13 +327,6 @@ function LogDetail({ line, onClose, onFilter, contextLines, openInstance, openSe
             </div>
           </>
         )}
-        {line.inst && (
-          <div className="rs-d-foot">
-            <button className="rs-paneltgl" onClick={() => openInstance(line.inst, line.ns || undefined)}>
-              <Icon name="instances" size={14} />Open instance in Rune<Icon name="external" size={13} />
-            </button>
-          </div>
-        )}
       </div>
     </Drawer>
   );
