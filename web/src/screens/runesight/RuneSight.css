@@ -123,8 +123,6 @@
 .rs-facet-key.k-level { color: var(--c-tan); }
 .rs-facet-key.k-node { color: var(--c-pink); }
 .rs-facet-key.k-instance { color: var(--accent-text); }
-.rs-facet-grip { color: var(--text-4); cursor: grab; flex: none; display: inline-flex; }
-.rs-facet-grip:active { cursor: grabbing; }
 .rs-facet-val { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
 .rs-facet-val:hover { background: var(--surface-2); }
 .rs-facet-val.on { background: var(--accent-dim); }

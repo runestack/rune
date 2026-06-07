@@ -121,7 +121,6 @@ function LabelsPanel({ facets, query, toggle }: { facets: Facet[]; query: LogQue
                 onDragStart={(e) => { setDrag(key); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", key); } catch { /* ignore */ } }}
                 onDragEnd={() => { setDrag(null); setOver(null); }}
                 onClick={() => toggleCollapse(key)} title="Click to collapse · drag to reorder">
-                <Icon name="grip" size={13} stroke={2.4} className="rs-facet-grip" />
                 <Icon name="chevrond" size={12} stroke={2.4} style={{ flex: "none", transition: "transform .15s", transform: isCol ? "rotate(-90deg)" : "none" }} />
                 <span className="rs-facet-keyname">{f.key}</span>
                 <span className="rs-facet-keyc tnum">{f.values.length}</span>
