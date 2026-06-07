@@ -44,6 +44,7 @@ export const ICON_PATHS = {
   check: "M20 6L9 17l-5-5",
   alert:
     "M10.3 4.3L2.6 17.5A1.6 1.6 0 004 20h16a1.6 1.6 0 001.4-2.5L13.7 4.3a1.6 1.6 0 00-3.4 0zM12 9v5M12 17h.01",
+  grip: "M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

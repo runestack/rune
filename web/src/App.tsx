@@ -9,6 +9,9 @@ import { ScopeProvider } from "./lib/scope";
 import { ContextSwitcher } from "./ContextSwitcher";
 import { ScopeIndicator } from "./ScopeIndicator";
 import type { Instance, Service } from "./api/types";
+import { clients } from "./api/transport";
+import { mapInstance, mapService } from "./api/map";
+import { InstanceStatus } from "./gen/pkg/api/proto/instance_pb";
 import { Overview } from "./screens/Overview";
 import { Services } from "./screens/Services";
 import { Instances } from "./screens/Instances";
@@ -20,6 +23,21 @@ import { Networking } from "./screens/Networking";
 import { Identity } from "./screens/Identity";
 import { Logs } from "./screens/Logs";
 import { Secrets } from "./screens/Secrets";
+import { RuneSight } from "./screens/runesight/RuneSight";
+import type { RsTab } from "./screens/runesight/RuneSight";
+import { SAVED_VIEWS, firingCount, SOURCES_COUNT } from "./screens/runesight/mockData";
+import { emptyQuery, normQuery } from "./api/observe";
+import type { LogQuery, Range } from "./api/observe";
+
+// RuneSight routes map to a tab inside the single RuneSight surface.
+const RS_ROUTES: Record<string, RsTab> = {
+  "rs-explore": "explore",
+  "rs-views": "views",
+  "rs-alerts": "alerts",
+  "rs-sources": "sources",
+};
+
+const FIRING = firingCount();
 
 const NAV: NavGroup[] = [
   {
@@ -46,6 +64,15 @@ const NAV: NavGroup[] = [
       { id: "identity", label: "Identity & RBAC", icon: "identity" },
     ],
   },
+  {
+    group: "Sight",
+    items: [
+      { id: "rs-explore", label: "Explore", icon: "search" },
+      { id: "rs-views", label: "Saved Views", icon: "logs", count: SAVED_VIEWS.length },
+      { id: "rs-alerts", label: "Alerts", icon: "alert", count: FIRING || undefined, firing: true },
+      { id: "rs-sources", label: "Sources", icon: "instances", count: SOURCES_COUNT },
+    ],
+  },
 ];
 
 const CRUMBS: Record<string, string[]> = {
@@ -58,6 +85,10 @@ const CRUMBS: Record<string, string[]> = {
   network: ["Data", "Networking"],
   logs: ["Operate", "Logs & Exec"],
   identity: ["Operate", "Identity & RBAC"],
+  "rs-explore": ["Sight", "Explore"],
+  "rs-views": ["Sight", "Saved Views"],
+  "rs-alerts": ["Sight", "Alerts"],
+  "rs-sources": ["Sight", "Sources"],
 };
 
 function Placeholder({ title }: { title: string }) {
@@ -80,6 +111,11 @@ export function App({ user, onLogout }: AppProps) {
   const [svc, setSvc] = useState<Service | null>(null);
   const [inst, setInst] = useState<Instance | null>(null);
   const [logsSvc, setLogsSvc] = useState<string | null>(null);
+  // RuneSight state is lifted here so tab navigation (Saved Views -> Explore)
+  // preserves the active query / range / live-tail across the route remount.
+  const [rsQuery, setRsQuery] = useState<LogQuery>(emptyQuery);
+  const [rsRange, setRsRange] = useState<Range>("1h");
+  const [rsLive, setRsLive] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try { return localStorage.getItem("rune-nav-collapsed") === "1"; } catch { return false; }
   });
@@ -116,6 +152,35 @@ export function App({ user, onLogout }: AppProps) {
   const openSvc = (s: Service) => { setInst(null); setSvc(s); };
   const openInst = (i: Instance) => { setSvc(null); setInst(i); };
 
+  // Cross-surface back-links (e.g. from a RuneSight log line into the main
+  // dashboard): resolve a friendly instance/service name to its live record and
+  // open the matching drawer. If the lookup can't resolve it, fall back to
+  // routing to the list view so the operator still lands somewhere useful.
+  async function openInstanceByName(name: string, ns?: string) {
+    try {
+      const res = await clients.instances.listInstances({ namespace: "*" });
+      const svcRes = await clients.services.listServices({ namespace: "*" });
+      const svcNameById = new Map<string, string>();
+      for (const s of svcRes.services) svcNameById.set(s.id, s.name);
+      const match = res.instances
+        .filter((i) => i.status !== InstanceStatus.DELETED)
+        .map((i) => mapInstance(i, svcNameById))
+        .find((i) => i.id === name && (!ns || i.ns === ns));
+      if (match) { go("instances"); openInst(match); return; }
+    } catch { /* fall through to the list view */ }
+    go("instances");
+  }
+  async function openServiceByName(name: string, ns?: string) {
+    try {
+      const res = await clients.services.listServices({ namespace: "*" });
+      const match = res.services
+        .map(mapService)
+        .find((s) => s.name === name && (!ns || s.ns === ns));
+      if (match) { go("services"); openSvc(match); return; }
+    } catch { /* fall through to the list view */ }
+    go("services");
+  }
+
   let screen;
   switch (route) {
     case "overview": screen = <Overview go={go} openSvc={openSvc} />; break;
@@ -127,7 +192,26 @@ export function App({ user, onLogout }: AppProps) {
     case "network": screen = <Networking />; break;
     case "logs": screen = <Logs initialSvc={logsSvc} />; break;
     case "identity": screen = <Identity />; break;
-    default: screen = <Placeholder title={NAV.flatMap((g) => g.items).find((i) => i.id === route)?.label ?? route} />;
+    default:
+      if (route in RS_ROUTES) {
+        screen = (
+          <RuneSight
+            tab={RS_ROUTES[route]}
+            go={(t) => go("rs-" + t)}
+            query={rsQuery}
+            setQuery={setRsQuery}
+            range={rsRange}
+            setRange={setRsRange}
+            live={rsLive}
+            setLive={setRsLive}
+            loadView={(q) => { setRsQuery(normQuery(q)); go("rs-explore"); }}
+            openInstance={openInstanceByName}
+            openService={openServiceByName}
+          />
+        );
+      } else {
+        screen = <Placeholder title={NAV.flatMap((g) => g.items).find((i) => i.id === route)?.label ?? route} />;
+      }
   }
 
   return (
@@ -136,7 +220,7 @@ export function App({ user, onLogout }: AppProps) {
       <ToastProvider>
       <AppShell
         collapsed={navCollapsed}
-        contentFlex={route === "logs"}
+        contentFlex={route === "logs" || route === "rs-explore"}
         sidebar={
           <Sidebar
             nav={NAV}

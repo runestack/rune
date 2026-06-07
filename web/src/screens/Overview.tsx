@@ -3,12 +3,17 @@ import {
   Replicas, Spark, Spinner, Table, Tag, UsageBar,
 } from "../components";
 import { useAuditFeed, useOverview } from "../api/hooks";
+import { useObserveOverview } from "../api/observe";
+import type { Bucket } from "../api/observe";
 import { useScope } from "../lib/scope";
 import type { Service } from "../api/types";
+import { ALERTS, INGESTION, SOURCES_COUNT } from "./runesight/mockData";
+import "./runesight/RuneSight.css";
 
 export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => void; openSvc: (s: Service) => void }) {
   const { data, loading, error, reload } = useOverview();
   const { data: feed } = useAuditFeed(6);
+  const { data: observe } = useObserveOverview("1h");
   const { ns: scopeNs } = useScope();
   const T = data.totals;
 
@@ -135,6 +140,9 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
         </Card>
       </div>
 
+      {/* observability — RuneSight "Sight" card (core, not a plugin) */}
+      {observe.enabled && <SightCard buckets={observe.buckets} total={observe.total} go={go} />}
+
       {/* activity + usage */}
       <div className="grid g-2-1">
         <Card>
@@ -162,5 +170,75 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
         </Card>
       </div>
     </div>
+  );
+}
+
+/**
+ * Home "Sight" card — log persistence & alerts summary.
+ * INGEST (ln/min + last hour) and the VOLUME histogram come from
+ * ObserveService (live); RETENTION / SOURCES / FIRING are mocked since
+ * those backends don't exist yet.
+ */
+function SightCard({ buckets, total, go }: { buckets: Bucket[]; total: number; go: (r: string) => void }) {
+  const perMin = Math.round(total / 60);
+  const firing = ALERTS.filter((a) => a.status === "firing");
+  const sorted = buckets.map((b) => b.total).filter((x) => x > 0).sort((a, b) => b - a);
+  const max = Math.max(1, sorted[Math.floor(sorted.length * 0.08)] || sorted[0] || 1);
+  const fmt = (t: number) => new Date(t).toISOString().slice(11, 16);
+  return (
+    <Card className="sight-card" style={{ marginBottom: 16 }}>
+      <CardHead
+        actions={
+          <div className="sight-act">
+            {firing.length > 0 && <span className="sight-firing"><Icon name="alert" size={12} />{firing.length} firing</span>}
+            <Button size="sm" variant="ghost" onClick={() => go("rs-explore")}>Open in Sight <Icon name="external" size={13} /></Button>
+          </div>
+        }
+      >
+        <span className="sight-badge"><Icon name="search" size={13} /></span>
+        Sight
+        <span className="sight-sub">Log persistence &amp; alerts</span>
+      </CardHead>
+      <div className="sight-grid">
+        <div className="sight-kpis">
+          <div className="sight-kpi">
+            <div className="sk-label">Ingest</div>
+            <div className="sk-val">{perMin.toLocaleString()}<small>ln/min</small></div>
+            <div className="sk-sub">last hour {total.toLocaleString()}</div>
+          </div>
+          <div className="sight-kpi">
+            <div className="sk-label">Retention</div>
+            <div className="sk-val">{INGESTION.retentionDays}<small>d</small></div>
+            <div className="sk-sub">{INGESTION.storageUsedGi} / {INGESTION.storageCapGi} GiB</div>
+          </div>
+          <div className="sight-kpi">
+            <div className="sk-label">Sources</div>
+            <div className="sk-val">{SOURCES_COUNT}</div>
+            <div className="sk-sub">services streaming</div>
+          </div>
+          <div className="sight-kpi">
+            <div className="sk-label">Firing</div>
+            <div className={"sk-val" + (firing.length ? " hot" : "")}>{firing.length}</div>
+            <div className="sk-sub">{firing.length ? firing[0].name.toLowerCase() : "all clear"}</div>
+          </div>
+        </div>
+        <div className="sight-vol">
+          <div className="sight-vol-head">
+            <span className="eyebrow">Volume · last hour</span>
+            <span className="sight-vol-legend"><i className="sv-i" />info<i className="sv-w" />warn<i className="sv-e" />error</span>
+          </div>
+          <div className="sight-hist">
+            {buckets.map((b, i) => (
+              <div className="sv-bar" key={i} title={`${fmt(b.t0)} · ${b.total} lines`}>
+                {b.error > 0 && <span className="sv-seg e" style={{ height: `${(b.error / max) * 100}%` }} />}
+                {b.warn > 0 && <span className="sv-seg w" style={{ height: `${(b.warn / max) * 100}%` }} />}
+                {(b.info + b.debug) > 0 && <span className="sv-seg i" style={{ height: `${((b.info + b.debug) / max) * 100}%` }} />}
+              </div>
+            ))}
+          </div>
+          <div className="sight-vol-axis"><span>{buckets[0] ? fmt(buckets[0].t0) : "1h ago"}</span><span>now</span></div>
+        </div>
+      </div>
+    </Card>
   );
 }

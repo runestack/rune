@@ -69,6 +69,7 @@
 .nav-item:hover .nav-ico { color: var(--text-2); }
 .nav-item .nav-count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); font-weight: 500; }
 .nav-item.active .nav-count { color: var(--accent-text); }
+.nav-item .nav-count.firing { color: var(--fail); background: var(--fail-dim); border: 1px solid rgba(229,72,77,.3); border-radius: 5px; padding: 0 6px; }
 .sb-foot { border-top: 1px solid var(--border); padding: 11px 14px; display: flex; align-items: center; gap: 10px; }
 /* avatar styling now lives in the Avatar primitive (components/primitives/Avatar) */
 .sb-foot .who { font-size: 12.5px; font-weight: 600; min-width: 0; }

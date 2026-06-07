@@ -1,36 +1,51 @@
 /* ============================================================
    RUNE — design tokens (single source of theming truth)
-   Warm near-black base (Claude desktop) × precise technical
-   structure (Oxide/steel.dev). Purple #9e8cfc primary accent.
+   Cool near-black "steel" base (matches Rune Landing3 / the
+   RuneSight design system) × precise technical structure.
+   Purple #9e8cfc primary accent + an 8-color categorical
+   palette for status + data viz.
    The Tweaks panel mutates --accent / --radius at runtime.
    ============================================================ */
 :root {
-  /* surfaces — warm neutral darks */
-  --bg: #161513;
-  --bg-grid: rgba(236, 233, 226, 0.018);
-  --surface: #1f1d1b;
-  --surface-2: #262320;
-  --surface-3: #2f2c28; /* hover / raised */
-  --inset: #131210; /* code / log wells */
+  /* surfaces — cool neutral darks (steel) */
+  --bg: #0f0f0f;
+  --bg-2: #0b0b0b;
+  --bg-grid: rgba(255, 255, 255, 0.022);
+  --surface: #161616;
+  --surface-2: #1d1d1f;
+  --surface-3: #252528; /* hover / raised */
+  --inset: #0a0a0a; /* code / log wells */
 
   /* hairlines */
-  --border: #2c2925;
-  --border-strong: #3a3631;
-  --border-faint: #232120;
+  --border: #262628;
+  --border-strong: #34343a;
+  --border-faint: #1b1b1d;
+  --rail: #1f1f22;
 
-  /* text */
-  --text: #ece8e1;
-  --text-2: #a6a097;
-  --text-3: #726c63;
-  --text-4: #534e47;
+  /* text — cool neutrals */
+  --text: #ededef;
+  --text-2: #b3b3bc;
+  --text-3: #7d7d88;
+  --text-4: #54545d;
 
   /* brand accent (tweakable) */
   --accent: #9e8cfc;
   --accent-text: #b8acff;
-  --accent-dim: rgba(158, 140, 252, 0.13);
-  --accent-line: rgba(158, 140, 252, 0.32);
+  --accent-2: #b8acff;
+  --accent-dim: rgba(158, 140, 252, 0.14);
+  --accent-line: rgba(158, 140, 252, 0.34);
 
-  /* semantic status — used sparingly, for attention only */
+  /* 8-color categorical palette (steel.dev) — vibrant, for data viz + status */
+  --c-green: #30a46c;
+  --c-pink: #d6409f;
+  --c-orange: #f76809;
+  --c-tan: #daa16e;
+  --c-purple: #9e8cfc;
+  --c-red: #e5484d;
+  --c-yellow: #f6d908;
+  --c-cyan: #67ddfd;
+
+  /* semantic status — vibrant, used for attention + level coloring */
   --run: #30a46c;
   --fail: #e5484d;
   --warn: #f6d908;
@@ -39,6 +54,12 @@
   --pink: #d6409f;
   --tan: #daa16e;
   --idle: #6f6a62;
+
+  /* log level colors (RuneSight) — vibrant, match the screenshots */
+  --lvl-info: var(--accent); /* info rides the accent purple */
+  --lvl-warn: #f6d908;
+  --lvl-error: #e5484d;
+  --lvl-debug: #54545d;
 
   --run-dim: rgba(48, 164, 108, 0.14);
   --fail-dim: rgba(229, 72, 77, 0.14);

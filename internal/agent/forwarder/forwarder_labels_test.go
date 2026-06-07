@@ -14,7 +14,8 @@ func TestRecordFromInstanceLine_CarriesServiceLabels(t *testing.T) {
 	inst := &types.Instance{
 		Namespace:   "default",
 		ServiceName: "web",
-		ID:          "web-0",
+		ID:          "b3c1f2a0-0000-0000-0000-000000000001",
+		Name:        "web-0",
 		Labels:      map[string]string{"app": "web", "tier": "frontend"},
 	}
 
@@ -23,6 +24,7 @@ func TestRecordFromInstanceLine_CarriesServiceLabels(t *testing.T) {
 	if rec.Labels["app"] != "web" || rec.Labels["tier"] != "frontend" {
 		t.Fatalf("service labels not propagated: %+v", rec.Labels)
 	}
+	// Instance is stamped with the friendly Name, not the opaque ID/UUID.
 	if rec.Namespace != "default" || rec.Service != "web" || rec.Instance != "web-0" || rec.Node != "node-1" {
 		t.Errorf("intrinsic dims wrong: ns=%q svc=%q inst=%q node=%q", rec.Namespace, rec.Service, rec.Instance, rec.Node)
 	}

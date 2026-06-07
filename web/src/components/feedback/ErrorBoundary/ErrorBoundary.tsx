@@ -38,20 +38,20 @@ export class ErrorBoundary extends Component<Props, State> {
 // Inline-styled so it renders even if the app stylesheet failed to load.
 function DefaultFallback({ error, onReset }: { error: Error; onReset: () => void }) {
   return (
-    <div style={{ height: "100vh", display: "grid", placeItems: "center", background: "#161513", color: "#ece8e1", fontFamily: "ui-sans-serif, system-ui, sans-serif", padding: 24 }}>
+    <div style={{ height: "100vh", display: "grid", placeItems: "center", background: "#0f0f0f", color: "#ededef", fontFamily: "ui-sans-serif, system-ui, sans-serif", padding: 24 }}>
       <div style={{ maxWidth: 440, textAlign: "center" }}>
         <div style={{ fontFamily: "Georgia, serif", fontSize: 26, fontWeight: 500, marginBottom: 10 }}>
           rune<span style={{ color: "#9e8cfc" }}>.</span>
         </div>
         <h1 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 8px" }}>Something went wrong</h1>
-        <p style={{ fontSize: 13, lineHeight: 1.55, color: "#a6a097", margin: "0 0 18px" }}>
+        <p style={{ fontSize: 13, lineHeight: 1.55, color: "#b3b3bc", margin: "0 0 18px" }}>
           The dashboard hit an unexpected error and stopped rendering. Reloading usually clears it.
         </p>
-        <pre style={{ fontFamily: "ui-monospace, monospace", fontSize: 11.5, color: "#726c63", background: "#131210", border: "1px solid #2c2925", borderRadius: 8, padding: "9px 12px", overflow: "auto", textAlign: "left", marginBottom: 18 }}>
+        <pre style={{ fontFamily: "ui-monospace, monospace", fontSize: 11.5, color: "#7d7d88", background: "#0a0a0a", border: "1px solid #262628", borderRadius: 8, padding: "9px 12px", overflow: "auto", textAlign: "left", marginBottom: 18 }}>
           {error.message || String(error)}
         </pre>
         <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-          <button onClick={onReset} style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, padding: "7px 13px", borderRadius: 8, cursor: "pointer", border: "1px solid #3a3631", background: "#262320", color: "#ece8e1" }}>
+          <button onClick={onReset} style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, padding: "7px 13px", borderRadius: 8, cursor: "pointer", border: "1px solid #34343a", background: "#1d1d1f", color: "#ededef" }}>
             Try again
           </button>
           <button onClick={() => window.location.reload()} style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, padding: "7px 13px", borderRadius: 8, cursor: "pointer", border: "1px solid #9e8cfc", background: "#9e8cfc", color: "#15121f" }}>
