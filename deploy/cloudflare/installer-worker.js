@@ -19,7 +19,12 @@ const FILES = {
   "install.runestack.io": "install.sh",
 };
 
-const RAW_BASE = "https://raw.githubusercontent.com/runestack/rune/master/scripts/";
+// Branch the installer SCRIPTS are served from. master = stable releases,
+// dev = prereleases. While everything is a prerelease (no stable release cut
+// yet) we serve from `dev` so the one-liners run the current installer logic.
+// TODO(stable): switch to `master` once dev→master promotion begins.
+// (The script itself still resolves the newest *release* via the GitHub API.)
+const RAW_BASE = "https://raw.githubusercontent.com/runestack/rune/dev/scripts/";
 
 export default {
   async fetch(request) {
