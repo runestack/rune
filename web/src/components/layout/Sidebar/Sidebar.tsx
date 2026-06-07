@@ -5,7 +5,7 @@ import { Logo } from "../../primitives/Logo";
 import type { LogoVariant } from "../../../lib/theme";
 import "./Sidebar.css";
 
-export interface NavItem { id: string; label: string; icon: IconName; count?: number }
+export interface NavItem { id: string; label: string; icon: IconName; count?: number; firing?: boolean }
 export interface NavGroup { group: string; items: NavItem[] }
 
 export interface SidebarProps {
@@ -43,7 +43,7 @@ export function Sidebar({ nav, route, go, logoVariant, context, user, onLogout, 
               <div key={it.id} className={`nav-item${route === it.id ? " active" : ""}`} onClick={() => go(it.id)}>
                 <span className="nav-ico"><Icon name={it.icon} size={17} /></span>
                 {it.label}
-                {it.count != null && <span className="nav-count tnum">{it.count}</span>}
+                {it.count != null && <span className={"nav-count tnum" + (it.firing ? " firing" : "")}>{it.count}</span>}
               </div>
             ))}
           </div>

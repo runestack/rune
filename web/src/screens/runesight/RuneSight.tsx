@@ -1,35 +1,28 @@
-import { useState } from "react";
-import { EmptyState, PageHead, Spinner, Tabs } from "../../components";
-import { useCapabilities, emptyQuery } from "../../api/observe";
+import { EmptyState, PageHead, Spinner } from "../../components";
+import { useCapabilities } from "../../api/observe";
 import type { LogQuery, Range } from "../../api/observe";
 import { Explorer } from "./Explorer";
+import { SavedViews } from "./SavedViews";
+import { Alerts } from "./Alerts";
+import { Sources } from "./Sources";
 import "./RuneSight.css";
 
-type RsTab = "explore" | "views" | "alerts" | "ingestion";
+export type RsTab = "explore" | "views" | "alerts" | "sources";
 
-const TABS: { id: RsTab; label: string }[] = [
-  { id: "explore", label: "Log Explorer" },
-  { id: "views", label: "Saved Views" },
-  { id: "alerts", label: "Alert Rules" },
-  { id: "ingestion", label: "Ingestion" },
-];
-
-/** Placeholder for the stubbed RuneSight surfaces (Saved Views / Alerts / Ingestion). */
-function ComingSoon({ eyebrow, title, sub }: { eyebrow: string; title: string; sub: string }) {
-  return (
-    <div className="wrap">
-      <PageHead eyebrow={eyebrow} title={title} sub={sub} />
-      <EmptyState icon="logs" title="Coming soon" hint="This RuneSight surface lands in the next slice. The Log Explorer is live now." />
-    </div>
-  );
+export interface RuneSightProps {
+  tab: RsTab;
+  go: (tab: RsTab) => void;
+  query: LogQuery;
+  setQuery: (q: LogQuery | ((q: LogQuery) => LogQuery)) => void;
+  range: Range;
+  setRange: (r: Range) => void;
+  live: boolean;
+  setLive: (fn: (l: boolean) => boolean) => void;
+  loadView: (q: Partial<LogQuery>) => void;
 }
 
-export function RuneSight() {
+export function RuneSight({ tab, go, query, setQuery, range, setRange, live, setLive, loadView }: RuneSightProps) {
   const { data: caps, loading, error, reload } = useCapabilities();
-  const [tab, setTab] = useState<RsTab>("explore");
-  const [query, setQuery] = useState<LogQuery>(emptyQuery);
-  const [range, setRange] = useState<Range>("1h");
-  const [live, setLive] = useState(false);
 
   if (loading) {
     return (
@@ -60,23 +53,20 @@ export function RuneSight() {
     );
   }
 
+  if (tab === "views") return <SavedViews loadView={loadView} go={() => go("explore")} />;
+  if (tab === "alerts") return <Alerts loadView={loadView} />;
+  if (tab === "sources") return <Sources />;
+
   return (
-    <div className="rs-explorer">
-      <div style={{ padding: "16px 22px 0" }}>
-        <Tabs tabs={TABS} active={tab} onChange={setTab} />
-      </div>
-      {tab === "explore" && (
-        <Explorer query={query} setQuery={setQuery} range={range} setRange={setRange} live={live} setLive={setLive} />
-      )}
-      {tab === "views" && (
-        <ComingSoon eyebrow="rune sight · saved queries" title="Saved <em>Views</em>" sub="Reusable LogQL queries your team has saved." />
-      )}
-      {tab === "alerts" && (
-        <ComingSoon eyebrow="rune sight · log-based alerting" title="Alert <em>Rules</em>" sub="Rules evaluate a LogQL query on a rolling window and fire when the condition is met." />
-      )}
-      {tab === "ingestion" && (
-        <ComingSoon eyebrow="rune logs · pipeline health" title="Ingestion <em>&amp;</em> Retention" sub="rune-agent tails every instance and ships to the RuneSight store." />
-      )}
-    </div>
+    <Explorer
+      query={query}
+      setQuery={setQuery}
+      range={range}
+      setRange={setRange}
+      live={live}
+      setLive={setLive}
+      go={go}
+      loadView={loadView}
+    />
   );
 }

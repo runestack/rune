@@ -21,6 +21,20 @@ import { Identity } from "./screens/Identity";
 import { Logs } from "./screens/Logs";
 import { Secrets } from "./screens/Secrets";
 import { RuneSight } from "./screens/runesight/RuneSight";
+import type { RsTab } from "./screens/runesight/RuneSight";
+import { SAVED_VIEWS, firingCount, SOURCES_COUNT } from "./screens/runesight/mockData";
+import { emptyQuery, normQuery } from "./api/observe";
+import type { LogQuery, Range } from "./api/observe";
+
+// RuneSight routes map to a tab inside the single RuneSight surface.
+const RS_ROUTES: Record<string, RsTab> = {
+  "rs-explore": "explore",
+  "rs-views": "views",
+  "rs-alerts": "alerts",
+  "rs-sources": "sources",
+};
+
+const FIRING = firingCount();
 
 const NAV: NavGroup[] = [
   {
@@ -41,16 +55,19 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    group: "Observe",
-    items: [
-      { id: "runesight", label: "RuneSight", icon: "search" },
-    ],
-  },
-  {
     group: "Operate",
     items: [
       { id: "logs", label: "Logs & Exec", icon: "logs" },
       { id: "identity", label: "Identity & RBAC", icon: "identity" },
+    ],
+  },
+  {
+    group: "Sight",
+    items: [
+      { id: "rs-explore", label: "Explore", icon: "search" },
+      { id: "rs-views", label: "Saved Views", icon: "logs", count: SAVED_VIEWS.length },
+      { id: "rs-alerts", label: "Alerts", icon: "alert", count: FIRING || undefined, firing: true },
+      { id: "rs-sources", label: "Sources", icon: "instances", count: SOURCES_COUNT },
     ],
   },
 ];
@@ -63,9 +80,12 @@ const CRUMBS: Record<string, string[]> = {
   storage: ["Data", "Storage"],
   secrets: ["Data", "Secrets & Config"],
   network: ["Data", "Networking"],
-  runesight: ["Observe", "RuneSight"],
   logs: ["Operate", "Logs & Exec"],
   identity: ["Operate", "Identity & RBAC"],
+  "rs-explore": ["Sight", "Explore"],
+  "rs-views": ["Sight", "Saved Views"],
+  "rs-alerts": ["Sight", "Alerts"],
+  "rs-sources": ["Sight", "Sources"],
 };
 
 function Placeholder({ title }: { title: string }) {
@@ -88,6 +108,11 @@ export function App({ user, onLogout }: AppProps) {
   const [svc, setSvc] = useState<Service | null>(null);
   const [inst, setInst] = useState<Instance | null>(null);
   const [logsSvc, setLogsSvc] = useState<string | null>(null);
+  // RuneSight state is lifted here so tab navigation (Saved Views -> Explore)
+  // preserves the active query / range / live-tail across the route remount.
+  const [rsQuery, setRsQuery] = useState<LogQuery>(emptyQuery);
+  const [rsRange, setRsRange] = useState<Range>("1h");
+  const [rsLive, setRsLive] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try { return localStorage.getItem("rune-nav-collapsed") === "1"; } catch { return false; }
   });
@@ -133,10 +158,26 @@ export function App({ user, onLogout }: AppProps) {
     case "storage": screen = <Storage />; break;
     case "secrets": screen = <Secrets />; break;
     case "network": screen = <Networking />; break;
-    case "runesight": screen = <RuneSight />; break;
     case "logs": screen = <Logs initialSvc={logsSvc} />; break;
     case "identity": screen = <Identity />; break;
-    default: screen = <Placeholder title={NAV.flatMap((g) => g.items).find((i) => i.id === route)?.label ?? route} />;
+    default:
+      if (route in RS_ROUTES) {
+        screen = (
+          <RuneSight
+            tab={RS_ROUTES[route]}
+            go={(t) => go("rs-" + t)}
+            query={rsQuery}
+            setQuery={setRsQuery}
+            range={rsRange}
+            setRange={setRsRange}
+            live={rsLive}
+            setLive={setRsLive}
+            loadView={(q) => { setRsQuery(normQuery(q)); go("rs-explore"); }}
+          />
+        );
+      } else {
+        screen = <Placeholder title={NAV.flatMap((g) => g.items).find((i) => i.id === route)?.label ?? route} />;
+      }
   }
 
   return (
@@ -145,7 +186,7 @@ export function App({ user, onLogout }: AppProps) {
       <ToastProvider>
       <AppShell
         collapsed={navCollapsed}
-        contentFlex={route === "logs" || route === "runesight"}
+        contentFlex={route === "logs" || route === "rs-explore"}
         sidebar={
           <Sidebar
             nav={NAV}

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Drawer, Icon } from "../../components";
 import {
-  emptyQuery, facetsFromLines, runQuery, toggleFacet, LABEL_KEYS,
+  emptyQuery, facetsFromLines, runQuery, toggleFacet, toLogQL, normQuery, LABEL_KEYS,
 } from "../../api/observe";
 import type { Bucket, Facet, LogLine, LogQuery, Range, RunResult } from "../../api/observe";
 import { LogQLBar } from "./LogQLBar";
+import { Highlighted } from "./LogQLBar";
+import { SAVED_VIEWS, HISTORY_SEED, classifyView } from "./mockData";
+import type { SavedView } from "./mockData";
+import type { RsTab } from "./RuneSight";
 
 const LVL_LABEL: Record<string, string> = { error: "ERROR", warn: "WARN", info: "INFO", debug: "DEBUG" };
 const REFRESH_MS = 5000;
@@ -52,7 +56,7 @@ function Histogram({ buckets, onBucket, activeBucket }: { buckets: Bucket[]; onB
       <div className="rs-hist-axis">
         <span>{buckets[0] ? fmt(buckets[0].t0) : ""}</span>
         <span className="rs-hist-legend">
-          <span><i className="rs-tip-dot info" />info</span><span><i className="rs-tip-dot warn" />warn</span><span><i className="rs-tip-dot error" />error</span>
+          <span><i className="info" />info</span><span><i className="warn" />warn</span><span><i className="error" />error</span>
         </span>
         <span>now</span>
       </div>
@@ -60,24 +64,69 @@ function Histogram({ buckets, onBucket, activeBucket }: { buckets: Bucket[]; onB
   );
 }
 
-/* ---------- labels facet panel ---------- */
+/* ---------- labels facet panel — collapsible · expandable · drag-to-reorder ---------- */
 function LabelsPanel({ facets, query, toggle }: { facets: Facet[]; query: LogQuery; toggle: (qf: keyof LogQuery, v: string) => void }) {
+  const keys: string[] = facets.map((f) => f.key);
+  const byKey: Record<string, Facet> = {};
+  facets.forEach((f) => { byKey[f.key] = f; });
+
+  const [order, setOrder] = useState<string[]>(() => {
+    try { const s = JSON.parse(localStorage.getItem("rs-facet-order") || "null"); if (Array.isArray(s)) return s; } catch { /* ignore */ }
+    return keys;
+  });
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("rs-facet-collapsed") || "[]")); } catch { return new Set(); }
+  });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [drag, setDrag] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+
+  // reconcile saved order with the facet keys actually present
+  const ordered = useMemo(() => {
+    const present = order.filter((k) => keys.includes(k));
+    const missing = keys.filter((k) => !present.includes(k));
+    return [...present, ...missing];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order, facets]);
+
+  useEffect(() => { try { localStorage.setItem("rs-facet-order", JSON.stringify(ordered)); } catch { /* ignore */ } }, [ordered]);
+  useEffect(() => { try { localStorage.setItem("rs-facet-collapsed", JSON.stringify([...collapsed])); } catch { /* ignore */ } }, [collapsed]);
+
+  const toggleCollapse = (k: string) => setCollapsed((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const toggleExpand = (k: string) => setExpanded((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  function drop(targetKey: string) {
+    if (drag && drag !== targetKey) {
+      const arr = ordered.filter((k) => k !== drag);
+      arr.splice(arr.indexOf(targetKey), 0, drag);
+      setOrder(arr);
+    }
+    setDrag(null); setOver(null);
+  }
+
   return (
     <div className="rs-labels">
       <div className="rs-panel-head"><span className="eyebrow">Labels</span><span className="rs-panel-count">{facets.length}</span></div>
       <div className="rs-labels-scroll">
-        {facets.map((f) => {
-          const isExp = expanded.has(f.key);
+        {ordered.map((key) => {
+          const f = byKey[key];
+          if (!f) return null;
+          const isCol = collapsed.has(key);
+          const isExp = expanded.has(key);
           const lim = isExp ? f.values.length : 10;
           return (
-            <div className="rs-facet" key={f.key}>
-              <div className={"rs-facet-key k-" + f.key}>
+            <div className={"rs-facet" + (drag === key ? " dragging" : "") + (over === key && drag && drag !== key ? " dragover" : "")} key={key}
+              onDragOver={(e) => { if (drag) { e.preventDefault(); if (over !== key) setOver(key); } }}
+              onDrop={(e) => { e.preventDefault(); drop(key); }}>
+              <div className={"rs-facet-key k-" + f.key} draggable
+                onDragStart={(e) => { setDrag(key); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", key); } catch { /* ignore */ } }}
+                onDragEnd={() => { setDrag(null); setOver(null); }}
+                onClick={() => toggleCollapse(key)} title="Click to collapse · drag to reorder">
+                <Icon name="grip" size={13} stroke={2.4} className="rs-facet-grip" />
+                <Icon name="chevrond" size={12} stroke={2.4} style={{ flex: "none", transition: "transform .15s", transform: isCol ? "rotate(-90deg)" : "none" }} />
                 <span className="rs-facet-keyname">{f.key}</span>
                 <span className="rs-facet-keyc tnum">{f.values.length}</span>
               </div>
-              {f.values.slice(0, lim).map(({ v, c }) => {
+              {!isCol && f.values.slice(0, lim).map(({ v, c }) => {
                 const on = (query[f.qf] as string[]).includes(v);
                 return (
                   <div key={v} className={"rs-facet-val" + (on ? " on" : "")} onClick={() => toggle(f.qf, v)}>
@@ -87,8 +136,8 @@ function LabelsPanel({ facets, query, toggle }: { facets: Facet[]; query: LogQue
                   </div>
                 );
               })}
-              {f.values.length > 10 && (
-                <button className="rs-facet-more" onClick={() => toggleExpand(f.key)}>
+              {!isCol && f.values.length > 10 && (
+                <button className="rs-facet-more" onClick={() => toggleExpand(key)}>
                   <Icon name="chevrond" size={11} stroke={2.4} style={{ transition: "transform .15s", transform: isExp ? "rotate(180deg)" : "none" }} />
                   {isExp ? "Show less" : `+${f.values.length - 10} more`}
                 </button>
@@ -101,8 +150,105 @@ function LabelsPanel({ facets, query, toggle }: { facets: Facet[]; query: LogQue
   );
 }
 
+/* ---------- save-query modal ---------- */
+function SaveQueryModal({ query, onClose, onSave }: { query: LogQuery; onClose: () => void; onSave: (v: { name: string; desc: string; pinned: boolean }) => void }) {
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [pinned, setPinned] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { const id = setTimeout(() => inputRef.current?.focus(), 30); return () => clearTimeout(id); }, []);
+  const qstr = toLogQL(query);
+  function submit() { if (!name.trim()) return; onSave({ name: name.trim(), desc: desc.trim(), pinned }); onClose(); }
+  return (
+    <div className="rs-modal-scrim" onMouseDown={onClose}>
+      <div className="rs-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="rs-modal-head"><div className="eyebrow">Save query</div>
+          <button className="rs-modal-x" onClick={onClose}><Icon name="close" size={16} /></button>
+        </div>
+        <div className="rs-modal-body">
+          <label className="rs-field"><span className="rs-field-l">Name</span>
+            <input ref={inputRef} className="rs-field-i" value={name} placeholder="e.g. Payment 5xx errors"
+              onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") onClose(); }} /></label>
+          <label className="rs-field"><span className="rs-field-l">Description <em>optional</em></span>
+            <input className="rs-field-i" value={desc} placeholder="What this query is for"
+              onChange={(e) => setDesc(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} /></label>
+          <div className="rs-field"><span className="rs-field-l">Query</span>
+            <div className="rs-field-q mono"><Highlighted text={qstr} /></div>
+          </div>
+          <label className="rs-pinrow" onClick={() => setPinned((p) => !p)}>
+            <span className={"rs-pinbox" + (pinned ? " on" : "")}>{pinned ? <Icon name="check" size={12} /> : null}</span>
+            Pin to top of saved queries
+          </label>
+        </div>
+        <div className="rs-modal-foot">
+          <button className="rs-paneltgl" style={{ height: 34, padding: "0 13px" }} onClick={onClose}>Cancel</button>
+          <button className="rs-run primary" disabled={!name.trim()} onClick={submit}><Icon name="check" size={14} />Save query</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- saved queries + history rail ---------- */
+interface HistEntry { q: Partial<LogQuery>; ts: string; hits: string; dur: string }
+function QueriesRail({ loadView, history, currentQuery, extraViews, onSave, removed, onDelete, onViewAll }: {
+  loadView: (q: Partial<LogQuery>) => void;
+  history: HistEntry[];
+  currentQuery: LogQuery;
+  extraViews: SavedView[];
+  onSave: (v: { name: string; desc: string; pinned: boolean }) => void;
+  removed: Set<string>;
+  onDelete: (id: string) => void;
+  onViewAll: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const views = [...extraViews, ...SAVED_VIEWS].filter((v) => !removed.has(v.id));
+  return (
+    <div className="rs-saved">
+      <div className="rs-panel-head"><span className="eyebrow">Saved queries</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button className="rs-viewall" onClick={onViewAll}>View all <Icon name="chevron" size={12} /></button>
+          <button className="rs-panel-add" title="Save current query" onClick={() => setSaving(true)}><Icon name="plus" size={14} /></button>
+        </div>
+      </div>
+      <div className="rs-saved-scroll">
+        {views.length === 0 && <div className="rs-saved-empty">No saved queries. Press <Icon name="plus" size={11} /> to save the current one.</div>}
+        {views.map((v) => (
+          <div key={v.id} className={"rs-saved-item" + (confirmId === v.id ? " confirming" : "")} onClick={() => loadView(v.q)}>
+            <div className="rs-saved-name">{v.name}{v.pinned && <Icon name="pin" size={11} />}{(v as SavedView & { fresh?: boolean }).fresh && <span className="rs-saved-new">new</span>}</div>
+            {v.desc && <div className="rs-saved-desc">{v.desc}</div>}
+            <div className="rs-saved-q mono">{toLogQL(normQuery(v.q))}</div>
+            <div className="rs-saved-owner">{v.owner} · {v.last}</div>
+            {confirmId === v.id ? (
+              <div className="rs-saved-confirm" onClick={(e) => e.stopPropagation()}>
+                <span>Delete?</span>
+                <button className="rs-sc-yes" onClick={() => { onDelete(v.id); setConfirmId(null); }}>Delete</button>
+                <button className="rs-sc-no" onClick={() => setConfirmId(null)}>Cancel</button>
+              </div>
+            ) : (
+              <button className="rs-saved-del" title="Delete saved query"
+                onClick={(e) => { e.stopPropagation(); setConfirmId(v.id); }}><Icon name="close" size={13} /></button>
+            )}
+          </div>
+        ))}
+        <div className="rs-panel-head" style={{ marginTop: 6 }}><span className="eyebrow">History</span><span className="rs-panel-count">recent</span></div>
+        {history.map((h, i) => (
+          <button key={i} className="rs-hist-item" onClick={() => loadView(h.q)}>
+            <div className="rs-saved-q mono">{toLogQL(normQuery(h.q))}</div>
+            <div className="rs-hist-meta mono">{h.ts} · {h.hits} hits · {h.dur}</div>
+          </button>
+        ))}
+      </div>
+      {saving && <SaveQueryModal query={currentQuery} onClose={() => setSaving(false)} onSave={onSave} />}
+    </div>
+  );
+}
+
 /* ---------- detail drawer ---------- */
-function LogDetail({ line, onClose, onFilter }: { line: LogLine; onClose: () => void; onFilter: (qf: keyof LogQuery | "text", v: string) => void }) {
+function LogDetail({ line, onClose, onFilter, contextLines }: {
+  line: LogLine; onClose: () => void; onFilter: (qf: keyof LogQuery | "text", v: string) => void; contextLines: LogLine[];
+}) {
   const Row = ({ k, v, qf, val }: { k: string; v: string; qf?: keyof LogQuery; val?: string }) => (
     <div className="rs-d-row">
       <span className="rs-d-k">{k}</span>
@@ -110,7 +256,6 @@ function LogDetail({ line, onClose, onFilter }: { line: LogLine; onClose: () => 
       {qf && val && <button className="rs-d-add" title={`Filter ${k}="${val}"`} onClick={() => onFilter(qf, val)}><Icon name="filter" size={12} /></button>}
     </div>
   );
-  // user labels = everything not in the fixed identity set
   const extra = Object.entries(line.labels).filter(([k]) => !LABEL_KEYS.includes(k as never) && k !== "pod_ip");
   return (
     <Drawer onClose={onClose}>
@@ -118,7 +263,7 @@ function LogDetail({ line, onClose, onFilter }: { line: LogLine; onClose: () => 
         <div className="eyebrow" style={{ marginBottom: 8 }}>Log line · {line.ts}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
           <span className={"rs-lvl-badge " + line.level}>{LVL_LABEL[line.level] ?? line.level.toUpperCase()}</span>
-          {line.svc && <span style={{ fontSize: 14, color: "var(--accent-text)" }}>{line.svc}</span>}
+          {line.svc && <span className="rs-d-src" style={{ fontSize: 14 }}>{line.svc}</span>}
         </div>
         <div className="rs-d-msg mono">{line.msg}</div>
       </div>
@@ -138,6 +283,20 @@ function LogDetail({ line, onClose, onFilter }: { line: LogLine; onClose: () => 
             <div className="rs-d-grid">{extra.map(([k, v]) => <Row key={k} k={k} v={v} />)}</div>
           </>
         )}
+        {line.inst && contextLines.length > 1 && (
+          <>
+            <div className="rs-d-sec eyebrow">Context · {line.inst}</div>
+            <div className="rs-d-grid" style={{ background: "var(--inset)", padding: "8px 0" }}>
+              {contextLines.map((c) => (
+                <div key={c.id} className="rs-d-row" style={{ background: c.id === line.id ? "var(--accent-dim)" : "var(--inset)", opacity: c.id === line.id ? 1 : 0.6, gap: 10 }}>
+                  <span className="rs-d-k" style={{ width: 78 }}>{c.ts.slice(0, 8)}</span>
+                  <span className={"rs-lvl " + c.level} style={{ width: 42, flex: "none" }}>{LVL_LABEL[c.level] ?? c.level.toUpperCase()}</span>
+                  <span className="rs-d-v mono" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.msg}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </Drawer>
   );
@@ -151,19 +310,29 @@ export interface ExplorerProps {
   setRange: (r: Range) => void;
   live: boolean;
   setLive: (fn: (l: boolean) => boolean) => void;
+  go: (tab: RsTab) => void;
+  loadView: (q: Partial<LogQuery>) => void;
 }
 
-export function Explorer({ query, setQuery, range, setRange, live, setLive }: ExplorerProps) {
+export function Explorer({ query, setQuery, range, setRange, live, setLive, go, loadView }: ExplorerProps) {
   const [sel, setSel] = useState<LogLine | null>(null);
   const [limit, setLimit] = useState(120);
   const [activeBucket, setActiveBucket] = useState<number | null>(null);
   const [showLabels, setShowLabels] = useState(() => { try { return localStorage.getItem("rs-labels") !== "0"; } catch { return true; } });
+  const [showSaved, setShowSaved] = useState(() => { try { return localStorage.getItem("rs-saved") === "1"; } catch { return false; } });
   const [result, setResult] = useState<RunResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistEntry[]>(HISTORY_SEED);
+  const [extraViews, setExtraViews] = useState<SavedView[]>([]);
+  const [removedViews, setRemovedViews] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("rs-removed-views") || "[]")); } catch { return new Set(); }
+  });
   const ctrlRef = useRef<AbortController | null>(null);
 
   useEffect(() => { try { localStorage.setItem("rs-labels", showLabels ? "1" : "0"); } catch { /* ignore */ } }, [showLabels]);
+  useEffect(() => { try { localStorage.setItem("rs-saved", showSaved ? "1" : "0"); } catch { /* ignore */ } }, [showSaved]);
+  useEffect(() => { try { localStorage.setItem("rs-removed-views", JSON.stringify([...removedViews])); } catch { /* ignore */ } }, [removedViews]);
 
   const execute = useCallback((q: LogQuery, r: Range) => {
     ctrlRef.current?.abort();
@@ -180,7 +349,6 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive }: Ex
       });
   }, []);
 
-  // run on query/range change
   useEffect(() => {
     setLimit(120);
     setActiveBucket(null);
@@ -188,7 +356,6 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive }: Ex
     return () => ctrlRef.current?.abort();
   }, [query, range, execute]);
 
-  // auto-refresh (live tail) — re-run on an interval without resetting the view
   useEffect(() => {
     if (!live) return;
     const id = setInterval(() => execute(query, range), REFRESH_MS);
@@ -224,6 +391,37 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive }: Ex
       : { ...q, [key]: (q[key] as string[]).includes(val) ? q[key] : [...(q[key] as string[]), val] });
   }, [setQuery]);
 
+  function run(parsed: LogQuery) {
+    setQuery(parsed);
+    setHistory((h) => [{
+      q: parsed,
+      ts: new Date().toISOString().slice(11, 19),
+      hits: total >= 1000 ? (total / 1000).toFixed(1) + "k" : String(total),
+      dur,
+    }, ...h].slice(0, 6));
+  }
+
+  function saveQuery({ name, desc, pinned }: { name: string; desc: string; pinned: boolean }) {
+    const v: SavedView & { fresh?: boolean } = {
+      id: "u" + Date.now(), name, desc, q: { ...query }, owner: "ore", last: "just now",
+      pinned, count: total, icon: classifyView(query).icon, fresh: true,
+    };
+    setExtraViews((vs) => [v, ...vs]);
+  }
+  function deleteView(id: string) {
+    setExtraViews((vs) => vs.filter((x) => x.id !== id));
+    setRemovedViews((s) => { const n = new Set(s); n.add(id); return n; });
+  }
+
+  // Context: surrounding lines from the same instance in the current result.
+  const contextLines = useMemo(() => {
+    if (!sel || !sel.inst) return [];
+    const same = all.filter((l) => l.inst === sel.inst).sort((a, b) => a.t - b.t);
+    const idx = same.findIndex((l) => l.id === sel.id);
+    if (idx < 0) return [];
+    return same.slice(Math.max(0, idx - 5), idx + 6);
+  }, [sel, all]);
+
   return (
     <div className="rs-explorer">
       <LogQLBar
@@ -238,7 +436,7 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive }: Ex
         }, [facets])}
         setRange={setRange}
         setLive={setLive}
-        run={(q) => setQuery(q)}
+        run={run}
       />
 
       <div className="rs-hitbar">
@@ -257,6 +455,9 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive }: Ex
         {live && <span className="rs-livetag"><span className="rs-live-dot" />streaming</span>}
         <button className={"rs-paneltgl" + (showLabels ? " on" : "")} onClick={() => setShowLabels((v) => !v)} title="Toggle labels panel">
           <Icon name="filter" size={14} />Labels
+        </button>
+        <button className={"rs-paneltgl" + (showSaved ? " on" : "")} onClick={() => setShowSaved((v) => !v)} title="Toggle saved queries">
+          <Icon name="logs" size={14} />Saved
         </button>
       </div>
 
@@ -298,9 +499,22 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive }: Ex
             {!error && total > 0 && total <= view.length && <div className="rs-streamend">— end of results in range —</div>}
           </div>
         </div>
+
+        {showSaved && (
+          <QueriesRail
+            loadView={loadView}
+            history={history}
+            currentQuery={query}
+            extraViews={extraViews}
+            onSave={saveQuery}
+            removed={removedViews}
+            onDelete={deleteView}
+            onViewAll={() => go("views")}
+          />
+        )}
       </div>
 
-      {sel && <LogDetail line={sel} onClose={() => setSel(null)} onFilter={applyFilter} />}
+      {sel && <LogDetail line={sel} onClose={() => setSel(null)} onFilter={applyFilter} contextLines={contextLines} />}
     </div>
   );
 }
