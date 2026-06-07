@@ -55,6 +55,17 @@ type Config struct {
 	// Logger; defaults to the global logger with component "observe.embedded".
 	Logger log.Logger
 
+	// Dir, when non-empty, enables disk persistence: the store writes a
+	// write-ahead log under this directory (node-local, under the runed data
+	// dir) and replays it on startup so logs survive a runed restart. Empty =
+	// in-memory only (tests, ephemeral). Persistence is best-effort — a disk
+	// failure logs a warning and degrades to in-memory rather than erroring.
+	Dir string
+
+	// MaxDiskBytes is the hard cap on WAL disk usage (drop-oldest segments).
+	// Zero uses the package default. Only applies when Dir is set.
+	MaxDiskBytes int64
+
 	// now lets tests inject a clock. nil uses time.Now.
 	now func() time.Time
 }
@@ -68,6 +79,8 @@ type Store struct {
 
 	mu  sync.RWMutex
 	buf []observe.LogRecord // append-ordered (ingest order ≈ time order)
+
+	wal *wal // disk persistence; nil when Dir unset or WAL open failed
 
 	sweepOnce sync.Once
 	stopCh    chan struct{}
@@ -98,6 +111,19 @@ func New(cfg Config) *Store {
 		stopCh:     make(chan struct{}),
 		stopped:    make(chan struct{}),
 	}
+	// Enable disk persistence + replay prior logs into the ring (best-effort).
+	if cfg.Dir != "" {
+		w, err := openWAL(cfg.Dir, 0, cfg.MaxDiskBytes, s.log)
+		if err != nil {
+			s.log.Warn("observe: disk persistence disabled (WAL open failed); running in-memory", log.Err(err))
+		} else {
+			s.wal = w
+			if restored := w.replay(s.retention, s.maxRecords, s.now()); len(restored) > 0 {
+				s.buf = restored
+				s.log.Info("observe: restored logs from disk", log.Int("records", len(restored)))
+			}
+		}
+	}
 	go s.sweepLoop()
 	return s
 }
@@ -124,19 +150,24 @@ func (s *Store) Write(ctx context.Context, batch []observe.LogRecord) error {
 		return err
 	}
 	now := s.now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Fill ingest-time for zero timestamps once, so the ring and the WAL agree.
+	filled := make([]observe.LogRecord, len(batch))
 	for i := range batch {
 		r := batch[i]
 		if r.Timestamp.IsZero() {
 			r.Timestamp = now
 		}
-		s.buf = append(s.buf, r)
+		filled[i] = r
 	}
+	s.mu.Lock()
+	s.buf = append(s.buf, filled...)
 	if over := len(s.buf) - s.maxRecords; over > 0 {
 		// Drop oldest.
 		s.buf = s.buf[over:]
 	}
+	s.mu.Unlock()
+	// Persist outside the store lock so disk I/O never blocks queries.
+	s.wal.append(filled) // nil-safe: no-op when persistence is off
 	return nil
 }
 
@@ -261,6 +292,8 @@ func (s *Store) Close() error {
 		close(s.stopCh)
 		<-s.stopped
 	})
+	// Flush + close the WAL after the sweeper has stopped (nil-safe, idempotent).
+	s.wal.close()
 	return nil
 }
 
@@ -286,19 +319,25 @@ func (s *Store) sweepLoop() {
 }
 
 func (s *Store) sweep() {
-	if s.retention < 0 {
-		return
+	now := s.now()
+	if s.retention >= 0 {
+		cutoff := now.Add(-s.retention)
+		s.mu.Lock()
+		// Records are appended roughly in time order; find the first record at
+		// or after the cutoff and drop everything before it.
+		idx := sort.Search(len(s.buf), func(i int) bool {
+			return !s.buf[i].Timestamp.Before(cutoff)
+		})
+		if idx > 0 {
+			s.buf = append(s.buf[:0], s.buf[idx:]...)
+		}
+		s.mu.Unlock()
 	}
-	cutoff := s.now().Add(-s.retention)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Records are appended roughly in time order; find the first record at or
-	// after the cutoff and drop everything before it.
-	idx := sort.Search(len(s.buf), func(i int) bool {
-		return !s.buf[i].Timestamp.Before(cutoff)
-	})
-	if idx > 0 {
-		s.buf = append(s.buf[:0], s.buf[idx:]...)
+	// Persist buffered writes and prune disk (retention + size cap). Done
+	// outside the store lock so disk I/O never blocks queries. nil-safe.
+	if s.wal != nil {
+		s.wal.flush()
+		s.wal.prune(s.retention, now)
 	}
 }
 
