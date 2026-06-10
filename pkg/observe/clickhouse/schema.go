@@ -71,7 +71,8 @@ func buildCreateTableDDL(cfg Config) string {
 // buildTTLClause builds the TTL: move parts older than HotDays to the S3 volume
 // (the tiering step), then DELETE parts older than RetentionDays. Either part is
 // omitted when its config is zero; an empty clause means "keep everything on the
-// hot disk forever".
+// hot disk forever". The timestamp column is DateTime64, which ClickHouse
+// rejects in a TTL expression (it requires DateTime/Date), so it is downcast.
 func buildTTLClause(cfg Config) string {
 	var rules []string
 	if cfg.HotDays > 0 && cfg.StoragePolicy != "" {
@@ -79,10 +80,10 @@ func buildTTLClause(cfg Config) string {
 		if vol == "" {
 			vol = "s3"
 		}
-		rules = append(rules, fmt.Sprintf("timestamp + INTERVAL %d DAY TO VOLUME '%s'", cfg.HotDays, vol))
+		rules = append(rules, fmt.Sprintf("toDateTime(timestamp) + INTERVAL %d DAY TO VOLUME '%s'", cfg.HotDays, vol))
 	}
 	if cfg.RetentionDays > 0 {
-		rules = append(rules, fmt.Sprintf("timestamp + INTERVAL %d DAY DELETE", cfg.RetentionDays))
+		rules = append(rules, fmt.Sprintf("toDateTime(timestamp) + INTERVAL %d DAY DELETE", cfg.RetentionDays))
 	}
 	if len(rules) == 0 {
 		return ""

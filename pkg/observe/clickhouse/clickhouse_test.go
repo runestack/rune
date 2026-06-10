@@ -161,7 +161,7 @@ func TestBuildCreateTableDDL_WithTiering(t *testing.T) {
 		"ENGINE = MergeTree",
 		"PARTITION BY toDate(timestamp)",
 		"ORDER BY (namespace, service, timestamp)",
-		"TTL timestamp + INTERVAL 7 DAY TO VOLUME 's3', timestamp + INTERVAL 30 DAY DELETE",
+		"TTL toDateTime(timestamp) + INTERVAL 7 DAY TO VOLUME 's3', toDateTime(timestamp) + INTERVAL 30 DAY DELETE",
 		"SETTINGS storage_policy = 'runesight_tiered'",
 	} {
 		if !strings.Contains(ddl, want) {
@@ -187,7 +187,7 @@ func TestBuildCreateTableDDL_RetentionOnlyNoMove(t *testing.T) {
 	if strings.Contains(ddl, "TO VOLUME") {
 		t.Errorf("must not emit TO VOLUME without a storage policy:\n%s", ddl)
 	}
-	if !strings.Contains(ddl, "TTL timestamp + INTERVAL 30 DAY DELETE") {
+	if !strings.Contains(ddl, "TTL toDateTime(timestamp) + INTERVAL 30 DAY DELETE") {
 		t.Errorf("want retention DELETE TTL:\n%s", ddl)
 	}
 }
