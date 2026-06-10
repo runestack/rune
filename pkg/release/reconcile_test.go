@@ -34,11 +34,14 @@ func (f *fakeRecords) Save(_ context.Context, rel *types.Release) error {
 
 // fakeApplier records an ordered event log so tests can assert prune-last.
 type fakeApplier struct {
-	events       []string
-	pruned       []types.OwnerRef
-	verified     bool
-	failApplyKey string
-	failVerify   bool
+	events        []string
+	pruned        []types.OwnerRef
+	reverted      []types.OwnerRef
+	verified      bool
+	failApplyKey  string
+	failPruneKey  string
+	failRevertKey string
+	failVerify    bool
 }
 
 func (a *fakeApplier) Apply(_ context.Context, c PlannedChange) error {
@@ -50,6 +53,9 @@ func (a *fakeApplier) Apply(_ context.Context, c PlannedChange) error {
 }
 
 func (a *fakeApplier) Prune(_ context.Context, ref types.OwnerRef) error {
+	if a.failPruneKey != "" && ref.Key() == a.failPruneKey {
+		return errors.New("prune boom")
+	}
 	a.events = append(a.events, "prune:"+ref.Key())
 	a.pruned = append(a.pruned, ref)
 	return nil
@@ -61,6 +67,15 @@ func (a *fakeApplier) Verify(_ context.Context, _ []types.OwnerRef) error {
 	}
 	a.events = append(a.events, "verify")
 	a.verified = true
+	return nil
+}
+
+func (a *fakeApplier) Revert(_ context.Context, ref types.OwnerRef) error {
+	if a.failRevertKey != "" && ref.Key() == a.failRevertKey {
+		return errors.New("revert boom")
+	}
+	a.events = append(a.events, "revert:"+ref.Key())
+	a.reverted = append(a.reverted, ref)
 	return nil
 }
 
@@ -213,5 +228,145 @@ func TestPrepare_DetachWithPruneRefused(t *testing.T) {
 	}, recs, fakeLive{})
 	if !errors.Is(err, ErrDetachWouldPrune) {
 		t.Errorf("want ErrDetachWouldPrune, got %v", err)
+	}
+}
+
+// --- atomic rollback (Decision D3, --atomic) ---
+
+// An atomic apply failure reverts everything executed so far — including the
+// failing change itself (it may have half-applied) — in reverse order.
+func TestReconcile_Atomic_ApplyFailureReverts(t *testing.T) {
+	creds, web := secretRef("default", "creds"), svcRef("default", "web")
+	applier := &fakeApplier{failApplyKey: web.Key()} // secret lands, service fails
+	recs := newFakeRecords()
+
+	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Atomic: true,
+		Resources: desired(web, creds),
+	}, recs, fakeLive{}, applier)
+	if err == nil {
+		t.Fatal("expected apply error")
+	}
+	if rel.Status != types.ReleaseStatusFailed {
+		t.Errorf("status: want failed, got %q", rel.Status)
+	}
+	// Reverse execution order: the failing service first, then the secret.
+	want := []string{"apply:secret/default/creds", "revert:service/default/web", "revert:secret/default/creds"}
+	if strings.Join(applier.events, ",") != strings.Join(want, ",") {
+		t.Errorf("event order:\n got %v\nwant %v", applier.events, want)
+	}
+	if !strings.Contains(err.Error(), "rolled back") {
+		t.Errorf("error should note the rollback, got: %v", err)
+	}
+	// First install fully rolled back: the failed record owns nothing.
+	if len(rel.Owns) != 0 {
+		t.Errorf("owns after first-install rollback: want 0, got %v", rel.Owns)
+	}
+}
+
+// An atomic verify failure reverts every applied change.
+func TestReconcile_Atomic_VerifyFailureReverts(t *testing.T) {
+	creds, web := secretRef("default", "creds"), svcRef("default", "web")
+	applier := &fakeApplier{failVerify: true}
+
+	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Atomic: true,
+		Resources: desired(web, creds),
+	}, newFakeRecords(), fakeLive{}, applier)
+	if err == nil {
+		t.Fatal("expected verify error")
+	}
+	if rel.Status != types.ReleaseStatusFailed {
+		t.Errorf("status: want failed, got %q", rel.Status)
+	}
+	want := []string{
+		"apply:secret/default/creds", "apply:service/default/web",
+		"revert:service/default/web", "revert:secret/default/creds",
+	}
+	if strings.Join(applier.events, ",") != strings.Join(want, ",") {
+		t.Errorf("event order:\n got %v\nwant %v", applier.events, want)
+	}
+}
+
+// An atomic prune failure reverts the whole revision — applies and any prunes
+// that already ran — and restores the previous revision's owned set on the
+// failed record (live state is back to the previous revision's truth).
+func TestReconcile_Atomic_PruneFailureRevertsAll(t *testing.T) {
+	a, b := svcRef("default", "a"), svcRef("default", "b")
+	recs := newFakeRecords()
+	prevOwns := []types.OwnerRef{a, b}
+	recs.rels["default/rel"] = &types.Release{
+		Name: "rel", Namespace: "default", Revision: 1,
+		Status: types.ReleaseStatusDeployed, Owns: prevOwns,
+	}
+	applier := &fakeApplier{failPruneKey: b.Key()} // b dropped from desired → prune fails
+
+	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Atomic: true, Resources: desired(a),
+	}, recs, fakeLive{}, applier)
+	if err == nil {
+		t.Fatal("expected prune error")
+	}
+	if rel.Status != types.ReleaseStatusFailed {
+		t.Errorf("status: want failed, got %q", rel.Status)
+	}
+	want := []string{
+		"apply:service/default/a", "verify",
+		"revert:service/default/b", "revert:service/default/a",
+	}
+	if strings.Join(applier.events, ",") != strings.Join(want, ",") {
+		t.Errorf("event order:\n got %v\nwant %v", applier.events, want)
+	}
+	// The failed record's owned set reflects restored reality: the previous
+	// revision's resources (including b, which the failed prune would have
+	// removed from Owns).
+	if len(rel.Owns) != len(prevOwns) {
+		t.Errorf("owns after rollback: want %d (previous revision's), got %v", len(prevOwns), rel.Owns)
+	}
+}
+
+// A failing revert doesn't strand the rest of the rollback: remaining changes
+// still revert, and the error carries both the cause and the revert failure.
+func TestReconcile_Atomic_RevertFailureAggregates(t *testing.T) {
+	creds, web := secretRef("default", "creds"), svcRef("default", "web")
+	applier := &fakeApplier{failVerify: true, failRevertKey: web.Key()}
+
+	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Atomic: true,
+		Resources: desired(web, creds),
+	}, newFakeRecords(), fakeLive{}, applier)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if rel.Status != types.ReleaseStatusFailed {
+		t.Errorf("status: want failed, got %q", rel.Status)
+	}
+	// The secret still reverted despite the service revert failing.
+	if len(applier.reverted) != 1 || applier.reverted[0].Key() != creds.Key() {
+		t.Errorf("secret should still revert, got %v", applier.reverted)
+	}
+	for _, fragment := range []string{"unhealthy", "rollback incomplete", web.Key()} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("error should contain %q, got: %v", fragment, err)
+		}
+	}
+}
+
+// Without Atomic, a failure reverts nothing (today's leave-as-failed default).
+func TestReconcile_NonAtomic_DoesNotRevert(t *testing.T) {
+	web := svcRef("default", "web")
+	applier := &fakeApplier{failVerify: true}
+
+	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Resources: desired(web),
+	}, newFakeRecords(), fakeLive{}, applier)
+	if err == nil {
+		t.Fatal("expected verify error")
+	}
+	if rel.Status != types.ReleaseStatusFailed {
+		t.Errorf("status: want failed, got %q", rel.Status)
+	}
+	if len(applier.reverted) != 0 {
+		t.Errorf("non-atomic failure must not revert, got %v", applier.reverted)
 	}
 }

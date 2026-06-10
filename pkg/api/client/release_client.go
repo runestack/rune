@@ -235,6 +235,7 @@ func specToProto(spec release.ReleaseSpec) *generated.ReleaseSpec {
 		RenderedDigest: spec.RenderedDigest,
 		Adopt:          spec.Options.Adopt,
 		Detach:         spec.Detach,
+		Atomic:         spec.Atomic,
 	}
 	if len(spec.Values) > 0 {
 		if b, err := json.Marshal(spec.Values); err == nil {
