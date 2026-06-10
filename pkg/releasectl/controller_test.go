@@ -196,3 +196,133 @@ func TestPlan_NoApply(t *testing.T) {
 		t.Errorf("Plan should not persist a release record")
 	}
 }
+
+// --- atomic rollback against the real applier (--atomic, D3) ---
+
+// An atomic cast whose apply fails midway deletes the resources it created.
+// The service payload is deliberately missing, so the secret (rank 4) applies
+// first and the service (rank 5) fails — the secret must then be rolled back.
+func TestCast_Atomic_ApplyFailureCleansUpCreates(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+
+	sref := svcRef("default", "web")
+	scrref := secretRef("default", "creds")
+	spec := release.ReleaseSpec{
+		Name:      "app",
+		Namespace: "default",
+		Atomic:    true,
+		Resources: []release.DesiredResource{{Ref: sref}, {Ref: scrref}},
+	}
+	payloads := Payloads{
+		// No service payload → Apply fails after the secret has been created.
+		Secrets: map[string]*types.Secret{
+			scrref.Key(): {Name: "creds", Namespace: "default", Type: "static",
+				Data: map[string]string{"password": "hunter2"}},
+		},
+	}
+
+	rel, _, err := c.Cast(ctx, spec, payloads)
+	if err == nil {
+		t.Fatal("expected cast to fail (missing service payload)")
+	}
+	if rel == nil || rel.Status != types.ReleaseStatusFailed {
+		t.Fatalf("want failed release record, got %+v", rel)
+	}
+	// The created secret must be gone again.
+	if _, err := c.secrets.Get(ctx, "default", "creds"); err == nil {
+		t.Errorf("secret should have been rolled back (deleted)")
+	}
+	// Rolled back to nothing: the failed record owns nothing.
+	if len(rel.Owns) != 0 {
+		t.Errorf("owns after first-install rollback: want 0, got %v", rel.Owns)
+	}
+}
+
+// An atomic upgrade whose apply fails after updating a secret restores the
+// secret's previous revision — INCLUDING its Data values (json:"-", stored
+// encrypted separately) and the previous OwnedBy stamp.
+func TestCast_Atomic_UpdateFailureRestoresSecret(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+
+	scrref := secretRef("default", "creds")
+	v1 := Payloads{
+		Secrets: map[string]*types.Secret{
+			scrref.Key(): {Name: "creds", Namespace: "default", Type: "static",
+				Data: map[string]string{"password": "v1-value"}},
+		},
+	}
+	if _, _, err := c.Cast(ctx, release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: scrref}},
+	}, v1); err != nil {
+		t.Fatalf("cast v1: %v", err)
+	}
+
+	// Revision 2 (atomic): update the secret AND add a service whose payload is
+	// missing — the secret update lands, then the service apply fails.
+	sref := svcRef("default", "web")
+	v2 := Payloads{
+		Secrets: map[string]*types.Secret{
+			scrref.Key(): {Name: "creds", Namespace: "default", Type: "static",
+				Data: map[string]string{"password": "v2-value"}},
+		},
+	}
+	rel, _, err := c.Cast(ctx, release.ReleaseSpec{
+		Name: "app", Namespace: "default", Atomic: true,
+		Resources: []release.DesiredResource{{Ref: scrref}, {Ref: sref}},
+	}, v2)
+	if err == nil {
+		t.Fatal("expected cast v2 to fail (missing service payload)")
+	}
+	if rel == nil || rel.Status != types.ReleaseStatusFailed {
+		t.Fatalf("want failed release record, got %+v", rel)
+	}
+
+	// The secret must be back at revision 1's state: v1 Data and OwnedBy rev 1.
+	got, err := c.secrets.Get(ctx, "default", "creds")
+	if err != nil {
+		t.Fatalf("secret should still exist after rollback: %v", err)
+	}
+	if got.Data["password"] != "v1-value" {
+		t.Errorf("secret data: want restored %q, got %q", "v1-value", got.Data["password"])
+	}
+	if got.OwnedBy == nil || got.OwnedBy.Revision != 1 {
+		t.Errorf("OwnedBy: want revision 1 restored, got %+v", got.OwnedBy)
+	}
+	// The failed record's owned set reflects restored reality (revision 1's).
+	if len(rel.Owns) != 1 || rel.Owns[0].Key() != scrref.Key() {
+		t.Errorf("owns after rollback: want just the secret, got %v", rel.Owns)
+	}
+}
+
+// Without --atomic the same failure leaves the half-applied state in place
+// (today's default), so operators can inspect what landed.
+func TestCast_NonAtomic_LeavesPartialState(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+
+	sref := svcRef("default", "web")
+	scrref := secretRef("default", "creds")
+	payloads := Payloads{
+		Secrets: map[string]*types.Secret{
+			scrref.Key(): {Name: "creds", Namespace: "default", Type: "static",
+				Data: map[string]string{"password": "hunter2"}},
+		},
+	}
+	rel, _, err := c.Cast(ctx, release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: sref}, {Ref: scrref}},
+	}, payloads)
+	if err == nil {
+		t.Fatal("expected cast to fail (missing service payload)")
+	}
+	if rel == nil || rel.Status != types.ReleaseStatusFailed {
+		t.Fatalf("want failed release record, got %+v", rel)
+	}
+	// The created secret stays (no rollback by default).
+	if _, err := c.secrets.Get(ctx, "default", "creds"); err != nil {
+		t.Errorf("secret should remain without --atomic: %v", err)
+	}
+}

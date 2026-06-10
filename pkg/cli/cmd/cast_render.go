@@ -383,6 +383,7 @@ func (r *renderedRelease) toReleaseSpec(name string, src types.ReleaseSource, op
 		Resources:      r.resources,
 		Options:        release.Options{Adopt: opts.adopt},
 		Detach:         opts.detach,
+		Atomic:         opts.atomic,
 	}
 }
 

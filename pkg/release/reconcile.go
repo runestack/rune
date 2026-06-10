@@ -3,6 +3,7 @@ package release
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/runestack/rune/pkg/types"
@@ -34,6 +35,14 @@ type ReleaseSpec struct {
 	// Detach requests create/update-only async completion (Decision C3). A
 	// detach spec whose plan prunes is rejected with ErrDetachWouldPrune.
 	Detach bool
+
+	// Atomic opts into rollback-on-failure (Decision D3, Helm parity): if any
+	// apply, verify, or prune step fails, every change this revision already
+	// made is reverted — creates deleted, updates and prunes restored from
+	// their pre-cast state — so the cast lands fully applied or not at all.
+	// The release is still recorded `failed` (the rollback is noted in the
+	// cause); the default (false) keeps today's leave-as-failed behavior.
+	Atomic bool
 }
 
 // Applier executes individual plan actions against the cluster. Implemented
@@ -45,6 +54,12 @@ type Applier interface {
 	Prune(ctx context.Context, ref types.OwnerRef) error
 	// Verify blocks until the given owned resources are healthy (or errors).
 	Verify(ctx context.Context, refs []types.OwnerRef) error
+	// Revert restores a resource to the pre-image captured before this cast
+	// first touched it (via Apply or Prune): a resource that did not exist is
+	// deleted, one that did is restored to that prior state. Used only by
+	// atomic rollback; must tolerate the change having half-applied or not
+	// applied at all.
+	Revert(ctx context.Context, ref types.OwnerRef) error
 }
 
 // ReleaseRecords is the persistence the reconciler needs (satisfied by
@@ -126,20 +141,46 @@ func Prepare(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live Li
 	applies, prunes := splitForExecution(plan)
 
 	exec := func(ctx context.Context, applier Applier) (*types.Release, error) {
+		// done logs every change in execution order so atomic rollback can
+		// revert in reverse. The failing change is included: it may have
+		// half-applied, and Revert tolerates a change that never landed.
+		var done []PlannedChange
+
+		fail := func(cause error) (*types.Release, error) {
+			if spec.Atomic {
+				if rerr := revertChanges(ctx, applier, done); rerr != nil {
+					cause = errors.Join(cause,
+						fmt.Errorf("atomic rollback incomplete: %w", rerr))
+				} else {
+					// Live state is back to the previous revision's; make the
+					// failed record's owned set reflect that reality.
+					if prev != nil {
+						rel.Owns, rel.References = prev.Owns, prev.References
+					} else {
+						rel.Owns, rel.References = nil, nil
+					}
+					cause = fmt.Errorf("%w (atomic: this revision's changes were rolled back)", cause)
+				}
+			}
+			return failRelease(ctx, recs, rel, cause)
+		}
+
 		// Apply create/update/adopt/reference in dependency order.
 		for _, change := range applies {
+			done = append(done, change)
 			if err := applier.Apply(ctx, change); err != nil {
-				return failRelease(ctx, recs, rel, err)
+				return fail(err)
 			}
 		}
 		// Verify owned resources are healthy before any destructive step.
 		if err := applier.Verify(ctx, owns); err != nil {
-			return failRelease(ctx, recs, rel, err)
+			return fail(err)
 		}
 		// Prune last (never reached on a failed apply/verify).
 		for _, change := range prunes {
+			done = append(done, change)
 			if err := applier.Prune(ctx, change.Ref); err != nil {
-				return failRelease(ctx, recs, rel, err)
+				return fail(err)
 			}
 		}
 		rel.Status = types.ReleaseStatusDeployed
@@ -157,8 +198,10 @@ func Prepare(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live Li
 //	plan → write pending intent → apply (ordered) → verify → prune-last → deployed
 //
 // It is Prepare followed by Execute. On apply/verify failure it records the
-// release as failed and returns; nothing is pruned (Decision D3). Detach callers
-// use Prepare + a background Execute instead (see releasectl.Controller.Cast).
+// release as failed and returns; nothing is pruned (Decision D3). With
+// spec.Atomic, the failure path additionally reverts every change this revision
+// made before recording `failed`. Detach callers use Prepare + a background
+// Execute instead (see releasectl.Controller.Cast).
 func Reconcile(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live LiveLookup, applier Applier) (*types.Release, *Plan, error) {
 	prep, err := Prepare(ctx, spec, recs, live)
 	if err != nil {
@@ -180,6 +223,23 @@ func failRelease(ctx context.Context, recs ReleaseRecords, rel *types.Release, c
 	rel.Status = types.ReleaseStatusFailed
 	_ = recs.Save(ctx, rel)
 	return rel, cause
+}
+
+// revertChanges undoes executed changes in reverse execution order (atomic
+// rollback). References are skipped (Apply never materializes them). Revert is
+// best-effort across the set: a failed revert doesn't strand the rest; all
+// failures are aggregated so the operator sees exactly what was left behind.
+func revertChanges(ctx context.Context, applier Applier, done []PlannedChange) error {
+	var errs []error
+	for i := len(done) - 1; i >= 0; i-- {
+		if done[i].Action == ActionReference {
+			continue
+		}
+		if err := applier.Revert(ctx, done[i].Ref); err != nil {
+			errs = append(errs, fmt.Errorf("revert %s: %w", done[i].Ref.Key(), err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // partitionOwnership splits a plan's resources into owned (create/update/adopt)

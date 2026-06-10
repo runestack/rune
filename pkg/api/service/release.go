@@ -179,6 +179,7 @@ func protoToSpec(p *generated.ReleaseSpec) (release.ReleaseSpec, error) {
 		RenderedDigest: p.GetRenderedDigest(),
 		Options:        release.Options{Adopt: p.GetAdopt()},
 		Detach:         p.GetDetach(),
+		Atomic:         p.GetAtomic(),
 	}
 	mf, err := protoToManifest(p.GetManifest())
 	if err != nil {

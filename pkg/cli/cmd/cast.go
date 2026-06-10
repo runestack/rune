@@ -36,6 +36,7 @@ type castOptions struct {
 
 	// Stateful-release flags (CAST_REFACTOR_PLAN §7)
 	adopt      bool   // take over unmanaged / foreign-owned resources (--adopt)
+	atomic     bool   // roll back this revision's changes on failure (--atomic, D3)
 	yes        bool   // skip the confirm prompt for prune/adopt plans (--yes)
 	outputJSON bool   // emit structured plan + result (--output json)
 	output     string // raw --output value
@@ -105,6 +106,7 @@ func newCastCmd() *cobra.Command {
 
 	// Stateful-release flags (CAST_REFACTOR_PLAN §7)
 	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "Take over resources that are unmanaged or owned by another release")
+	cmd.Flags().BoolVar(&opts.atomic, "atomic", false, "Roll back this cast's changes if it fails (note: a verify timeout also triggers rollback)")
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "Skip the confirmation prompt for plans that prune or adopt")
 	cmd.Flags().StringVarP(&opts.output, "output", "o", "", "Output format: json (emit structured plan + result)")
 	return cmd

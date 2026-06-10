@@ -84,6 +84,7 @@ message ReleaseSpec {
   bool adopt = 8;                  // take over unmanaged / foreign-owned resources
   bool detach = 9;                 // create/update-only async completion (C3)
   RenderedPayloads payloads = 10;  // populated for Cast; ignored by Plan
+  bool atomic = 11;                // roll back this revision's changes on failure (D3)
 }
 
 // Action mirrors release.Action — the reconcile verb for a single resource.

@@ -519,6 +519,7 @@ type ReleaseSpec struct {
 	Adopt          bool                   `protobuf:"varint,8,opt,name=adopt,proto3" json:"adopt,omitempty"`        // take over unmanaged / foreign-owned resources
 	Detach         bool                   `protobuf:"varint,9,opt,name=detach,proto3" json:"detach,omitempty"`      // create/update-only async completion (C3)
 	Payloads       *RenderedPayloads      `protobuf:"bytes,10,opt,name=payloads,proto3" json:"payloads,omitempty"`  // populated for Cast; ignored by Plan
+	Atomic         bool                   `protobuf:"varint,11,opt,name=atomic,proto3" json:"atomic,omitempty"`     // roll back this revision's changes on failure (D3)
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -621,6 +622,13 @@ func (x *ReleaseSpec) GetPayloads() *RenderedPayloads {
 		return x.Payloads
 	}
 	return nil
+}
+
+func (x *ReleaseSpec) GetAtomic() bool {
+	if x != nil {
+		return x.Atomic
+	}
+	return false
 }
 
 // PlannedChange pairs a resource ref with its planned action and, when the
@@ -1463,7 +1471,7 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
 	"\fVolumesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x89\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa1\x03\n" +
 	"\vReleaseSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12/\n" +
@@ -1476,7 +1484,8 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"\x05adopt\x18\b \x01(\bR\x05adopt\x12\x16\n" +
 	"\x06detach\x18\t \x01(\bR\x06detach\x126\n" +
 	"\bpayloads\x18\n" +
-	" \x01(\v2\x1a.rune.api.RenderedPayloadsR\bpayloads\"\x88\x01\n" +
+	" \x01(\v2\x1a.rune.api.RenderedPayloadsR\bpayloads\x12\x16\n" +
+	"\x06atomic\x18\v \x01(\bR\x06atomic\"\x88\x01\n" +
 	"\rPlannedChange\x12$\n" +
 	"\x03ref\x18\x01 \x01(\v2\x12.rune.api.OwnerRefR\x03ref\x12(\n" +
 	"\x06action\x18\x02 \x01(\x0e2\x10.rune.api.ActionR\x06action\x12'\n" +
