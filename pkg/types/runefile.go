@@ -365,9 +365,14 @@ type StorageConfig struct {
 //	  enabled: true
 //	  backend: embedded        # embedded | clickhouse | loki
 //	  retention_days: 7
-//	  objectStore:             # only for clickhouse/loki cold tier
-//	    enabled: false
-//	    endpoint: ""
+//	  loki:                    # only for backend: loki
+//	    url: http://loki:3100
+//	    tenant_id: ""
+//	  clickhouse:              # only for backend: clickhouse
+//	    dsn: clickhouse://user:pass@host:9000/runesight
+//	    auto_migrate: true
+//	    storage_policy: ""     # enables S3 tiering when set
+//	    hot_days: 7
 type ObservabilityConfig struct {
 	// Enabled turns the forwarder + log store on. Default false (opt-in):
 	// the embedded store is lightweight but logging every workload line is
@@ -379,23 +384,51 @@ type ObservabilityConfig struct {
 	// optional clickhouse / loki sinks.
 	Backend string `yaml:"backend,omitempty"`
 
-	// RetentionDays bounds how long the embedded store keeps records. 0 uses
-	// the store default (7 days). Ignored by external backends, which manage
-	// their own retention.
+	// RetentionDays bounds record age: the embedded store's sweep, and the
+	// ClickHouse table's DELETE TTL. 0 uses the backend default. Loki manages
+	// its own retention server-side.
 	RetentionDays int `yaml:"retention_days,omitempty"`
 
-	// ObjectStore configures an optional S3-compatible cold tier for the
-	// clickhouse/loki backends. Ignored by the embedded backend.
-	ObjectStore *ObjectStoreConfig `yaml:"objectStore,omitempty"`
+	// Loki configures the loki backend. Parallel to internal/config.LokiConfig.
+	Loki *LokiConfig `yaml:"loki,omitempty"`
+
+	// ClickHouse configures the clickhouse backend, including S3 tiering.
+	// Parallel to internal/config.ClickHouseConfig.
+	ClickHouse *ClickHouseConfig `yaml:"clickhouse,omitempty"`
 }
 
-// ObjectStoreConfig configures the optional S3-compatible cold tier for the
-// external observability backends (DigitalOcean Spaces / MinIO / R2).
-type ObjectStoreConfig struct {
-	Enabled  bool   `yaml:"enabled,omitempty"`
-	Endpoint string `yaml:"endpoint,omitempty"`
-	Bucket   string `yaml:"bucket,omitempty"`
-	Region   string `yaml:"region,omitempty"`
+// LokiConfig is the runefile block for the loki observability backend. Loki
+// is object-storage-native (no tiering knobs here — point Loki itself at a
+// bucket); this block only says where Loki is.
+type LokiConfig struct {
+	// URL is the Loki HTTP endpoint (e.g. http://loki:3100).
+	URL string `yaml:"url,omitempty"`
+	// TenantID is sent as X-Scope-OrgID for multi-tenant Loki.
+	TenantID string `yaml:"tenant_id,omitempty"`
+}
+
+// ClickHouseConfig is the runefile block for the clickhouse observability
+// backend. ClickHouse is local-disk-first; long retention is S3 tiering — a
+// TTL move-to-volume against a server-configured storage policy (the policy
+// and its S3 credentials live in ClickHouse server config, not here).
+type ClickHouseConfig struct {
+	// DSN is the connection string (clickhouse://user:pass@host:9000/db).
+	DSN string `yaml:"dsn,omitempty"`
+	// Database is the target database (default "runesight").
+	Database string `yaml:"database,omitempty"`
+	// Table is the target log table (default "logs").
+	Table string `yaml:"table,omitempty"`
+	// AutoMigrate creates the database/table on first connect (default true).
+	AutoMigrate bool `yaml:"auto_migrate,omitempty"`
+	// StoragePolicy is the server-configured policy naming the hot + s3
+	// volumes. Empty disables tiering.
+	StoragePolicy string `yaml:"storage_policy,omitempty"`
+	// S3Volume is the volume within StoragePolicy aged parts move to
+	// (default "s3").
+	S3Volume string `yaml:"s3_volume,omitempty"`
+	// HotDays moves parts older than this to S3Volume. 0 keeps everything
+	// on the hot disk.
+	HotDays int `yaml:"hot_days,omitempty"`
 }
 
 // ParseRuneFile parses a Rune configuration file from the given file
@@ -702,15 +735,23 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 		"require_tls":     true,
 
 		// native observability (RuneSight): observability.{enabled,backend,
-		// retention_days, objectStore.{enabled,endpoint,bucket,region}}.
-		// "enabled"/"endpoint" are shared with other blocks.
-		// ("region" is already accepted via the docker-registry keys below.)
+		// retention_days, loki.{url,tenant_id}, clickhouse.{dsn,database,
+		// table,auto_migrate,storage_policy,s3_volume,hot_days}}.
+		// "enabled" is shared with other blocks.
 		"observability":  true,
 		"backend":        true,
 		"retention_days": true,
-		"objectstore":    true,
-		"endpoint":       true,
-		"bucket":         true,
+		"loki":           true,
+		"url":            true,
+		"tenant_id":      true,
+		"clickhouse":     true,
+		"dsn":            true,
+		"database":       true,
+		"table":          true,
+		"auto_migrate":   true,
+		"storage_policy": true,
+		"s3_volume":      true,
+		"hot_days":       true,
 
 		// storage.* (typed knobs + opaque per-driver maps; key names
 		// under .drivers are driver-specific so we accept anything

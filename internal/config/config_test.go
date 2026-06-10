@@ -49,10 +49,16 @@ observability:
   enabled: true
   backend: loki
   retention_days: 14
-  objectStore:
-    enabled: true
-    endpoint: http://loki:3100
-    bucket: rune-logs
+  loki:
+    url: http://loki:3100
+    tenant_id: team-a
+  clickhouse:
+    dsn: clickhouse://default:pw@ch:9000/runesight
+    database: runesight
+    table: logs
+    storage_policy: runesight_tiered
+    s3_volume: cold
+    hot_days: 7
 failed_instance_retention:
   per_service_cap: 9
   ttl: 36h
@@ -84,13 +90,41 @@ failed_instance_retention:
 	assert.Equal(t, 36*time.Hour, cfg.FailedInstanceRetention.TTL,
 		"failed_instance_retention.ttl (duration)")
 
-	// Single-word and camelCase keys that worked before must keep working.
+	// The observability backend blocks (loki / clickhouse incl. S3 tiering).
+	assert.Equal(t, "http://loki:3100", cfg.Observability.Loki.URL, "loki.url")
+	assert.Equal(t, "team-a", cfg.Observability.Loki.TenantID, "loki.tenant_id")
+	assert.Equal(t, "clickhouse://default:pw@ch:9000/runesight", cfg.Observability.ClickHouse.DSN, "clickhouse.dsn")
+	assert.Equal(t, "runesight", cfg.Observability.ClickHouse.Database, "clickhouse.database")
+	assert.Equal(t, "logs", cfg.Observability.ClickHouse.Table, "clickhouse.table")
+	assert.Equal(t, "runesight_tiered", cfg.Observability.ClickHouse.StoragePolicy, "clickhouse.storage_policy")
+	assert.Equal(t, "cold", cfg.Observability.ClickHouse.S3Volume, "clickhouse.s3_volume")
+	assert.Equal(t, 7, cfg.Observability.ClickHouse.HotDays, "clickhouse.hot_days")
+	assert.True(t, cfg.Observability.ClickHouse.AutoMigrate, "clickhouse.auto_migrate defaults true when unset")
+
+	// Single-word keys that worked before must keep working.
 	assert.Equal(t, "staging", cfg.Namespace, "namespace")
 	assert.True(t, cfg.Observability.Enabled, "observability.enabled")
 	assert.Equal(t, "loki", cfg.Observability.Backend, "observability.backend")
-	assert.True(t, cfg.Observability.ObjectStore.Enabled, "objectStore.enabled")
-	assert.Equal(t, "http://loki:3100", cfg.Observability.ObjectStore.Endpoint, "objectStore.endpoint")
-	assert.Equal(t, "rune-logs", cfg.Observability.ObjectStore.Bucket, "objectStore.bucket")
+}
+
+// auto_migrate defaults to true (zero-config schema creation) and an explicit
+// `auto_migrate: false` must override the default — the classic viper trap of
+// a bool default being indistinguishable from an unset key.
+func TestLoad_ClickHouseAutoMigrateExplicitFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runefile.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+observability:
+  backend: clickhouse
+  clickhouse:
+    dsn: clickhouse://ch:9000/runesight
+    auto_migrate: false
+`), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.Observability.ClickHouse.AutoMigrate, "explicit auto_migrate: false must win over the true default")
+	assert.Equal(t, "clickhouse://ch:9000/runesight", cfg.Observability.ClickHouse.DSN)
 }
 
 // Keys absent from the runefile keep their Default() values.

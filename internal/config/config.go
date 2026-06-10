@@ -223,9 +223,17 @@ type Storage struct {
 //	  enabled: true
 //	  backend: embedded        # embedded | clickhouse | loki
 //	  retention_days: 7
-//	  objectStore:
-//	    enabled: false
-//	    endpoint: ""
+//	  loki:                    # only for backend: loki
+//	    url: http://loki:3100
+//	    tenant_id: ""
+//	  clickhouse:              # only for backend: clickhouse
+//	    dsn: clickhouse://user:pass@host:9000/runesight
+//	    database: runesight
+//	    table: logs
+//	    auto_migrate: true
+//	    storage_policy: ""     # server-side policy naming hot+s3 volumes
+//	    s3_volume: s3
+//	    hot_days: 0            # move parts older than N days to s3_volume
 type Observability struct {
 	// Enabled turns the agent forwarder + log store on. Default false
 	// (opt-in): a bare install stays on the live ephemeral log stream.
@@ -234,22 +242,51 @@ type Observability struct {
 	// Backend selects the log store: embedded (default), clickhouse, or loki.
 	Backend string `yaml:"backend,omitempty"`
 
-	// RetentionDays bounds the embedded store's record age. 0 => store
-	// default (7d). External backends manage their own retention.
+	// RetentionDays bounds record age: the embedded store's sweep, and the
+	// ClickHouse table's DELETE TTL. 0 => backend default. Loki manages its
+	// own retention server-side.
 	RetentionDays int `yaml:"retention_days,omitempty"`
 
-	// ObjectStore configures an optional S3-compatible cold tier for the
-	// external backends.
-	ObjectStore ObjectStore `yaml:"objectStore,omitempty"`
+	// Loki configures the loki backend.
+	Loki LokiConfig `yaml:"loki,omitempty"`
+
+	// ClickHouse configures the clickhouse backend, including S3 tiering.
+	ClickHouse ClickHouseConfig `yaml:"clickhouse,omitempty"`
 }
 
-// ObjectStore configures the optional S3-compatible cold tier (DigitalOcean
-// Spaces / MinIO / R2) for the external observability backends.
-type ObjectStore struct {
-	Enabled  bool   `yaml:"enabled,omitempty"`
-	Endpoint string `yaml:"endpoint,omitempty"`
-	Bucket   string `yaml:"bucket,omitempty"`
-	Region   string `yaml:"region,omitempty"`
+// LokiConfig is the runefile block for the loki backend. Loki is
+// object-storage-native, so there is no tiering here — point Loki itself at a
+// bucket; this block only says where Loki is.
+type LokiConfig struct {
+	// URL is the Loki HTTP endpoint (e.g. http://loki:3100).
+	URL string `yaml:"url,omitempty"`
+	// TenantID is sent as X-Scope-OrgID for multi-tenant Loki.
+	TenantID string `yaml:"tenant_id,omitempty"`
+}
+
+// ClickHouseConfig is the runefile block for the clickhouse backend.
+// ClickHouse is local-disk-first; long retention is S3 *tiering*: a TTL
+// move-to-volume against a server-configured storage policy (the policy and
+// its S3 credentials live in ClickHouse server config, not here).
+type ClickHouseConfig struct {
+	// DSN is the connection string (clickhouse://user:pass@host:9000/db).
+	DSN string `yaml:"dsn,omitempty"`
+	// Database is the target database (default "runesight").
+	Database string `yaml:"database,omitempty"`
+	// Table is the target log table (default "logs").
+	Table string `yaml:"table,omitempty"`
+	// AutoMigrate creates the database/table on first connect. Default true
+	// (zero-config); set false when operators manage the schema themselves.
+	AutoMigrate bool `yaml:"auto_migrate,omitempty"`
+	// StoragePolicy is the server-configured policy naming the hot + s3
+	// volumes. Empty disables tiering.
+	StoragePolicy string `yaml:"storage_policy,omitempty"`
+	// S3Volume is the volume within StoragePolicy that aged parts move to
+	// (default "s3").
+	S3Volume string `yaml:"s3_volume,omitempty"`
+	// HotDays moves parts older than this to S3Volume. 0 keeps all parts on
+	// the hot disk.
+	HotDays int `yaml:"hot_days,omitempty"`
 }
 
 type Config struct {
@@ -330,6 +367,10 @@ func Default() *Config {
 		ConfigResource: struct {
 			Limits store.Limits `yaml:"limits"`
 		}{Limits: store.Limits{MaxObjectBytes: 1 << 20, MaxKeyNameLength: 256}},
+		// AutoMigrate defaults on so the analytical backend works zero-config;
+		// a runefile `auto_migrate: false` overrides it for operator-managed
+		// schemas.
+		Observability: Observability{ClickHouse: ClickHouseConfig{AutoMigrate: true}},
 		FailedInstanceRetention: FailedInstanceRetention{
 			PerServiceCap:    3,
 			TTL:              1 * time.Hour,
