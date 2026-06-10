@@ -4,12 +4,10 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT_DIR"
 
-echo "[E2E] Building test server and CLI..."
-go build -o bin/runed-test ./cmd/runed-test
-go build -o bin/rune ./cmd/rune
+# The harness builds runed + rune itself (once per test process), so no
+# pre-build step is needed here. Readiness window is env-tunable for
+# slow CI runners.
+export RUNE_E2E_HEALTH_TIMEOUT_SECONDS=${RUNE_E2E_HEALTH_TIMEOUT_SECONDS:-60}
 
-# Increase HTTP health wait or allow override
-export RUNE_E2E_HEALTH_TIMEOUT_SECONDS=${RUNE_E2E_HEALTH_TIMEOUT_SECONDS:-30}
-
-echo "[E2E] Running tests with -tags=e2e"
-go test ./test/e2e -tags=e2e -v
+echo "[E2E] Running tests with -tags=e2e (real runed server)"
+go test ./test/e2e/... -tags=e2e -v -timeout 20m "$@"
