@@ -223,8 +223,9 @@ func (s *APIServer) Start() error {
 	// Native observability (RuneSight). A nil ObserveStore means the
 	// runefile [observability] block was absent or disabled; the service
 	// still registers but reports enabled=false so clients fall back to the
-	// live ephemeral log stream.
-	s.observeService = service.NewObserveService(s.options.ObserveStore, s.logger)
+	// live ephemeral log stream. Saved views persist in the state store and
+	// work regardless of which log backend (if any) is wired.
+	s.observeService = service.NewObserveService(s.options.ObserveStore, repos.NewSavedViewRepo(s.store), s.logger)
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)

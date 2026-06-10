@@ -243,6 +243,7 @@ mark.rs-mark { background: rgba(246,217,8,.26); color: var(--text); border-radiu
 @media (max-width: 720px) { .rs-vgrid { grid-template-columns: 1fr; } }
 .rs-vcard { display: flex; flex-direction: column; gap: 12px; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px 18px; cursor: pointer; font-family: var(--sans); transition: border-color .14s, transform .14s; }
 .rs-vcard:hover { border-color: var(--accent-line); }
+.rs-vcard:hover .rs-saved-del { opacity: 1; }
 .rs-vcard-head { display: flex; align-items: center; gap: 10px; }
 .rs-vrow-ico { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 8px; background: var(--accent-dim); color: var(--accent-text); border: 1px solid var(--accent-line); }
 .rs-vrow-ico.tone-red { background: var(--fail-dim); color: var(--fail); border-color: rgba(229,72,77,.3); }

@@ -58,6 +58,10 @@ const (
 	// revisioned record of what a `rune cast` installed, used for list / diff /
 	// rollback / clean uninstall. See _docs/plugins/RUNESET_STATEFUL_RELEASES.md.
 	ResourceTypeRelease ResourceType = "release"
+
+	// ResourceTypeSavedView represents a cluster-scoped RuneSight saved view
+	// (a named Log Explorer query: LogQL + relative time range).
+	ResourceTypeSavedView ResourceType = "saved_view"
 )
 
 // RunnerType is the type of runner for an instance.

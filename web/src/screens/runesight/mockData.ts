@@ -2,27 +2,15 @@
    RuneSight — mocked metadata for surfaces without a backend yet.
 
    The live log query / histogram / facets come from ObserveService
-   (see ../../api/observe). Saved Views, Alert Rules and Notification
+   (see ../../api/observe), and Saved Views are live via the saved-view
+   RPCs (see ../../api/savedViews). Alert Rules and Notification
    Channels have no server seam yet, so we ship the design's mock data
    (ported from the design bundle's runesight-data.js) to render the
-   Saved Queries panel, the Saved Views screen, and the nav badges.
+   Alerts screen and the nav badges.
    ============================================================ */
 import type { LogQuery } from "../../api/observe";
 import { normQuery, toLogQL } from "../../api/observe";
 import type { IconName } from "../../components";
-
-export interface SavedView {
-  id: string;
-  name: string;
-  icon: IconName;
-  q: Partial<LogQuery>;
-  owner: string;
-  last: string;
-  pinned: boolean;
-  /** approximate 24h line count — mocked since there's no aggregate seam */
-  count: number;
-  desc?: string;
-}
 
 export interface AlertRule {
   id: string;
@@ -43,16 +31,6 @@ export interface Channel {
   state: "healthy" | "degraded" | "down";
   last: string;
 }
-
-/* ---- saved views (design: RSIGHT.savedViews) ---- */
-export const SAVED_VIEWS: SavedView[] = [
-  { id: "v1", name: "Payment errors", icon: "alert", q: { services: ["payments"], levels: ["error", "warn"] }, owner: "ore", last: "2m ago", pinned: true, count: 123 },
-  { id: "v2", name: "Checkout 503s", icon: "bolt", q: { text: "503" }, owner: "dele.k", last: "18m ago", pinned: true, count: 151 },
-  { id: "v3", name: "Auth failures", icon: "shield", q: { services: ["auth-service"], levels: ["error"] }, owner: "ada.m", last: "1h ago", pinned: false, count: 17 },
-  { id: "v4", name: "Slow upstreams", icon: "clock", q: { levels: ["warn"], text: "latency" }, owner: "ore", last: "3h ago", pinned: false, count: 128 },
-  { id: "v5", name: "5xx — api-core", icon: "health", q: { namespaces: ["production"], services: ["api-core"], text: "500" }, owner: "sre", last: "yesterday", pinned: false, count: 7 },
-  { id: "v6", name: "Deploy activity — indexer", icon: "refresh", q: { services: ["search-indexer"] }, owner: "ci-deployer", last: "3m ago", pinned: false, count: 64 },
-];
 
 /* ---- notification channels (design: RSIGHT.channels) ---- */
 export const CHANNELS: Channel[] = [

@@ -445,6 +445,18 @@ func (s *TestStore) Get(ctx context.Context, resourceType types.ResourceType, na
 				return nil
 			}
 
+		case *types.SavedView:
+			if targetView, ok := resource.(*types.SavedView); ok && storedData != nil {
+				*targetView = *storedData
+				return nil
+			}
+
+		case types.SavedView:
+			if targetView, ok := resource.(*types.SavedView); ok {
+				*targetView = storedData
+				return nil
+			}
+
 		}
 
 		// Store the data - for testing we assume this will work

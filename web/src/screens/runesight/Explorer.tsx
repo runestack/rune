@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Drawer, Icon } from "../../components";
 import {
-  emptyQuery, facetsFromLines, runQuery, toggleFacet, toLogQL, normQuery, LABEL_KEYS,
+  emptyQuery, facetsFromLines, runQuery, toggleFacet, toLogQL, normQuery, parseLogQL, LABEL_KEYS,
   parseLogfmt, extractTraceId,
 } from "../../api/observe";
 import type { Bucket, Facet, LogLine, LogQuery, Range, RunResult } from "../../api/observe";
 import { LogQLBar } from "./LogQLBar";
 import { Highlighted } from "./LogQLBar";
-import { SAVED_VIEWS, HISTORY_SEED, classifyView } from "./mockData";
-import type { SavedView } from "./mockData";
+import { deleteSavedView, listSavedViews, saveView, timeAgo, viewSlug } from "../../api/savedViews";
+import type { SavedViewData } from "../../api/savedViews";
+import { HISTORY_SEED } from "./mockData";
 import type { RsTab } from "./RuneSight";
 
 const LVL_LABEL: Record<string, string> = { error: "ERROR", warn: "WARN", info: "INFO", debug: "DEBUG" };
@@ -191,19 +192,18 @@ function SaveQueryModal({ query, onClose, onSave }: { query: LogQuery; onClose: 
 
 /* ---------- saved queries + history rail ---------- */
 interface HistEntry { q: Partial<LogQuery>; ts: string; hits: string; dur: string }
-function QueriesRail({ loadView, history, currentQuery, extraViews, onSave, removed, onDelete, onViewAll }: {
+function QueriesRail({ loadView, history, currentQuery, views, onSave, onDelete, onViewAll }: {
   loadView: (q: Partial<LogQuery>) => void;
   history: HistEntry[];
   currentQuery: LogQuery;
-  extraViews: SavedView[];
+  views: SavedViewData[];
   onSave: (v: { name: string; desc: string; pinned: boolean }) => void;
-  removed: Set<string>;
-  onDelete: (id: string) => void;
+  onDelete: (name: string) => void;
   onViewAll: () => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
-  const views = [...extraViews, ...SAVED_VIEWS].filter((v) => !removed.has(v.id));
+  const parse = (logql: string): Partial<LogQuery> => { try { return parseLogQL(logql); } catch { return {}; } };
   return (
     <div className="rs-saved">
       <div className="rs-panel-head"><span className="eyebrow">Saved queries</span>
@@ -215,15 +215,15 @@ function QueriesRail({ loadView, history, currentQuery, extraViews, onSave, remo
       <div className="rs-saved-scroll">
         {views.length === 0 && <div className="rs-saved-empty">No saved queries. Press <Icon name="plus" size={11} /> to save the current one.</div>}
         {views.map((v) => (
-          <div key={v.id} className={"rs-saved-item" + (confirmId === v.id ? " confirming" : "")} onClick={() => loadView(v.q)}>
-            <div className="rs-saved-name">{v.name}{v.pinned && <Icon name="pin" size={11} />}{(v as SavedView & { fresh?: boolean }).fresh && <span className="rs-saved-new">new</span>}</div>
-            {v.desc && <div className="rs-saved-desc">{v.desc}</div>}
-            <div className="rs-saved-q mono">{toLogQL(normQuery(v.q))}</div>
-            <div className="rs-saved-owner">{v.owner} · {v.last}</div>
+          <div key={v.id} className={"rs-saved-item" + (confirmId === v.id ? " confirming" : "")} onClick={() => loadView(parse(v.logql))}>
+            <div className="rs-saved-name">{v.name}{v.pinned && <Icon name="pin" size={11} />}</div>
+            {v.description && <div className="rs-saved-desc">{v.description}</div>}
+            <div className="rs-saved-q mono">{v.logql}</div>
+            <div className="rs-saved-owner">{v.createdBy || "—"} · {timeAgo(v.updatedAt)}</div>
             {confirmId === v.id ? (
               <div className="rs-saved-confirm" onClick={(e) => e.stopPropagation()}>
                 <span>Delete?</span>
-                <button className="rs-sc-yes" onClick={() => { onDelete(v.id); setConfirmId(null); }}>Delete</button>
+                <button className="rs-sc-yes" onClick={() => { onDelete(v.name); setConfirmId(null); }}>Delete</button>
                 <button className="rs-sc-no" onClick={() => setConfirmId(null)}>Cancel</button>
               </div>
             ) : (
@@ -356,15 +356,18 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive, go, 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistEntry[]>(HISTORY_SEED);
-  const [extraViews, setExtraViews] = useState<SavedView[]>([]);
-  const [removedViews, setRemovedViews] = useState<Set<string>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem("rs-removed-views") || "[]")); } catch { return new Set(); }
-  });
+  const [savedViews, setSavedViews] = useState<SavedViewData[]>([]);
   const ctrlRef = useRef<AbortController | null>(null);
 
   useEffect(() => { try { localStorage.setItem("rs-labels", showLabels ? "1" : "0"); } catch { /* ignore */ } }, [showLabels]);
   useEffect(() => { try { localStorage.setItem("rs-saved", showSaved ? "1" : "0"); } catch { /* ignore */ } }, [showSaved]);
-  useEffect(() => { try { localStorage.setItem("rs-removed-views", JSON.stringify([...removedViews])); } catch { /* ignore */ } }, [removedViews]);
+
+  const refreshViews = useCallback(() => {
+    listSavedViews()
+      .then(setSavedViews)
+      .catch((e: unknown) => console.error("listSavedViews:", e));
+  }, []);
+  useEffect(() => { refreshViews(); }, [refreshViews]);
 
   const execute = useCallback((q: LogQuery, r: Range) => {
     ctrlRef.current?.abort();
@@ -434,15 +437,14 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive, go, 
   }
 
   function saveQuery({ name, desc, pinned }: { name: string; desc: string; pinned: boolean }) {
-    const v: SavedView & { fresh?: boolean } = {
-      id: "u" + Date.now(), name, desc, q: { ...query }, owner: "ore", last: "just now",
-      pinned, count: total, icon: classifyView(query).icon, fresh: true,
-    };
-    setExtraViews((vs) => [v, ...vs]);
+    saveView({ name: viewSlug(name), description: desc, logql: toLogQL(normQuery(query)), range, pinned })
+      .then(refreshViews)
+      .catch((e: unknown) => console.error("saveView:", e));
   }
-  function deleteView(id: string) {
-    setExtraViews((vs) => vs.filter((x) => x.id !== id));
-    setRemovedViews((s) => { const n = new Set(s); n.add(id); return n; });
+  function deleteView(name: string) {
+    deleteSavedView(name)
+      .then(refreshViews)
+      .catch((e: unknown) => console.error("deleteSavedView:", e));
   }
 
   // Context: surrounding lines from the same instance in the current result.
@@ -537,9 +539,8 @@ export function Explorer({ query, setQuery, range, setRange, live, setLive, go, 
             loadView={loadView}
             history={history}
             currentQuery={query}
-            extraViews={extraViews}
+            views={savedViews}
             onSave={saveQuery}
-            removed={removedViews}
             onDelete={deleteView}
             onViewAll={() => go("views")}
           />
