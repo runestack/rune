@@ -59,10 +59,6 @@ observability:
     storage_policy: runesight_tiered
     s3_volume: cold
     hot_days: 7
-  objectStore:
-    enabled: true
-    endpoint: http://legacy:3100
-    bucket: rune-logs
 failed_instance_retention:
   per_service_cap: 9
   ttl: 36h
@@ -105,13 +101,10 @@ failed_instance_retention:
 	assert.Equal(t, 7, cfg.Observability.ClickHouse.HotDays, "clickhouse.hot_days")
 	assert.True(t, cfg.Observability.ClickHouse.AutoMigrate, "clickhouse.auto_migrate defaults true when unset")
 
-	// Single-word and camelCase keys that worked before must keep working.
+	// Single-word keys that worked before must keep working.
 	assert.Equal(t, "staging", cfg.Namespace, "namespace")
 	assert.True(t, cfg.Observability.Enabled, "observability.enabled")
 	assert.Equal(t, "loki", cfg.Observability.Backend, "observability.backend")
-	assert.True(t, cfg.Observability.ObjectStore.Enabled, "objectStore.enabled")
-	assert.Equal(t, "http://legacy:3100", cfg.Observability.ObjectStore.Endpoint, "objectStore.endpoint")
-	assert.Equal(t, "rune-logs", cfg.Observability.ObjectStore.Bucket, "objectStore.bucket")
 }
 
 // auto_migrate defaults to true (zero-config schema creation) and an explicit

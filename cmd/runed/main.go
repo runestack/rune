@@ -1126,28 +1126,17 @@ func buildObserveStore(appCfg *config.Config, dataDir string, logger log.Logger)
 	if dataDir != "" {
 		embeddedDir = filepath.Join(dataDir, "observe")
 	}
-	// The external backends read their dedicated runefile blocks
-	// (observability.loki / observability.clickhouse); the legacy
-	// objectStore.endpoint remains a fallback endpoint carrier.
-	lokiURL := o.Loki.URL
-	if lokiURL == "" {
-		lokiURL = o.ObjectStore.Endpoint
-	}
-	chDSN := o.ClickHouse.DSN
-	if chDSN == "" {
-		chDSN = o.ObjectStore.Endpoint
-	}
 	return observebackend.Open(observebackend.Backend(o.Backend), observebackend.Options{
 		Embedded: observebackend.EmbeddedConfig{
 			RetentionDays: o.RetentionDays,
 			Dir:           embeddedDir,
 		},
 		Loki: observebackend.LokiConfig{
-			BaseURL:  lokiURL,
+			BaseURL:  o.Loki.URL,
 			TenantID: o.Loki.TenantID,
 		},
 		ClickHouse: observebackend.ClickHouseConfig{
-			DSN:           chDSN,
+			DSN:           o.ClickHouse.DSN,
 			Database:      o.ClickHouse.Database,
 			Table:         o.ClickHouse.Table,
 			RetentionDays: o.RetentionDays,

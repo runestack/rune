@@ -234,9 +234,6 @@ type Storage struct {
 //	    storage_policy: ""     # server-side policy naming hot+s3 volumes
 //	    s3_volume: s3
 //	    hot_days: 0            # move parts older than N days to s3_volume
-//	  objectStore:
-//	    enabled: false
-//	    endpoint: ""
 type Observability struct {
 	// Enabled turns the agent forwarder + log store on. Default false
 	// (opt-in): a bare install stays on the live ephemeral log stream.
@@ -255,11 +252,6 @@ type Observability struct {
 
 	// ClickHouse configures the clickhouse backend, including S3 tiering.
 	ClickHouse ClickHouseConfig `yaml:"clickhouse,omitempty"`
-
-	// ObjectStore configures an optional S3-compatible cold tier for the
-	// external backends. Deprecated as the backend endpoint carrier: set
-	// loki.url / clickhouse.dsn instead; endpoint remains a fallback.
-	ObjectStore ObjectStore `yaml:"objectStore,omitempty"`
 }
 
 // LokiConfig is the runefile block for the loki backend. Loki is
@@ -295,15 +287,6 @@ type ClickHouseConfig struct {
 	// HotDays moves parts older than this to S3Volume. 0 keeps all parts on
 	// the hot disk.
 	HotDays int `yaml:"hot_days,omitempty"`
-}
-
-// ObjectStore configures the optional S3-compatible cold tier (DigitalOcean
-// Spaces / MinIO / R2) for the external observability backends.
-type ObjectStore struct {
-	Enabled  bool   `yaml:"enabled,omitempty"`
-	Endpoint string `yaml:"endpoint,omitempty"`
-	Bucket   string `yaml:"bucket,omitempty"`
-	Region   string `yaml:"region,omitempty"`
 }
 
 type Config struct {

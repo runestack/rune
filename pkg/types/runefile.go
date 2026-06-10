@@ -395,11 +395,6 @@ type ObservabilityConfig struct {
 	// ClickHouse configures the clickhouse backend, including S3 tiering.
 	// Parallel to internal/config.ClickHouseConfig.
 	ClickHouse *ClickHouseConfig `yaml:"clickhouse,omitempty"`
-
-	// ObjectStore configures an optional S3-compatible cold tier for the
-	// clickhouse/loki backends. Ignored by the embedded backend. Deprecated
-	// as the backend endpoint carrier: set loki.url / clickhouse.dsn instead.
-	ObjectStore *ObjectStoreConfig `yaml:"objectStore,omitempty"`
 }
 
 // LokiConfig is the runefile block for the loki observability backend. Loki
@@ -434,15 +429,6 @@ type ClickHouseConfig struct {
 	// HotDays moves parts older than this to S3Volume. 0 keeps everything
 	// on the hot disk.
 	HotDays int `yaml:"hot_days,omitempty"`
-}
-
-// ObjectStoreConfig configures the optional S3-compatible cold tier for the
-// external observability backends (DigitalOcean Spaces / MinIO / R2).
-type ObjectStoreConfig struct {
-	Enabled  bool   `yaml:"enabled,omitempty"`
-	Endpoint string `yaml:"endpoint,omitempty"`
-	Bucket   string `yaml:"bucket,omitempty"`
-	Region   string `yaml:"region,omitempty"`
 }
 
 // ParseRuneFile parses a Rune configuration file from the given file
@@ -749,15 +735,23 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 		"require_tls":     true,
 
 		// native observability (RuneSight): observability.{enabled,backend,
-		// retention_days, objectStore.{enabled,endpoint,bucket,region}}.
-		// "enabled"/"endpoint" are shared with other blocks.
-		// ("region" is already accepted via the docker-registry keys below.)
+		// retention_days, loki.{url,tenant_id}, clickhouse.{dsn,database,
+		// table,auto_migrate,storage_policy,s3_volume,hot_days}}.
+		// "enabled" is shared with other blocks.
 		"observability":  true,
 		"backend":        true,
 		"retention_days": true,
-		"objectstore":    true,
-		"endpoint":       true,
-		"bucket":         true,
+		"loki":           true,
+		"url":            true,
+		"tenant_id":      true,
+		"clickhouse":     true,
+		"dsn":            true,
+		"database":       true,
+		"table":          true,
+		"auto_migrate":   true,
+		"storage_policy": true,
+		"s3_volume":      true,
+		"hot_days":       true,
 
 		// storage.* (typed knobs + opaque per-driver maps; key names
 		// under .drivers are driver-specific so we accept anything
