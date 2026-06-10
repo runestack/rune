@@ -82,3 +82,29 @@ auth:
 plugins:
   dir: "/var/lib/rune/plugins"
   enabled: ["docker", "process"]
+
+# Native observability (RuneSight). Off by default; when enabled, the agent
+# forwards workload logs into the selected store and the dashboard's Log
+# Explorer queries it.
+observability:
+  enabled: false
+  backend: embedded           # embedded (default, zero deps) | loki | clickhouse
+  retention_days: 7           # embedded sweep + clickhouse DELETE TTL
+
+  # Only for backend: loki. Loki stores chunks in object storage natively —
+  # configure S3 on the Loki deployment itself.
+  # loki:
+  #   url: http://loki:3100
+  #   tenant_id: ""           # X-Scope-OrgID for multi-tenant Loki
+
+  # Only for backend: clickhouse. S3 tiering = a TTL move against a
+  # storage policy defined in ClickHouse server config (operators own the
+  # S3 credentials there); this block just opts the log table in.
+  # clickhouse:
+  #   dsn: clickhouse://user:pass@clickhouse:9000/runesight
+  #   database: runesight
+  #   table: logs
+  #   auto_migrate: true      # create database/table on first connect
+  #   storage_policy: ""      # e.g. runesight_tiered (enables tiering)
+  #   s3_volume: s3           # volume within the policy aged parts move to
+  #   hot_days: 7             # move parts older than this to s3_volume

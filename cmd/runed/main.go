@@ -1120,12 +1120,22 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 // store; clickhouse/loki yield the optional-sink skeletons.
 func buildObserveStore(appCfg *config.Config, dataDir string, logger log.Logger) (observe.LogStore, error) {
 	o := appCfg.Observability
-	// Persist the embedded store to node-local disk under the runed data dir so
-	// logs survive a restart. Derived from --data-dir (not a runefile key) to
-	// dodge the snake_case config-parsing gap; empty dataDir => in-memory only.
+	// Persist the embedded store to node-local disk under the runed data dir
+	// so logs survive a restart; empty dataDir => in-memory only.
 	var embeddedDir string
 	if dataDir != "" {
 		embeddedDir = filepath.Join(dataDir, "observe")
+	}
+	// The external backends read their dedicated runefile blocks
+	// (observability.loki / observability.clickhouse); the legacy
+	// objectStore.endpoint remains a fallback endpoint carrier.
+	lokiURL := o.Loki.URL
+	if lokiURL == "" {
+		lokiURL = o.ObjectStore.Endpoint
+	}
+	chDSN := o.ClickHouse.DSN
+	if chDSN == "" {
+		chDSN = o.ObjectStore.Endpoint
 	}
 	return observebackend.Open(observebackend.Backend(o.Backend), observebackend.Options{
 		Embedded: observebackend.EmbeddedConfig{
@@ -1133,16 +1143,18 @@ func buildObserveStore(appCfg *config.Config, dataDir string, logger log.Logger)
 			Dir:           embeddedDir,
 		},
 		Loki: observebackend.LokiConfig{
-			BaseURL: o.ObjectStore.Endpoint,
+			BaseURL:  lokiURL,
+			TenantID: o.Loki.TenantID,
 		},
 		ClickHouse: observebackend.ClickHouseConfig{
-			DSN:           o.ObjectStore.Endpoint,
+			DSN:           chDSN,
+			Database:      o.ClickHouse.Database,
+			Table:         o.ClickHouse.Table,
 			RetentionDays: o.RetentionDays,
-			// Create the schema on first use so the analytical backend works
-			// zero-config. S3 tiering (storage policy / hot-days) is operator-
-			// configured server-side and plumbed via ClickHouseConfig directly;
-			// a dedicated runefile block is deferred (snake_case config gap).
-			AutoMigrate: true,
+			AutoMigrate:   o.ClickHouse.AutoMigrate,
+			StoragePolicy: o.ClickHouse.StoragePolicy,
+			S3Volume:      o.ClickHouse.S3Volume,
+			HotDays:       o.ClickHouse.HotDays,
 		},
 		Logger: logger.WithComponent("observe"),
 	})
