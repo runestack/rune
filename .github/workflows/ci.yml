@@ -36,6 +36,18 @@ jobs:
           go-version: '1.25.x'
           check-latest: true
           cache: true
+      # Seed the image the docker runner tests use. Shared runners hit Docker
+      # Hub's anonymous pull rate limit ("toomanyrequests"), so pull from the
+      # ECR Public mirror of the Docker official images (no anonymous limit)
+      # and retag; fall back to Docker Hub if the mirror is unavailable. The
+      # tests use imagePull=missing, so a seeded image means zero Hub pulls.
+      - name: Seed test images (avoid Docker Hub rate limits)
+        run: |
+          if docker pull public.ecr.aws/docker/library/alpine:latest; then
+            docker tag public.ecr.aws/docker/library/alpine:latest alpine:latest
+          else
+            for i in 1 2 3; do docker pull alpine:latest && break || sleep $((i * 15)); done
+          fi
       - name: Run unit tests with race detection
         run: make test-unit-race
       - name: Check Coverage
