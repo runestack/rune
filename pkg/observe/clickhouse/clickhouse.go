@@ -15,6 +15,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -287,7 +288,11 @@ func (s *Store) Labels(ctx context.Context, sel observe.Selector) ([]observe.Lab
 		if err := rows.Scan(&v, &c); err != nil {
 			return nil, err
 		}
-		out = append(out, observe.LabelValue{Name: sel.Name, Value: v, Count: int64(c)})
+		count := int64(math.MaxInt64)
+		if c <= math.MaxInt64 {
+			count = int64(c)
+		}
+		out = append(out, observe.LabelValue{Name: sel.Name, Value: v, Count: count})
 	}
 	return out, rows.Err()
 }
