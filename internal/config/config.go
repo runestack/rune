@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/runestack/rune/pkg/crypto"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/spf13/viper"
@@ -372,7 +373,16 @@ func Load(path string) (*Config, error) {
 	}
 	cfg := Default()
 	if err := v.ReadInConfig(); err == nil {
-		if err := v.Unmarshal(cfg); err != nil {
+		// Decode against the `yaml` struct tags — they are the runefile
+		// schema-of-record. Viper's default decoder matches `mapstructure`
+		// tags (which these structs don't declare) and falls back to
+		// case-insensitive field-name matching, which silently drops every
+		// multi-word snake_case key (handoff_ttl, retention_days, data_dir,
+		// ...). Viper's default decode hooks (string→duration, string→slice)
+		// are preserved; only the tag name changes.
+		if err := v.Unmarshal(cfg, func(dc *mapstructure.DecoderConfig) {
+			dc.TagName = "yaml"
+		}); err != nil {
 			return nil, err
 		}
 	}
