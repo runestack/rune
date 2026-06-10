@@ -16,7 +16,9 @@ import (
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -27,15 +29,20 @@ const (
 
 // Server is a real runed process owned by a single test.
 type Server struct {
-	GRPCAddr    string
-	HTTPAddr    string
-	MetricsAddr string // empty unless Options.Metrics
-	DataDir     string
-	LogPath     string
+	GRPCAddr string
+	HTTPAddr string
+	DataDir  string
+	LogPath  string
 
 	cmd     *exec.Cmd
 	logFile *os.File
 	stopped bool
+
+	// waitDone closes once the single Wait goroutine reaps the
+	// process; waitErr is valid after that. One reaper avoids the
+	// Wait-called-twice trap between readiness checks and Stop.
+	waitDone chan struct{}
+	waitErr  error
 }
 
 // startServer builds (once), configures and spawns runed, then blocks
@@ -56,12 +63,9 @@ func startServer(t *testing.T, opts Options) *Server {
 		DataDir:  dataDir,
 		LogPath:  dir + "/runed.log",
 	}
-	if opts.Metrics {
-		s.MetricsAddr = freeAddr(t)
-	}
 
 	runefilePath := dir + "/runefile.toml"
-	runefile := renderRunefile(opts, dataDir, s.GRPCAddr, s.HTTPAddr, s.MetricsAddr)
+	runefile := renderRunefile(opts, dataDir, s.GRPCAddr, s.HTTPAddr)
 	if err := os.WriteFile(runefilePath, []byte(runefile), 0o644); err != nil {
 		t.Fatalf("harness: write runefile: %v", err)
 	}
@@ -74,6 +78,10 @@ func startServer(t *testing.T, opts Options) *Server {
 
 	cmd := exec.Command(runed, "--config", runefilePath, "--dev-mode")
 	cmd.Dir = dir
+	// Hermetic environment: the user's shell may carry RUNE_*
+	// overrides (RUNE_SERVER_GRPC_ADDRESS, RUNE_LOG_LEVEL, …) that
+	// viper would silently honor over the generated runefile.
+	cmd.Env = scrubRuneEnv(os.Environ())
 	// Handing the file straight to the child avoids pipe-drain
 	// goroutines entirely; the OS does the teeing.
 	cmd.Stdout = logFile
@@ -85,6 +93,11 @@ func startServer(t *testing.T, opts Options) *Server {
 		t.Fatalf("harness: start runed: %v", err)
 	}
 	s.cmd = cmd
+	s.waitDone = make(chan struct{})
+	go func() {
+		s.waitErr = cmd.Wait()
+		close(s.waitDone)
+	}()
 
 	t.Cleanup(func() {
 		s.Stop()
@@ -111,30 +124,34 @@ func readyTimeout() time.Duration {
 
 // waitReady polls the gRPC HealthService until it answers — stronger
 // than a TCP probe because it proves the API layer is serving, not
-// just that the socket is bound.
+// just that the socket is bound. One lazy connection is reused across
+// polls; gRPC redials it as the server comes up.
 func (s *Server) waitReady(timeout time.Duration) error {
+	conn, err := grpc.NewClient(s.GRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("create probe client: %w", err)
+	}
+	defer conn.Close()
+	health := generated.NewHealthServiceClient(conn)
+
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		if s.cmd.ProcessState != nil {
-			return fmt.Errorf("runed exited early: %v", s.cmd.ProcessState)
+		select {
+		case <-s.waitDone:
+			return fmt.Errorf("runed exited before becoming ready: %v", s.waitErr)
+		default:
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		conn, err := grpc.DialContext(ctx, s.GRPCAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
-		if err == nil {
-			_, herr := generated.NewHealthServiceClient(conn).GetHealth(ctx, &generated.GetHealthRequest{})
-			conn.Close()
-			cancel()
-			// Unauthenticated still proves the server is up and serving.
-			if herr == nil || strings.Contains(herr.Error(), "Unauthenticated") {
-				return nil
-			}
-			lastErr = herr
-		} else {
-			lastErr = err
-			cancel()
+		_, herr := health.GetHealth(ctx, &generated.GetHealthRequest{})
+		cancel()
+		// Unauthenticated still proves the server is up and serving;
+		// the bootstrap token doesn't exist yet at this point.
+		if herr == nil || status.Code(herr) == codes.Unauthenticated {
+			return nil
 		}
+		lastErr = herr
 		time.Sleep(readyPollInterval)
 	}
 	return fmt.Errorf("timed out after %s waiting for %s (last error: %v)", timeout, s.GRPCAddr, lastErr)
@@ -151,16 +168,11 @@ func (s *Server) Stop() {
 	pgid := -s.cmd.Process.Pid
 	_ = syscall.Kill(pgid, syscall.SIGTERM)
 
-	done := make(chan struct{})
-	go func() {
-		_, _ = s.cmd.Process.Wait()
-		close(done)
-	}()
 	select {
-	case <-done:
+	case <-s.waitDone:
 	case <-time.After(shutdownGrace):
 		_ = syscall.Kill(pgid, syscall.SIGKILL)
-		<-done
+		<-s.waitDone
 	}
 	if s.logFile != nil {
 		_ = s.logFile.Close()

@@ -4,6 +4,7 @@
 package harness
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -76,8 +77,11 @@ func (c *CLI) writeConfig(t *testing.T, serverAddr, token string) {
 // non-zero exit from the CLI is data for the caller.
 func (c *CLI) Run(t *testing.T, args ...string) Result {
 	t.Helper()
-	cmd := exec.Command(c.bin, args...)
-	cmd.Env = append(os.Environ(),
+	ctx, cancel := context.WithTimeout(context.Background(), cliTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, c.bin, args...)
+	cmd.Env = append(scrubRuneEnv(os.Environ()),
 		"RUNE_CLI_CONFIG="+c.configPath,
 		// Plain output: no ANSI color tables to fight in assertions.
 		"NO_COLOR=1",
@@ -87,27 +91,18 @@ func (c *CLI) Run(t *testing.T, args ...string) Result {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("harness: start rune %v: %v", args, err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	var exitCode int
-	select {
-	case err := <-done:
-		if err != nil {
-			if ee, ok := err.(*exec.ExitError); ok {
-				exitCode = ee.ExitCode()
-			} else {
-				t.Fatalf("harness: rune %v: %v", args, err)
-			}
-		}
-	case <-time.After(cliTimeout):
-		_ = cmd.Process.Kill()
-		<-done
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("harness: rune %v timed out after %s\n--- stdout ---\n%s\n--- stderr ---\n%s",
 			args, cliTimeout, stdout.String(), stderr.String())
+	}
+	var exitCode int
+	if err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("harness: rune %v: %v", args, err)
+		}
+		exitCode = ee.ExitCode()
 	}
 
 	return Result{Args: args, ExitCode: exitCode, Stdout: stdout.String(), Stderr: stderr.String()}
