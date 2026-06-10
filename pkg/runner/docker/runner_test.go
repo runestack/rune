@@ -93,6 +93,10 @@ func TestDockerRunnerLifecycle(t *testing.T) {
 		NodeID:    "test-node",
 		Metadata: &runetypes.InstanceMetadata{
 			Image: "alpine:latest",
+			// Reuse a locally present image instead of re-pulling from Docker
+			// Hub on every run — CI runners share NAT IPs and hit the
+			// anonymous pull rate limit (the workflow pre-seeds the image).
+			ImagePull: runetypes.ImagePullMissing,
 		},
 		Exec: &runetypes.Exec{
 			Command: []string{"sleep", "30"},
@@ -233,6 +237,8 @@ func TestList(t *testing.T) {
 		Namespace: namespace,
 		Metadata: &runetypes.InstanceMetadata{
 			Image: "alpine:latest",
+			// See TestDockerRunnerLifecycle: avoid Docker Hub rate limits.
+			ImagePull: runetypes.ImagePullMissing,
 		},
 	}
 
@@ -244,6 +250,8 @@ func TestList(t *testing.T) {
 		Namespace: namespace,
 		Metadata: &runetypes.InstanceMetadata{
 			Image: "alpine:latest",
+			// See TestDockerRunnerLifecycle: avoid Docker Hub rate limits.
+			ImagePull: runetypes.ImagePullMissing,
 		},
 	}
 
