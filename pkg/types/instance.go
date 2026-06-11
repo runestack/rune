@@ -118,6 +118,13 @@ type Instance struct {
 	// "OOMKilled"). Set at the moment of the Failed transition.
 	FailureReason string `json:"failureReason,omitempty" yaml:"failureReason,omitempty"`
 
+	// Usage is a live resource-usage sample attached by the API read path
+	// from runners that implement the StatsProvider capability. TRANSIENT:
+	// excluded from store serialization (json/yaml "-") so stale samples
+	// are never persisted — it exists only on instances flowing through a
+	// read RPC response.
+	Usage *InstanceUsage `json:"-" yaml:"-"`
+
 	// LastLogs is a snapshot of the last N bytes of the instance's stdout
 	// and stderr, captured before the container is removed (either during
 	// a restart-on-failure cycle or at retention-GC eviction). Lets
@@ -395,4 +402,21 @@ func (i *Instance) Equals(other Resource) bool {
 		i.ServiceID == otherInstance.ServiceID &&
 		i.NodeID == otherInstance.NodeID &&
 		i.Status == otherInstance.Status
+}
+
+// InstanceUsage is a point-in-time resource-usage sample for one instance,
+// reported by a runner that implements the StatsProvider capability.
+type InstanceUsage struct {
+	// CPUPercent is CPU usage as a share of the WHOLE HOST, 0–100 — the
+	// same denominator as node-level CPU on HealthService, so instance
+	// bars and node bars compare 1:1. Negative when unknown.
+	CPUPercent float64
+
+	// MemUsedBytes is memory used in bytes (cgroup usage minus inactive
+	// file cache, matching `docker stats` semantics).
+	MemUsedBytes uint64
+
+	// MemLimitBytes is the container's cgroup memory limit, which equals
+	// the host total when the container is uncapped. 0 when unknown.
+	MemLimitBytes uint64
 }

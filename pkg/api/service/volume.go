@@ -4,10 +4,12 @@ package service
 import (
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
@@ -23,6 +25,11 @@ type VolumeService struct {
 	scRepo        *repos.StorageClassRepo
 	driverConfigs map[string]map[string]any
 	logger        log.Logger
+
+	// drivers memoizes driver instances for the read-path usage
+	// enrichment (see volume_usage.go). Guarded by driverMu.
+	driverMu sync.Mutex
+	drivers  map[string]driver.Driver
 }
 
 // VolumeServiceOption configures optional VolumeService behaviour.
@@ -92,6 +99,7 @@ func (s *VolumeService) GetVolume(ctx context.Context, req *generated.GetVolumeR
 		}
 		return nil, status.Errorf(codes.Internal, "get: %v", err)
 	}
+	s.enrichVolumesUsage(ctx, []*types.Volume{v})
 	return &generated.VolumeResponse{
 		Volume: volumeToProto(v),
 		Status: &generated.Status{Code: int32(codes.OK)},
@@ -141,7 +149,7 @@ func (s *VolumeService) ListVolumes(ctx context.Context, req *generated.ListVolu
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list: %v", err)
 	}
-	out := make([]*generated.Volume, 0, len(vols))
+	matched := make([]*types.Volume, 0, len(vols))
 	for _, v := range vols {
 		if !matchLabels(v.Labels, req.LabelSelector) {
 			continue
@@ -149,6 +157,11 @@ func (s *VolumeService) ListVolumes(ctx context.Context, req *generated.ListVolu
 		if !matchVolumeFieldSelector(v, req.FieldSelector) {
 			continue
 		}
+		matched = append(matched, v)
+	}
+	s.enrichVolumesUsage(ctx, matched)
+	out := make([]*generated.Volume, 0, len(matched))
+	for _, v := range matched {
 		out = append(out, volumeToProto(v))
 	}
 	return &generated.ListVolumesResponse{
@@ -209,6 +222,8 @@ func volumeToProto(v *types.Volume) *generated.Volume {
 		Message:          v.Message,
 		CreatedAt:        v.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:        v.UpdatedAt.Format(time.RFC3339),
+		UsedBytes:        v.UsedBytes,
+		CapacityBytes:    v.CapacityBytes,
 	}
 	if v.SnapshotSchedule != nil {
 		ret := v.SnapshotSchedule.Retention

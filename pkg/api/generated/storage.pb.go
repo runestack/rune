@@ -674,11 +674,18 @@ type Volume struct {
 	BoundClaim       string            `protobuf:"bytes,14,opt,name=bound_claim,json=boundClaim,proto3" json:"bound_claim,omitempty"`
 	// Status is one of: Pending, Provisioning, Available, Bound, Released,
 	// Stalled, Failed.
-	Status        string `protobuf:"bytes,15,opt,name=status,proto3" json:"status,omitempty"`
-	StatusReason  string `protobuf:"bytes,16,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"`
-	Message       string `protobuf:"bytes,17,opt,name=message,proto3" json:"message,omitempty"`
-	CreatedAt     string `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     string `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Status       string `protobuf:"bytes,15,opt,name=status,proto3" json:"status,omitempty"`
+	StatusReason string `protobuf:"bytes,16,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"`
+	Message      string `protobuf:"bytes,17,opt,name=message,proto3" json:"message,omitempty"`
+	CreatedAt    string `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt    string `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Live usage, populated at read time for drivers that implement the
+	// UsageReporter capability (currently the local drivers). 0 = unknown.
+	// used_bytes is the measured on-disk usage of the volume's backing
+	// storage; capacity_bytes is the provisioned capacity (parsed from the
+	// spec size when the driver cannot report it).
+	UsedBytes     uint64 `protobuf:"varint,20,opt,name=used_bytes,json=usedBytes,proto3" json:"used_bytes,omitempty"`
+	CapacityBytes uint64 `protobuf:"varint,21,opt,name=capacity_bytes,json=capacityBytes,proto3" json:"capacity_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -844,6 +851,20 @@ func (x *Volume) GetUpdatedAt() string {
 		return x.UpdatedAt
 	}
 	return ""
+}
+
+func (x *Volume) GetUsedBytes() uint64 {
+	if x != nil {
+		return x.UsedBytes
+	}
+	return 0
+}
+
+func (x *Volume) GetCapacityBytes() uint64 {
+	if x != nil {
+		return x.CapacityBytes
+	}
+	return 0
 }
 
 type CreateVolumeRequest struct {
@@ -1965,7 +1986,7 @@ const file_pkg_api_proto_storage_proto_rawDesc = "" +
 	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"D\n" +
 	"\x10SnapshotSchedule\x12\x12\n" +
 	"\x04cron\x18\x01 \x01(\tR\x04cron\x12\x1c\n" +
-	"\tretention\x18\x02 \x01(\x05R\tretention\"\xa1\x06\n" +
+	"\tretention\x18\x02 \x01(\x05R\tretention\"\xe7\x06\n" +
 	"\x06Volume\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -1993,7 +2014,10 @@ const file_pkg_api_proto_storage_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x12 \x01(\tR\tcreatedAt\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\x13 \x01(\tR\tupdatedAt\x1a9\n" +
+	"updated_at\x18\x13 \x01(\tR\tupdatedAt\x12\x1d\n" +
+	"\n" +
+	"used_bytes\x18\x14 \x01(\x04R\tusedBytes\x12%\n" +
+	"\x0ecapacity_bytes\x18\x15 \x01(\x04R\rcapacityBytes\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a=\n" +

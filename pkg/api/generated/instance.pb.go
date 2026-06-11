@@ -141,7 +141,12 @@ type Instance struct {
 	FailureReason string `protobuf:"bytes,19,opt,name=failure_reason,json=failureReason,proto3" json:"failure_reason,omitempty"`
 	// Labels denormalized from the parent Service (and, in future, node topology
 	// labels at placement). User-defined stream dimensions for the instance.
-	Labels        map[string]string `protobuf:"bytes,20,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Labels map[string]string `protobuf:"bytes,20,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Live resource usage sampled from the runner at read time (StatsProvider
+	// runners only — currently docker). Absent when the runner cannot report
+	// usage or the instance is not running. Mirrors the NodeResources pattern
+	// on HealthService.
+	Usage         *InstanceUsage `protobuf:"bytes,21,opt,name=usage,proto3" json:"usage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -316,6 +321,81 @@ func (x *Instance) GetLabels() map[string]string {
 	return nil
 }
 
+func (x *Instance) GetUsage() *InstanceUsage {
+	if x != nil {
+		return x.Usage
+	}
+	return nil
+}
+
+// InstanceUsage is a point-in-time resource usage sample for one instance.
+type InstanceUsage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// CPU usage as a share of the WHOLE HOST, 0–100 (same denominator as the
+	// node-level cpu_used_percent on HealthService, so instance bars and node
+	// bars compare 1:1). Negative when unknown.
+	CpuPercent float64 `protobuf:"fixed64,1,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`
+	// Memory used in bytes (cgroup usage minus inactive file cache — matches
+	// `docker stats` semantics).
+	MemUsedBytes uint64 `protobuf:"varint,2,opt,name=mem_used_bytes,json=memUsedBytes,proto3" json:"mem_used_bytes,omitempty"`
+	// Memory limit in bytes: the container's cgroup limit, which equals the
+	// host total when the container is uncapped. 0 when unknown.
+	MemLimitBytes uint64 `protobuf:"varint,3,opt,name=mem_limit_bytes,json=memLimitBytes,proto3" json:"mem_limit_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstanceUsage) Reset() {
+	*x = InstanceUsage{}
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstanceUsage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstanceUsage) ProtoMessage() {}
+
+func (x *InstanceUsage) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstanceUsage.ProtoReflect.Descriptor instead.
+func (*InstanceUsage) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *InstanceUsage) GetCpuPercent() float64 {
+	if x != nil {
+		return x.CpuPercent
+	}
+	return 0
+}
+
+func (x *InstanceUsage) GetMemUsedBytes() uint64 {
+	if x != nil {
+		return x.MemUsedBytes
+	}
+	return 0
+}
+
+func (x *InstanceUsage) GetMemLimitBytes() uint64 {
+	if x != nil {
+		return x.MemLimitBytes
+	}
+	return 0
+}
+
 // InstanceMetadata represents metadata for an instance.
 type InstanceMetadata struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -335,7 +415,7 @@ type InstanceMetadata struct {
 
 func (x *InstanceMetadata) Reset() {
 	*x = InstanceMetadata{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[1]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -347,7 +427,7 @@ func (x *InstanceMetadata) String() string {
 func (*InstanceMetadata) ProtoMessage() {}
 
 func (x *InstanceMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[1]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -360,7 +440,7 @@ func (x *InstanceMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceMetadata.ProtoReflect.Descriptor instead.
 func (*InstanceMetadata) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{1}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *InstanceMetadata) GetGeneration() int32 {
@@ -415,7 +495,7 @@ type ResolvedSecretMount struct {
 
 func (x *ResolvedSecretMount) Reset() {
 	*x = ResolvedSecretMount{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[2]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -427,7 +507,7 @@ func (x *ResolvedSecretMount) String() string {
 func (*ResolvedSecretMount) ProtoMessage() {}
 
 func (x *ResolvedSecretMount) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[2]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -440,7 +520,7 @@ func (x *ResolvedSecretMount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvedSecretMount.ProtoReflect.Descriptor instead.
 func (*ResolvedSecretMount) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{2}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ResolvedSecretMount) GetName() string {
@@ -488,7 +568,7 @@ type ResolvedConfigMount struct {
 
 func (x *ResolvedConfigMount) Reset() {
 	*x = ResolvedConfigMount{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[3]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -500,7 +580,7 @@ func (x *ResolvedConfigMount) String() string {
 func (*ResolvedConfigMount) ProtoMessage() {}
 
 func (x *ResolvedConfigMount) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[3]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -513,7 +593,7 @@ func (x *ResolvedConfigMount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvedConfigMount.ProtoReflect.Descriptor instead.
 func (*ResolvedConfigMount) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{3}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ResolvedConfigMount) GetName() string {
@@ -557,7 +637,7 @@ type KeyToPath struct {
 
 func (x *KeyToPath) Reset() {
 	*x = KeyToPath{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[4]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -569,7 +649,7 @@ func (x *KeyToPath) String() string {
 func (*KeyToPath) ProtoMessage() {}
 
 func (x *KeyToPath) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[4]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -582,7 +662,7 @@ func (x *KeyToPath) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyToPath.ProtoReflect.Descriptor instead.
 func (*KeyToPath) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{4}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *KeyToPath) GetKey() string {
@@ -612,7 +692,7 @@ type GetInstanceRequest struct {
 
 func (x *GetInstanceRequest) Reset() {
 	*x = GetInstanceRequest{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[5]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -624,7 +704,7 @@ func (x *GetInstanceRequest) String() string {
 func (*GetInstanceRequest) ProtoMessage() {}
 
 func (x *GetInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[5]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -637,7 +717,7 @@ func (x *GetInstanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceRequest.ProtoReflect.Descriptor instead.
 func (*GetInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{5}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetInstanceRequest) GetId() string {
@@ -667,7 +747,7 @@ type InstanceResponse struct {
 
 func (x *InstanceResponse) Reset() {
 	*x = InstanceResponse{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[6]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -679,7 +759,7 @@ func (x *InstanceResponse) String() string {
 func (*InstanceResponse) ProtoMessage() {}
 
 func (x *InstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[6]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -692,7 +772,7 @@ func (x *InstanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceResponse.ProtoReflect.Descriptor instead.
 func (*InstanceResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{6}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *InstanceResponse) GetInstance() *Instance {
@@ -732,7 +812,7 @@ type ListInstancesRequest struct {
 
 func (x *ListInstancesRequest) Reset() {
 	*x = ListInstancesRequest{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -744,7 +824,7 @@ func (x *ListInstancesRequest) String() string {
 func (*ListInstancesRequest) ProtoMessage() {}
 
 func (x *ListInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -757,7 +837,7 @@ func (x *ListInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInstancesRequest.ProtoReflect.Descriptor instead.
 func (*ListInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{7}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListInstancesRequest) GetServiceName() string {
@@ -824,7 +904,7 @@ type ListInstancesResponse struct {
 
 func (x *ListInstancesResponse) Reset() {
 	*x = ListInstancesResponse{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[8]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -836,7 +916,7 @@ func (x *ListInstancesResponse) String() string {
 func (*ListInstancesResponse) ProtoMessage() {}
 
 func (x *ListInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[8]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -849,7 +929,7 @@ func (x *ListInstancesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInstancesResponse.ProtoReflect.Descriptor instead.
 func (*ListInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{8}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListInstancesResponse) GetInstances() []*Instance {
@@ -888,7 +968,7 @@ type InstanceActionRequest struct {
 
 func (x *InstanceActionRequest) Reset() {
 	*x = InstanceActionRequest{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[9]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -900,7 +980,7 @@ func (x *InstanceActionRequest) String() string {
 func (*InstanceActionRequest) ProtoMessage() {}
 
 func (x *InstanceActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[9]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -913,7 +993,7 @@ func (x *InstanceActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceActionRequest.ProtoReflect.Descriptor instead.
 func (*InstanceActionRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{9}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *InstanceActionRequest) GetId() string {
@@ -954,7 +1034,7 @@ type WatchInstancesRequest struct {
 
 func (x *WatchInstancesRequest) Reset() {
 	*x = WatchInstancesRequest{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[10]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -966,7 +1046,7 @@ func (x *WatchInstancesRequest) String() string {
 func (*WatchInstancesRequest) ProtoMessage() {}
 
 func (x *WatchInstancesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[10]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -979,7 +1059,7 @@ func (x *WatchInstancesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchInstancesRequest.ProtoReflect.Descriptor instead.
 func (*WatchInstancesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{10}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *WatchInstancesRequest) GetNamespace() string {
@@ -1025,7 +1105,7 @@ type WatchInstancesResponse struct {
 
 func (x *WatchInstancesResponse) Reset() {
 	*x = WatchInstancesResponse{}
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[11]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1037,7 +1117,7 @@ func (x *WatchInstancesResponse) String() string {
 func (*WatchInstancesResponse) ProtoMessage() {}
 
 func (x *WatchInstancesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_instance_proto_msgTypes[11]
+	mi := &file_pkg_api_proto_instance_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1050,7 +1130,7 @@ func (x *WatchInstancesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchInstancesResponse.ProtoReflect.Descriptor instead.
 func (*WatchInstancesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{11}
+	return file_pkg_api_proto_instance_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *WatchInstancesResponse) GetInstance() *Instance {
@@ -1078,7 +1158,7 @@ var File_pkg_api_proto_instance_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_instance_proto_rawDesc = "" +
 	"\n" +
-	"\x1cpkg/api/proto/instance.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\xc4\x06\n" +
+	"\x1cpkg/api/proto/instance.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\xf3\x06\n" +
 	"\bInstance\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06runner\x18\x02 \x01(\tR\x06runner\x12\x1c\n" +
@@ -1103,13 +1183,19 @@ const file_pkg_api_proto_instance_proto_rawDesc = "" +
 	"\bmetadata\x18\x11 \x01(\v2\x1a.rune.api.InstanceMetadataR\bmetadata\x12\x1b\n" +
 	"\tfailed_at\x18\x12 \x01(\tR\bfailedAt\x12%\n" +
 	"\x0efailure_reason\x18\x13 \x01(\tR\rfailureReason\x126\n" +
-	"\x06labels\x18\x14 \x03(\v2\x1e.rune.api.Instance.LabelsEntryR\x06labels\x1a>\n" +
+	"\x06labels\x18\x14 \x03(\v2\x1e.rune.api.Instance.LabelsEntryR\x06labels\x12-\n" +
+	"\x05usage\x18\x15 \x01(\v2\x17.rune.api.InstanceUsageR\x05usage\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8e\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"~\n" +
+	"\rInstanceUsage\x12\x1f\n" +
+	"\vcpu_percent\x18\x01 \x01(\x01R\n" +
+	"cpuPercent\x12$\n" +
+	"\x0emem_used_bytes\x18\x02 \x01(\x04R\fmemUsedBytes\x12&\n" +
+	"\x0fmem_limit_bytes\x18\x03 \x01(\x04R\rmemLimitBytes\"\x8e\x02\n" +
 	"\x10InstanceMetadata\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x05R\n" +
@@ -1216,77 +1302,79 @@ func file_pkg_api_proto_instance_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_instance_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_api_proto_instance_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_pkg_api_proto_instance_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_pkg_api_proto_instance_proto_goTypes = []any{
 	(InstanceStatus)(0),            // 0: rune.api.InstanceStatus
 	(*Instance)(nil),               // 1: rune.api.Instance
-	(*InstanceMetadata)(nil),       // 2: rune.api.InstanceMetadata
-	(*ResolvedSecretMount)(nil),    // 3: rune.api.ResolvedSecretMount
-	(*ResolvedConfigMount)(nil),    // 4: rune.api.ResolvedConfigMount
-	(*KeyToPath)(nil),              // 5: rune.api.KeyToPath
-	(*GetInstanceRequest)(nil),     // 6: rune.api.GetInstanceRequest
-	(*InstanceResponse)(nil),       // 7: rune.api.InstanceResponse
-	(*ListInstancesRequest)(nil),   // 8: rune.api.ListInstancesRequest
-	(*ListInstancesResponse)(nil),  // 9: rune.api.ListInstancesResponse
-	(*InstanceActionRequest)(nil),  // 10: rune.api.InstanceActionRequest
-	(*WatchInstancesRequest)(nil),  // 11: rune.api.WatchInstancesRequest
-	(*WatchInstancesResponse)(nil), // 12: rune.api.WatchInstancesResponse
-	nil,                            // 13: rune.api.Instance.EnvironmentEntry
-	nil,                            // 14: rune.api.Instance.LabelsEntry
-	nil,                            // 15: rune.api.ResolvedSecretMount.DataEntry
-	nil,                            // 16: rune.api.ResolvedConfigMount.DataEntry
-	nil,                            // 17: rune.api.ListInstancesRequest.LabelSelectorEntry
-	nil,                            // 18: rune.api.ListInstancesRequest.FieldSelectorEntry
-	nil,                            // 19: rune.api.WatchInstancesRequest.LabelSelectorEntry
-	nil,                            // 20: rune.api.WatchInstancesRequest.FieldSelectorEntry
-	(*Resources)(nil),              // 21: rune.api.Resources
-	(*Status)(nil),                 // 22: rune.api.Status
-	(*PagingParams)(nil),           // 23: rune.api.PagingParams
-	(EventType)(0),                 // 24: rune.api.EventType
+	(*InstanceUsage)(nil),          // 2: rune.api.InstanceUsage
+	(*InstanceMetadata)(nil),       // 3: rune.api.InstanceMetadata
+	(*ResolvedSecretMount)(nil),    // 4: rune.api.ResolvedSecretMount
+	(*ResolvedConfigMount)(nil),    // 5: rune.api.ResolvedConfigMount
+	(*KeyToPath)(nil),              // 6: rune.api.KeyToPath
+	(*GetInstanceRequest)(nil),     // 7: rune.api.GetInstanceRequest
+	(*InstanceResponse)(nil),       // 8: rune.api.InstanceResponse
+	(*ListInstancesRequest)(nil),   // 9: rune.api.ListInstancesRequest
+	(*ListInstancesResponse)(nil),  // 10: rune.api.ListInstancesResponse
+	(*InstanceActionRequest)(nil),  // 11: rune.api.InstanceActionRequest
+	(*WatchInstancesRequest)(nil),  // 12: rune.api.WatchInstancesRequest
+	(*WatchInstancesResponse)(nil), // 13: rune.api.WatchInstancesResponse
+	nil,                            // 14: rune.api.Instance.EnvironmentEntry
+	nil,                            // 15: rune.api.Instance.LabelsEntry
+	nil,                            // 16: rune.api.ResolvedSecretMount.DataEntry
+	nil,                            // 17: rune.api.ResolvedConfigMount.DataEntry
+	nil,                            // 18: rune.api.ListInstancesRequest.LabelSelectorEntry
+	nil,                            // 19: rune.api.ListInstancesRequest.FieldSelectorEntry
+	nil,                            // 20: rune.api.WatchInstancesRequest.LabelSelectorEntry
+	nil,                            // 21: rune.api.WatchInstancesRequest.FieldSelectorEntry
+	(*Resources)(nil),              // 22: rune.api.Resources
+	(*Status)(nil),                 // 23: rune.api.Status
+	(*PagingParams)(nil),           // 24: rune.api.PagingParams
+	(EventType)(0),                 // 25: rune.api.EventType
 }
 var file_pkg_api_proto_instance_proto_depIdxs = []int32{
 	0,  // 0: rune.api.Instance.status:type_name -> rune.api.InstanceStatus
-	21, // 1: rune.api.Instance.resources:type_name -> rune.api.Resources
-	13, // 2: rune.api.Instance.environment:type_name -> rune.api.Instance.EnvironmentEntry
-	2,  // 3: rune.api.Instance.metadata:type_name -> rune.api.InstanceMetadata
-	14, // 4: rune.api.Instance.labels:type_name -> rune.api.Instance.LabelsEntry
-	3,  // 5: rune.api.InstanceMetadata.secret_mounts:type_name -> rune.api.ResolvedSecretMount
-	4,  // 6: rune.api.InstanceMetadata.config_mounts:type_name -> rune.api.ResolvedConfigMount
-	15, // 7: rune.api.ResolvedSecretMount.data:type_name -> rune.api.ResolvedSecretMount.DataEntry
-	5,  // 8: rune.api.ResolvedSecretMount.items:type_name -> rune.api.KeyToPath
-	16, // 9: rune.api.ResolvedConfigMount.data:type_name -> rune.api.ResolvedConfigMount.DataEntry
-	5,  // 10: rune.api.ResolvedConfigMount.items:type_name -> rune.api.KeyToPath
-	1,  // 11: rune.api.InstanceResponse.instance:type_name -> rune.api.Instance
-	22, // 12: rune.api.InstanceResponse.status:type_name -> rune.api.Status
-	0,  // 13: rune.api.ListInstancesRequest.status:type_name -> rune.api.InstanceStatus
-	23, // 14: rune.api.ListInstancesRequest.paging:type_name -> rune.api.PagingParams
-	17, // 15: rune.api.ListInstancesRequest.label_selector:type_name -> rune.api.ListInstancesRequest.LabelSelectorEntry
-	18, // 16: rune.api.ListInstancesRequest.field_selector:type_name -> rune.api.ListInstancesRequest.FieldSelectorEntry
-	1,  // 17: rune.api.ListInstancesResponse.instances:type_name -> rune.api.Instance
-	22, // 18: rune.api.ListInstancesResponse.status:type_name -> rune.api.Status
-	23, // 19: rune.api.ListInstancesResponse.paging:type_name -> rune.api.PagingParams
-	19, // 20: rune.api.WatchInstancesRequest.label_selector:type_name -> rune.api.WatchInstancesRequest.LabelSelectorEntry
-	20, // 21: rune.api.WatchInstancesRequest.field_selector:type_name -> rune.api.WatchInstancesRequest.FieldSelectorEntry
-	1,  // 22: rune.api.WatchInstancesResponse.instance:type_name -> rune.api.Instance
-	24, // 23: rune.api.WatchInstancesResponse.event_type:type_name -> rune.api.EventType
-	22, // 24: rune.api.WatchInstancesResponse.status:type_name -> rune.api.Status
-	6,  // 25: rune.api.InstanceService.GetInstance:input_type -> rune.api.GetInstanceRequest
-	8,  // 26: rune.api.InstanceService.ListInstances:input_type -> rune.api.ListInstancesRequest
-	10, // 27: rune.api.InstanceService.StartInstance:input_type -> rune.api.InstanceActionRequest
-	10, // 28: rune.api.InstanceService.StopInstance:input_type -> rune.api.InstanceActionRequest
-	10, // 29: rune.api.InstanceService.RestartInstance:input_type -> rune.api.InstanceActionRequest
-	11, // 30: rune.api.InstanceService.WatchInstances:input_type -> rune.api.WatchInstancesRequest
-	7,  // 31: rune.api.InstanceService.GetInstance:output_type -> rune.api.InstanceResponse
-	9,  // 32: rune.api.InstanceService.ListInstances:output_type -> rune.api.ListInstancesResponse
-	7,  // 33: rune.api.InstanceService.StartInstance:output_type -> rune.api.InstanceResponse
-	7,  // 34: rune.api.InstanceService.StopInstance:output_type -> rune.api.InstanceResponse
-	7,  // 35: rune.api.InstanceService.RestartInstance:output_type -> rune.api.InstanceResponse
-	12, // 36: rune.api.InstanceService.WatchInstances:output_type -> rune.api.WatchInstancesResponse
-	31, // [31:37] is the sub-list for method output_type
-	25, // [25:31] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	22, // 1: rune.api.Instance.resources:type_name -> rune.api.Resources
+	14, // 2: rune.api.Instance.environment:type_name -> rune.api.Instance.EnvironmentEntry
+	3,  // 3: rune.api.Instance.metadata:type_name -> rune.api.InstanceMetadata
+	15, // 4: rune.api.Instance.labels:type_name -> rune.api.Instance.LabelsEntry
+	2,  // 5: rune.api.Instance.usage:type_name -> rune.api.InstanceUsage
+	4,  // 6: rune.api.InstanceMetadata.secret_mounts:type_name -> rune.api.ResolvedSecretMount
+	5,  // 7: rune.api.InstanceMetadata.config_mounts:type_name -> rune.api.ResolvedConfigMount
+	16, // 8: rune.api.ResolvedSecretMount.data:type_name -> rune.api.ResolvedSecretMount.DataEntry
+	6,  // 9: rune.api.ResolvedSecretMount.items:type_name -> rune.api.KeyToPath
+	17, // 10: rune.api.ResolvedConfigMount.data:type_name -> rune.api.ResolvedConfigMount.DataEntry
+	6,  // 11: rune.api.ResolvedConfigMount.items:type_name -> rune.api.KeyToPath
+	1,  // 12: rune.api.InstanceResponse.instance:type_name -> rune.api.Instance
+	23, // 13: rune.api.InstanceResponse.status:type_name -> rune.api.Status
+	0,  // 14: rune.api.ListInstancesRequest.status:type_name -> rune.api.InstanceStatus
+	24, // 15: rune.api.ListInstancesRequest.paging:type_name -> rune.api.PagingParams
+	18, // 16: rune.api.ListInstancesRequest.label_selector:type_name -> rune.api.ListInstancesRequest.LabelSelectorEntry
+	19, // 17: rune.api.ListInstancesRequest.field_selector:type_name -> rune.api.ListInstancesRequest.FieldSelectorEntry
+	1,  // 18: rune.api.ListInstancesResponse.instances:type_name -> rune.api.Instance
+	23, // 19: rune.api.ListInstancesResponse.status:type_name -> rune.api.Status
+	24, // 20: rune.api.ListInstancesResponse.paging:type_name -> rune.api.PagingParams
+	20, // 21: rune.api.WatchInstancesRequest.label_selector:type_name -> rune.api.WatchInstancesRequest.LabelSelectorEntry
+	21, // 22: rune.api.WatchInstancesRequest.field_selector:type_name -> rune.api.WatchInstancesRequest.FieldSelectorEntry
+	1,  // 23: rune.api.WatchInstancesResponse.instance:type_name -> rune.api.Instance
+	25, // 24: rune.api.WatchInstancesResponse.event_type:type_name -> rune.api.EventType
+	23, // 25: rune.api.WatchInstancesResponse.status:type_name -> rune.api.Status
+	7,  // 26: rune.api.InstanceService.GetInstance:input_type -> rune.api.GetInstanceRequest
+	9,  // 27: rune.api.InstanceService.ListInstances:input_type -> rune.api.ListInstancesRequest
+	11, // 28: rune.api.InstanceService.StartInstance:input_type -> rune.api.InstanceActionRequest
+	11, // 29: rune.api.InstanceService.StopInstance:input_type -> rune.api.InstanceActionRequest
+	11, // 30: rune.api.InstanceService.RestartInstance:input_type -> rune.api.InstanceActionRequest
+	12, // 31: rune.api.InstanceService.WatchInstances:input_type -> rune.api.WatchInstancesRequest
+	8,  // 32: rune.api.InstanceService.GetInstance:output_type -> rune.api.InstanceResponse
+	10, // 33: rune.api.InstanceService.ListInstances:output_type -> rune.api.ListInstancesResponse
+	8,  // 34: rune.api.InstanceService.StartInstance:output_type -> rune.api.InstanceResponse
+	8,  // 35: rune.api.InstanceService.StopInstance:output_type -> rune.api.InstanceResponse
+	8,  // 36: rune.api.InstanceService.RestartInstance:output_type -> rune.api.InstanceResponse
+	13, // 37: rune.api.InstanceService.WatchInstances:output_type -> rune.api.WatchInstancesResponse
+	32, // [32:38] is the sub-list for method output_type
+	26, // [26:32] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_instance_proto_init() }
@@ -1301,7 +1389,7 @@ func file_pkg_api_proto_instance_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_instance_proto_rawDesc), len(file_pkg_api_proto_instance_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -263,3 +263,18 @@ var (
 	// AccessMode is not in Capabilities.AccessModes.
 	ErrAccessModeUnsupported = errors.New("storage driver: access mode unsupported")
 )
+
+// UsageReporter is an OPTIONAL capability: drivers that can measure a
+// volume's live on-disk usage implement it (the local directory drivers
+// do, via a bounded directory walk). The API read path type-asserts for
+// it and leaves usage at zero/unknown for drivers without it — cloud
+// block drivers would need a node-local statfs, which requires agent
+// support and is future work.
+//
+// usedBytes is the measured usage. capacityBytes MAY be 0 when the driver
+// cannot determine a real capacity (directory-backed volumes have no
+// device boundary); callers should then fall back to the volume's spec
+// size.
+type UsageReporter interface {
+	Usage(ctx context.Context, opctx OpContext, handle VolumeHandle) (usedBytes, capacityBytes uint64, err error)
+}

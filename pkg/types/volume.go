@@ -115,6 +115,13 @@ type Volume struct {
 	// The controller treats it as a string; the owning driver re-parses it.
 	Handle string `json:"handle,omitempty" yaml:"handle,omitempty"`
 
+	// UsedBytes / CapacityBytes are live usage figures attached by the API
+	// read path from drivers that implement the UsageReporter capability.
+	// TRANSIENT: excluded from store serialization (json/yaml "-") so stale
+	// samples are never persisted. 0 means unknown.
+	UsedBytes     uint64 `json:"-" yaml:"-"`
+	CapacityBytes uint64 `json:"-" yaml:"-"`
+
 	// OwnerService is set on volumes auto-created from a claimTemplate so the
 	// controller knows whose deletion may trigger reclaim.
 	// Format: "<namespace>/<service-name>".

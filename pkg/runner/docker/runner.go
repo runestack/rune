@@ -141,6 +141,11 @@ type DockerRunner struct {
 	dnsMu      sync.RWMutex
 	dnsServers []string
 	dnsSearch  []string
+
+	// stats caches previous per-container CPU counters so InstanceStats
+	// (runner.StatsProvider) can compute deltas across calls without a
+	// blocking two-sample read every time. See stats.go.
+	stats *statsCache
 }
 
 func (r *DockerRunner) Type() types.RunnerType {
@@ -192,6 +197,7 @@ func NewDockerRunnerWithConfig(logger log.Logger, config *DockerConfig) (*Docker
 		config:       config,
 		ecrAuthCache: make(map[string]ecrAuthEntry),
 		providers:    nil,
+		stats:        newStatsCache(),
 	}, nil
 }
 

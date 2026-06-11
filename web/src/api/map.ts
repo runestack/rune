@@ -89,12 +89,50 @@ function portLabels(svc: PbService): string[] {
   });
 }
 
+/**
+ * Aggregate live usage across a service's embedded instances.
+ *
+ * CPU: instance cpu_percent is already host-share (same denominator as node
+ * CPU), so the service total is the SUM across instances, clamped to 100.
+ *
+ * Memory: percent = Σ used / denominator. When every instance reports the
+ * same limit (the common cases: identical caps, or uncapped where the limit
+ * equals host total) the denominator is that shared limit; otherwise it's
+ * the sum of limits.
+ */
+function aggregateUsage(insts: PbInstance[]): { cpu: number; mem: number } {
+  let cpu = 0;
+  let usedSum = 0;
+  let limitSum = 0;
+  let sharedLimit = -1; // -1 unset · -2 mixed
+  let any = false;
+  for (const i of insts) {
+    const u = i.usage;
+    if (!u) continue;
+    any = true;
+    if (u.cpuPercent >= 0) cpu += u.cpuPercent;
+    const used = Number(u.memUsedBytes);
+    const limit = Number(u.memLimitBytes);
+    if (limit > 0) {
+      usedSum += used;
+      limitSum += limit;
+      if (sharedLimit === -1) sharedLimit = limit;
+      else if (sharedLimit !== limit) sharedLimit = -2;
+    }
+  }
+  if (!any) return { cpu: 0, mem: 0 };
+  const denom = sharedLimit > 0 ? sharedLimit : limitSum;
+  const mem = denom > 0 ? (usedSum / denom) * 100 : 0;
+  return { cpu: Math.min(100, Math.round(cpu)), mem: Math.min(100, Math.round(mem)) };
+}
+
 export function mapService(svc: PbService): Service {
   const insts = svc.instances ?? [];
   const ready = insts.filter((i) => i.status === InstanceStatus.RUNNING).length;
   const want = svc.scale ?? insts.length;
   const restarts = insts.reduce((a, i) => a + (i.metadata?.restartCount ?? 0), 0);
   const runtime = (svc.runtime || "container").toLowerCase();
+  const usage = aggregateUsage(insts);
   return {
     name: svc.name || "—",
     ns: svc.namespace || "default",
@@ -103,8 +141,8 @@ export function mapService(svc: PbService): Service {
     ready,
     want,
     image: svc.image || (runtime === "process" ? `${svc.command || "process"} (process)` : "—"),
-    cpu: 0,
-    mem: 0,
+    cpu: usage.cpu,
+    mem: usage.mem,
     restarts,
     age: ageFrom(svc.metadata?.createdAt),
     ports: portLabels(svc),
@@ -120,14 +158,21 @@ export function mapService(svc: PbService): Service {
 
 export function mapInstance(i: PbInstance, svcNameById?: Map<string, string>): Instance {
   const svc = i.serviceName || (i.serviceId && svcNameById?.get(i.serviceId)) || "—";
+  // Live usage from the runner (absent = unknown → 0). CPU is host-share
+  // (same denominator as node CPU); memory percent is used/limit, where an
+  // uncapped container's limit equals the host total.
+  const u = i.usage;
+  const cpu = u && u.cpuPercent >= 0 ? Math.round(u.cpuPercent) : 0;
+  const memLimit = u ? Number(u.memLimitBytes) : 0;
+  const mem = u && memLimit > 0 ? Math.min(100, Math.round((Number(u.memUsedBytes) / memLimit) * 100)) : 0;
   return {
     id: i.name || i.id || "—",
     svc,
     ns: i.namespace || "default",
     node: i.nodeId || i.runner || "—",
     status: mapInstanceStatus(i.status),
-    cpu: 0,
-    mem: 0,
+    cpu,
+    mem,
     restarts: i.metadata?.restartCount ?? 0,
     uptime: i.status === InstanceStatus.RUNNING ? ageFrom(i.createdAt) : "—",
     ip: i.ip || "—",
@@ -160,11 +205,15 @@ function volumeStatusLabel(s: string): string {
 export function mapVolume(v: PbVolume): Volume {
   const access = v.accessMode || "";
   const mode = access === "ReadWriteMany" ? "RWX" : access === "ReadOnlyMany" ? "ROX" : access ? "RWO" : "—";
+  // Live usage from the UsageReporter driver capability; capacity falls back
+  // to the spec size server-side. 0 capacity = unknown → render 0%.
+  const capacity = Number(v.capacityBytes);
+  const used = capacity > 0 ? Math.min(100, Math.round((Number(v.usedBytes) / capacity) * 100)) : 0;
   return {
     name: v.name || "—",
     ns: v.namespace || "default",
     size: v.size || "—",
-    used: 0,
+    used,
     status: volumeStatusLabel(v.status),
     class: v.storageClassName || "—",
     node: v.boundNode || "—",

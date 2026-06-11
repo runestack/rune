@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner/manager"
@@ -69,6 +70,9 @@ func (s *InstanceService) GetInstance(ctx context.Context, req *generated.GetIns
 		instance.Status = mergeInstanceStatus(instance.Status, status)
 	}
 
+	// Attach live resource usage (best-effort).
+	enrichInstancesUsage(ctx, s.runnerManager, []*types.Instance{instance}, s.logger)
+
 	// Convert to protobuf message
 	protoInstance, err := s.instanceModelToProto(instance)
 	if err != nil {
@@ -131,23 +135,25 @@ func (s *InstanceService) ListInstances(ctx context.Context, req *generated.List
 		instances = append(instances, &instance)
 	}
 
-	// Convert to protobuf messages
-	protoInstances := make([]*generated.Instance, 0, len(instances))
+	// Merge live runner status onto each stored record first, so the
+	// usage enrichment below only samples instances that are actually
+	// Running.
 	for _, instance := range instances {
-		// Get instance status from the appropriate runner
-		var status types.InstanceStatus
-		var statusErr error
-
 		runnerToUse, err := s.runnerManager.GetInstanceRunner(instance)
 		if err != nil {
 			return nil, err
 		}
-		status, statusErr = runnerToUse.Status(ctx, instance)
-
-		if statusErr == nil {
+		if status, statusErr := runnerToUse.Status(ctx, instance); statusErr == nil {
 			instance.Status = mergeInstanceStatus(instance.Status, status)
 		}
+	}
 
+	// Attach live resource usage (best-effort, concurrent, bounded).
+	enrichInstancesUsage(ctx, s.runnerManager, instances, s.logger)
+
+	// Convert to protobuf messages
+	protoInstances := make([]*generated.Instance, 0, len(instances))
+	for _, instance := range instances {
 		protoInstance, err := s.instanceModelToProto(instance)
 		if err != nil {
 			s.logger.Error("Failed to convert instance to proto", log.Err(err))
@@ -422,6 +428,10 @@ func (s *InstanceService) instanceModelToProto(instance *types.Instance) (*gener
 			},
 		}
 	}
+
+	// Live usage sample (nil when the runner can't report it — clients
+	// must treat absent as unknown, not 0).
+	protoInstance.Usage = client.InstanceUsageToProto(instance.Usage)
 
 	return protoInstance, nil
 }
