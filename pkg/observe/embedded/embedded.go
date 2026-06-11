@@ -137,6 +137,7 @@ func (s *Store) Capabilities() observe.Capabilities {
 		RawSQL:                 false,
 		Percentiles:            false,
 		HighCardinalityFilters: false,
+		Parsers:                true,
 	}
 }
 
@@ -191,6 +192,10 @@ func (s *Store) Execute(ctx context.Context, q *observe.Query) (observe.ResultSt
 	if err != nil {
 		return nil, err
 	}
+	labelFilters, err := observe.CompileLabelFilters(q.LabelFilters)
+	if err != nil {
+		return nil, err
+	}
 
 	// Snapshot under the read lock so Execute is consistent and lock-free
 	// afterwards.
@@ -212,6 +217,30 @@ func (s *Store) Execute(ctx context.Context, q *observe.Query) (observe.ResultSt
 		}
 		if !filters.matches(r.Line) {
 			continue
+		}
+		// Parser stages: extract fields and merge them into the record's
+		// labels (a fresh map — snapshot records share Labels with the ring).
+		// Extracted fields then feed label filters, row output, and metric
+		// group-by alike.
+		if len(q.Parsers) > 0 {
+			if extracted := observe.ExtractFields(r.Line, q.Parsers); len(extracted) > 0 {
+				merged := make(map[string]string, len(r.Labels)+len(extracted))
+				for k, v := range r.Labels {
+					merged[k] = v
+				}
+				for k, v := range extracted {
+					merged[k] = v
+				}
+				r.Labels = merged
+			}
+		}
+		if len(labelFilters) > 0 {
+			rec := r
+			if !labelFilters.Matches(func(name string) (string, bool) {
+				return recordLabel(rec, name)
+			}) {
+				continue
+			}
 		}
 		matched = append(matched, r)
 	}

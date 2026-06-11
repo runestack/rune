@@ -99,6 +99,9 @@ func (s *Store) Capabilities() observe.Capabilities {
 		RawSQL:                 true,
 		Percentiles:            true,
 		HighCardinalityFilters: true,
+		// Parser pipeline stages are not lowered to SQL yet; RawSQL
+		// (JSONExtract / extractKeyValuePairs) is the escape hatch.
+		Parsers: false,
 	}
 }
 
@@ -201,6 +204,10 @@ func (s *Store) Execute(ctx context.Context, q *observe.Query) (observe.ResultSt
 	db, err := s.conn(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(q.Parsers) > 0 || len(q.LabelFilters) > 0 {
+		return nil, observe.ErrCapabilityUnsupported
 	}
 
 	if q.RawSQL != "" {

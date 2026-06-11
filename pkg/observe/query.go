@@ -19,6 +19,17 @@ type Query struct {
 	// Applied in order; ANDed together.
 	LineFilters []LineFilter
 
+	// Parsers are field-extraction stages (`| logfmt`, `| json`) applied
+	// after the line filters. Extracted fields become labels on the row —
+	// visible in results, filterable via LabelFilters, and groupable in
+	// aggregations. Our subset fixes the pipeline order as
+	// selectors → line filters → parsers → label filters.
+	Parsers []ParserStage
+
+	// LabelFilters are post-parse predicates (`| status = "500"`,
+	// `| dur > 250`) over intrinsic and extracted labels. ANDed together.
+	LabelFilters []LabelFilter
+
 	// Aggregation, when non-nil, turns the query from a log query into a
 	// metric query (e.g. count_over_time → a histogram). When nil the query
 	// returns raw log lines.
@@ -97,6 +108,42 @@ const (
 // LineFilter is a single post-selection grep stage over the log line content.
 type LineFilter struct {
 	Op    LineFilterOp
+	Value string
+}
+
+// ParserStage is a field-extraction stage.
+type ParserStage string
+
+const (
+	// ParserLogfmt extracts key=value pairs from the line (`| logfmt`).
+	ParserLogfmt ParserStage = "logfmt"
+	// ParserJSON extracts top-level scalar fields from a JSON line (`| json`).
+	// Nested objects/arrays are skipped in this subset.
+	ParserJSON ParserStage = "json"
+)
+
+// LabelFilterOp is the comparison of a post-parse label filter. String ops
+// compare lexically (regex ops compile the value); numeric ops parse both
+// sides as floats and drop rows whose label value is not numeric.
+type LabelFilterOp string
+
+const (
+	LabelFilterEq    LabelFilterOp = "="
+	LabelFilterNeq   LabelFilterOp = "!="
+	LabelFilterRe    LabelFilterOp = "=~"
+	LabelFilterNotRe LabelFilterOp = "!~"
+	LabelFilterGT    LabelFilterOp = ">"
+	LabelFilterGTE   LabelFilterOp = ">="
+	LabelFilterLT    LabelFilterOp = "<"
+	LabelFilterLTE   LabelFilterOp = "<="
+	LabelFilterNumEq LabelFilterOp = "=="
+)
+
+// LabelFilter is one post-parse predicate over a label (intrinsic or
+// extracted by a parser stage).
+type LabelFilter struct {
+	Label string
+	Op    LabelFilterOp
 	Value string
 }
 

@@ -41,24 +41,28 @@ func ParseLogQL(logql string, start, end time.Time, limit int, forward bool) (*Q
 	if agg, inner, groupBy, ok, err := parseMetricWrapper(expr); err != nil {
 		return nil, err
 	} else if ok {
-		sel, filters, rerr := parseStreamAndFilters(inner)
+		sel, pipe, rerr := parseStreamAndFilters(inner)
 		if rerr != nil {
 			return nil, rerr
 		}
 		q.Selectors = sel
-		q.LineFilters = filters
+		q.LineFilters = pipe.lineFilters
+		q.Parsers = pipe.parsers
+		q.LabelFilters = pipe.labelFilters
 		agg.GroupBy = groupBy
 		q.Aggregation = agg
 		return q, nil
 	}
 
-	// Plain log query: a stream selector plus optional line filters.
-	sel, filters, err := parseStreamAndFilters(expr)
+	// Plain log query: a stream selector plus an optional pipeline.
+	sel, pipe, err := parseStreamAndFilters(expr)
 	if err != nil {
 		return nil, err
 	}
 	q.Selectors = sel
-	q.LineFilters = filters
+	q.LineFilters = pipe.lineFilters
+	q.Parsers = pipe.parsers
+	q.LabelFilters = pipe.labelFilters
 	return q, nil
 }
 
@@ -176,29 +180,38 @@ func splitRange(s string) (streamPart string, step time.Duration, err error) {
 	return strings.TrimSpace(s[:open]), d, nil
 }
 
-// parseStreamAndFilters parses `{matchers} |= "x" != "y"` into selectors and
-// line filters.
-func parseStreamAndFilters(s string) ([]Matcher, []LineFilter, error) {
+// pipeline is the parsed post-selector chain: grep stages, parser stages, and
+// post-parse label filters. Our subset fixes evaluation order as
+// line filters → parsers → label filters regardless of written order.
+type pipeline struct {
+	lineFilters  []LineFilter
+	parsers      []ParserStage
+	labelFilters []LabelFilter
+}
+
+// parseStreamAndFilters parses `{matchers} |= "x" | logfmt | dur > 250` into
+// selectors and the pipeline.
+func parseStreamAndFilters(s string) ([]Matcher, pipeline, error) {
 	s = strings.TrimSpace(s)
 	if !strings.HasPrefix(s, "{") {
-		return nil, nil, fmt.Errorf("observe: query must start with a stream selector '{...}'")
+		return nil, pipeline{}, fmt.Errorf("observe: query must start with a stream selector '{...}'")
 	}
 	close := strings.Index(s, "}")
 	if close < 0 {
-		return nil, nil, fmt.Errorf("observe: unterminated stream selector")
+		return nil, pipeline{}, fmt.Errorf("observe: unterminated stream selector")
 	}
 	matchers, err := parseMatchers(s[1:close])
 	if err != nil {
-		return nil, nil, err
+		return nil, pipeline{}, err
 	}
 	if len(matchers) == 0 {
-		return nil, nil, fmt.Errorf("observe: stream selector must have at least one matcher")
+		return nil, pipeline{}, fmt.Errorf("observe: stream selector must have at least one matcher")
 	}
-	filters, err := parseLineFilters(s[close+1:])
+	pipe, err := parsePipeline(s[close+1:])
 	if err != nil {
-		return nil, nil, err
+		return nil, pipeline{}, err
 	}
-	return matchers, filters, nil
+	return matchers, pipe, nil
 }
 
 // parseMatchers parses `a="b", c=~"re"` into Matchers.
@@ -245,37 +258,136 @@ func parseMatcher(s string) (Matcher, error) {
 	return Matcher{}, fmt.Errorf("observe: invalid matcher %q", s)
 }
 
-// parseLineFilters parses a trailing `|= "x" != "y" |~ "re" !~ "re"` chain.
-func parseLineFilters(s string) ([]LineFilter, error) {
+// parsePipeline parses the trailing stage chain: line filters (`|= "x"`,
+// `!= "y"`, `|~`/`!~`), parser stages (`| logfmt`, `| json`), and post-parse
+// label filters (`| status = "500"`, `| dur > 250`).
+func parsePipeline(s string) (pipeline, error) {
+	var pipe pipeline
 	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil, nil
-	}
-	var out []LineFilter
 	for s != "" {
-		var op LineFilterOp
-		var tok string
 		switch {
 		case strings.HasPrefix(s, "|="):
-			op, tok = LineContains, "|="
-		case strings.HasPrefix(s, "!~"):
-			op, tok = LineNotRegex, "!~"
-		case strings.HasPrefix(s, "!="):
-			op, tok = LineNotContains, "!="
+			val, rest, err := takeQuoted(strings.TrimSpace(s[2:]))
+			if err != nil {
+				return pipe, err
+			}
+			pipe.lineFilters = append(pipe.lineFilters, LineFilter{Op: LineContains, Value: val})
+			s = strings.TrimSpace(rest)
 		case strings.HasPrefix(s, "|~"):
-			op, tok = LineRegex, "|~"
+			val, rest, err := takeQuoted(strings.TrimSpace(s[2:]))
+			if err != nil {
+				return pipe, err
+			}
+			pipe.lineFilters = append(pipe.lineFilters, LineFilter{Op: LineRegex, Value: val})
+			s = strings.TrimSpace(rest)
+		case strings.HasPrefix(s, "!~"):
+			val, rest, err := takeQuoted(strings.TrimSpace(s[2:]))
+			if err != nil {
+				return pipe, err
+			}
+			pipe.lineFilters = append(pipe.lineFilters, LineFilter{Op: LineNotRegex, Value: val})
+			s = strings.TrimSpace(rest)
+		case strings.HasPrefix(s, "!="):
+			val, rest, err := takeQuoted(strings.TrimSpace(s[2:]))
+			if err != nil {
+				return pipe, err
+			}
+			pipe.lineFilters = append(pipe.lineFilters, LineFilter{Op: LineNotContains, Value: val})
+			s = strings.TrimSpace(rest)
+		case strings.HasPrefix(s, "|"):
+			rest, err := parsePipeStage(strings.TrimSpace(s[1:]), &pipe)
+			if err != nil {
+				return pipe, err
+			}
+			s = strings.TrimSpace(rest)
 		default:
-			return nil, fmt.Errorf("observe: unexpected token in line filters: %q", s)
+			return pipe, fmt.Errorf("observe: unexpected token in pipeline: %q", s)
 		}
-		s = strings.TrimSpace(strings.TrimPrefix(s, tok))
-		val, rest, err := takeQuoted(s)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, LineFilter{Op: op, Value: val})
-		s = strings.TrimSpace(rest)
 	}
-	return out, nil
+	return pipe, nil
+}
+
+// parsePipeStage parses what follows a bare `|`: a parser stage name or a
+// label-filter expression `ident op value`. Returns the unconsumed remainder.
+func parsePipeStage(s string, pipe *pipeline) (string, error) {
+	ident, rest := takeIdent(s)
+	if ident == "" {
+		return "", fmt.Errorf("observe: expected parser stage or label filter after '|', got %q", s)
+	}
+	rest = strings.TrimSpace(rest)
+
+	// Label filter when an operator follows (so a label literally named
+	// "json" stays filterable); parser stage otherwise.
+	op, afterOp, hasOp := takeLabelFilterOp(rest)
+	if !hasOp {
+		switch ParserStage(ident) {
+		case ParserLogfmt, ParserJSON:
+			pipe.parsers = append(pipe.parsers, ParserStage(ident))
+			return rest, nil
+		default:
+			return "", fmt.Errorf("observe: unknown pipeline stage %q (want logfmt, json, or a label filter)", ident)
+		}
+	}
+
+	afterOp = strings.TrimSpace(afterOp)
+	var val, remainder string
+	if strings.HasPrefix(afterOp, "\"") {
+		v, r, err := takeQuoted(afterOp)
+		if err != nil {
+			return "", err
+		}
+		val, remainder = v, r
+	} else {
+		val, remainder = takeBareToken(afterOp)
+		if val == "" {
+			return "", fmt.Errorf("observe: label filter %s %s missing value", ident, op)
+		}
+		if op == LabelFilterRe || op == LabelFilterNotRe {
+			return "", fmt.Errorf("observe: regex label filter value must be quoted: %s %s %s", ident, op, val)
+		}
+	}
+	pipe.labelFilters = append(pipe.labelFilters, LabelFilter{Label: ident, Op: op, Value: val})
+	return remainder, nil
+}
+
+// takeIdent reads a leading identifier ([A-Za-z_][A-Za-z0-9_]*).
+func takeIdent(s string) (ident, rest string) {
+	i := 0
+	for ; i < len(s); i++ {
+		c := s[i]
+		isAlpha := c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if i == 0 && !isAlpha {
+			return "", s
+		}
+		if !isAlpha && !(c >= '0' && c <= '9') {
+			break
+		}
+	}
+	return s[:i], s[i:]
+}
+
+// takeLabelFilterOp reads a leading label-filter operator, longest first.
+func takeLabelFilterOp(s string) (LabelFilterOp, string, bool) {
+	for _, op := range []LabelFilterOp{
+		LabelFilterRe, LabelFilterNotRe, LabelFilterGTE, LabelFilterLTE,
+		LabelFilterNumEq, LabelFilterNeq, LabelFilterEq, LabelFilterGT, LabelFilterLT,
+	} {
+		if strings.HasPrefix(s, string(op)) {
+			return op, s[len(op):], true
+		}
+	}
+	return "", s, false
+}
+
+// takeBareToken reads up to the next whitespace or '|'.
+func takeBareToken(s string) (tok, rest string) {
+	i := 0
+	for ; i < len(s); i++ {
+		if s[i] == ' ' || s[i] == '\t' || s[i] == '|' {
+			break
+		}
+	}
+	return s[:i], s[i:]
 }
 
 // takeQuoted reads a leading "..." string and returns its unquoted value plus

@@ -102,6 +102,7 @@ func (s *ObserveService) GetCapabilities(ctx context.Context, _ *generated.Capab
 		RawSql:                 c.RawSQL,
 		Percentiles:            c.Percentiles,
 		HighCardinalityFilters: c.HighCardinalityFilters,
+		Parsers:                c.Parsers,
 		Enabled:                true,
 	}, nil
 }

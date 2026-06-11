@@ -19,7 +19,7 @@ import (
 // (e.g. quantile_over_time), mirroring the Loki capability handshake.
 func renderLogQL(q *observe.Query) (string, error) {
 	sel := renderSelectors(q.Selectors)
-	filters := renderLineFilters(q.LineFilters)
+	filters := renderLineFilters(q.LineFilters) + renderPipeline(q.Parsers, q.LabelFilters)
 
 	if q.Aggregation == nil {
 		return sel + filters, nil
@@ -65,6 +65,30 @@ func renderLineFilters(fs []observe.LineFilter) string {
 		b.WriteString(lineOpString(f.Op))
 		b.WriteByte(' ')
 		b.WriteString(strconv.Quote(f.Value))
+	}
+	return b.String()
+}
+
+// renderPipeline renders parser stages and post-parse label filters in our
+// subset's fixed order (after the line filters) — natively valid Loki LogQL.
+func renderPipeline(parsers []observe.ParserStage, lfs []observe.LabelFilter) string {
+	var b strings.Builder
+	for _, p := range parsers {
+		b.WriteString(" | ")
+		b.WriteString(string(p))
+	}
+	for _, f := range lfs {
+		b.WriteString(" | ")
+		b.WriteString(f.Label)
+		b.WriteByte(' ')
+		b.WriteString(string(f.Op))
+		b.WriteByte(' ')
+		switch f.Op {
+		case observe.LabelFilterEq, observe.LabelFilterNeq, observe.LabelFilterRe, observe.LabelFilterNotRe:
+			b.WriteString(strconv.Quote(f.Value))
+		default: // numeric ops take bare values
+			b.WriteString(f.Value)
+		}
 	}
 	return b.String()
 }
