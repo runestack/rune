@@ -25,7 +25,7 @@ import { Logs } from "./screens/Logs";
 import { Secrets } from "./screens/Secrets";
 import { RuneSight } from "./screens/runesight/RuneSight";
 import type { RsTab } from "./screens/runesight/RuneSight";
-import { SAVED_VIEWS, firingCount, SOURCES_COUNT } from "./screens/runesight/mockData";
+import { firingCount, SOURCES_COUNT } from "./screens/runesight/mockData";
 import { emptyQuery, normQuery } from "./api/observe";
 import type { LogQuery, Range } from "./api/observe";
 
@@ -68,7 +68,8 @@ const NAV: NavGroup[] = [
     group: "Sight",
     items: [
       { id: "rs-explore", label: "Explore", icon: "search" },
-      { id: "rs-views", label: "Saved Views", icon: "logs", count: SAVED_VIEWS.length },
+      // Saved views are live (cluster-shared) — no static badge count.
+      { id: "rs-views", label: "Saved Views", icon: "logs" },
       { id: "rs-alerts", label: "Alerts", icon: "alert", count: FIRING || undefined, firing: true },
       { id: "rs-sources", label: "Sources", icon: "instances", count: SOURCES_COUNT },
     ],

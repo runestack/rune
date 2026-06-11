@@ -535,6 +535,381 @@ func (*QueryResult_Row) isQueryResult_Result() {}
 
 func (*QueryResult_Sample) isQueryResult_Result() {}
 
+// SavedView mirrors types.SavedView: a named, reusable Log Explorer query
+// (LogQL + relative time-range token). Cluster-scoped and shared.
+type SavedView struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // DNS-1123 cluster-unique
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Logql         string                 `protobuf:"bytes,4,opt,name=logql,proto3" json:"logql,omitempty"`
+	Range         string                 `protobuf:"bytes,5,opt,name=range,proto3" json:"range,omitempty"` // relative token: "15m" | "1h" | "24h" | ...
+	Pinned        bool                   `protobuf:"varint,6,opt,name=pinned,proto3" json:"pinned,omitempty"`
+	CreatedBy     string                 `protobuf:"bytes,7,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // RFC3339
+	UpdatedAt     string                 `protobuf:"bytes,9,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"` // RFC3339
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SavedView) Reset() {
+	*x = SavedView{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SavedView) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SavedView) ProtoMessage() {}
+
+func (x *SavedView) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SavedView.ProtoReflect.Descriptor instead.
+func (*SavedView) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SavedView) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SavedView) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SavedView) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *SavedView) GetLogql() string {
+	if x != nil {
+		return x.Logql
+	}
+	return ""
+}
+
+func (x *SavedView) GetRange() string {
+	if x != nil {
+		return x.Range
+	}
+	return ""
+}
+
+func (x *SavedView) GetPinned() bool {
+	if x != nil {
+		return x.Pinned
+	}
+	return false
+}
+
+func (x *SavedView) GetCreatedBy() string {
+	if x != nil {
+		return x.CreatedBy
+	}
+	return ""
+}
+
+func (x *SavedView) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *SavedView) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+type ListSavedViewsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSavedViewsRequest) Reset() {
+	*x = ListSavedViewsRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSavedViewsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSavedViewsRequest) ProtoMessage() {}
+
+func (x *ListSavedViewsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSavedViewsRequest.ProtoReflect.Descriptor instead.
+func (*ListSavedViewsRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{8}
+}
+
+type ListSavedViewsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Views         []*SavedView           `protobuf:"bytes,1,rep,name=views,proto3" json:"views,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSavedViewsResponse) Reset() {
+	*x = ListSavedViewsResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSavedViewsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSavedViewsResponse) ProtoMessage() {}
+
+func (x *ListSavedViewsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSavedViewsResponse.ProtoReflect.Descriptor instead.
+func (*ListSavedViewsResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ListSavedViewsResponse) GetViews() []*SavedView {
+	if x != nil {
+		return x.Views
+	}
+	return nil
+}
+
+type SaveViewRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Upsert by name: create when absent, update otherwise.
+	View          *SavedView `protobuf:"bytes,1,opt,name=view,proto3" json:"view,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveViewRequest) Reset() {
+	*x = SaveViewRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveViewRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveViewRequest) ProtoMessage() {}
+
+func (x *SaveViewRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveViewRequest.ProtoReflect.Descriptor instead.
+func (*SaveViewRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SaveViewRequest) GetView() *SavedView {
+	if x != nil {
+		return x.View
+	}
+	return nil
+}
+
+type SaveViewResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	View          *SavedView             `protobuf:"bytes,1,opt,name=view,proto3" json:"view,omitempty"`
+	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveViewResponse) Reset() {
+	*x = SaveViewResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveViewResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveViewResponse) ProtoMessage() {}
+
+func (x *SaveViewResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveViewResponse.ProtoReflect.Descriptor instead.
+func (*SaveViewResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SaveViewResponse) GetView() *SavedView {
+	if x != nil {
+		return x.View
+	}
+	return nil
+}
+
+func (x *SaveViewResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+type DeleteSavedViewRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSavedViewRequest) Reset() {
+	*x = DeleteSavedViewRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSavedViewRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSavedViewRequest) ProtoMessage() {}
+
+func (x *DeleteSavedViewRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSavedViewRequest.ProtoReflect.Descriptor instead.
+func (*DeleteSavedViewRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *DeleteSavedViewRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DeleteSavedViewResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteSavedViewResponse) Reset() {
+	*x = DeleteSavedViewResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteSavedViewResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteSavedViewResponse) ProtoMessage() {}
+
+func (x *DeleteSavedViewResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteSavedViewResponse.ProtoReflect.Descriptor instead.
+func (*DeleteSavedViewResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *DeleteSavedViewResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
 type CapabilitiesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -543,7 +918,7 @@ type CapabilitiesRequest struct {
 
 func (x *CapabilitiesRequest) Reset() {
 	*x = CapabilitiesRequest{}
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -555,7 +930,7 @@ func (x *CapabilitiesRequest) String() string {
 func (*CapabilitiesRequest) ProtoMessage() {}
 
 func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -568,7 +943,7 @@ func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilitiesRequest.ProtoReflect.Descriptor instead.
 func (*CapabilitiesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{7}
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{14}
 }
 
 // ObserveCapabilities mirrors observe.Capabilities for the dashboard handshake.
@@ -586,7 +961,7 @@ type ObserveCapabilities struct {
 
 func (x *ObserveCapabilities) Reset() {
 	*x = ObserveCapabilities{}
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[8]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -598,7 +973,7 @@ func (x *ObserveCapabilities) String() string {
 func (*ObserveCapabilities) ProtoMessage() {}
 
 func (x *ObserveCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[8]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -611,7 +986,7 @@ func (x *ObserveCapabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserveCapabilities.ProtoReflect.Descriptor instead.
 func (*ObserveCapabilities) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{8}
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ObserveCapabilities) GetBackend() string {
@@ -705,7 +1080,32 @@ const file_pkg_api_proto_observe_proto_rawDesc = "" +
 	"\vQueryResult\x12$\n" +
 	"\x03row\x18\x01 \x01(\v2\x10.rune.api.LogRowH\x00R\x03row\x120\n" +
 	"\x06sample\x18\x02 \x01(\v2\x16.rune.api.MetricSampleH\x00R\x06sampleB\b\n" +
-	"\x06result\"\x15\n" +
+	"\x06result\"\xf2\x01\n" +
+	"\tSavedView\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x14\n" +
+	"\x05logql\x18\x04 \x01(\tR\x05logql\x12\x14\n" +
+	"\x05range\x18\x05 \x01(\tR\x05range\x12\x16\n" +
+	"\x06pinned\x18\x06 \x01(\bR\x06pinned\x12\x1d\n" +
+	"\n" +
+	"created_by\x18\a \x01(\tR\tcreatedBy\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\b \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\t \x01(\tR\tupdatedAt\"\x17\n" +
+	"\x15ListSavedViewsRequest\"C\n" +
+	"\x16ListSavedViewsResponse\x12)\n" +
+	"\x05views\x18\x01 \x03(\v2\x13.rune.api.SavedViewR\x05views\":\n" +
+	"\x0fSaveViewRequest\x12'\n" +
+	"\x04view\x18\x01 \x01(\v2\x13.rune.api.SavedViewR\x04view\"e\n" +
+	"\x10SaveViewResponse\x12'\n" +
+	"\x04view\x18\x01 \x01(\v2\x13.rune.api.SavedViewR\x04view\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\",\n" +
+	"\x16DeleteSavedViewRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"C\n" +
+	"\x17DeleteSavedViewResponse\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"\x15\n" +
 	"\x13CapabilitiesRequest\"\xd9\x01\n" +
 	"\x13ObserveCapabilities\x12\x18\n" +
 	"\abackend\x18\x01 \x01(\tR\abackend\x12\x19\n" +
@@ -713,11 +1113,14 @@ const file_pkg_api_proto_observe_proto_rawDesc = "" +
 	"\araw_sql\x18\x03 \x01(\bR\x06rawSql\x12 \n" +
 	"\vpercentiles\x18\x04 \x01(\bR\vpercentiles\x128\n" +
 	"\x18high_cardinality_filters\x18\x05 \x01(\bR\x16highCardinalityFilters\x12\x18\n" +
-	"\aenabled\x18\x06 \x01(\bR\aenabled2\xe0\x01\n" +
+	"\aenabled\x18\x06 \x01(\bR\aenabled2\xd0\x03\n" +
 	"\x0eObserveService\x12:\n" +
 	"\aExecute\x12\x16.rune.api.ObserveQuery\x1a\x15.rune.api.QueryResult0\x01\x12O\n" +
 	"\x0fGetCapabilities\x12\x1d.rune.api.CapabilitiesRequest\x1a\x1d.rune.api.ObserveCapabilities\x12A\n" +
-	"\bPushLogs\x12\x19.rune.api.PushLogsRequest\x1a\x1a.rune.api.PushLogsResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\bPushLogs\x12\x19.rune.api.PushLogsRequest\x1a\x1a.rune.api.PushLogsResponse\x12S\n" +
+	"\x0eListSavedViews\x12\x1f.rune.api.ListSavedViewsRequest\x1a .rune.api.ListSavedViewsResponse\x12A\n" +
+	"\bSaveView\x12\x19.rune.api.SaveViewRequest\x1a\x1a.rune.api.SaveViewResponse\x12V\n" +
+	"\x0fDeleteSavedView\x12 .rune.api.DeleteSavedViewRequest\x1a!.rune.api.DeleteSavedViewResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_observe_proto_rawDescOnce sync.Once
@@ -731,41 +1134,59 @@ func file_pkg_api_proto_observe_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_observe_proto_rawDescData
 }
 
-var file_pkg_api_proto_observe_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_pkg_api_proto_observe_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_pkg_api_proto_observe_proto_goTypes = []any{
-	(*LogRecord)(nil),           // 0: rune.api.LogRecord
-	(*PushLogsRequest)(nil),     // 1: rune.api.PushLogsRequest
-	(*PushLogsResponse)(nil),    // 2: rune.api.PushLogsResponse
-	(*ObserveQuery)(nil),        // 3: rune.api.ObserveQuery
-	(*LogRow)(nil),              // 4: rune.api.LogRow
-	(*MetricSample)(nil),        // 5: rune.api.MetricSample
-	(*QueryResult)(nil),         // 6: rune.api.QueryResult
-	(*CapabilitiesRequest)(nil), // 7: rune.api.CapabilitiesRequest
-	(*ObserveCapabilities)(nil), // 8: rune.api.ObserveCapabilities
-	nil,                         // 9: rune.api.LogRecord.LabelsEntry
-	nil,                         // 10: rune.api.LogRow.LabelsEntry
-	nil,                         // 11: rune.api.MetricSample.GroupLabelsEntry
-	(*Status)(nil),              // 12: rune.api.Status
+	(*LogRecord)(nil),               // 0: rune.api.LogRecord
+	(*PushLogsRequest)(nil),         // 1: rune.api.PushLogsRequest
+	(*PushLogsResponse)(nil),        // 2: rune.api.PushLogsResponse
+	(*ObserveQuery)(nil),            // 3: rune.api.ObserveQuery
+	(*LogRow)(nil),                  // 4: rune.api.LogRow
+	(*MetricSample)(nil),            // 5: rune.api.MetricSample
+	(*QueryResult)(nil),             // 6: rune.api.QueryResult
+	(*SavedView)(nil),               // 7: rune.api.SavedView
+	(*ListSavedViewsRequest)(nil),   // 8: rune.api.ListSavedViewsRequest
+	(*ListSavedViewsResponse)(nil),  // 9: rune.api.ListSavedViewsResponse
+	(*SaveViewRequest)(nil),         // 10: rune.api.SaveViewRequest
+	(*SaveViewResponse)(nil),        // 11: rune.api.SaveViewResponse
+	(*DeleteSavedViewRequest)(nil),  // 12: rune.api.DeleteSavedViewRequest
+	(*DeleteSavedViewResponse)(nil), // 13: rune.api.DeleteSavedViewResponse
+	(*CapabilitiesRequest)(nil),     // 14: rune.api.CapabilitiesRequest
+	(*ObserveCapabilities)(nil),     // 15: rune.api.ObserveCapabilities
+	nil,                             // 16: rune.api.LogRecord.LabelsEntry
+	nil,                             // 17: rune.api.LogRow.LabelsEntry
+	nil,                             // 18: rune.api.MetricSample.GroupLabelsEntry
+	(*Status)(nil),                  // 19: rune.api.Status
 }
 var file_pkg_api_proto_observe_proto_depIdxs = []int32{
-	9,  // 0: rune.api.LogRecord.labels:type_name -> rune.api.LogRecord.LabelsEntry
+	16, // 0: rune.api.LogRecord.labels:type_name -> rune.api.LogRecord.LabelsEntry
 	0,  // 1: rune.api.PushLogsRequest.records:type_name -> rune.api.LogRecord
-	12, // 2: rune.api.PushLogsResponse.status:type_name -> rune.api.Status
-	10, // 3: rune.api.LogRow.labels:type_name -> rune.api.LogRow.LabelsEntry
-	11, // 4: rune.api.MetricSample.group_labels:type_name -> rune.api.MetricSample.GroupLabelsEntry
+	19, // 2: rune.api.PushLogsResponse.status:type_name -> rune.api.Status
+	17, // 3: rune.api.LogRow.labels:type_name -> rune.api.LogRow.LabelsEntry
+	18, // 4: rune.api.MetricSample.group_labels:type_name -> rune.api.MetricSample.GroupLabelsEntry
 	4,  // 5: rune.api.QueryResult.row:type_name -> rune.api.LogRow
 	5,  // 6: rune.api.QueryResult.sample:type_name -> rune.api.MetricSample
-	3,  // 7: rune.api.ObserveService.Execute:input_type -> rune.api.ObserveQuery
-	7,  // 8: rune.api.ObserveService.GetCapabilities:input_type -> rune.api.CapabilitiesRequest
-	1,  // 9: rune.api.ObserveService.PushLogs:input_type -> rune.api.PushLogsRequest
-	6,  // 10: rune.api.ObserveService.Execute:output_type -> rune.api.QueryResult
-	8,  // 11: rune.api.ObserveService.GetCapabilities:output_type -> rune.api.ObserveCapabilities
-	2,  // 12: rune.api.ObserveService.PushLogs:output_type -> rune.api.PushLogsResponse
-	10, // [10:13] is the sub-list for method output_type
-	7,  // [7:10] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	7,  // 7: rune.api.ListSavedViewsResponse.views:type_name -> rune.api.SavedView
+	7,  // 8: rune.api.SaveViewRequest.view:type_name -> rune.api.SavedView
+	7,  // 9: rune.api.SaveViewResponse.view:type_name -> rune.api.SavedView
+	19, // 10: rune.api.SaveViewResponse.status:type_name -> rune.api.Status
+	19, // 11: rune.api.DeleteSavedViewResponse.status:type_name -> rune.api.Status
+	3,  // 12: rune.api.ObserveService.Execute:input_type -> rune.api.ObserveQuery
+	14, // 13: rune.api.ObserveService.GetCapabilities:input_type -> rune.api.CapabilitiesRequest
+	1,  // 14: rune.api.ObserveService.PushLogs:input_type -> rune.api.PushLogsRequest
+	8,  // 15: rune.api.ObserveService.ListSavedViews:input_type -> rune.api.ListSavedViewsRequest
+	10, // 16: rune.api.ObserveService.SaveView:input_type -> rune.api.SaveViewRequest
+	12, // 17: rune.api.ObserveService.DeleteSavedView:input_type -> rune.api.DeleteSavedViewRequest
+	6,  // 18: rune.api.ObserveService.Execute:output_type -> rune.api.QueryResult
+	15, // 19: rune.api.ObserveService.GetCapabilities:output_type -> rune.api.ObserveCapabilities
+	2,  // 20: rune.api.ObserveService.PushLogs:output_type -> rune.api.PushLogsResponse
+	9,  // 21: rune.api.ObserveService.ListSavedViews:output_type -> rune.api.ListSavedViewsResponse
+	11, // 22: rune.api.ObserveService.SaveView:output_type -> rune.api.SaveViewResponse
+	13, // 23: rune.api.ObserveService.DeleteSavedView:output_type -> rune.api.DeleteSavedViewResponse
+	18, // [18:24] is the sub-list for method output_type
+	12, // [12:18] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_observe_proto_init() }
@@ -784,7 +1205,7 @@ func file_pkg_api_proto_observe_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_observe_proto_rawDesc), len(file_pkg_api_proto_observe_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

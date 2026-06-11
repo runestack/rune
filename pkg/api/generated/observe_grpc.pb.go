@@ -22,6 +22,9 @@ const (
 	ObserveService_Execute_FullMethodName         = "/rune.api.ObserveService/Execute"
 	ObserveService_GetCapabilities_FullMethodName = "/rune.api.ObserveService/GetCapabilities"
 	ObserveService_PushLogs_FullMethodName        = "/rune.api.ObserveService/PushLogs"
+	ObserveService_ListSavedViews_FullMethodName  = "/rune.api.ObserveService/ListSavedViews"
+	ObserveService_SaveView_FullMethodName        = "/rune.api.ObserveService/SaveView"
+	ObserveService_DeleteSavedView_FullMethodName = "/rune.api.ObserveService/DeleteSavedView"
 )
 
 // ObserveServiceClient is the client API for ObserveService service.
@@ -36,6 +39,11 @@ type ObserveServiceClient interface {
 	// forwarder writes through an in-process path instead; this RPC is the
 	// multi-node transport.
 	PushLogs(ctx context.Context, in *PushLogsRequest, opts ...grpc.CallOption) (*PushLogsResponse, error)
+	// Saved views: named, reusable Log Explorer queries (cluster-shared).
+	// SaveView upserts by name and validates the LogQL before persisting.
+	ListSavedViews(ctx context.Context, in *ListSavedViewsRequest, opts ...grpc.CallOption) (*ListSavedViewsResponse, error)
+	SaveView(ctx context.Context, in *SaveViewRequest, opts ...grpc.CallOption) (*SaveViewResponse, error)
+	DeleteSavedView(ctx context.Context, in *DeleteSavedViewRequest, opts ...grpc.CallOption) (*DeleteSavedViewResponse, error)
 }
 
 type observeServiceClient struct {
@@ -85,6 +93,36 @@ func (c *observeServiceClient) PushLogs(ctx context.Context, in *PushLogsRequest
 	return out, nil
 }
 
+func (c *observeServiceClient) ListSavedViews(ctx context.Context, in *ListSavedViewsRequest, opts ...grpc.CallOption) (*ListSavedViewsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSavedViewsResponse)
+	err := c.cc.Invoke(ctx, ObserveService_ListSavedViews_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *observeServiceClient) SaveView(ctx context.Context, in *SaveViewRequest, opts ...grpc.CallOption) (*SaveViewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveViewResponse)
+	err := c.cc.Invoke(ctx, ObserveService_SaveView_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *observeServiceClient) DeleteSavedView(ctx context.Context, in *DeleteSavedViewRequest, opts ...grpc.CallOption) (*DeleteSavedViewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteSavedViewResponse)
+	err := c.cc.Invoke(ctx, ObserveService_DeleteSavedView_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ObserveServiceServer is the server API for ObserveService service.
 // All implementations must embed UnimplementedObserveServiceServer
 // for forward compatibility.
@@ -97,6 +135,11 @@ type ObserveServiceServer interface {
 	// forwarder writes through an in-process path instead; this RPC is the
 	// multi-node transport.
 	PushLogs(context.Context, *PushLogsRequest) (*PushLogsResponse, error)
+	// Saved views: named, reusable Log Explorer queries (cluster-shared).
+	// SaveView upserts by name and validates the LogQL before persisting.
+	ListSavedViews(context.Context, *ListSavedViewsRequest) (*ListSavedViewsResponse, error)
+	SaveView(context.Context, *SaveViewRequest) (*SaveViewResponse, error)
+	DeleteSavedView(context.Context, *DeleteSavedViewRequest) (*DeleteSavedViewResponse, error)
 	mustEmbedUnimplementedObserveServiceServer()
 }
 
@@ -115,6 +158,15 @@ func (UnimplementedObserveServiceServer) GetCapabilities(context.Context, *Capab
 }
 func (UnimplementedObserveServiceServer) PushLogs(context.Context, *PushLogsRequest) (*PushLogsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PushLogs not implemented")
+}
+func (UnimplementedObserveServiceServer) ListSavedViews(context.Context, *ListSavedViewsRequest) (*ListSavedViewsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListSavedViews not implemented")
+}
+func (UnimplementedObserveServiceServer) SaveView(context.Context, *SaveViewRequest) (*SaveViewResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SaveView not implemented")
+}
+func (UnimplementedObserveServiceServer) DeleteSavedView(context.Context, *DeleteSavedViewRequest) (*DeleteSavedViewResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteSavedView not implemented")
 }
 func (UnimplementedObserveServiceServer) mustEmbedUnimplementedObserveServiceServer() {}
 func (UnimplementedObserveServiceServer) testEmbeddedByValue()                        {}
@@ -184,6 +236,60 @@ func _ObserveService_PushLogs_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ObserveService_ListSavedViews_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSavedViewsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ObserveServiceServer).ListSavedViews(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ObserveService_ListSavedViews_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ObserveServiceServer).ListSavedViews(ctx, req.(*ListSavedViewsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ObserveService_SaveView_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveViewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ObserveServiceServer).SaveView(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ObserveService_SaveView_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ObserveServiceServer).SaveView(ctx, req.(*SaveViewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ObserveService_DeleteSavedView_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteSavedViewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ObserveServiceServer).DeleteSavedView(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ObserveService_DeleteSavedView_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ObserveServiceServer).DeleteSavedView(ctx, req.(*DeleteSavedViewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ObserveService_ServiceDesc is the grpc.ServiceDesc for ObserveService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -198,6 +304,18 @@ var ObserveService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PushLogs",
 			Handler:    _ObserveService_PushLogs_Handler,
+		},
+		{
+			MethodName: "ListSavedViews",
+			Handler:    _ObserveService_ListSavedViews_Handler,
+		},
+		{
+			MethodName: "SaveView",
+			Handler:    _ObserveService_SaveView_Handler,
+		},
+		{
+			MethodName: "DeleteSavedView",
+			Handler:    _ObserveService_DeleteSavedView_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

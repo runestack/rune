@@ -9,6 +9,8 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/observe"
 	"github.com/runestack/rune/pkg/observe/embedded"
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
 	"google.golang.org/grpc"
 )
 
@@ -43,7 +45,7 @@ func newSeededObserveService(t *testing.T) *ObserveService {
 	if err := st.Write(context.Background(), recs); err != nil {
 		t.Fatal(err)
 	}
-	return NewObserveService(st, log.GetDefaultLogger())
+	return NewObserveService(st, nil, log.GetDefaultLogger())
 }
 
 func TestObserveService_ExecuteLogQuery(t *testing.T) {
@@ -100,7 +102,7 @@ func TestObserveService_Capabilities(t *testing.T) {
 }
 
 func TestObserveService_DisabledReportsNotEnabled(t *testing.T) {
-	svc := NewObserveService(nil, log.GetDefaultLogger())
+	svc := NewObserveService(nil, nil, log.GetDefaultLogger())
 	if svc.Enabled() {
 		t.Fatal("expected disabled service")
 	}
@@ -120,7 +122,7 @@ func TestObserveService_DisabledReportsNotEnabled(t *testing.T) {
 func TestObserveService_PushAndIngest(t *testing.T) {
 	st := embedded.New(embedded.Config{Retention: -1})
 	t.Cleanup(func() { _ = st.Close() })
-	svc := NewObserveService(st, log.GetDefaultLogger())
+	svc := NewObserveService(st, nil, log.GetDefaultLogger())
 
 	resp, err := svc.PushLogs(context.Background(), &generated.PushLogsRequest{
 		Records: []*generated.LogRecord{
@@ -138,5 +140,52 @@ func TestObserveService_PushAndIngest(t *testing.T) {
 	}
 	if got := st.Len(); got != 2 {
 		t.Fatalf("want 2 records after push+ingest, got %d", got)
+	}
+}
+
+func TestObserveService_SavedViewCRUD(t *testing.T) {
+	st := embedded.New(embedded.Config{Retention: -1})
+	t.Cleanup(func() { _ = st.Close() })
+	svc := NewObserveService(st, repos.NewSavedViewRepo(store.NewTestStore()), log.GetDefaultLogger())
+	ctx := context.Background()
+
+	// Save validates the LogQL before persisting.
+	if _, err := svc.SaveView(ctx, &generated.SaveViewRequest{
+		View: &generated.SavedView{Name: "broken", Logql: "not logql"},
+	}); err == nil {
+		t.Fatal("want invalid-logql error")
+	}
+
+	saved, err := svc.SaveView(ctx, &generated.SaveViewRequest{
+		View: &generated.SavedView{Name: "api-errors", Logql: `{service="api", level="error"}`, Range: "1h", Pinned: true},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if saved.GetView().GetId() == "" || saved.GetView().GetCreatedAt() == "" {
+		t.Fatalf("save did not stamp identity: %+v", saved.GetView())
+	}
+
+	list, err := svc.ListSavedViews(ctx, &generated.ListSavedViewsRequest{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.GetViews()) != 1 || list.GetViews()[0].GetName() != "api-errors" {
+		t.Fatalf("unexpected list: %+v", list.GetViews())
+	}
+
+	if _, err := svc.DeleteSavedView(ctx, &generated.DeleteSavedViewRequest{Name: "api-errors"}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, _ = svc.ListSavedViews(ctx, &generated.ListSavedViewsRequest{})
+	if len(list.GetViews()) != 0 {
+		t.Fatalf("view not deleted: %+v", list.GetViews())
+	}
+}
+
+func TestObserveService_SavedViewsUnavailableWithoutRepo(t *testing.T) {
+	svc := NewObserveService(nil, nil, log.GetDefaultLogger())
+	if _, err := svc.ListSavedViews(context.Background(), &generated.ListSavedViewsRequest{}); err == nil {
+		t.Fatal("want FailedPrecondition when repo is nil")
 	}
 }

@@ -18,5 +18,12 @@ jobs:
           check-latest: true
           cache: true
 
+      # Pre-pull the image the dataplane tests cast, so a Docker Hub
+      # rate-limit or slow pull mid-test doesn't read as a Rune bug.
+      - name: Pre-pull test images
+        run: docker pull nginx:alpine
+
       - name: Run E2E tests
         run: make test-e2e
+        env:
+          RUNE_E2E_HEALTH_TIMEOUT_SECONDS: "60"

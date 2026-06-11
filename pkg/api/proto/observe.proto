@@ -78,6 +78,46 @@ message QueryResult {
   }
 }
 
+// --- Saved views ---
+
+// SavedView mirrors types.SavedView: a named, reusable Log Explorer query
+// (LogQL + relative time-range token). Cluster-scoped and shared.
+message SavedView {
+  string id = 1;
+  string name = 2; // DNS-1123 cluster-unique
+  string description = 3;
+  string logql = 4;
+  string range = 5; // relative token: "15m" | "1h" | "24h" | ...
+  bool pinned = 6;
+  string created_by = 7;
+  string created_at = 8; // RFC3339
+  string updated_at = 9; // RFC3339
+}
+
+message ListSavedViewsRequest {}
+
+message ListSavedViewsResponse {
+  repeated SavedView views = 1;
+}
+
+message SaveViewRequest {
+  // Upsert by name: create when absent, update otherwise.
+  SavedView view = 1;
+}
+
+message SaveViewResponse {
+  SavedView view = 1;
+  Status status = 2;
+}
+
+message DeleteSavedViewRequest {
+  string name = 1;
+}
+
+message DeleteSavedViewResponse {
+  Status status = 2;
+}
+
 message CapabilitiesRequest {}
 
 // ObserveCapabilities mirrors observe.Capabilities for the dashboard handshake.
@@ -101,4 +141,10 @@ service ObserveService {
   // forwarder writes through an in-process path instead; this RPC is the
   // multi-node transport.
   rpc PushLogs(PushLogsRequest) returns (PushLogsResponse);
+
+  // Saved views: named, reusable Log Explorer queries (cluster-shared).
+  // SaveView upserts by name and validates the LogQL before persisting.
+  rpc ListSavedViews(ListSavedViewsRequest) returns (ListSavedViewsResponse);
+  rpc SaveView(SaveViewRequest) returns (SaveViewResponse);
+  rpc DeleteSavedView(DeleteSavedViewRequest) returns (DeleteSavedViewResponse);
 }

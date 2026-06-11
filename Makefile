@@ -142,7 +142,7 @@ test-integration-docker-go:
 		golang:1.23-alpine \
 		sh -c "apk add --no-cache git bash && go build -o bin/rune-test ./cmd/rune-test && bash scripts/integration/run_tests.sh"
 
-## Run end-to-end tests (real CLI + test server)
+## Run end-to-end tests (real CLI + real runed server)
 test-e2e:
 	@bash scripts/run_e2e_tests.sh
 
@@ -287,7 +287,7 @@ help:
 	@echo "  test-integration-store STORE=<type>  Run integration tests with specific store type"
 	@echo "  test-integration-docker              Run integration tests in Docker environment"
 	@echo "  test-integration-docker-go           Run integration tests in Go container with Docker access"
-	@echo "  test-e2e          Run end-to-end tests (real CLI + test server)"
+	@echo "  test-e2e          Run end-to-end tests (real CLI + real runed server)"
 	@echo "  coverage-report   Open unit coverage report"
 	@echo "  coverage-summary  Show unit coverage summary"
 	@echo "  check-coverage    Check unit coverage against threshold ($(THRESHOLD)%)"
