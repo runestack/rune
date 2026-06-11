@@ -64,7 +64,11 @@ func duDir(ctx context.Context, root string) (uint64, error) {
 		}
 		if d.Type().IsRegular() {
 			if info, ierr := d.Info(); ierr == nil {
-				total += uint64(info.Size())
+				// Size() is int64 and never negative for a regular file,
+				// but guard the conversion anyway (gosec G115).
+				if sz := info.Size(); sz > 0 {
+					total += uint64(sz)
+				}
 			}
 		}
 		return nil
