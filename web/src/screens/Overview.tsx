@@ -7,7 +7,9 @@ import { useObserveOverview } from "../api/observe";
 import type { Bucket } from "../api/observe";
 import { useScope } from "../lib/scope";
 import type { Service } from "../api/types";
-import { ALERTS, INGESTION, SOURCES_COUNT } from "./runesight/mockData";
+import { useEffect, useState } from "react";
+import { listAlertRules } from "../api/alerting";
+import { INGESTION, SOURCES_COUNT } from "./runesight/mockData";
 import "./runesight/RuneSight.css";
 
 export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => void; openSvc: (s: Service) => void }) {
@@ -176,12 +178,19 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
 /**
  * Home "Sight" card — log persistence & alerts summary.
  * INGEST (ln/min + last hour) and the VOLUME histogram come from
- * ObserveService (live); RETENTION / SOURCES / FIRING are mocked since
- * those backends don't exist yet.
+ * ObserveService (live), as is FIRING (alerting RPCs); RETENTION / SOURCES
+ * are mocked since those backends don't exist yet.
  */
 function SightCard({ buckets, total, go }: { buckets: Bucket[]; total: number; go: (r: string) => void }) {
   const perMin = Math.round(total / 60);
-  const firing = ALERTS.filter((a) => a.status === "firing");
+  const [firing, setFiring] = useState<string[]>([]); // firing rule names
+  useEffect(() => {
+    let on = true;
+    listAlertRules()
+      .then(({ statuses }) => { if (on) setFiring(statuses.filter((s) => s.state === "firing").map((s) => s.rule)); })
+      .catch(() => { /* observe unreachable — the card just shows 0 firing */ });
+    return () => { on = false; };
+  }, []);
   const sorted = buckets.map((b) => b.total).filter((x) => x > 0).sort((a, b) => b - a);
   const max = Math.max(1, sorted[Math.floor(sorted.length * 0.08)] || sorted[0] || 1);
   const fmt = (t: number) => new Date(t).toISOString().slice(11, 16);
@@ -219,7 +228,7 @@ function SightCard({ buckets, total, go }: { buckets: Bucket[]; total: number; g
           <div className="sight-kpi">
             <div className="sk-label">Firing</div>
             <div className={"sk-val" + (firing.length ? " hot" : "")}>{firing.length}</div>
-            <div className="sk-sub">{firing.length ? firing[0].name.toLowerCase() : "all clear"}</div>
+            <div className="sk-sub">{firing.length ? firing[0] : "all clear"}</div>
           </div>
         </div>
         <div className="sight-vol">

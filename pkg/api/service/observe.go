@@ -8,6 +8,7 @@ import (
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/observe"
+	"github.com/runestack/rune/pkg/observe/alerting"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc/codes"
@@ -33,6 +34,11 @@ type ObserveService struct {
 	store  observe.LogStore
 	views  *repos.SavedViewRepo
 	logger log.Logger
+
+	// Alerting backends, wired via SetAlerting (see observe_alerting.go).
+	alertRules *repos.AlertRuleRepo
+	channels   *repos.ChannelRepo
+	alerter    *alerting.Alerter
 }
 
 // NewObserveService constructs the service. A nil store means observability is

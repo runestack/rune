@@ -910,6 +910,879 @@ func (x *DeleteSavedViewResponse) GetStatus() *Status {
 	return nil
 }
 
+// AlertRule mirrors types.AlertRule: a LogQL count threshold evaluated by the
+// runed alerter. Durations are strings in Go syntax ("5m", "90s").
+type AlertRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // DNS-1123 cluster-unique
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Logql         string                 `protobuf:"bytes,4,opt,name=logql,proto3" json:"logql,omitempty"`   // plain log selector; the alerter adds count_over_time
+	Window        string                 `protobuf:"bytes,5,opt,name=window,proto3" json:"window,omitempty"` // rolling count window
+	Op            string                 `protobuf:"bytes,6,opt,name=op,proto3" json:"op,omitempty"`         // > >= < <= ==
+	Threshold     float64                `protobuf:"fixed64,7,opt,name=threshold,proto3" json:"threshold,omitempty"`
+	For           string                 `protobuf:"bytes,8,opt,name=for,proto3" json:"for,omitempty"`           // pending->firing hysteresis ("" => fire immediately)
+	Interval      string                 `protobuf:"bytes,9,opt,name=interval,proto3" json:"interval,omitempty"` // evaluation cadence ("" => 60s)
+	Channels      []string               `protobuf:"bytes,10,rep,name=channels,proto3" json:"channels,omitempty"`
+	Disabled      bool                   `protobuf:"varint,11,opt,name=disabled,proto3" json:"disabled,omitempty"`
+	CreatedBy     string                 `protobuf:"bytes,12,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
+	CreatedAt     string                 `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"` // RFC3339
+	UpdatedAt     string                 `protobuf:"bytes,14,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"` // RFC3339
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AlertRule) Reset() {
+	*x = AlertRule{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AlertRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AlertRule) ProtoMessage() {}
+
+func (x *AlertRule) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AlertRule.ProtoReflect.Descriptor instead.
+func (*AlertRule) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AlertRule) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *AlertRule) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *AlertRule) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *AlertRule) GetLogql() string {
+	if x != nil {
+		return x.Logql
+	}
+	return ""
+}
+
+func (x *AlertRule) GetWindow() string {
+	if x != nil {
+		return x.Window
+	}
+	return ""
+}
+
+func (x *AlertRule) GetOp() string {
+	if x != nil {
+		return x.Op
+	}
+	return ""
+}
+
+func (x *AlertRule) GetThreshold() float64 {
+	if x != nil {
+		return x.Threshold
+	}
+	return 0
+}
+
+func (x *AlertRule) GetFor() string {
+	if x != nil {
+		return x.For
+	}
+	return ""
+}
+
+func (x *AlertRule) GetInterval() string {
+	if x != nil {
+		return x.Interval
+	}
+	return ""
+}
+
+func (x *AlertRule) GetChannels() []string {
+	if x != nil {
+		return x.Channels
+	}
+	return nil
+}
+
+func (x *AlertRule) GetDisabled() bool {
+	if x != nil {
+		return x.Disabled
+	}
+	return false
+}
+
+func (x *AlertRule) GetCreatedBy() string {
+	if x != nil {
+		return x.CreatedBy
+	}
+	return ""
+}
+
+func (x *AlertRule) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *AlertRule) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+// AlertStatus is a rule's live evaluation state (held by the alerter).
+type AlertStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rule          string                 `protobuf:"bytes,1,opt,name=rule,proto3" json:"rule,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"` // ok | pending | firing
+	Value         float64                `protobuf:"fixed64,3,opt,name=value,proto3" json:"value,omitempty"`
+	Since         string                 `protobuf:"bytes,4,opt,name=since,proto3" json:"since,omitempty"`                          // RFC3339 — when the current state began
+	LastEval      string                 `protobuf:"bytes,5,opt,name=last_eval,json=lastEval,proto3" json:"last_eval,omitempty"`    // RFC3339
+	LastError     string                 `protobuf:"bytes,6,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"` // "" when healthy
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AlertStatus) Reset() {
+	*x = AlertStatus{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AlertStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AlertStatus) ProtoMessage() {}
+
+func (x *AlertStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AlertStatus.ProtoReflect.Descriptor instead.
+func (*AlertStatus) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *AlertStatus) GetRule() string {
+	if x != nil {
+		return x.Rule
+	}
+	return ""
+}
+
+func (x *AlertStatus) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *AlertStatus) GetValue() float64 {
+	if x != nil {
+		return x.Value
+	}
+	return 0
+}
+
+func (x *AlertStatus) GetSince() string {
+	if x != nil {
+		return x.Since
+	}
+	return ""
+}
+
+func (x *AlertStatus) GetLastEval() string {
+	if x != nil {
+		return x.LastEval
+	}
+	return ""
+}
+
+func (x *AlertStatus) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+// Channel mirrors types.Channel: a templated-webhook notification target.
+type Channel struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // DNS-1123 cluster-unique
+	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"` // webhook | slack
+	Url           string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`
+	Headers       map[string]string      `protobuf:"bytes,5,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // values may hold ${secret:ns/name/key}
+	Body          string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`                                                                                 // Go text/template; "" => default payload
+	CreatedAt     string                 `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                                                      // RFC3339
+	UpdatedAt     string                 `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`                                                      // RFC3339
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Channel) Reset() {
+	*x = Channel{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Channel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Channel) ProtoMessage() {}
+
+func (x *Channel) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Channel.ProtoReflect.Descriptor instead.
+func (*Channel) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *Channel) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Channel) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Channel) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *Channel) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *Channel) GetHeaders() map[string]string {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *Channel) GetBody() string {
+	if x != nil {
+		return x.Body
+	}
+	return ""
+}
+
+func (x *Channel) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *Channel) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+type ListAlertRulesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAlertRulesRequest) Reset() {
+	*x = ListAlertRulesRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAlertRulesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAlertRulesRequest) ProtoMessage() {}
+
+func (x *ListAlertRulesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAlertRulesRequest.ProtoReflect.Descriptor instead.
+func (*ListAlertRulesRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{17}
+}
+
+type ListAlertRulesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Rules []*AlertRule           `protobuf:"bytes,1,rep,name=rules,proto3" json:"rules,omitempty"`
+	// Statuses for known rules, keyed implicitly by AlertStatus.rule.
+	Statuses      []*AlertStatus `protobuf:"bytes,2,rep,name=statuses,proto3" json:"statuses,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAlertRulesResponse) Reset() {
+	*x = ListAlertRulesResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAlertRulesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAlertRulesResponse) ProtoMessage() {}
+
+func (x *ListAlertRulesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAlertRulesResponse.ProtoReflect.Descriptor instead.
+func (*ListAlertRulesResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ListAlertRulesResponse) GetRules() []*AlertRule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+func (x *ListAlertRulesResponse) GetStatuses() []*AlertStatus {
+	if x != nil {
+		return x.Statuses
+	}
+	return nil
+}
+
+type SaveAlertRuleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rule          *AlertRule             `protobuf:"bytes,1,opt,name=rule,proto3" json:"rule,omitempty"` // upsert by name
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveAlertRuleRequest) Reset() {
+	*x = SaveAlertRuleRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveAlertRuleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveAlertRuleRequest) ProtoMessage() {}
+
+func (x *SaveAlertRuleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveAlertRuleRequest.ProtoReflect.Descriptor instead.
+func (*SaveAlertRuleRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SaveAlertRuleRequest) GetRule() *AlertRule {
+	if x != nil {
+		return x.Rule
+	}
+	return nil
+}
+
+type SaveAlertRuleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rule          *AlertRule             `protobuf:"bytes,1,opt,name=rule,proto3" json:"rule,omitempty"`
+	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveAlertRuleResponse) Reset() {
+	*x = SaveAlertRuleResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveAlertRuleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveAlertRuleResponse) ProtoMessage() {}
+
+func (x *SaveAlertRuleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveAlertRuleResponse.ProtoReflect.Descriptor instead.
+func (*SaveAlertRuleResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *SaveAlertRuleResponse) GetRule() *AlertRule {
+	if x != nil {
+		return x.Rule
+	}
+	return nil
+}
+
+func (x *SaveAlertRuleResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+type DeleteAlertRuleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteAlertRuleRequest) Reset() {
+	*x = DeleteAlertRuleRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteAlertRuleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteAlertRuleRequest) ProtoMessage() {}
+
+func (x *DeleteAlertRuleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteAlertRuleRequest.ProtoReflect.Descriptor instead.
+func (*DeleteAlertRuleRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *DeleteAlertRuleRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DeleteAlertRuleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteAlertRuleResponse) Reset() {
+	*x = DeleteAlertRuleResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteAlertRuleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteAlertRuleResponse) ProtoMessage() {}
+
+func (x *DeleteAlertRuleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteAlertRuleResponse.ProtoReflect.Descriptor instead.
+func (*DeleteAlertRuleResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *DeleteAlertRuleResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+type ListChannelsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListChannelsRequest) Reset() {
+	*x = ListChannelsRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListChannelsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListChannelsRequest) ProtoMessage() {}
+
+func (x *ListChannelsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListChannelsRequest.ProtoReflect.Descriptor instead.
+func (*ListChannelsRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{23}
+}
+
+type ListChannelsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Channels      []*Channel             `protobuf:"bytes,1,rep,name=channels,proto3" json:"channels,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListChannelsResponse) Reset() {
+	*x = ListChannelsResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListChannelsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListChannelsResponse) ProtoMessage() {}
+
+func (x *ListChannelsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListChannelsResponse.ProtoReflect.Descriptor instead.
+func (*ListChannelsResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ListChannelsResponse) GetChannels() []*Channel {
+	if x != nil {
+		return x.Channels
+	}
+	return nil
+}
+
+type SaveChannelRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Channel       *Channel               `protobuf:"bytes,1,opt,name=channel,proto3" json:"channel,omitempty"` // upsert by name
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveChannelRequest) Reset() {
+	*x = SaveChannelRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveChannelRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveChannelRequest) ProtoMessage() {}
+
+func (x *SaveChannelRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveChannelRequest.ProtoReflect.Descriptor instead.
+func (*SaveChannelRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SaveChannelRequest) GetChannel() *Channel {
+	if x != nil {
+		return x.Channel
+	}
+	return nil
+}
+
+type SaveChannelResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Channel       *Channel               `protobuf:"bytes,1,opt,name=channel,proto3" json:"channel,omitempty"`
+	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveChannelResponse) Reset() {
+	*x = SaveChannelResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveChannelResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveChannelResponse) ProtoMessage() {}
+
+func (x *SaveChannelResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveChannelResponse.ProtoReflect.Descriptor instead.
+func (*SaveChannelResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *SaveChannelResponse) GetChannel() *Channel {
+	if x != nil {
+		return x.Channel
+	}
+	return nil
+}
+
+func (x *SaveChannelResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+type DeleteChannelRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteChannelRequest) Reset() {
+	*x = DeleteChannelRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteChannelRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteChannelRequest) ProtoMessage() {}
+
+func (x *DeleteChannelRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteChannelRequest.ProtoReflect.Descriptor instead.
+func (*DeleteChannelRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *DeleteChannelRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DeleteChannelResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteChannelResponse) Reset() {
+	*x = DeleteChannelResponse{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteChannelResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteChannelResponse) ProtoMessage() {}
+
+func (x *DeleteChannelResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteChannelResponse.ProtoReflect.Descriptor instead.
+func (*DeleteChannelResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *DeleteChannelResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
 type CapabilitiesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -918,7 +1791,7 @@ type CapabilitiesRequest struct {
 
 func (x *CapabilitiesRequest) Reset() {
 	*x = CapabilitiesRequest{}
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[14]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -930,7 +1803,7 @@ func (x *CapabilitiesRequest) String() string {
 func (*CapabilitiesRequest) ProtoMessage() {}
 
 func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[14]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -943,7 +1816,7 @@ func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilitiesRequest.ProtoReflect.Descriptor instead.
 func (*CapabilitiesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{14}
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{29}
 }
 
 // ObserveCapabilities mirrors observe.Capabilities for the dashboard handshake.
@@ -961,7 +1834,7 @@ type ObserveCapabilities struct {
 
 func (x *ObserveCapabilities) Reset() {
 	*x = ObserveCapabilities{}
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[15]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -973,7 +1846,7 @@ func (x *ObserveCapabilities) String() string {
 func (*ObserveCapabilities) ProtoMessage() {}
 
 func (x *ObserveCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[15]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -986,7 +1859,7 @@ func (x *ObserveCapabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserveCapabilities.ProtoReflect.Descriptor instead.
 func (*ObserveCapabilities) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{15}
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ObserveCapabilities) GetBackend() string {
@@ -1105,6 +1978,72 @@ const file_pkg_api_proto_observe_proto_rawDesc = "" +
 	"\x16DeleteSavedViewRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"C\n" +
 	"\x17DeleteSavedViewResponse\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"\xf0\x02\n" +
+	"\tAlertRule\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x14\n" +
+	"\x05logql\x18\x04 \x01(\tR\x05logql\x12\x16\n" +
+	"\x06window\x18\x05 \x01(\tR\x06window\x12\x0e\n" +
+	"\x02op\x18\x06 \x01(\tR\x02op\x12\x1c\n" +
+	"\tthreshold\x18\a \x01(\x01R\tthreshold\x12\x10\n" +
+	"\x03for\x18\b \x01(\tR\x03for\x12\x1a\n" +
+	"\binterval\x18\t \x01(\tR\binterval\x12\x1a\n" +
+	"\bchannels\x18\n" +
+	" \x03(\tR\bchannels\x12\x1a\n" +
+	"\bdisabled\x18\v \x01(\bR\bdisabled\x12\x1d\n" +
+	"\n" +
+	"created_by\x18\f \x01(\tR\tcreatedBy\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\r \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\x0e \x01(\tR\tupdatedAt\"\x9f\x01\n" +
+	"\vAlertStatus\x12\x12\n" +
+	"\x04rule\x18\x01 \x01(\tR\x04rule\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\x01R\x05value\x12\x14\n" +
+	"\x05since\x18\x04 \x01(\tR\x05since\x12\x1b\n" +
+	"\tlast_eval\x18\x05 \x01(\tR\blastEval\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\x06 \x01(\tR\tlastError\"\x9b\x02\n" +
+	"\aChannel\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x03 \x01(\tR\x04type\x12\x10\n" +
+	"\x03url\x18\x04 \x01(\tR\x03url\x128\n" +
+	"\aheaders\x18\x05 \x03(\v2\x1e.rune.api.Channel.HeadersEntryR\aheaders\x12\x12\n" +
+	"\x04body\x18\x06 \x01(\tR\x04body\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\a \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\b \x01(\tR\tupdatedAt\x1a:\n" +
+	"\fHeadersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x17\n" +
+	"\x15ListAlertRulesRequest\"v\n" +
+	"\x16ListAlertRulesResponse\x12)\n" +
+	"\x05rules\x18\x01 \x03(\v2\x13.rune.api.AlertRuleR\x05rules\x121\n" +
+	"\bstatuses\x18\x02 \x03(\v2\x15.rune.api.AlertStatusR\bstatuses\"?\n" +
+	"\x14SaveAlertRuleRequest\x12'\n" +
+	"\x04rule\x18\x01 \x01(\v2\x13.rune.api.AlertRuleR\x04rule\"j\n" +
+	"\x15SaveAlertRuleResponse\x12'\n" +
+	"\x04rule\x18\x01 \x01(\v2\x13.rune.api.AlertRuleR\x04rule\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\",\n" +
+	"\x16DeleteAlertRuleRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"C\n" +
+	"\x17DeleteAlertRuleResponse\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"\x15\n" +
+	"\x13ListChannelsRequest\"E\n" +
+	"\x14ListChannelsResponse\x12-\n" +
+	"\bchannels\x18\x01 \x03(\v2\x11.rune.api.ChannelR\bchannels\"A\n" +
+	"\x12SaveChannelRequest\x12+\n" +
+	"\achannel\x18\x01 \x01(\v2\x11.rune.api.ChannelR\achannel\"l\n" +
+	"\x13SaveChannelResponse\x12+\n" +
+	"\achannel\x18\x01 \x01(\v2\x11.rune.api.ChannelR\achannel\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"*\n" +
+	"\x14DeleteChannelRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"A\n" +
+	"\x15DeleteChannelResponse\x12(\n" +
 	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"\x15\n" +
 	"\x13CapabilitiesRequest\"\xd9\x01\n" +
 	"\x13ObserveCapabilities\x12\x18\n" +
@@ -1113,14 +2052,20 @@ const file_pkg_api_proto_observe_proto_rawDesc = "" +
 	"\araw_sql\x18\x03 \x01(\bR\x06rawSql\x12 \n" +
 	"\vpercentiles\x18\x04 \x01(\bR\vpercentiles\x128\n" +
 	"\x18high_cardinality_filters\x18\x05 \x01(\bR\x16highCardinalityFilters\x12\x18\n" +
-	"\aenabled\x18\x06 \x01(\bR\aenabled2\xd0\x03\n" +
+	"\aenabled\x18\x06 \x01(\bR\aenabled2\xbc\a\n" +
 	"\x0eObserveService\x12:\n" +
 	"\aExecute\x12\x16.rune.api.ObserveQuery\x1a\x15.rune.api.QueryResult0\x01\x12O\n" +
 	"\x0fGetCapabilities\x12\x1d.rune.api.CapabilitiesRequest\x1a\x1d.rune.api.ObserveCapabilities\x12A\n" +
 	"\bPushLogs\x12\x19.rune.api.PushLogsRequest\x1a\x1a.rune.api.PushLogsResponse\x12S\n" +
 	"\x0eListSavedViews\x12\x1f.rune.api.ListSavedViewsRequest\x1a .rune.api.ListSavedViewsResponse\x12A\n" +
 	"\bSaveView\x12\x19.rune.api.SaveViewRequest\x1a\x1a.rune.api.SaveViewResponse\x12V\n" +
-	"\x0fDeleteSavedView\x12 .rune.api.DeleteSavedViewRequest\x1a!.rune.api.DeleteSavedViewResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\x0fDeleteSavedView\x12 .rune.api.DeleteSavedViewRequest\x1a!.rune.api.DeleteSavedViewResponse\x12S\n" +
+	"\x0eListAlertRules\x12\x1f.rune.api.ListAlertRulesRequest\x1a .rune.api.ListAlertRulesResponse\x12P\n" +
+	"\rSaveAlertRule\x12\x1e.rune.api.SaveAlertRuleRequest\x1a\x1f.rune.api.SaveAlertRuleResponse\x12V\n" +
+	"\x0fDeleteAlertRule\x12 .rune.api.DeleteAlertRuleRequest\x1a!.rune.api.DeleteAlertRuleResponse\x12M\n" +
+	"\fListChannels\x12\x1d.rune.api.ListChannelsRequest\x1a\x1e.rune.api.ListChannelsResponse\x12J\n" +
+	"\vSaveChannel\x12\x1c.rune.api.SaveChannelRequest\x1a\x1d.rune.api.SaveChannelResponse\x12P\n" +
+	"\rDeleteChannel\x12\x1e.rune.api.DeleteChannelRequest\x1a\x1f.rune.api.DeleteChannelResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_observe_proto_rawDescOnce sync.Once
@@ -1134,7 +2079,7 @@ func file_pkg_api_proto_observe_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_observe_proto_rawDescData
 }
 
-var file_pkg_api_proto_observe_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_pkg_api_proto_observe_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_pkg_api_proto_observe_proto_goTypes = []any{
 	(*LogRecord)(nil),               // 0: rune.api.LogRecord
 	(*PushLogsRequest)(nil),         // 1: rune.api.PushLogsRequest
@@ -1150,43 +2095,83 @@ var file_pkg_api_proto_observe_proto_goTypes = []any{
 	(*SaveViewResponse)(nil),        // 11: rune.api.SaveViewResponse
 	(*DeleteSavedViewRequest)(nil),  // 12: rune.api.DeleteSavedViewRequest
 	(*DeleteSavedViewResponse)(nil), // 13: rune.api.DeleteSavedViewResponse
-	(*CapabilitiesRequest)(nil),     // 14: rune.api.CapabilitiesRequest
-	(*ObserveCapabilities)(nil),     // 15: rune.api.ObserveCapabilities
-	nil,                             // 16: rune.api.LogRecord.LabelsEntry
-	nil,                             // 17: rune.api.LogRow.LabelsEntry
-	nil,                             // 18: rune.api.MetricSample.GroupLabelsEntry
-	(*Status)(nil),                  // 19: rune.api.Status
+	(*AlertRule)(nil),               // 14: rune.api.AlertRule
+	(*AlertStatus)(nil),             // 15: rune.api.AlertStatus
+	(*Channel)(nil),                 // 16: rune.api.Channel
+	(*ListAlertRulesRequest)(nil),   // 17: rune.api.ListAlertRulesRequest
+	(*ListAlertRulesResponse)(nil),  // 18: rune.api.ListAlertRulesResponse
+	(*SaveAlertRuleRequest)(nil),    // 19: rune.api.SaveAlertRuleRequest
+	(*SaveAlertRuleResponse)(nil),   // 20: rune.api.SaveAlertRuleResponse
+	(*DeleteAlertRuleRequest)(nil),  // 21: rune.api.DeleteAlertRuleRequest
+	(*DeleteAlertRuleResponse)(nil), // 22: rune.api.DeleteAlertRuleResponse
+	(*ListChannelsRequest)(nil),     // 23: rune.api.ListChannelsRequest
+	(*ListChannelsResponse)(nil),    // 24: rune.api.ListChannelsResponse
+	(*SaveChannelRequest)(nil),      // 25: rune.api.SaveChannelRequest
+	(*SaveChannelResponse)(nil),     // 26: rune.api.SaveChannelResponse
+	(*DeleteChannelRequest)(nil),    // 27: rune.api.DeleteChannelRequest
+	(*DeleteChannelResponse)(nil),   // 28: rune.api.DeleteChannelResponse
+	(*CapabilitiesRequest)(nil),     // 29: rune.api.CapabilitiesRequest
+	(*ObserveCapabilities)(nil),     // 30: rune.api.ObserveCapabilities
+	nil,                             // 31: rune.api.LogRecord.LabelsEntry
+	nil,                             // 32: rune.api.LogRow.LabelsEntry
+	nil,                             // 33: rune.api.MetricSample.GroupLabelsEntry
+	nil,                             // 34: rune.api.Channel.HeadersEntry
+	(*Status)(nil),                  // 35: rune.api.Status
 }
 var file_pkg_api_proto_observe_proto_depIdxs = []int32{
-	16, // 0: rune.api.LogRecord.labels:type_name -> rune.api.LogRecord.LabelsEntry
+	31, // 0: rune.api.LogRecord.labels:type_name -> rune.api.LogRecord.LabelsEntry
 	0,  // 1: rune.api.PushLogsRequest.records:type_name -> rune.api.LogRecord
-	19, // 2: rune.api.PushLogsResponse.status:type_name -> rune.api.Status
-	17, // 3: rune.api.LogRow.labels:type_name -> rune.api.LogRow.LabelsEntry
-	18, // 4: rune.api.MetricSample.group_labels:type_name -> rune.api.MetricSample.GroupLabelsEntry
+	35, // 2: rune.api.PushLogsResponse.status:type_name -> rune.api.Status
+	32, // 3: rune.api.LogRow.labels:type_name -> rune.api.LogRow.LabelsEntry
+	33, // 4: rune.api.MetricSample.group_labels:type_name -> rune.api.MetricSample.GroupLabelsEntry
 	4,  // 5: rune.api.QueryResult.row:type_name -> rune.api.LogRow
 	5,  // 6: rune.api.QueryResult.sample:type_name -> rune.api.MetricSample
 	7,  // 7: rune.api.ListSavedViewsResponse.views:type_name -> rune.api.SavedView
 	7,  // 8: rune.api.SaveViewRequest.view:type_name -> rune.api.SavedView
 	7,  // 9: rune.api.SaveViewResponse.view:type_name -> rune.api.SavedView
-	19, // 10: rune.api.SaveViewResponse.status:type_name -> rune.api.Status
-	19, // 11: rune.api.DeleteSavedViewResponse.status:type_name -> rune.api.Status
-	3,  // 12: rune.api.ObserveService.Execute:input_type -> rune.api.ObserveQuery
-	14, // 13: rune.api.ObserveService.GetCapabilities:input_type -> rune.api.CapabilitiesRequest
-	1,  // 14: rune.api.ObserveService.PushLogs:input_type -> rune.api.PushLogsRequest
-	8,  // 15: rune.api.ObserveService.ListSavedViews:input_type -> rune.api.ListSavedViewsRequest
-	10, // 16: rune.api.ObserveService.SaveView:input_type -> rune.api.SaveViewRequest
-	12, // 17: rune.api.ObserveService.DeleteSavedView:input_type -> rune.api.DeleteSavedViewRequest
-	6,  // 18: rune.api.ObserveService.Execute:output_type -> rune.api.QueryResult
-	15, // 19: rune.api.ObserveService.GetCapabilities:output_type -> rune.api.ObserveCapabilities
-	2,  // 20: rune.api.ObserveService.PushLogs:output_type -> rune.api.PushLogsResponse
-	9,  // 21: rune.api.ObserveService.ListSavedViews:output_type -> rune.api.ListSavedViewsResponse
-	11, // 22: rune.api.ObserveService.SaveView:output_type -> rune.api.SaveViewResponse
-	13, // 23: rune.api.ObserveService.DeleteSavedView:output_type -> rune.api.DeleteSavedViewResponse
-	18, // [18:24] is the sub-list for method output_type
-	12, // [12:18] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	35, // 10: rune.api.SaveViewResponse.status:type_name -> rune.api.Status
+	35, // 11: rune.api.DeleteSavedViewResponse.status:type_name -> rune.api.Status
+	34, // 12: rune.api.Channel.headers:type_name -> rune.api.Channel.HeadersEntry
+	14, // 13: rune.api.ListAlertRulesResponse.rules:type_name -> rune.api.AlertRule
+	15, // 14: rune.api.ListAlertRulesResponse.statuses:type_name -> rune.api.AlertStatus
+	14, // 15: rune.api.SaveAlertRuleRequest.rule:type_name -> rune.api.AlertRule
+	14, // 16: rune.api.SaveAlertRuleResponse.rule:type_name -> rune.api.AlertRule
+	35, // 17: rune.api.SaveAlertRuleResponse.status:type_name -> rune.api.Status
+	35, // 18: rune.api.DeleteAlertRuleResponse.status:type_name -> rune.api.Status
+	16, // 19: rune.api.ListChannelsResponse.channels:type_name -> rune.api.Channel
+	16, // 20: rune.api.SaveChannelRequest.channel:type_name -> rune.api.Channel
+	16, // 21: rune.api.SaveChannelResponse.channel:type_name -> rune.api.Channel
+	35, // 22: rune.api.SaveChannelResponse.status:type_name -> rune.api.Status
+	35, // 23: rune.api.DeleteChannelResponse.status:type_name -> rune.api.Status
+	3,  // 24: rune.api.ObserveService.Execute:input_type -> rune.api.ObserveQuery
+	29, // 25: rune.api.ObserveService.GetCapabilities:input_type -> rune.api.CapabilitiesRequest
+	1,  // 26: rune.api.ObserveService.PushLogs:input_type -> rune.api.PushLogsRequest
+	8,  // 27: rune.api.ObserveService.ListSavedViews:input_type -> rune.api.ListSavedViewsRequest
+	10, // 28: rune.api.ObserveService.SaveView:input_type -> rune.api.SaveViewRequest
+	12, // 29: rune.api.ObserveService.DeleteSavedView:input_type -> rune.api.DeleteSavedViewRequest
+	17, // 30: rune.api.ObserveService.ListAlertRules:input_type -> rune.api.ListAlertRulesRequest
+	19, // 31: rune.api.ObserveService.SaveAlertRule:input_type -> rune.api.SaveAlertRuleRequest
+	21, // 32: rune.api.ObserveService.DeleteAlertRule:input_type -> rune.api.DeleteAlertRuleRequest
+	23, // 33: rune.api.ObserveService.ListChannels:input_type -> rune.api.ListChannelsRequest
+	25, // 34: rune.api.ObserveService.SaveChannel:input_type -> rune.api.SaveChannelRequest
+	27, // 35: rune.api.ObserveService.DeleteChannel:input_type -> rune.api.DeleteChannelRequest
+	6,  // 36: rune.api.ObserveService.Execute:output_type -> rune.api.QueryResult
+	30, // 37: rune.api.ObserveService.GetCapabilities:output_type -> rune.api.ObserveCapabilities
+	2,  // 38: rune.api.ObserveService.PushLogs:output_type -> rune.api.PushLogsResponse
+	9,  // 39: rune.api.ObserveService.ListSavedViews:output_type -> rune.api.ListSavedViewsResponse
+	11, // 40: rune.api.ObserveService.SaveView:output_type -> rune.api.SaveViewResponse
+	13, // 41: rune.api.ObserveService.DeleteSavedView:output_type -> rune.api.DeleteSavedViewResponse
+	18, // 42: rune.api.ObserveService.ListAlertRules:output_type -> rune.api.ListAlertRulesResponse
+	20, // 43: rune.api.ObserveService.SaveAlertRule:output_type -> rune.api.SaveAlertRuleResponse
+	22, // 44: rune.api.ObserveService.DeleteAlertRule:output_type -> rune.api.DeleteAlertRuleResponse
+	24, // 45: rune.api.ObserveService.ListChannels:output_type -> rune.api.ListChannelsResponse
+	26, // 46: rune.api.ObserveService.SaveChannel:output_type -> rune.api.SaveChannelResponse
+	28, // 47: rune.api.ObserveService.DeleteChannel:output_type -> rune.api.DeleteChannelResponse
+	36, // [36:48] is the sub-list for method output_type
+	24, // [24:36] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_observe_proto_init() }
@@ -1205,7 +2190,7 @@ func file_pkg_api_proto_observe_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_observe_proto_rawDesc), len(file_pkg_api_proto_observe_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
