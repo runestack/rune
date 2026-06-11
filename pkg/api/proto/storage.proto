@@ -120,6 +120,14 @@ message Volume {
   string message = 17;
   string created_at = 18;
   string updated_at = 19;
+
+  // Live usage, populated at read time for drivers that implement the
+  // UsageReporter capability (currently the local drivers). 0 = unknown.
+  // used_bytes is the measured on-disk usage of the volume's backing
+  // storage; capacity_bytes is the provisioned capacity (parsed from the
+  // spec size when the driver cannot report it).
+  uint64 used_bytes = 20;
+  uint64 capacity_bytes = 21;
 }
 
 message CreateVolumeRequest {

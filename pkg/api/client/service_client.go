@@ -988,6 +988,21 @@ func embeddedInstanceToProto(i *types.Instance) *generated.Instance {
 		Pid:           utils.ToInt32NonNegative(i.PID),
 		CreatedAt:     formatInstanceTime(i.CreatedAt),
 		UpdatedAt:     formatInstanceTime(i.UpdatedAt),
+		Usage:         InstanceUsageToProto(i.Usage),
+	}
+}
+
+// InstanceUsageToProto maps the transient live-usage sample onto the wire.
+// nil in → nil out: an absent usage field means "unknown", which clients
+// must render as unknown rather than 0.
+func InstanceUsageToProto(u *types.InstanceUsage) *generated.InstanceUsage {
+	if u == nil {
+		return nil
+	}
+	return &generated.InstanceUsage{
+		CpuPercent:    u.CPUPercent,
+		MemUsedBytes:  u.MemUsedBytes,
+		MemLimitBytes: u.MemLimitBytes,
 	}
 }
 

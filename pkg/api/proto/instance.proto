@@ -88,6 +88,28 @@ message Instance {
   // Labels denormalized from the parent Service (and, in future, node topology
   // labels at placement). User-defined stream dimensions for the instance.
   map<string, string> labels = 20;
+
+  // Live resource usage sampled from the runner at read time (StatsProvider
+  // runners only — currently docker). Absent when the runner cannot report
+  // usage or the instance is not running. Mirrors the NodeResources pattern
+  // on HealthService.
+  InstanceUsage usage = 21;
+}
+
+// InstanceUsage is a point-in-time resource usage sample for one instance.
+message InstanceUsage {
+  // CPU usage as a share of the WHOLE HOST, 0–100 (same denominator as the
+  // node-level cpu_used_percent on HealthService, so instance bars and node
+  // bars compare 1:1). Negative when unknown.
+  double cpu_percent = 1;
+
+  // Memory used in bytes (cgroup usage minus inactive file cache — matches
+  // `docker stats` semantics).
+  uint64 mem_used_bytes = 2;
+
+  // Memory limit in bytes: the container's cgroup limit, which equals the
+  // host total when the container is uncapped. 0 when unknown.
+  uint64 mem_limit_bytes = 3;
 }
 
 // InstanceMetadata represents metadata for an instance.

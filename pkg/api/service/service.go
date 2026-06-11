@@ -202,6 +202,7 @@ func (s *ServiceService) GetService(ctx context.Context, req *generated.GetServi
 				service.Instances = append(service.Instances, *inst)
 			}
 		}
+		enrichEmbeddedUsage(ctx, s.runnerManager, service.Instances, s.logger)
 	}
 
 	// Convert to protobuf message
@@ -261,6 +262,7 @@ func (s *ServiceService) ListServices(ctx context.Context, req *generated.ListSe
 					service.Instances = append(service.Instances, *inst)
 				}
 			}
+			enrichEmbeddedUsage(ctx, s.runnerManager, service.Instances, s.logger)
 		}
 
 		protoService := client.ServiceToProto(service)

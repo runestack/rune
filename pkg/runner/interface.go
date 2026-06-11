@@ -93,6 +93,19 @@ type IPProvider interface {
 	InstanceIP(ctx context.Context, instance *types.Instance) (string, error)
 }
 
+// StatsProvider is implemented by runners that can report live resource
+// usage for a running instance (the docker runner via the daemon's stats
+// API). Runners without the capability simply don't implement it — the
+// API read path type-asserts and leaves Instance.Usage nil, which the
+// dashboard renders as "unknown" rather than 0.
+//
+// CPUPercent semantics: share of the WHOLE HOST (0–100), the same
+// denominator as node-level CPU on HealthService, so instance and node
+// bars compare 1:1.
+type StatsProvider interface {
+	InstanceStats(ctx context.Context, instance *types.Instance) (*types.InstanceUsage, error)
+}
+
 // HealthChecker is implemented by runners that can verify their backing
 // runtime is reachable (e.g. the Docker runner pinging the daemon). A
 // runner that does not implement it is treated as always-ready — correct
