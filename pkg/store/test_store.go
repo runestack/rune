@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -111,48 +113,22 @@ func (s *TestStore) CreateResource(ctx context.Context, resourceType types.Resou
 	return s.Create(ctx, resourceType, nn.Namespace, nn.Name, resource)
 }
 
-// Helper method for deep copying resources to avoid reference issues
+// deepCopy returns a copy of the resource so stored values don't alias caller
+// memory. For any pointer-to-struct it performs the same shallow value copy
+// the old per-type switch did (`copied := *v`), but generically — every
+// resource type, present and future, gets identical treatment without
+// registration. (Deliberately NOT a JSON round-trip: that would drop
+// unexported and json:"-" fields such as the embedded NamespacedResource.)
 func (s *TestStore) deepCopy(resource interface{}) interface{} {
-	var copy interface{}
-
-	switch v := resource.(type) {
-	case *types.Service:
-		// Create a copy to store
-		copied := *v
-		copy = &copied
-	case *types.Instance:
-		// Create a copy to store
-		copied := *v
-		copy = &copied
-	case *types.ScalingOperation:
-		// Create a copy to store
-		copied := *v
-		copy = &copied
-	case *types.Namespace:
-		// Create a copy to store
-		copied := *v
-		copy = &copied
-	case *types.Policy:
-		copied := *v
-		copy = &copied
-	case *types.Volume:
-		copied := *v
-		copy = &copied
-	case *types.StorageClass:
-		copied := *v
-		copy = &copied
-	case *types.Snapshot:
-		copied := *v
-		copy = &copied
-	case *types.Release:
-		copied := *v
-		copy = &copied
-	default:
-		// For other types, just use as-is (not ideal but works for basic types)
-		copy = resource
+	rv := reflect.ValueOf(resource)
+	if rv.Kind() == reflect.Ptr && !rv.IsNil() {
+		out := reflect.New(rv.Elem().Type())
+		out.Elem().Set(rv.Elem())
+		return out.Interface()
 	}
-
-	return copy
+	// Non-pointer values (maps, plain structs) are stored as-is, matching the
+	// old default branch.
+	return resource
 }
 
 // Create implements the Store interface.
@@ -160,13 +136,10 @@ func (s *TestStore) Create(ctx context.Context, resourceType types.ResourceType,
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	fmt.Println("Create", resourceType, namespace, name, resource)
-
 	if !s.opened {
 		return errors.New("store is not opened")
 	}
 
-	fmt.Println("Before Create", resourceType, s.data[resourceType])
 	// Initialize maps if they don't exist
 	if _, exists := s.data[resourceType]; !exists {
 		s.data[resourceType] = make(map[string]map[string]interface{})
@@ -203,8 +176,6 @@ func (s *TestStore) Create(ctx context.Context, resourceType types.ResourceType,
 		},
 	}
 
-	fmt.Println("After Create", s.data[resourceType])
-
 	// Send watch event with an independent deep-copy so subscribers that mutate
 	// the received resource in-place (e.g. controllers) do not race with later
 	// readers of the stored value via Get.
@@ -235,232 +206,38 @@ func (s *TestStore) Get(ctx context.Context, resourceType types.ResourceType, na
 	}
 
 	if data, exists := nsBucket[name]; exists {
-		// For testing purposes, we're implementing a simplified struct copying approach
-		// This works with common test patterns where you pass a pointer to a struct
-
-		// If it implements our Set interface, use that
+		// If the target implements the Set interface, use that.
 		if setter, ok := resource.(interface{ Set(interface{}) }); ok {
 			setter.Set(data)
 			return nil
 		}
 
-		// For test convenience, let's try to handle common test types directly
-		switch storedData := data.(type) {
-		case map[string]interface{}:
-			// If the target is a map
-			if targetMap, ok := resource.(*map[string]interface{}); ok {
-				*targetMap = storedData
+		// Generic pointer assignment — replaces the old hand-maintained
+		// per-type switch (which silently returned "not found" for any
+		// resource type nobody had registered). Stored values are either
+		// *T (the deepCopy path) or plain values; the caller passes *T.
+		tv := reflect.ValueOf(resource)
+		if tv.Kind() == reflect.Ptr && !tv.IsNil() {
+			te := tv.Elem()
+			dv := reflect.ValueOf(data)
+			// stored *T -> target *T  (the `*target = *stored` cases)
+			if dv.Kind() == reflect.Ptr && !dv.IsNil() && dv.Elem().Type() == te.Type() {
+				te.Set(dv.Elem())
 				return nil
 			}
-
-		case *types.Service:
-			// If the target is a Service pointer
-			if targetSvc, ok := resource.(*types.Service); ok && storedData != nil {
-				*targetSvc = *storedData
+			// stored T -> target *T  (the value-stored cases, incl. maps)
+			if dv.IsValid() && dv.Type() == te.Type() {
+				te.Set(dv)
 				return nil
 			}
-
-		case *types.Instance:
-			// If the target is an Instance pointer
-			if targetInst, ok := resource.(*types.Instance); ok && storedData != nil {
-				*targetInst = *storedData
-				return nil
-			}
-
-		case *types.ScalingOperation:
-			// If the target is a ScalingOperation pointer
-			if targetOp, ok := resource.(*types.ScalingOperation); ok && storedData != nil {
-				*targetOp = *storedData
-				return nil
-			}
-
-		case types.Service:
-			// If stored as value but target is pointer
-			if targetSvc, ok := resource.(*types.Service); ok {
-				*targetSvc = storedData
-				return nil
-			}
-
-		case *types.Configmap:
-			if targetCfg, ok := resource.(*types.Configmap); ok && storedData != nil {
-				*targetCfg = *storedData
-				return nil
-			}
-
-		case types.Configmap:
-			if targetCfg, ok := resource.(*types.Configmap); ok {
-				*targetCfg = storedData
-				return nil
-			}
-
-		case *types.Policy:
-			if targetPol, ok := resource.(*types.Policy); ok && storedData != nil {
-				*targetPol = *storedData
-				return nil
-			}
-
-		case types.Policy:
-			if targetPol, ok := resource.(*types.Policy); ok {
-				*targetPol = storedData
-				return nil
-			}
-
-		case *types.StoredSecret:
-			// If the target is a Secret pointer
-			if targetSec, ok := resource.(*types.StoredSecret); ok && storedData != nil {
-				*targetSec = *storedData
-				return nil
-			}
-
-		case types.StoredSecret:
-			// If stored as value but target is pointer
-			if targetSec, ok := resource.(*types.StoredSecret); ok {
-				*targetSec = storedData
-				return nil
-			}
-
-		case *types.Secret:
-			// If the target is a Secret pointer
-			if targetSec, ok := resource.(*types.Secret); ok && storedData != nil {
-				*targetSec = *storedData
-				return nil
-			}
-
-		case types.Secret:
-			// If stored as value but target is pointer
-			if targetSec, ok := resource.(*types.Secret); ok {
-				*targetSec = storedData
-				return nil
-			}
-
-		case types.Instance:
-			// If stored as value but target is pointer
-			if targetInst, ok := resource.(*types.Instance); ok {
-				*targetInst = storedData
-				return nil
-			}
-
-		case types.ScalingOperation:
-			// If stored as value but target is pointer
-			if targetOp, ok := resource.(*types.ScalingOperation); ok {
-				*targetOp = storedData
-				return nil
-			}
-
-		case *types.DeletionOperation:
-			// If the target is a DeletionOperation pointer
-			if targetOp, ok := resource.(*types.DeletionOperation); ok && storedData != nil {
-				*targetOp = *storedData
-				return nil
-			}
-
-		case types.DeletionOperation:
-			// If stored as value but target is pointer
-			if targetOp, ok := resource.(*types.DeletionOperation); ok {
-				*targetOp = storedData
-				return nil
-			}
-
-		case *types.User:
-			if targetUser, ok := resource.(*types.User); ok && storedData != nil {
-				*targetUser = *storedData
-				return nil
-			}
-
-		case types.User:
-			if targetUser, ok := resource.(*types.User); ok {
-				*targetUser = storedData
-				return nil
-			}
-
-		case *types.Volume:
-			if targetVol, ok := resource.(*types.Volume); ok && storedData != nil {
-				*targetVol = *storedData
-				return nil
-			}
-
-		case types.Volume:
-			if targetVol, ok := resource.(*types.Volume); ok {
-				*targetVol = storedData
-				return nil
-			}
-
-		case *types.StorageClass:
-			if targetClass, ok := resource.(*types.StorageClass); ok && storedData != nil {
-				*targetClass = *storedData
-				return nil
-			}
-
-		case types.StorageClass:
-			if targetClass, ok := resource.(*types.StorageClass); ok {
-				*targetClass = storedData
-				return nil
-			}
-
-		case *types.Namespace:
-			if targetNs, ok := resource.(*types.Namespace); ok && storedData != nil {
-				*targetNs = *storedData
-				return nil
-			}
-
-		case types.Namespace:
-			if targetNs, ok := resource.(*types.Namespace); ok {
-				*targetNs = storedData
-				return nil
-			}
-
-		case *types.Snapshot:
-			if targetSnap, ok := resource.(*types.Snapshot); ok && storedData != nil {
-				*targetSnap = *storedData
-				return nil
-			}
-
-		case types.Snapshot:
-			if targetSnap, ok := resource.(*types.Snapshot); ok {
-				*targetSnap = storedData
-				return nil
-			}
-
-		case *types.Token:
-			if targetTok, ok := resource.(*types.Token); ok && storedData != nil {
-				*targetTok = *storedData
-				return nil
-			}
-
-		case types.Token:
-			if targetTok, ok := resource.(*types.Token); ok {
-				*targetTok = storedData
-				return nil
-			}
-
-		case *types.Release:
-			if targetRel, ok := resource.(*types.Release); ok && storedData != nil {
-				*targetRel = *storedData
-				return nil
-			}
-
-		case types.Release:
-			if targetRel, ok := resource.(*types.Release); ok {
-				*targetRel = storedData
-				return nil
-			}
-
-		case *types.SavedView:
-			if targetView, ok := resource.(*types.SavedView); ok && storedData != nil {
-				*targetView = *storedData
-				return nil
-			}
-
-		case types.SavedView:
-			if targetView, ok := resource.(*types.SavedView); ok {
-				*targetView = storedData
-				return nil
-			}
-
 		}
 
-		// Store the data - for testing we assume this will work
-		// This is intentionally simplified for testing purposes
+		// Shape mismatch (e.g. stored as map[string]interface{}, typed
+		// target): JSON round-trip recovers the typed form.
+		b, err := json.Marshal(data)
+		if err == nil && json.Unmarshal(b, resource) == nil {
+			return nil
+		}
 		return fmt.Errorf("cannot set resource data: incompatible types (try using a pointer to the correct type)")
 	}
 
@@ -471,8 +248,6 @@ func (s *TestStore) Get(ctx context.Context, resourceType types.ResourceType, na
 func (s *TestStore) List(ctx context.Context, resourceType types.ResourceType, namespace string, resource interface{}) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-
-	fmt.Println("Before List", resourceType, s.data[resourceType])
 
 	if !s.opened {
 		return errors.New("store is not opened")
@@ -588,8 +363,6 @@ func (s *TestStore) Watch(ctx context.Context, resourceType types.ResourceType, 
 	s.watchMutex.Lock()
 	defer s.watchMutex.Unlock()
 
-	fmt.Printf("Setting up watch for %s, namespace=%s\n", resourceType, namespace)
-
 	if !s.opened {
 		return nil, errors.New("store is not opened")
 	}
@@ -603,10 +376,8 @@ func (s *TestStore) Watch(ctx context.Context, resourceType types.ResourceType, 
 	// Add the channel to the watch channels
 	if _, exists := s.watchChans[watchKey]; !exists {
 		s.watchChans[watchKey] = make([]chan WatchEvent, 0)
-		fmt.Printf("Created new watcher list for %s\n", watchKey)
 	}
 	s.watchChans[watchKey] = append(s.watchChans[watchKey], ch)
-	fmt.Printf("Added watcher for %s, now have %d watchers\n", watchKey, len(s.watchChans[watchKey]))
 
 	// Set up cancellation handling
 	go func() {
@@ -619,7 +390,6 @@ func (s *TestStore) Watch(ctx context.Context, resourceType types.ResourceType, 
 			if c == ch {
 				s.watchChans[watchKey] = append(s.watchChans[watchKey][:i], s.watchChans[watchKey][i+1:]...)
 				close(ch)
-				fmt.Printf("Watch context cancelled, removed watcher for %s\n", watchKey)
 				break
 			}
 		}
@@ -717,42 +487,30 @@ func (s *TestStore) sendWatchEventWithSource(resourceType types.ResourceType, na
 
 	// First try exact namespace match
 	exactWatchKey := fmt.Sprintf("%s/%s", resourceType, namespace)
-	fmt.Printf("Sending watch event: %s, %s, %s, key=%s\n", eventType, resourceType, name, exactWatchKey)
 
 	// Check for exact namespace match watchers
 	if chans, exists := s.watchChans[exactWatchKey]; exists {
-		fmt.Printf("Found %d watchers for exact match %s\n", len(chans), exactWatchKey)
 		for _, ch := range chans {
 			// Non-blocking send
 			select {
 			case ch <- event:
-				fmt.Printf("Event sent successfully to exact watcher for %s\n", exactWatchKey)
 			default:
-				fmt.Printf("Channel full, skipping event for exact watcher %s\n", exactWatchKey)
 			}
 		}
-	} else {
-		fmt.Printf("No exact watchers found for %s\n", exactWatchKey)
 	}
 
 	// Also check for resource-wide watchers (with empty namespace)
 	wildcardWatchKey := fmt.Sprintf("%s/", resourceType)
 	if namespace != "" && wildcardWatchKey != exactWatchKey {
-		fmt.Printf("Also checking for wildcard watchers %s\n", wildcardWatchKey)
 
 		if chans, exists := s.watchChans[wildcardWatchKey]; exists {
-			fmt.Printf("Found %d wildcard watchers for %s\n", len(chans), wildcardWatchKey)
 			for _, ch := range chans {
 				// Non-blocking send
 				select {
 				case ch <- event:
-					fmt.Printf("Event sent successfully to wildcard watcher for %s\n", wildcardWatchKey)
 				default:
-					fmt.Printf("Channel full, skipping event for wildcard watcher %s\n", wildcardWatchKey)
 				}
 			}
-		} else {
-			fmt.Printf("No wildcard watchers found for %s\n", wildcardWatchKey)
 		}
 	}
 }
