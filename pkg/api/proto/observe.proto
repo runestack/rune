@@ -236,6 +236,9 @@ message ObserveCapabilities {
   bool percentiles = 4;
   bool high_cardinality_filters = 5;
   bool enabled = 6; // false when observability is disabled (no backend wired)
+  // parsers is true when the backend evaluates `| logfmt` / `| json` pipeline
+  // stages and post-parse label filters (embedded, loki; not clickhouse yet).
+  bool parsers = 7;
 }
 
 service ObserveService {

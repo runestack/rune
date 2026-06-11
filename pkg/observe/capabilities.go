@@ -51,6 +51,12 @@ type Capabilities struct {
 	// high-cardinality label keys (e.g. order_id, trace_id) is cheap enough to
 	// expose in the dashboard.
 	HighCardinalityFilters bool
+
+	// Parsers is true when the store evaluates field-extraction pipeline
+	// stages (`| logfmt`, `| json`) and post-parse label filters. The
+	// embedded store evaluates them in-process and Loki natively; the
+	// ClickHouse adapter rejects them for now (RawSQL is its escape hatch).
+	Parsers bool
 }
 
 // Supports reports whether the store can serve the given tier.

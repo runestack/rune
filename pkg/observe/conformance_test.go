@@ -197,3 +197,87 @@ func TestParseLogQL_Rejects(t *testing.T) {
 		}
 	}
 }
+
+// Parser-stage conformance: `| logfmt` / `| json` extraction, post-parse label
+// filters, and aggregation grouped by an extracted label — the LogQL-depth
+// surface every parsers-capable backend must agree on.
+func TestConformance_Parsers(t *testing.T) {
+	base := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	store := embedded.New(embedded.Config{Retention: -1})
+	t.Cleanup(func() { _ = store.Close() })
+	seed := []observe.LogRecord{
+		{Timestamp: base, Service: "api", Namespace: "default", Instance: "api-1", Node: "n1", Level: "info",
+			Line: `level=info msg="pay ok" status=200 dur=42 method=POST`},
+		{Timestamp: base.Add(1 * time.Second), Service: "api", Namespace: "default", Instance: "api-1", Node: "n1", Level: "error",
+			Line: `level=error msg="pay failed" status=503 dur=1890 method=POST`},
+		{Timestamp: base.Add(2 * time.Second), Service: "api", Namespace: "default", Instance: "api-2", Node: "n2", Level: "error",
+			Line: `level=error msg="pay failed" status=502 dur=950 method=GET`},
+		{Timestamp: base.Add(3 * time.Second), Service: "api", Namespace: "default", Instance: "api-2", Node: "n2", Level: "info",
+			Line: `{"msg":"checkout","status":200,"dur":77}`},
+		{Timestamp: base.Add(4 * time.Second), Service: "api", Namespace: "default", Instance: "api-1", Node: "n1", Level: "info",
+			Line: `plain unparseable line`},
+	}
+	if err := store.Write(context.Background(), seed); err != nil {
+		t.Fatal(err)
+	}
+	window := func(q *observe.Query) *observe.Query {
+		q.Start = base.Add(-time.Hour)
+		q.End = base.Add(time.Hour)
+		return q
+	}
+	parse := func(t *testing.T, logql string) *observe.Query {
+		t.Helper()
+		q, err := observe.ParseLogQL(logql, time.Time{}, time.Time{}, 0, false)
+		if err != nil {
+			t.Fatalf("parse %q: %v", logql, err)
+		}
+		return window(q)
+	}
+
+	t.Run("logfmt numeric label filter", func(t *testing.T) {
+		rows := collectRows(t, store, parse(t, `{service="api"} | logfmt | status >= 500`))
+		if len(rows) != 2 {
+			t.Fatalf("want 2 5xx rows, got %d", len(rows))
+		}
+		// Extracted fields surface as row labels.
+		for _, r := range rows {
+			if r.Labels["status"] != "503" && r.Labels["status"] != "502" {
+				t.Errorf("extracted status missing on row: %+v", r.Labels)
+			}
+		}
+	})
+
+	t.Run("string label filter on extracted field", func(t *testing.T) {
+		rows := collectRows(t, store, parse(t, `{service="api"} | logfmt | method = "POST" | status >= 500`))
+		if len(rows) != 1 || rows[0].Labels["status"] != "503" {
+			t.Fatalf("want the 503 POST row, got %+v", rows)
+		}
+	})
+
+	t.Run("json extraction", func(t *testing.T) {
+		rows := collectRows(t, store, parse(t, `{service="api"} | json | msg = "checkout"`))
+		if len(rows) != 1 || rows[0].Labels["dur"] != "77" {
+			t.Fatalf("json row wrong: %+v", rows)
+		}
+	})
+
+	t.Run("unparseable lines drop under label filters", func(t *testing.T) {
+		// The plain line extracts nothing; numeric filter drops it, but it
+		// still appears in an unfiltered parser query.
+		all := collectRows(t, store, parse(t, `{service="api"} | logfmt`))
+		if len(all) != 5 {
+			t.Fatalf("parser stage alone must not drop rows: got %d", len(all))
+		}
+	})
+
+	t.Run("aggregate grouped by extracted label", func(t *testing.T) {
+		samples := collectSamples(t, store, parse(t, `sum by (status) (count_over_time({service="api"} | logfmt [1h]))`))
+		byStatus := map[string]float64{}
+		for _, s := range samples {
+			byStatus[s.GroupLabels["status"]] += s.Value
+		}
+		if byStatus["200"] != 1 || byStatus["503"] != 1 || byStatus["502"] != 1 {
+			t.Fatalf("status grouping wrong: %+v", byStatus)
+		}
+	})
+}

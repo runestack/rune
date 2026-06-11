@@ -81,6 +81,7 @@ func (s *Store) Capabilities() observe.Capabilities {
 		RawSQL:                 false,
 		Percentiles:            false,
 		HighCardinalityFilters: false,
+		Parsers:                true,
 	}
 }
 

@@ -1959,8 +1959,11 @@ type ObserveCapabilities struct {
 	Percentiles            bool                   `protobuf:"varint,4,opt,name=percentiles,proto3" json:"percentiles,omitempty"`
 	HighCardinalityFilters bool                   `protobuf:"varint,5,opt,name=high_cardinality_filters,json=highCardinalityFilters,proto3" json:"high_cardinality_filters,omitempty"`
 	Enabled                bool                   `protobuf:"varint,6,opt,name=enabled,proto3" json:"enabled,omitempty"` // false when observability is disabled (no backend wired)
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// parsers is true when the backend evaluates `| logfmt` / `| json` pipeline
+	// stages and post-parse label filters (embedded, loki; not clickhouse yet).
+	Parsers       bool `protobuf:"varint,7,opt,name=parsers,proto3" json:"parsers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ObserveCapabilities) Reset() {
@@ -2031,6 +2034,13 @@ func (x *ObserveCapabilities) GetHighCardinalityFilters() bool {
 func (x *ObserveCapabilities) GetEnabled() bool {
 	if x != nil {
 		return x.Enabled
+	}
+	return false
+}
+
+func (x *ObserveCapabilities) GetParsers() bool {
+	if x != nil {
+		return x.Parsers
 	}
 	return false
 }
@@ -2185,14 +2195,15 @@ const file_pkg_api_proto_observe_proto_rawDesc = "" +
 	"\x0edisk_cap_bytes\x18\x05 \x01(\x03R\fdiskCapBytes\x12%\n" +
 	"\x0eretention_days\x18\x06 \x01(\x01R\rretentionDays\x12#\n" +
 	"\roldest_record\x18\a \x01(\tR\foldestRecord\"\x15\n" +
-	"\x13CapabilitiesRequest\"\xd9\x01\n" +
+	"\x13CapabilitiesRequest\"\xf3\x01\n" +
 	"\x13ObserveCapabilities\x12\x18\n" +
 	"\abackend\x18\x01 \x01(\tR\abackend\x12\x19\n" +
 	"\bmax_tier\x18\x02 \x01(\tR\amaxTier\x12\x17\n" +
 	"\araw_sql\x18\x03 \x01(\bR\x06rawSql\x12 \n" +
 	"\vpercentiles\x18\x04 \x01(\bR\vpercentiles\x128\n" +
 	"\x18high_cardinality_filters\x18\x05 \x01(\bR\x16highCardinalityFilters\x12\x18\n" +
-	"\aenabled\x18\x06 \x01(\bR\aenabled2\x86\b\n" +
+	"\aenabled\x18\x06 \x01(\bR\aenabled\x12\x18\n" +
+	"\aparsers\x18\a \x01(\bR\aparsers2\x86\b\n" +
 	"\x0eObserveService\x12:\n" +
 	"\aExecute\x12\x16.rune.api.ObserveQuery\x1a\x15.rune.api.QueryResult0\x01\x12O\n" +
 	"\x0fGetCapabilities\x12\x1d.rune.api.CapabilitiesRequest\x1a\x1d.rune.api.ObserveCapabilities\x12A\n" +

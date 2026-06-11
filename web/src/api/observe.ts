@@ -8,8 +8,10 @@
         into the level histogram (one series per level via group_labels).
 
    The query is modelled as a structured `LogQuery` of label matchers + a line
-   filter. We serialize it to LogQL for the wire and the query bar, and parse
-   LogQL back so the bar stays the source of truth (mirrors runesight-data.js).
+   filter, plus a verbatim `pipeline` tail for stages the UI doesn't model
+   (`| logfmt`, `| json`, post-parse label filters). We serialize it to LogQL
+   for the wire and the query bar, and parse LogQL back so the bar stays the
+   source of truth (mirrors runesight-data.js).
    ============================================================ */
 import { useCallback, useEffect, useState } from "react";
 import { clients } from "./transport";
@@ -33,6 +35,13 @@ export interface LogQuery {
   nodes: string[];
   instances: string[];
   text: string;
+  /**
+   * Raw pipeline tail the structured UI doesn't model: parser stages
+   * (`logfmt`, `json`) and post-parse label filters (`status >= 500`).
+   * Stored verbatim without the leading `| ` (e.g. `logfmt | status >= 500`);
+   * toLogQL re-appends it after the structured parts.
+   */
+  pipeline?: string;
 }
 
 const QF: Record<LabelKey, keyof LogQuery> = {
@@ -53,7 +62,7 @@ export function normQuery(q?: Partial<LogQuery>): LogQuery {
 
 /* ---------------- LogQL <-> LogQuery ---------------- */
 
-/** Serialize the structured query to LogQL (selector + line filter + level pipe). */
+/** Serialize the structured query to LogQL (selector + line filter + level pipe + pipeline). */
 export function toLogQL(q0: Partial<LogQuery>): string {
   const q = normQuery(q0);
   const sel: string[] = [];
@@ -69,12 +78,43 @@ export function toLogQL(q0: Partial<LogQuery>): string {
   let s = `{${sel.join(", ")}}`;
   if (q.text) s += ` |= "${q.text}"`;
   if (q.levels.length && q.levels.length < LEVELS.length) s += ` | level=~"${q.levels.join("|")}"`;
+  if (q.pipeline) s += ` | ${q.pipeline}`;
   return s;
 }
 
-/** Parse a LogQL string back into the structured query (best-effort subset). */
-export function parseLogQL(str: string): LogQuery {
+/**
+ * Split a LogQL string at the first bare-`|` stage the structured UI doesn't
+ * model (parser stages like `| logfmt` / `| json`, post-parse label filters
+ * like `| status >= 500`). `|=` / `|~` are line filters and the structured
+ * `| level=~"..."` pipe stays in the head; quotes (with `\"` escapes) are
+ * respected so pipes inside string values never split. Returns
+ * [head, pipelineTail] where the tail is trimmed and has no leading pipe.
+ */
+function splitPipeline(str: string): [string, string] {
+  let inQ = false;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (inQ) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inQ = false;
+      continue;
+    }
+    if (ch === '"') { inQ = true; continue; }
+    if (ch !== "|") continue;
+    const next = str[i + 1];
+    if (next === "=" || next === "~") { i++; continue; } // |= / |~ line filters
+    if (/^\|\s*level\s*=~?\s*"/.test(str.slice(i))) continue; // structured level pipe
+    return [str.slice(0, i).trimEnd(), str.slice(i + 1).trim()];
+  }
+  return [str, ""];
+}
+
+/** Parse a LogQL string back into the structured query (best-effort subset).
+ *  Unmodelled pipeline stages are captured verbatim into `q.pipeline`. */
+export function parseLogQL(str0: string): LogQuery {
   const q = emptyQuery();
+  const [str, pipeline] = splitPipeline(str0);
+  if (pipeline) q.pipeline = pipeline;
   const sel = str.match(/\{([^}]*)\}/);
   if (sel) {
     const re = /(\w+)\s*(=~|!=|!~|=)\s*"([^"]*)"/g;
@@ -292,6 +332,8 @@ export interface Capabilities {
   rawSql: boolean;
   percentiles: boolean;
   highCardinalityFilters: boolean;
+  /** Backend evaluates `| logfmt` / `| json` pipeline stages (embedded/loki; false for clickhouse). */
+  parsers: boolean;
 }
 
 /**
@@ -301,7 +343,7 @@ export interface Capabilities {
  */
 export function useCapabilities(): Query<Capabilities> {
   const [data, setData] = useState<Capabilities>({
-    enabled: false, backend: "", maxTier: "", rawSql: false, percentiles: false, highCardinalityFilters: false,
+    enabled: false, backend: "", maxTier: "", rawSql: false, percentiles: false, highCardinalityFilters: false, parsers: false,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -324,6 +366,7 @@ export function useCapabilities(): Query<Capabilities> {
           rawSql: c.rawSql,
           percentiles: c.percentiles,
           highCardinalityFilters: c.highCardinalityFilters,
+          parsers: c.parsers,
         });
         setLoading(false);
       })
