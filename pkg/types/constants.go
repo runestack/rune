@@ -62,6 +62,14 @@ const (
 	// ResourceTypeSavedView represents a cluster-scoped RuneSight saved view
 	// (a named Log Explorer query: LogQL + relative time range).
 	ResourceTypeSavedView ResourceType = "saved_view"
+
+	// ResourceTypeAlertRule represents a cluster-scoped RuneSight alert rule
+	// (a LogQL count threshold evaluated by the runed alerter).
+	ResourceTypeAlertRule ResourceType = "alert_rule"
+
+	// ResourceTypeChannel represents a cluster-scoped notification channel
+	// (templated webhook / slack) referenced by alert rules.
+	ResourceTypeChannel ResourceType = "channel"
 )
 
 // RunnerType is the type of runner for an instance.

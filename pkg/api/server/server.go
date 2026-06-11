@@ -17,6 +17,7 @@ import (
 	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/api/session"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/observe/alerting"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/releasectl"
 	"github.com/runestack/rune/pkg/runner/manager"
@@ -56,6 +57,10 @@ type APIServer struct {
 	eventService        *service.EventService
 	releaseService      *service.ReleaseService
 	observeService      *service.ObserveService
+
+	// alerter is the RuneSight alert evaluation loop (nil when observability
+	// is disabled). Stopped in stop().
+	alerter *alerting.Alerter
 
 	// gRPC server
 	grpcServer *grpc.Server
@@ -226,6 +231,23 @@ func (s *APIServer) Start() error {
 	// live ephemeral log stream. Saved views persist in the state store and
 	// work regardless of which log backend (if any) is wired.
 	s.observeService = service.NewObserveService(s.options.ObserveStore, repos.NewSavedViewRepo(s.store), s.logger)
+	// The alerter evaluates stored alert rules against the log store and
+	// notifies on transitions (Rune events + templated webhooks). Only
+	// meaningful with a log backend; rule/channel CRUD rides along with it.
+	if s.options.ObserveStore != nil {
+		alertRules := repos.NewAlertRuleRepo(s.store)
+		alertChannels := repos.NewChannelRepo(s.store)
+		s.alerter = alerting.New(alerting.Options{
+			Store:    s.options.ObserveStore,
+			Rules:    alertRules,
+			Channels: alertChannels,
+			Events:   s.options.EventLog,
+			Secrets:  alerting.SecretLookup(s.options.StorageSecretLookup),
+			Logger:   s.logger,
+		})
+		s.alerter.Start(context.Background())
+		s.observeService.SetAlerting(alertRules, alertChannels, s.alerter)
+	}
 
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
@@ -585,6 +607,11 @@ func (s *APIServer) Stop() error {
 
 func (s *APIServer) stop() error {
 	s.logger.Info("Stopping Rune Server")
+
+	// Stop the alert evaluation loop before the stores go away.
+	if s.alerter != nil {
+		s.alerter.Stop()
+	}
 
 	// Stop the orchestrator first
 	if s.orchestrator != nil {

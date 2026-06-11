@@ -298,6 +298,15 @@ mark.rs-mark { background: rgba(246,217,8,.26); color: var(--text); border-radiu
 .rs-chan-state.degraded { color: var(--tan); } .rs-chan-state.degraded .rs-chan-sdot { background: var(--warn); }
 .rs-chan-state.down { color: var(--fail); } .rs-chan-state.down .rs-chan-sdot { background: var(--fail); }
 .rs-eval-note { font-family: var(--mono); font-size: 10.5px; color: var(--text-4); white-space: nowrap; }
+.rs-rule-err { font-family: var(--mono); font-size: 10.5px; color: var(--warn); max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rs-chans-cell { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.rs-rule-act { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.rs-rule-act button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text-4); cursor: pointer; transition: color .12s, background .12s; }
+.rs-rule-act button:hover { color: var(--text); background: var(--surface-3); }
+.rs-rule-act button.danger:hover { color: var(--fail); background: var(--fail-dim); }
+textarea.rs-field-i { resize: vertical; font-size: 12.5px; line-height: 1.5; }
+.rs-field-hint { font-size: 11px; color: var(--text-4); line-height: 1.45; }
+.rs-field-err { font-size: 12px; color: var(--fail); background: var(--fail-dim); border: 1px solid rgba(229,72,77,.28); border-radius: 8px; padding: 9px 12px; line-height: 1.45; }
 .rs-share-bar { flex: 1; height: 7px; background: var(--inset); border-radius: 4px; overflow: hidden; }
 .rs-share-bar span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
 

@@ -118,6 +118,97 @@ message DeleteSavedViewResponse {
   Status status = 2;
 }
 
+// --- Alerting ---
+
+// AlertRule mirrors types.AlertRule: a LogQL count threshold evaluated by the
+// runed alerter. Durations are strings in Go syntax ("5m", "90s").
+message AlertRule {
+  string id = 1;
+  string name = 2; // DNS-1123 cluster-unique
+  string description = 3;
+  string logql = 4;     // plain log selector; the alerter adds count_over_time
+  string window = 5;    // rolling count window
+  string op = 6;        // > >= < <= ==
+  double threshold = 7;
+  string for = 8;       // pending->firing hysteresis ("" => fire immediately)
+  string interval = 9;  // evaluation cadence ("" => 60s)
+  repeated string channels = 10;
+  bool disabled = 11;
+  string created_by = 12;
+  string created_at = 13; // RFC3339
+  string updated_at = 14; // RFC3339
+}
+
+// AlertStatus is a rule's live evaluation state (held by the alerter).
+message AlertStatus {
+  string rule = 1;
+  string state = 2; // ok | pending | firing
+  double value = 3;
+  string since = 4;      // RFC3339 — when the current state began
+  string last_eval = 5;  // RFC3339
+  string last_error = 6; // "" when healthy
+}
+
+// Channel mirrors types.Channel: a templated-webhook notification target.
+message Channel {
+  string id = 1;
+  string name = 2; // DNS-1123 cluster-unique
+  string type = 3; // webhook | slack
+  string url = 4;
+  map<string, string> headers = 5; // values may hold ${secret:ns/name/key}
+  string body = 6;                 // Go text/template; "" => default payload
+  string created_at = 7;           // RFC3339
+  string updated_at = 8;           // RFC3339
+}
+
+message ListAlertRulesRequest {}
+
+message ListAlertRulesResponse {
+  repeated AlertRule rules = 1;
+  // Statuses for known rules, keyed implicitly by AlertStatus.rule.
+  repeated AlertStatus statuses = 2;
+}
+
+message SaveAlertRuleRequest {
+  AlertRule rule = 1; // upsert by name
+}
+
+message SaveAlertRuleResponse {
+  AlertRule rule = 1;
+  Status status = 2;
+}
+
+message DeleteAlertRuleRequest {
+  string name = 1;
+}
+
+message DeleteAlertRuleResponse {
+  Status status = 2;
+}
+
+message ListChannelsRequest {}
+
+message ListChannelsResponse {
+  repeated Channel channels = 1;
+}
+
+message SaveChannelRequest {
+  Channel channel = 1; // upsert by name
+}
+
+message SaveChannelResponse {
+  Channel channel = 1;
+  Status status = 2;
+}
+
+message DeleteChannelRequest {
+  string name = 1;
+}
+
+message DeleteChannelResponse {
+  Status status = 2;
+}
+
 message CapabilitiesRequest {}
 
 // ObserveCapabilities mirrors observe.Capabilities for the dashboard handshake.
@@ -147,4 +238,14 @@ service ObserveService {
   rpc ListSavedViews(ListSavedViewsRequest) returns (ListSavedViewsResponse);
   rpc SaveView(SaveViewRequest) returns (SaveViewResponse);
   rpc DeleteSavedView(DeleteSavedViewRequest) returns (DeleteSavedViewResponse);
+
+  // Alerting: rules (LogQL count thresholds evaluated by the runed alerter)
+  // and channels (templated-webhook notification targets). Save RPCs upsert
+  // by name and validate the LogQL / URL before persisting.
+  rpc ListAlertRules(ListAlertRulesRequest) returns (ListAlertRulesResponse);
+  rpc SaveAlertRule(SaveAlertRuleRequest) returns (SaveAlertRuleResponse);
+  rpc DeleteAlertRule(DeleteAlertRuleRequest) returns (DeleteAlertRuleResponse);
+  rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse);
+  rpc SaveChannel(SaveChannelRequest) returns (SaveChannelResponse);
+  rpc DeleteChannel(DeleteChannelRequest) returns (DeleteChannelResponse);
 }
