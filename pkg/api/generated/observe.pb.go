@@ -1783,6 +1783,137 @@ func (x *DeleteChannelResponse) GetStatus() *Status {
 	return nil
 }
 
+type ObserveStatsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObserveStatsRequest) Reset() {
+	*x = ObserveStatsRequest{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObserveStatsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObserveStatsRequest) ProtoMessage() {}
+
+func (x *ObserveStatsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObserveStatsRequest.ProtoReflect.Descriptor instead.
+func (*ObserveStatsRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{29}
+}
+
+// ObserveStats are store-level facts for the dashboard Sources page. Only
+// stores that own their storage (embedded) report them; external backends
+// (loki/clickhouse) manage their own storage and report supported=false.
+type ObserveStats struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Backend       string                 `protobuf:"bytes,1,opt,name=backend,proto3" json:"backend,omitempty"`
+	Supported     bool                   `protobuf:"varint,2,opt,name=supported,proto3" json:"supported,omitempty"` // false => storage managed by the backend
+	Records       int64                  `protobuf:"varint,3,opt,name=records,proto3" json:"records,omitempty"`
+	DiskUsedBytes int64                  `protobuf:"varint,4,opt,name=disk_used_bytes,json=diskUsedBytes,proto3" json:"disk_used_bytes,omitempty"`
+	DiskCapBytes  int64                  `protobuf:"varint,5,opt,name=disk_cap_bytes,json=diskCapBytes,proto3" json:"disk_cap_bytes,omitempty"`   // 0 = unbounded
+	RetentionDays float64                `protobuf:"fixed64,6,opt,name=retention_days,json=retentionDays,proto3" json:"retention_days,omitempty"` // 0 = default, negative = disabled
+	OldestRecord  string                 `protobuf:"bytes,7,opt,name=oldest_record,json=oldestRecord,proto3" json:"oldest_record,omitempty"`      // RFC3339; "" when empty
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObserveStats) Reset() {
+	*x = ObserveStats{}
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObserveStats) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObserveStats) ProtoMessage() {}
+
+func (x *ObserveStats) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObserveStats.ProtoReflect.Descriptor instead.
+func (*ObserveStats) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ObserveStats) GetBackend() string {
+	if x != nil {
+		return x.Backend
+	}
+	return ""
+}
+
+func (x *ObserveStats) GetSupported() bool {
+	if x != nil {
+		return x.Supported
+	}
+	return false
+}
+
+func (x *ObserveStats) GetRecords() int64 {
+	if x != nil {
+		return x.Records
+	}
+	return 0
+}
+
+func (x *ObserveStats) GetDiskUsedBytes() int64 {
+	if x != nil {
+		return x.DiskUsedBytes
+	}
+	return 0
+}
+
+func (x *ObserveStats) GetDiskCapBytes() int64 {
+	if x != nil {
+		return x.DiskCapBytes
+	}
+	return 0
+}
+
+func (x *ObserveStats) GetRetentionDays() float64 {
+	if x != nil {
+		return x.RetentionDays
+	}
+	return 0
+}
+
+func (x *ObserveStats) GetOldestRecord() string {
+	if x != nil {
+		return x.OldestRecord
+	}
+	return ""
+}
+
 type CapabilitiesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1791,7 +1922,7 @@ type CapabilitiesRequest struct {
 
 func (x *CapabilitiesRequest) Reset() {
 	*x = CapabilitiesRequest{}
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[29]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1803,7 +1934,7 @@ func (x *CapabilitiesRequest) String() string {
 func (*CapabilitiesRequest) ProtoMessage() {}
 
 func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[29]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1816,7 +1947,7 @@ func (x *CapabilitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilitiesRequest.ProtoReflect.Descriptor instead.
 func (*CapabilitiesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{29}
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{31}
 }
 
 // ObserveCapabilities mirrors observe.Capabilities for the dashboard handshake.
@@ -1834,7 +1965,7 @@ type ObserveCapabilities struct {
 
 func (x *ObserveCapabilities) Reset() {
 	*x = ObserveCapabilities{}
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[30]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1846,7 +1977,7 @@ func (x *ObserveCapabilities) String() string {
 func (*ObserveCapabilities) ProtoMessage() {}
 
 func (x *ObserveCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_observe_proto_msgTypes[30]
+	mi := &file_pkg_api_proto_observe_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1859,7 +1990,7 @@ func (x *ObserveCapabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserveCapabilities.ProtoReflect.Descriptor instead.
 func (*ObserveCapabilities) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{30}
+	return file_pkg_api_proto_observe_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ObserveCapabilities) GetBackend() string {
@@ -2045,6 +2176,15 @@ const file_pkg_api_proto_observe_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"A\n" +
 	"\x15DeleteChannelResponse\x12(\n" +
 	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"\x15\n" +
+	"\x13ObserveStatsRequest\"\xfa\x01\n" +
+	"\fObserveStats\x12\x18\n" +
+	"\abackend\x18\x01 \x01(\tR\abackend\x12\x1c\n" +
+	"\tsupported\x18\x02 \x01(\bR\tsupported\x12\x18\n" +
+	"\arecords\x18\x03 \x01(\x03R\arecords\x12&\n" +
+	"\x0fdisk_used_bytes\x18\x04 \x01(\x03R\rdiskUsedBytes\x12$\n" +
+	"\x0edisk_cap_bytes\x18\x05 \x01(\x03R\fdiskCapBytes\x12%\n" +
+	"\x0eretention_days\x18\x06 \x01(\x01R\rretentionDays\x12#\n" +
+	"\roldest_record\x18\a \x01(\tR\foldestRecord\"\x15\n" +
 	"\x13CapabilitiesRequest\"\xd9\x01\n" +
 	"\x13ObserveCapabilities\x12\x18\n" +
 	"\abackend\x18\x01 \x01(\tR\abackend\x12\x19\n" +
@@ -2052,7 +2192,7 @@ const file_pkg_api_proto_observe_proto_rawDesc = "" +
 	"\araw_sql\x18\x03 \x01(\bR\x06rawSql\x12 \n" +
 	"\vpercentiles\x18\x04 \x01(\bR\vpercentiles\x128\n" +
 	"\x18high_cardinality_filters\x18\x05 \x01(\bR\x16highCardinalityFilters\x12\x18\n" +
-	"\aenabled\x18\x06 \x01(\bR\aenabled2\xbc\a\n" +
+	"\aenabled\x18\x06 \x01(\bR\aenabled2\x86\b\n" +
 	"\x0eObserveService\x12:\n" +
 	"\aExecute\x12\x16.rune.api.ObserveQuery\x1a\x15.rune.api.QueryResult0\x01\x12O\n" +
 	"\x0fGetCapabilities\x12\x1d.rune.api.CapabilitiesRequest\x1a\x1d.rune.api.ObserveCapabilities\x12A\n" +
@@ -2065,7 +2205,8 @@ const file_pkg_api_proto_observe_proto_rawDesc = "" +
 	"\x0fDeleteAlertRule\x12 .rune.api.DeleteAlertRuleRequest\x1a!.rune.api.DeleteAlertRuleResponse\x12M\n" +
 	"\fListChannels\x12\x1d.rune.api.ListChannelsRequest\x1a\x1e.rune.api.ListChannelsResponse\x12J\n" +
 	"\vSaveChannel\x12\x1c.rune.api.SaveChannelRequest\x1a\x1d.rune.api.SaveChannelResponse\x12P\n" +
-	"\rDeleteChannel\x12\x1e.rune.api.DeleteChannelRequest\x1a\x1f.rune.api.DeleteChannelResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\rDeleteChannel\x12\x1e.rune.api.DeleteChannelRequest\x1a\x1f.rune.api.DeleteChannelResponse\x12H\n" +
+	"\x0fGetObserveStats\x12\x1d.rune.api.ObserveStatsRequest\x1a\x16.rune.api.ObserveStatsB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_observe_proto_rawDescOnce sync.Once
@@ -2079,7 +2220,7 @@ func file_pkg_api_proto_observe_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_observe_proto_rawDescData
 }
 
-var file_pkg_api_proto_observe_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_pkg_api_proto_observe_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_pkg_api_proto_observe_proto_goTypes = []any{
 	(*LogRecord)(nil),               // 0: rune.api.LogRecord
 	(*PushLogsRequest)(nil),         // 1: rune.api.PushLogsRequest
@@ -2110,41 +2251,43 @@ var file_pkg_api_proto_observe_proto_goTypes = []any{
 	(*SaveChannelResponse)(nil),     // 26: rune.api.SaveChannelResponse
 	(*DeleteChannelRequest)(nil),    // 27: rune.api.DeleteChannelRequest
 	(*DeleteChannelResponse)(nil),   // 28: rune.api.DeleteChannelResponse
-	(*CapabilitiesRequest)(nil),     // 29: rune.api.CapabilitiesRequest
-	(*ObserveCapabilities)(nil),     // 30: rune.api.ObserveCapabilities
-	nil,                             // 31: rune.api.LogRecord.LabelsEntry
-	nil,                             // 32: rune.api.LogRow.LabelsEntry
-	nil,                             // 33: rune.api.MetricSample.GroupLabelsEntry
-	nil,                             // 34: rune.api.Channel.HeadersEntry
-	(*Status)(nil),                  // 35: rune.api.Status
+	(*ObserveStatsRequest)(nil),     // 29: rune.api.ObserveStatsRequest
+	(*ObserveStats)(nil),            // 30: rune.api.ObserveStats
+	(*CapabilitiesRequest)(nil),     // 31: rune.api.CapabilitiesRequest
+	(*ObserveCapabilities)(nil),     // 32: rune.api.ObserveCapabilities
+	nil,                             // 33: rune.api.LogRecord.LabelsEntry
+	nil,                             // 34: rune.api.LogRow.LabelsEntry
+	nil,                             // 35: rune.api.MetricSample.GroupLabelsEntry
+	nil,                             // 36: rune.api.Channel.HeadersEntry
+	(*Status)(nil),                  // 37: rune.api.Status
 }
 var file_pkg_api_proto_observe_proto_depIdxs = []int32{
-	31, // 0: rune.api.LogRecord.labels:type_name -> rune.api.LogRecord.LabelsEntry
+	33, // 0: rune.api.LogRecord.labels:type_name -> rune.api.LogRecord.LabelsEntry
 	0,  // 1: rune.api.PushLogsRequest.records:type_name -> rune.api.LogRecord
-	35, // 2: rune.api.PushLogsResponse.status:type_name -> rune.api.Status
-	32, // 3: rune.api.LogRow.labels:type_name -> rune.api.LogRow.LabelsEntry
-	33, // 4: rune.api.MetricSample.group_labels:type_name -> rune.api.MetricSample.GroupLabelsEntry
+	37, // 2: rune.api.PushLogsResponse.status:type_name -> rune.api.Status
+	34, // 3: rune.api.LogRow.labels:type_name -> rune.api.LogRow.LabelsEntry
+	35, // 4: rune.api.MetricSample.group_labels:type_name -> rune.api.MetricSample.GroupLabelsEntry
 	4,  // 5: rune.api.QueryResult.row:type_name -> rune.api.LogRow
 	5,  // 6: rune.api.QueryResult.sample:type_name -> rune.api.MetricSample
 	7,  // 7: rune.api.ListSavedViewsResponse.views:type_name -> rune.api.SavedView
 	7,  // 8: rune.api.SaveViewRequest.view:type_name -> rune.api.SavedView
 	7,  // 9: rune.api.SaveViewResponse.view:type_name -> rune.api.SavedView
-	35, // 10: rune.api.SaveViewResponse.status:type_name -> rune.api.Status
-	35, // 11: rune.api.DeleteSavedViewResponse.status:type_name -> rune.api.Status
-	34, // 12: rune.api.Channel.headers:type_name -> rune.api.Channel.HeadersEntry
+	37, // 10: rune.api.SaveViewResponse.status:type_name -> rune.api.Status
+	37, // 11: rune.api.DeleteSavedViewResponse.status:type_name -> rune.api.Status
+	36, // 12: rune.api.Channel.headers:type_name -> rune.api.Channel.HeadersEntry
 	14, // 13: rune.api.ListAlertRulesResponse.rules:type_name -> rune.api.AlertRule
 	15, // 14: rune.api.ListAlertRulesResponse.statuses:type_name -> rune.api.AlertStatus
 	14, // 15: rune.api.SaveAlertRuleRequest.rule:type_name -> rune.api.AlertRule
 	14, // 16: rune.api.SaveAlertRuleResponse.rule:type_name -> rune.api.AlertRule
-	35, // 17: rune.api.SaveAlertRuleResponse.status:type_name -> rune.api.Status
-	35, // 18: rune.api.DeleteAlertRuleResponse.status:type_name -> rune.api.Status
+	37, // 17: rune.api.SaveAlertRuleResponse.status:type_name -> rune.api.Status
+	37, // 18: rune.api.DeleteAlertRuleResponse.status:type_name -> rune.api.Status
 	16, // 19: rune.api.ListChannelsResponse.channels:type_name -> rune.api.Channel
 	16, // 20: rune.api.SaveChannelRequest.channel:type_name -> rune.api.Channel
 	16, // 21: rune.api.SaveChannelResponse.channel:type_name -> rune.api.Channel
-	35, // 22: rune.api.SaveChannelResponse.status:type_name -> rune.api.Status
-	35, // 23: rune.api.DeleteChannelResponse.status:type_name -> rune.api.Status
+	37, // 22: rune.api.SaveChannelResponse.status:type_name -> rune.api.Status
+	37, // 23: rune.api.DeleteChannelResponse.status:type_name -> rune.api.Status
 	3,  // 24: rune.api.ObserveService.Execute:input_type -> rune.api.ObserveQuery
-	29, // 25: rune.api.ObserveService.GetCapabilities:input_type -> rune.api.CapabilitiesRequest
+	31, // 25: rune.api.ObserveService.GetCapabilities:input_type -> rune.api.CapabilitiesRequest
 	1,  // 26: rune.api.ObserveService.PushLogs:input_type -> rune.api.PushLogsRequest
 	8,  // 27: rune.api.ObserveService.ListSavedViews:input_type -> rune.api.ListSavedViewsRequest
 	10, // 28: rune.api.ObserveService.SaveView:input_type -> rune.api.SaveViewRequest
@@ -2155,20 +2298,22 @@ var file_pkg_api_proto_observe_proto_depIdxs = []int32{
 	23, // 33: rune.api.ObserveService.ListChannels:input_type -> rune.api.ListChannelsRequest
 	25, // 34: rune.api.ObserveService.SaveChannel:input_type -> rune.api.SaveChannelRequest
 	27, // 35: rune.api.ObserveService.DeleteChannel:input_type -> rune.api.DeleteChannelRequest
-	6,  // 36: rune.api.ObserveService.Execute:output_type -> rune.api.QueryResult
-	30, // 37: rune.api.ObserveService.GetCapabilities:output_type -> rune.api.ObserveCapabilities
-	2,  // 38: rune.api.ObserveService.PushLogs:output_type -> rune.api.PushLogsResponse
-	9,  // 39: rune.api.ObserveService.ListSavedViews:output_type -> rune.api.ListSavedViewsResponse
-	11, // 40: rune.api.ObserveService.SaveView:output_type -> rune.api.SaveViewResponse
-	13, // 41: rune.api.ObserveService.DeleteSavedView:output_type -> rune.api.DeleteSavedViewResponse
-	18, // 42: rune.api.ObserveService.ListAlertRules:output_type -> rune.api.ListAlertRulesResponse
-	20, // 43: rune.api.ObserveService.SaveAlertRule:output_type -> rune.api.SaveAlertRuleResponse
-	22, // 44: rune.api.ObserveService.DeleteAlertRule:output_type -> rune.api.DeleteAlertRuleResponse
-	24, // 45: rune.api.ObserveService.ListChannels:output_type -> rune.api.ListChannelsResponse
-	26, // 46: rune.api.ObserveService.SaveChannel:output_type -> rune.api.SaveChannelResponse
-	28, // 47: rune.api.ObserveService.DeleteChannel:output_type -> rune.api.DeleteChannelResponse
-	36, // [36:48] is the sub-list for method output_type
-	24, // [24:36] is the sub-list for method input_type
+	29, // 36: rune.api.ObserveService.GetObserveStats:input_type -> rune.api.ObserveStatsRequest
+	6,  // 37: rune.api.ObserveService.Execute:output_type -> rune.api.QueryResult
+	32, // 38: rune.api.ObserveService.GetCapabilities:output_type -> rune.api.ObserveCapabilities
+	2,  // 39: rune.api.ObserveService.PushLogs:output_type -> rune.api.PushLogsResponse
+	9,  // 40: rune.api.ObserveService.ListSavedViews:output_type -> rune.api.ListSavedViewsResponse
+	11, // 41: rune.api.ObserveService.SaveView:output_type -> rune.api.SaveViewResponse
+	13, // 42: rune.api.ObserveService.DeleteSavedView:output_type -> rune.api.DeleteSavedViewResponse
+	18, // 43: rune.api.ObserveService.ListAlertRules:output_type -> rune.api.ListAlertRulesResponse
+	20, // 44: rune.api.ObserveService.SaveAlertRule:output_type -> rune.api.SaveAlertRuleResponse
+	22, // 45: rune.api.ObserveService.DeleteAlertRule:output_type -> rune.api.DeleteAlertRuleResponse
+	24, // 46: rune.api.ObserveService.ListChannels:output_type -> rune.api.ListChannelsResponse
+	26, // 47: rune.api.ObserveService.SaveChannel:output_type -> rune.api.SaveChannelResponse
+	28, // 48: rune.api.ObserveService.DeleteChannel:output_type -> rune.api.DeleteChannelResponse
+	30, // 49: rune.api.ObserveService.GetObserveStats:output_type -> rune.api.ObserveStats
+	37, // [37:50] is the sub-list for method output_type
+	24, // [24:37] is the sub-list for method input_type
 	24, // [24:24] is the sub-list for extension type_name
 	24, // [24:24] is the sub-list for extension extendee
 	0,  // [0:24] is the sub-list for field type_name
@@ -2190,7 +2335,7 @@ func file_pkg_api_proto_observe_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_observe_proto_rawDesc), len(file_pkg_api_proto_observe_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   35,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

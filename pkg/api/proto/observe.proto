@@ -209,6 +209,23 @@ message DeleteChannelResponse {
   Status status = 2;
 }
 
+// --- Store stats (Sources page) ---
+
+message ObserveStatsRequest {}
+
+// ObserveStats are store-level facts for the dashboard Sources page. Only
+// stores that own their storage (embedded) report them; external backends
+// (loki/clickhouse) manage their own storage and report supported=false.
+message ObserveStats {
+  string backend = 1;
+  bool supported = 2; // false => storage managed by the backend
+  int64 records = 3;
+  int64 disk_used_bytes = 4;
+  int64 disk_cap_bytes = 5;       // 0 = unbounded
+  double retention_days = 6;       // 0 = default, negative = disabled
+  string oldest_record = 7;        // RFC3339; "" when empty
+}
+
 message CapabilitiesRequest {}
 
 // ObserveCapabilities mirrors observe.Capabilities for the dashboard handshake.
@@ -248,4 +265,9 @@ service ObserveService {
   rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse);
   rpc SaveChannel(SaveChannelRequest) returns (SaveChannelResponse);
   rpc DeleteChannel(DeleteChannelRequest) returns (DeleteChannelResponse);
+
+  // GetObserveStats reports store-level facts (records, disk, retention) for
+  // the dashboard Sources page. Volume/coverage numbers come from ordinary
+  // metric queries via Execute, not from this RPC.
+  rpc GetObserveStats(ObserveStatsRequest) returns (ObserveStats);
 }
