@@ -31,6 +31,7 @@ const (
 	ObserveService_ListChannels_FullMethodName    = "/rune.api.ObserveService/ListChannels"
 	ObserveService_SaveChannel_FullMethodName     = "/rune.api.ObserveService/SaveChannel"
 	ObserveService_DeleteChannel_FullMethodName   = "/rune.api.ObserveService/DeleteChannel"
+	ObserveService_GetObserveStats_FullMethodName = "/rune.api.ObserveService/GetObserveStats"
 )
 
 // ObserveServiceClient is the client API for ObserveService service.
@@ -59,6 +60,10 @@ type ObserveServiceClient interface {
 	ListChannels(ctx context.Context, in *ListChannelsRequest, opts ...grpc.CallOption) (*ListChannelsResponse, error)
 	SaveChannel(ctx context.Context, in *SaveChannelRequest, opts ...grpc.CallOption) (*SaveChannelResponse, error)
 	DeleteChannel(ctx context.Context, in *DeleteChannelRequest, opts ...grpc.CallOption) (*DeleteChannelResponse, error)
+	// GetObserveStats reports store-level facts (records, disk, retention) for
+	// the dashboard Sources page. Volume/coverage numbers come from ordinary
+	// metric queries via Execute, not from this RPC.
+	GetObserveStats(ctx context.Context, in *ObserveStatsRequest, opts ...grpc.CallOption) (*ObserveStats, error)
 }
 
 type observeServiceClient struct {
@@ -198,6 +203,16 @@ func (c *observeServiceClient) DeleteChannel(ctx context.Context, in *DeleteChan
 	return out, nil
 }
 
+func (c *observeServiceClient) GetObserveStats(ctx context.Context, in *ObserveStatsRequest, opts ...grpc.CallOption) (*ObserveStats, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ObserveStats)
+	err := c.cc.Invoke(ctx, ObserveService_GetObserveStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ObserveServiceServer is the server API for ObserveService service.
 // All implementations must embed UnimplementedObserveServiceServer
 // for forward compatibility.
@@ -224,6 +239,10 @@ type ObserveServiceServer interface {
 	ListChannels(context.Context, *ListChannelsRequest) (*ListChannelsResponse, error)
 	SaveChannel(context.Context, *SaveChannelRequest) (*SaveChannelResponse, error)
 	DeleteChannel(context.Context, *DeleteChannelRequest) (*DeleteChannelResponse, error)
+	// GetObserveStats reports store-level facts (records, disk, retention) for
+	// the dashboard Sources page. Volume/coverage numbers come from ordinary
+	// metric queries via Execute, not from this RPC.
+	GetObserveStats(context.Context, *ObserveStatsRequest) (*ObserveStats, error)
 	mustEmbedUnimplementedObserveServiceServer()
 }
 
@@ -269,6 +288,9 @@ func (UnimplementedObserveServiceServer) SaveChannel(context.Context, *SaveChann
 }
 func (UnimplementedObserveServiceServer) DeleteChannel(context.Context, *DeleteChannelRequest) (*DeleteChannelResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteChannel not implemented")
+}
+func (UnimplementedObserveServiceServer) GetObserveStats(context.Context, *ObserveStatsRequest) (*ObserveStats, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetObserveStats not implemented")
 }
 func (UnimplementedObserveServiceServer) mustEmbedUnimplementedObserveServiceServer() {}
 func (UnimplementedObserveServiceServer) testEmbeddedByValue()                        {}
@@ -500,6 +522,24 @@ func _ObserveService_DeleteChannel_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ObserveService_GetObserveStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ObserveStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ObserveServiceServer).GetObserveStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ObserveService_GetObserveStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ObserveServiceServer).GetObserveStats(ctx, req.(*ObserveStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ObserveService_ServiceDesc is the grpc.ServiceDesc for ObserveService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -550,6 +590,10 @@ var ObserveService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteChannel",
 			Handler:    _ObserveService_DeleteChannel_Handler,
+		},
+		{
+			MethodName: "GetObserveStats",
+			Handler:    _ObserveService_GetObserveStats_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

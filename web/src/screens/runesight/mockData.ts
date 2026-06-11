@@ -1,12 +1,12 @@
 /* ============================================================
-   RuneSight — mocked metadata for surfaces without a backend yet.
+   RuneSight — small presentation helpers ported from the design
+   bundle, plus the query-history seed for the Saved Queries panel.
 
-   The live log query / histogram / facets come from ObserveService
-   (see ../../api/observe), Saved Views are live via the saved-view
-   RPCs (see ../../api/savedViews), and Alert Rules / Notification
-   Channels are live via the alerting RPCs (see ../../api/alerting).
-   What remains here is the Sources surface metadata and small
-   presentation helpers ported from the design bundle.
+   All surface data is live: log query / histogram / facets via
+   ObserveService (see ../../api/observe), Saved Views via the
+   saved-view RPCs (see ../../api/savedViews), Alert Rules and
+   Notification Channels via the alerting RPCs (see ../../api/alerting),
+   and Sources via stats + metric queries (see ../../api/sources).
    ============================================================ */
 import type { LogQuery } from "../../api/observe";
 import { normQuery } from "../../api/observe";
@@ -17,20 +17,6 @@ export const HISTORY_SEED = [
   { q: { namespaces: ["production"], services: ["api-core"] } as Partial<LogQuery>, ts: "12:41:08", hits: "318", dur: "42ms" },
   { q: { levels: ["error"] } as Partial<LogQuery>, ts: "12:38:54", hits: "1.1k", dur: "61ms" },
 ];
-
-/* ---- retention / ingestion summary for the home Sight card (mocked) ---- */
-export const INGESTION = {
-  retentionDays: 14,
-  storageUsedGi: 22.1,
-  storageCapGi: 50,
-  storagePct: 44,
-  gbToday: 3.8,
-};
-
-/** Streaming log sources (services emitting logs). Mocked — matches the
- *  design's running-container set; the live count comes from facets when a
- *  query runs, but the nav badge needs a stable value up front. */
-export const SOURCES_COUNT = 13;
 
 /* derive a meaningful icon + tone from a saved view's query (design: classifyView) */
 export type Tone = "red" | "tan" | "cyan" | "green" | "accent";
