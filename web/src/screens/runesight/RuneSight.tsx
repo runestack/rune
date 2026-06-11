@@ -56,7 +56,7 @@ export function RuneSight({ tab, go, query, setQuery, range, setRange, live, set
     );
   }
 
-  if (tab === "views") return <SavedViews loadView={loadView} go={() => go("explore")} />;
+  if (tab === "views") return <SavedViews loadView={loadView} setRange={setRange} go={() => go("explore")} />;
   if (tab === "alerts") return <Alerts loadView={loadView} />;
   if (tab === "sources") return <Sources />;
 
