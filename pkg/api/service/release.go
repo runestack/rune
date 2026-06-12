@@ -215,11 +215,13 @@ func protoToPayloads(p *generated.RenderedPayloads) (releasectl.Payloads, error)
 		out.Services[k] = &svc
 	}
 	for k, v := range p.GetSecrets() {
-		var sec types.Secret
-		if err := json.Unmarshal([]byte(v), &sec); err != nil {
+		// Symmetric to the client's MarshalSecretPayload: restores Data, which
+		// plain unmarshaling drops (json:"-").
+		sec, err := types.UnmarshalSecretPayload([]byte(v))
+		if err != nil {
 			return out, err
 		}
-		out.Secrets[k] = &sec
+		out.Secrets[k] = sec
 	}
 	for k, v := range p.GetConfigmaps() {
 		var cm types.Configmap
