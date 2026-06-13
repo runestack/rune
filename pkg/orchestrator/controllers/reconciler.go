@@ -491,6 +491,23 @@ func (r *reconciler) ensureServiceInstances(ctx context.Context, service *types.
 		log.Int("desired", service.Scale),
 		log.Int("current", len(instanceData.Instances)))
 
+	// Stateful services (per-replica volume claimTemplates) keep stable
+	// {service}-{ordinal} slot names so replicas rebind their volumes across
+	// restarts; stateless services get unique {service}-{shorthash} names per
+	// lifetime (#84). The two need different reconcile identity models — slot
+	// matching vs. count-based — so dispatch here.
+	if serviceHasStableIdentity(service) {
+		return r.ensureStatefulInstances(ctx, service, instanceData)
+	}
+	return r.ensureStatelessInstances(ctx, service, instanceData)
+}
+
+// ensureStatefulInstances reconciles a service whose replicas have stable
+// ordinal identity. For each slot 0..Scale-1 it looks up the {service}-{ordinal}
+// instance by name: a compatible one is reconciled in place, an incompatible one
+// is deleted and recreated in the same slot, and a missing one is created. This
+// is the StatefulSet-style model where the name *is* the slot key.
+func (r *reconciler) ensureStatefulInstances(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) error {
 	for i := 0; i < service.Scale; i++ {
 		// Generate instance name
 		instanceName := generateInstanceName(service, i)
@@ -537,6 +554,62 @@ func (r *reconciler) ensureServiceInstances(ctx context.Context, service *types.
 		r.logger.Info("creating new instance", log.Json("instanceName", instanceName))
 		// Create a new instance — i is the per-replica slot ordinal.
 		if err := r.createNewInstance(ctx, service, instanceName, i); err != nil {
+			r.logger.Error("Failed to create new instance",
+				log.Str("service", service.Name),
+				log.Str("instance", instanceName),
+				log.Err(err))
+			// Continue with other instances
+		}
+	}
+
+	return nil
+}
+
+// ensureStatelessInstances reconciles a service whose replicas have no stable
+// identity. Instance names are unique per lifetime, so they can't be regenerated
+// from a slot index; identity is by count instead. Compatible instances are
+// reconciled in place and kept; incompatible ones are deleted; then enough
+// fresh {service}-{shorthash} instances are created to reach the desired scale.
+// Removing *excess* instances is handled separately by scaleDownService (which
+// runs before this in reconcileService), so this only ever creates.
+func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) error {
+	taken := make(map[string]bool, len(instanceData.Instances))
+	have := 0
+	for j := range instanceData.Instances {
+		inst := &instanceData.Instances[j]
+		isCompatible, reason := r.instanceController.isInstanceCompatibleWithService(ctx, inst, service)
+		if !isCompatible {
+			r.logger.Info("Instance incompatible, will recreate",
+				log.Str("service", service.Name),
+				log.Str("instance", inst.Name),
+				log.Str("reason", reason))
+			r.healthController.RemoveInstance(inst.ID)
+			if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
+				r.logger.Error("Failed to delete old instance during recreation",
+					log.Str("instance", inst.ID),
+					log.Err(err))
+			}
+			continue
+		}
+		if err := r.reconcileExistingInstance(ctx, service, inst); err != nil {
+			r.logger.Error("Failed to reconcile existing instance",
+				log.Str("service", service.Name),
+				log.Str("instance", inst.Name),
+				log.Err(err))
+			// Continue with other instances
+		}
+		taken[inst.Name] = true
+		have++
+	}
+
+	// Create fresh instances up to the desired scale. Ordinal is not meaningful
+	// for a stateless service (no per-replica volume binding); pass the running
+	// index purely so the field is populated deterministically.
+	for ordinal := have; ordinal < service.Scale; ordinal++ {
+		instanceName := generateHashInstanceName(service, taken)
+		taken[instanceName] = true
+		r.logger.Info("creating new instance", log.Json("instanceName", instanceName))
+		if err := r.createNewInstance(ctx, service, instanceName, ordinal); err != nil {
 			r.logger.Error("Failed to create new instance",
 				log.Str("service", service.Name),
 				log.Str("instance", instanceName),
