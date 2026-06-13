@@ -920,3 +920,106 @@ func TestServiceSpec_TemplateMethods(t *testing.T) {
 		t.Errorf("original should be unchanged, got: %s", originalSpec.Env["TEMPLATE1"])
 	}
 }
+
+// TestParseCastFile_MultiDocument is the regression test for #90: a castfile
+// with multiple YAML documents separated by `---` must contribute ALL of its
+// documents' resources, not silently drop everything after the first.
+// gopkg.in/yaml.v3's Unmarshal decodes only the first document, which used to
+// under-deploy the rest without any warning.
+func TestParseCastFile_MultiDocument(t *testing.T) {
+	t.Parallel()
+
+	yamlContent := `configmap:
+  name: app-settings
+  namespace: default
+  data:
+    mode: "blue"
+---
+service:
+  name: broken-api
+  namespace: default
+  image: nginx:alpine
+  scale: 1
+`
+
+	cf, err := ParseCastFileFromBytes([]byte(yamlContent), "")
+	if err != nil {
+		t.Fatalf("parse multi-document castfile: %v", err)
+	}
+	if len(cf.Configmaps) != 1 {
+		t.Fatalf("expected 1 configmap, got %d", len(cf.Configmaps))
+	}
+	if len(cf.Services) != 1 {
+		t.Fatalf("expected 1 service from the second document, got %d", len(cf.Services))
+	}
+	if cf.Configmaps[0].Name != "app-settings" {
+		t.Errorf("configmap name = %q, want app-settings", cf.Configmaps[0].Name)
+	}
+	if cf.Services[0].Name != "broken-api" {
+		t.Errorf("service name = %q, want broken-api", cf.Services[0].Name)
+	}
+	// Specs must hold both resources (drives plan/Owns).
+	if len(cf.GetSpecs()) != 2 {
+		t.Fatalf("expected 2 specs across both documents, got %d", len(cf.GetSpecs()))
+	}
+}
+
+// TestParseCastFile_MultiDocumentLeadingTrailingSeparators ensures empty
+// documents produced by leading/trailing `---` (and a blank middle section)
+// are skipped, not rejected as "must be a YAML mapping".
+func TestParseCastFile_MultiDocumentLeadingTrailingSeparators(t *testing.T) {
+	t.Parallel()
+
+	yamlContent := `---
+service:
+  name: api
+  namespace: default
+  image: nginx:alpine
+---
+---
+configmap:
+  name: cfg
+  namespace: default
+  data:
+    k: v
+---
+`
+
+	cf, err := ParseCastFileFromBytes([]byte(yamlContent), "")
+	if err != nil {
+		t.Fatalf("parse castfile with stray separators: %v", err)
+	}
+	if len(cf.Services) != 1 || len(cf.Configmaps) != 1 {
+		t.Fatalf("want 1 service + 1 configmap, got %d services / %d configmaps",
+			len(cf.Services), len(cf.Configmaps))
+	}
+}
+
+// TestParseCastFile_MultiDocumentInvalidKeyInLaterDoc ensures validation runs
+// per-document: an unknown top-level key in a non-first document is an error,
+// not silently dropped.
+func TestParseCastFile_MultiDocumentInvalidKeyInLaterDoc(t *testing.T) {
+	t.Parallel()
+
+	yamlContent := `service:
+  name: api
+  image: nginx:alpine
+---
+bogus:
+  name: nope
+`
+
+	if _, err := ParseCastFileFromBytes([]byte(yamlContent), ""); err == nil {
+		t.Fatal("expected error for unknown top-level key in second document, got nil")
+	}
+}
+
+// TestParseCastFile_EmptyStillRejected guards that the multi-document change
+// preserves the prior behavior for empty input.
+func TestParseCastFile_EmptyStillRejected(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ParseCastFileFromBytes([]byte("---\n---\n"), ""); err == nil {
+		t.Fatal("expected error for a castfile with no resource documents, got nil")
+	}
+}
