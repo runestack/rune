@@ -80,3 +80,66 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 30px rgba(0, 0, 0, 0.22);
   --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.4);
 }
+
+/* ============================================================
+   THEME MODES — base surface palettes, swapped via html[data-theme]
+   (see lib/theme.ts useThemeMode / the footer theme picker).
+   The accent tokens (--accent / --accent-text / --accent-dim /
+   --accent-line) and --radius* are owned by useTweaks and applied to
+   :root at runtime, so they are intentionally NOT redefined here — a
+   theme only swaps the neutral surfaces + shadows.
+   • default :root        = Dark  (cool steel + purple)
+   • [data-theme="light"] = Light (pure-white paper)
+   • [data-theme="sand"]  = Sand  (warm charcoal + amber-tinted)
+   ============================================================ */
+html[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-2: #f6f7f9;
+  --bg-grid: rgba(15, 18, 25, 0.03);
+  --surface: #ffffff;
+  --surface-2: #f5f6f8;
+  --surface-3: #eceef1;
+  --inset: #f7f8fa;
+
+  --border: #e4e6ea;
+  --border-strong: #d1d4db;
+  --border-faint: #eef0f3;
+  --rail: #e7e9ed;
+
+  --text: #14171c;
+  --text-2: #40454d;
+  --text-3: #6a6f78;
+  --text-4: #9aa0aa;
+
+  --shadow: 0 1px 2px rgba(15, 18, 25, 0.05), 0 8px 30px rgba(15, 18, 25, 0.08);
+  --shadow-pop: 0 14px 44px rgba(15, 18, 25, 0.15), 0 2px 8px rgba(15, 18, 25, 0.09);
+}
+
+html[data-theme="sand"] {
+  --bg: #14110c;
+  --bg-2: #100d09;
+  --bg-grid: rgba(255, 232, 196, 0.026);
+  --surface: #1b1711;
+  --surface-2: #221d16;
+  --surface-3: #2b251c;
+  --inset: #0e0b07;
+
+  --border: #2a241b;
+  --border-strong: #3c3327;
+  --border-faint: #201b13;
+  --rail: #241f17;
+
+  --text: #f1ece1;
+  --text-2: #bdb3a2;
+  --text-3: #897f6f;
+  --text-4: #5d5547;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 30px rgba(0, 0, 0, 0.28);
+  --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+/* Light-mode fixups: white-alpha hovers are invisible on paper, so the log
+   rows (RuneSight) need a dark-alpha hover/selection instead. */
+html[data-theme="light"] .logline:hover { background: rgba(15, 18, 25, 0.04); }
+html[data-theme="light"] .rs-row:hover { background: rgba(15, 18, 25, 0.04); }
+html[data-theme="light"] .rs-row.sel { background: var(--accent-dim); }

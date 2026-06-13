@@ -28,6 +28,63 @@ export function rgba(hex: string, a: number): string {
 export type LogoVariant = "mark" | "tile" | "wordmark" | "mono";
 export type Edges = "soft" | "crisp" | "sharp";
 
+/* ── Theme mode (base surface palette) ───────────────────────────────
+   Selectable surface palette, applied via html[data-theme]. The accent
+   tokens stay owned by useTweaks; these only swap the neutral surfaces.
+   "dark" is the :root default (no attribute needed); "light"/"sand" are
+   token overrides in styles/tokens.css. The swatch color (`sw`) is what
+   the footer theme picker shows. */
+export type ThemeMode = "dark" | "light" | "sand";
+
+export interface ThemeOption {
+  id: ThemeMode;
+  label: string;
+  /** Swatch fill in the picker (Sand uses a warm sand color, not its bg). */
+  sw: string;
+}
+
+export const THEMES: ThemeOption[] = [
+  { id: "dark", label: "Dark", sw: "#0f0f0f" },
+  { id: "light", label: "Light", sw: "#ffffff" },
+  { id: "sand", label: "Sand", sw: "#d9b487" },
+];
+
+const THEME_STORAGE_KEY = "rune.theme";
+
+/** Apply the base surface palette by setting html[data-theme]. Dark is the
+ *  default and clears the attribute so :root governs. */
+export function applyThemeMode(mode: ThemeMode): void {
+  const root = document.documentElement;
+  if (mode === "dark") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", mode);
+}
+
+function readThemeMode(): ThemeMode {
+  try {
+    const raw = localStorage.getItem(THEME_STORAGE_KEY);
+    if (raw === "light" || raw === "sand" || raw === "dark") return raw;
+  } catch {
+    /* ignore */
+  }
+  return "dark";
+}
+
+/** Theme-mode state, persisted to localStorage and applied to <html>. */
+export function useThemeMode(): [ThemeMode, (m: ThemeMode) => void] {
+  const [mode, setMode] = useState<ThemeMode>(readThemeMode);
+
+  useEffect(() => {
+    applyThemeMode(mode);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, mode);
+    } catch {
+      /* ignore */
+    }
+  }, [mode]);
+
+  return [mode, setMode];
+}
+
 export interface Tweaks {
   logo: LogoVariant;
   accent: string;

@@ -3,7 +3,7 @@ import {
   AppShell, Sidebar, Topbar, SearchPalette, PageHead, TweaksPanel, TweakSection, TweakRadio, TweakColor, ConfirmProvider, ToastProvider,
 } from "./components";
 import type { NavGroup } from "./components";
-import { useTweaks } from "./lib/theme";
+import { useTweaks, useThemeMode } from "./lib/theme";
 import { DEVTOOLS } from "./lib/devtools";
 import { ScopeProvider } from "./lib/scope";
 import { ContextSwitcher } from "./ContextSwitcher";
@@ -105,6 +105,7 @@ export interface AppProps {
 
 export function App({ user, onLogout }: AppProps) {
   const [t, setTweak] = useTweaks();
+  const [themeMode, setThemeMode] = useThemeMode();
   const [route, setRoute] = useState("overview");
   const [svc, setSvc] = useState<Service | null>(null);
   const [inst, setInst] = useState<Instance | null>(null);
@@ -228,6 +229,8 @@ export function App({ user, onLogout }: AppProps) {
             context={<ContextSwitcher go={go} />}
             user={user}
             onLogout={onLogout}
+            theme={themeMode}
+            onTheme={setThemeMode}
             onToggleNav={toggleNav}
           />
         }
