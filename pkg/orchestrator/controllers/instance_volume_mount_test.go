@@ -203,16 +203,42 @@ func TestResolveVolumeMount_ClaimTemplateIdempotent(t *testing.T) {
 	assert.Equal(t, "/var/lib/rune/volumes/default/data-api-0", got.Source)
 }
 
-func TestResolveVolumeMount_ClaimTemplateUnparseableInstanceName(t *testing.T) {
-	_, ic := newInstanceControllerForVolumeTests(t)
+// TestResolveVolumeMount_ClaimTemplateUsesOrdinalNotName proves the per-replica
+// volume binds to the instance's Ordinal field, NOT to anything parsed out of
+// the instance name. The name here is deliberately non-ordinal ("api-x7f2k",
+// the {service}-{shorthash} shape #84 moves to), yet the resolved volume must
+// still be data-api-2 because Ordinal is 2.
+func TestResolveVolumeMount_ClaimTemplateUsesOrdinalNotName(t *testing.T) {
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	pre := &types.Volume{
+		ID:               "data-api-2",
+		Name:             "data-api-2",
+		Namespace:        "default",
+		StorageClassName: "fast",
+		Size:             "5Gi",
+		AccessMode:       types.AccessModeRWO,
+		ReclaimPolicy:    types.ReclaimPolicyDelete,
+		OwnerService:     "default/api",
+		BoundClaim:       "api/data/2",
+		Status:           types.VolumeStatusAvailable,
+		Handle:           "/var/lib/rune/volumes/default/data-api-2",
+		CreatedAt:        time.Now().UTC().Add(-time.Hour),
+	}
+	require.NoError(t, ts.Create(context.Background(), types.ResourceTypeVolume, "default", "data-api-2", pre))
+
 	svc := &types.Service{Name: "api", Namespace: "default"}
-	_, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "ad-hoc"}, types.VolumeMount{
-		Name:          "data",
-		MountPath:     "/data",
-		ClaimTemplate: &types.VolumeClaimTemplate{Size: "1Gi"},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ordinal")
+	got, err := ic.resolveVolumeMount(context.Background(), svc,
+		&types.Instance{Name: "api-x7f2k", Ordinal: 2}, types.VolumeMount{
+			Name:      "data",
+			MountPath: "/data",
+			ClaimTemplate: &types.VolumeClaimTemplate{
+				StorageClassName: "fast",
+				Size:             "5Gi",
+				AccessMode:       types.AccessModeRWO,
+			},
+		})
+	require.NoError(t, err)
+	assert.Equal(t, "data-api-2", got.VolumeName, "binding follows Ordinal, not the name")
 }
 
 func TestResolveVolumeMount_RejectsBoth(t *testing.T) {

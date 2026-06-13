@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,8 +46,10 @@ type InstanceController interface {
 	// GetRunningInstances lists all running instances
 	ListRunningInstances(ctx context.Context, namespace string) ([]*types.Instance, error)
 
-	// CreateInstance creates a new instance for a service
-	CreateInstance(ctx context.Context, service *types.Service, instanceName string) (*types.Instance, error)
+	// CreateInstance creates a new instance for a service. ordinal is the
+	// per-replica slot index assigned by the reconciler; it is stored on the
+	// instance and drives per-replica volume claimTemplate binding.
+	CreateInstance(ctx context.Context, service *types.Service, instanceName string, ordinal int) (*types.Instance, error)
 
 	// RetryCreateInstance re-runs the create pipeline against an
 	// existing record that previously failed in a stuck-in-create
@@ -492,7 +493,7 @@ func (c *instanceController) ListRunningInstances(ctx context.Context, namespace
 
 // CreateInstance creates a new instance for a service
 // This would be simplified to only handle the pure creation case
-func (c *instanceController) CreateInstance(ctx context.Context, service *types.Service, instanceName string) (*types.Instance, error) {
+func (c *instanceController) CreateInstance(ctx context.Context, service *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
 	c.logger.Info("Creating new instance",
 		log.Str("service", service.Name),
 		log.Str("namespace", service.Namespace),
@@ -502,6 +503,7 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	instance := &types.Instance{
 		ID:          uuid.New().String(),
 		Name:        instanceName,
+		Ordinal:     ordinal,
 		Namespace:   service.Namespace,
 		ServiceName: service.Name,
 		ServiceID:   service.ID,
@@ -746,8 +748,8 @@ func (c *instanceController) RecreateInstance(ctx context.Context, service *type
 		return nil, fmt.Errorf("failed to delete instance for recreation: %w", err)
 	}
 
-	// Create a new instance
-	return c.CreateInstance(ctx, service, instanceName)
+	// Create a new instance — same logical slot, so carry the ordinal forward.
+	return c.CreateInstance(ctx, service, instanceName, existingInstance.Ordinal)
 }
 
 // UpdateInstance updates an existing instance
@@ -1634,7 +1636,7 @@ func (c *instanceController) RestartInstance(ctx context.Context, instance *type
 	// new record claims it. Same Name across the tombstone + the live
 	// replacement is fine — they're disambiguated by Status and ID.
 	// `service` was already loaded above for the restart-policy check.
-	replacement, err := c.CreateInstance(ctx, &service, instance.Name)
+	replacement, err := c.CreateInstance(ctx, &service, instance.Name, instance.Ordinal)
 	if err != nil {
 		return fmt.Errorf("failed to spawn replacement for %s: %w", instance.ID, err)
 	}
@@ -2218,10 +2220,10 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 	var ns, name string
 	if m.ClaimTemplate != nil {
 		ns = service.Namespace
-		ordinal, ok := instanceOrdinal(service.Name, instance.Name)
-		if !ok {
-			return types.ResolvedVolumeMount{}, fmt.Errorf("cannot derive ordinal from instance name %q for service %q", instance.Name, service.Name)
-		}
+		// The per-replica volume binds to the instance's ordinal slot. Ordinal
+		// is now carried explicitly on the instance (set at creation), not
+		// parsed back out of the name — so the name format is free to change.
+		ordinal := instance.Ordinal
 		name = fmt.Sprintf("%s-%s-%d", m.Name, service.Name, ordinal)
 		if err := c.ensureClaimTemplateVolume(ctx, service, m, name, ordinal); err != nil {
 			return types.ResolvedVolumeMount{}, fmt.Errorf("ensure claim-template volume %s/%s: %w", ns, name, err)
@@ -2307,27 +2309,6 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 		ReadOnly:        m.ReadOnly,
 		SubPath:         m.SubPath,
 	}, nil
-}
-
-// instanceOrdinal extracts the trailing integer ordinal from an
-// instance name produced by generateInstanceName ("<service>-<n>").
-// Returns false when the instance name does not match the expected
-// shape (e.g. ad-hoc names from tests or RecreateInstance with a
-// reused name).
-func instanceOrdinal(serviceName, instanceName string) (int, bool) {
-	prefix := serviceName + "-"
-	if !strings.HasPrefix(instanceName, prefix) {
-		return 0, false
-	}
-	suffix := instanceName[len(prefix):]
-	if suffix == "" {
-		return 0, false
-	}
-	n, err := strconv.Atoi(suffix)
-	if err != nil || n < 0 {
-		return 0, false
-	}
-	return n, true
 }
 
 // ensureClaimTemplateVolume creates the per-replica Volume row from a

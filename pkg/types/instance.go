@@ -30,6 +30,15 @@ type Instance struct {
 	// Name of the service this instance belongs to
 	ServiceName string `json:"serviceName" yaml:"serviceName"`
 
+	// Ordinal is the per-replica slot index (0-based) assigned by the
+	// reconciler at creation. It is the authoritative source of per-instance
+	// identity for stable resources — notably per-replica volume claimTemplates,
+	// which bind to "<mount>-<service>-<ordinal>". Keeping the ordinal as an
+	// explicit field (rather than parsing it back out of Name) decouples that
+	// binding from the instance-name format, so the name can move to a unique
+	// per-lifetime form (RUNE issue #84) without breaking volume rebinding.
+	Ordinal int `json:"ordinal" yaml:"ordinal"`
+
 	// Labels are denormalized from the parent Service's user labels at creation
 	// (and, once a placement scheduler exists, will also carry the assigned
 	// node's topology labels — see CreateInstance). They form the user-defined

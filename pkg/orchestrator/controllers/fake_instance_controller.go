@@ -37,7 +37,7 @@ type FakeInstanceController struct {
 	LastDialPeer net.Conn
 
 	// Custom behavior options
-	CreateInstanceFunc      func(ctx context.Context, service *types.Service, instanceName string) (*types.Instance, error)
+	CreateInstanceFunc      func(ctx context.Context, service *types.Service, instanceName string, ordinal int) (*types.Instance, error)
 	RetryCreateInstanceFunc func(ctx context.Context, service *types.Service, instance *types.Instance) error
 	RecreateInstanceFunc    func(ctx context.Context, service *types.Service, instance *types.Instance) (*types.Instance, error)
 	UpdateInstanceFunc      func(ctx context.Context, service *types.Service, instance *types.Instance) error
@@ -70,6 +70,7 @@ type FakeInstanceController struct {
 type CreateInstanceCall struct {
 	Service      *types.Service
 	InstanceName string
+	Ordinal      int
 }
 
 // RecreateInstanceCall records the parameters of a RecreateInstance call
@@ -155,7 +156,7 @@ func (c *FakeInstanceController) ListRunningInstances(ctx context.Context, names
 }
 
 // CreateInstance records a call to create an instance and returns a predefined or mocked result
-func (c *FakeInstanceController) CreateInstance(ctx context.Context, service *types.Service, instanceName string) (*types.Instance, error) {
+func (c *FakeInstanceController) CreateInstance(ctx context.Context, service *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -163,11 +164,12 @@ func (c *FakeInstanceController) CreateInstance(ctx context.Context, service *ty
 	c.CreateInstanceCalls = append(c.CreateInstanceCalls, CreateInstanceCall{
 		Service:      service,
 		InstanceName: instanceName,
+		Ordinal:      ordinal,
 	})
 
 	// If custom function is provided, use it
 	if c.CreateInstanceFunc != nil {
-		return c.CreateInstanceFunc(ctx, service, instanceName)
+		return c.CreateInstanceFunc(ctx, service, instanceName, ordinal)
 	}
 
 	// If error is set, return it
@@ -179,6 +181,7 @@ func (c *FakeInstanceController) CreateInstance(ctx context.Context, service *ty
 	instance := &types.Instance{
 		ID:          instanceName, // Use the name as ID for simplicity in tests
 		Name:        instanceName,
+		Ordinal:     ordinal,
 		Namespace:   service.Namespace,
 		ServiceID:   service.ID,
 		ServiceName: service.Name,

@@ -76,7 +76,7 @@ func TestCreateInstance(t *testing.T) {
 	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
 
 	// Test creating an instance for the service
-	instance, err := controller.CreateInstance(ctx, service, "test-instance-0")
+	instance, err := controller.CreateInstance(ctx, service, "test-instance-0", 0)
 	require.NoError(t, err, "CreateInstance should not return an error")
 	assert.NotNil(t, instance, "Instance should not be nil")
 	assert.Equal(t, "test-instance-0", instance.Name, "Instance Name should match")
@@ -1074,7 +1074,7 @@ func TestCreateInstance_SuccessSetsContainerEverCreatedAt(t *testing.T) {
 	ctx, _, _, controller := setupTestController(t)
 	service := instanceControllerCreateTestService(t.Context(), t, controllerTestStore(controller), "test-service", types.RestartPolicyAlways)
 
-	instance, err := controller.CreateInstance(ctx, service, "test-instance-0")
+	instance, err := controller.CreateInstance(ctx, service, "test-instance-0", 0)
 	require.NoError(t, err)
 	require.NotNil(t, instance.ContainerEverCreatedAt, "ContainerEverCreatedAt must be set after first successful Create")
 	assert.Equal(t, 0, instance.CreateAttempts, "CreateAttempts should be reset to 0 on success")
@@ -1093,7 +1093,7 @@ func TestCreateInstance_RunnerCreateError_RecordsReason(t *testing.T) {
 
 	// Inject a runner-side create failure.
 	testRunner.ErrorToReturn = assert.AnError
-	_, err := controller.CreateInstance(ctx, service, "test-instance-0")
+	_, err := controller.CreateInstance(ctx, service, "test-instance-0", 0)
 	require.Error(t, err)
 
 	// The record must still exist (no leaking-blank-Pending), with
@@ -1218,7 +1218,7 @@ func TestRecordCreateFailure_SchedulesBackoff(t *testing.T) {
 	testRunner.ErrorToReturn = assert.AnError
 
 	before := time.Now()
-	_, err := controller.CreateInstance(ctx, service, "test-instance-0")
+	_, err := controller.CreateInstance(ctx, service, "test-instance-0", 0)
 	require.Error(t, err)
 
 	var stored []types.Instance
@@ -1553,7 +1553,7 @@ func TestCreateInstance_WithReadinessProbe_StaysStartingUntilProbePasses(t *test
 	// Persist the updated spec so prepareEnvVars / etc. see the same one.
 	require.NoError(t, testStore.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, service))
 
-	instance, err := controller.CreateInstance(ctx, service, "ready-gated-0")
+	instance, err := controller.CreateInstance(ctx, service, "ready-gated-0", 0)
 	require.NoError(t, err)
 	assert.Equal(t, types.InstanceStatusStarting, instance.Status,
 		"with a readiness probe defined, runner.Start must NOT promote to Running")
@@ -1572,7 +1572,7 @@ func TestCreateInstance_NoReadinessProbe_PromotesToRunningAsBefore(t *testing.T)
 	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
 	// No service.Health → no readiness probe.
 
-	instance, err := controller.CreateInstance(ctx, service, "no-probe-0")
+	instance, err := controller.CreateInstance(ctx, service, "no-probe-0", 0)
 	require.NoError(t, err)
 	assert.Equal(t, types.InstanceStatusRunning, instance.Status)
 }

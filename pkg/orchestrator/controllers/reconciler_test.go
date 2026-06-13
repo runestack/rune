@@ -78,7 +78,7 @@ func TestReconcileScaleUp(t *testing.T) {
 	}
 
 	// Set up the instance controller to return our test instances
-	instanceController.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, instanceName string) (*types.Instance, error) {
+	instanceController.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
 		var instance *types.Instance
 		switch instanceName {
 		case "service1-0":
@@ -117,6 +117,9 @@ func TestReconcileScaleUp(t *testing.T) {
 	assert.Equal(t, 2, len(instanceController.CreateInstanceCalls))
 	assert.Equal(t, "service1-0", instanceController.CreateInstanceCalls[0].InstanceName)
 	assert.Equal(t, "service1-1", instanceController.CreateInstanceCalls[1].InstanceName)
+	// The reconciler passes the per-replica slot ordinal explicitly.
+	assert.Equal(t, 0, instanceController.CreateInstanceCalls[0].Ordinal)
+	assert.Equal(t, 1, instanceController.CreateInstanceCalls[1].Ordinal)
 
 	// Verify service status
 	updatedService := &types.Service{}
@@ -437,7 +440,7 @@ func TestTestInstanceController(t *testing.T) {
 
 	// Call the method
 	ctx := context.Background()
-	result, err := instanceCtrl.CreateInstance(ctx, service, "instance1")
+	result, err := instanceCtrl.CreateInstance(ctx, service, "instance1", 0)
 
 	// Verify results
 	assert.NoError(t, err)
@@ -533,13 +536,13 @@ func TestReconcilerCreateInstance(t *testing.T) {
 		Status:      types.InstanceStatusRunning,
 	}
 
-	instanceController.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, instanceName string) (*types.Instance, error) {
+	instanceController.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
 		return createdInstance, nil
 	}
 
 	// Directly test the behavior that the reconciler would use
 	ctx := context.Background()
-	result, err := instanceController.CreateInstance(ctx, service, "instance1")
+	result, err := instanceController.CreateInstance(ctx, service, "instance1", 0)
 
 	// Verify results
 	assert.NoError(t, err)
