@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -212,13 +213,14 @@ func TestHTTPHealthCheck(t *testing.T) {
 	err = controller.AddInstance(service, instance)
 	require.NoError(t, err)
 
-	// Wait for health check to run
-	time.Sleep(2 * time.Second)
-
-	// Check health status - should be healthy
-	status, err := controller.GetHealthStatus(ctx, instance.ID)
-	require.NoError(t, err)
-	assert.True(t, status.Liveness, "HTTP health check should report instance as healthy")
+	// Wait for the health check to run and mark the instance healthy. Poll
+	// rather than sleeping a fixed duration so the test tolerates scheduling
+	// delays under load.
+	require.Eventually(t, func() bool {
+		status, err := controller.GetHealthStatus(ctx, instance.ID)
+		return err == nil && status.Liveness
+	}, 5*time.Second, 100*time.Millisecond,
+		"HTTP health check should report instance as healthy")
 }
 
 // TestReadinessProbeStartsIndependentlyOfLivenessInitialDelay is a
@@ -424,13 +426,14 @@ func TestTCPHealthCheck(t *testing.T) {
 	err = controller.AddInstance(service, instance)
 	require.NoError(t, err)
 
-	// Wait for health check to run
-	time.Sleep(2 * time.Second)
-
-	// Check health status - should be healthy
-	status, err := controller.GetHealthStatus(ctx, instance.ID)
-	require.NoError(t, err)
-	assert.True(t, status.Liveness, "TCP health check should report instance as healthy")
+	// Wait for the health check to run and mark the instance healthy. Poll
+	// rather than sleeping a fixed duration so the test tolerates scheduling
+	// delays under load.
+	require.Eventually(t, func() bool {
+		status, err := controller.GetHealthStatus(ctx, instance.ID)
+		return err == nil && status.Liveness
+	}, 5*time.Second, 100*time.Millisecond,
+		"TCP health check should report instance as healthy")
 }
 
 // TestExecHealthCheck tests the exec health check
@@ -487,10 +490,13 @@ func TestExecHealthCheck(t *testing.T) {
 	err = controller.AddInstance(service, instance)
 	require.NoError(t, err)
 
-	// Just verify that exec was called after a while (use thread-safe getter)
-	time.Sleep(3 * time.Second)
-	execCalls := testRunner.GetExecCalls()
-	assert.Contains(t, execCalls, instance.ID, "Exec should have been called on instance")
+	// Just verify that exec was called after a while (use thread-safe getter).
+	// Poll rather than sleeping a fixed duration so the test tolerates
+	// scheduling delays under load.
+	require.Eventually(t, func() bool {
+		return slices.Contains(testRunner.GetExecCalls(), instance.ID)
+	}, 5*time.Second, 100*time.Millisecond,
+		"Exec should have been called on instance")
 }
 
 // TestRestartAfterHealthCheckFailure is a more direct test of the restart mechanism
@@ -546,17 +552,19 @@ func TestRestartAfterHealthCheckFailure(t *testing.T) {
 	err = controller.AddInstance(service, instance)
 	require.NoError(t, err)
 
-	// Wait for multiple health checks to run and trigger a restart
-	time.Sleep(5 * time.Second)
-
+	// Wait for multiple health checks to run and trigger a restart. Poll
+	// rather than sleeping a fixed duration so the test tolerates scheduling
+	// delays under load.
+	//
 	// Verify the new tombstone+replace flow fired: the original instance
 	// was Stopped (preserved as tombstone) and *some* replacement was
 	// Started. The replacement has a fresh UUID, so we check by count
 	// rather than by ID equality.
-	stoppedInstances := testRunner.GetStoppedInstances()
-	startedInstances := testRunner.GetStartedInstances()
-	assert.Contains(t, stoppedInstances, instance.ID, "Original instance should have been stopped")
-	assert.NotEmpty(t, startedInstances, "A replacement instance should have been started")
+	require.Eventually(t, func() bool {
+		return slices.Contains(testRunner.GetStoppedInstances(), instance.ID) &&
+			len(testRunner.GetStartedInstances()) > 0
+	}, 10*time.Second, 100*time.Millisecond,
+		"original instance should be stopped and a replacement started")
 }
 
 // TestNoHealthCheckService tests adding an instance with no health check configured
@@ -651,13 +659,14 @@ func TestInvalidHealthCheckType(t *testing.T) {
 	err = controller.AddInstance(service, instance)
 	require.NoError(t, err)
 
-	// Wait for health check to run
-	time.Sleep(2 * time.Second)
-
-	// Get health status - should not error but show as unhealthy due to invalid check type
-	status, err := controller.GetHealthStatus(ctx, instance.ID)
-	require.NoError(t, err)
-	assert.False(t, status.Liveness, "Invalid health check type should report as unhealthy")
+	// Wait for the health check to run and mark the instance unhealthy due
+	// to the invalid check type. Poll rather than sleeping a fixed duration
+	// so the test tolerates scheduling delays under load.
+	require.Eventually(t, func() bool {
+		status, err := controller.GetHealthStatus(ctx, instance.ID)
+		return err == nil && !status.Liveness
+	}, 5*time.Second, 100*time.Millisecond,
+		"Invalid health check type should report as unhealthy")
 }
 
 // TestHealthControllerNilContext tests that the health controller handles nil context gracefully
