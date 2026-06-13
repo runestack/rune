@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "../../primitives/Icon";
 import { Avatar } from "../../primitives/Avatar";
 import { Logo } from "../../primitives/Logo";
-import type { LogoVariant } from "../../../lib/theme";
+import { THEMES, type LogoVariant, type ThemeMode } from "../../../lib/theme";
 import "./Sidebar.css";
 
 export interface NavItem { id: string; label: string; icon: IconName; count?: number; firing?: boolean }
@@ -17,11 +17,34 @@ export interface SidebarProps {
   context?: ReactNode;
   user: { name: string; role: string };
   onLogout?: () => void;
+  /** Active surface theme + setter, surfaced in the footer menu. */
+  theme?: ThemeMode;
+  onTheme?: (m: ThemeMode) => void;
   /** Collapse the sidebar (chevron in the header). */
   onToggleNav?: () => void;
 }
 
-export function Sidebar({ nav, route, go, logoVariant, context, user, onLogout, onToggleNav }: SidebarProps) {
+export function Sidebar({ nav, route, go, logoVariant, context, user, onLogout, theme = "dark", onTheme, onToggleNav }: SidebarProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const footRef = useRef<HTMLDivElement>(null);
+
+  // The footer menu closes on outside-click or Escape.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (footRef.current && !footRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
   return (
     <aside className="sidebar">
       <div className="sb-head">
@@ -49,20 +72,61 @@ export function Sidebar({ nav, route, go, logoVariant, context, user, onLogout, 
           </div>
         ))}
       </nav>
-      <div className="sb-foot">
+      <div className="sb-foot" ref={footRef}>
         <Avatar name={user.name} size={28} />
         <div className="who">
           {user.name}
           <small>{user.role}</small>
         </div>
         <button
-          className="sb-logout"
-          title={onLogout ? "Sign out" : undefined}
-          onClick={onLogout}
-          style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-3)", cursor: onLogout ? "pointer" : "default", display: "flex", padding: 2 }}
+          className={"sb-foot-menu-btn" + (menuOpen ? " on" : "")}
+          title="Menu"
+          aria-label="Open menu"
+          aria-haspopup="true"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((o) => !o)}
         >
-          <Icon name={onLogout ? "external" : "dots"} size={16} />
+          <Icon name="dots" size={16} />
         </button>
+        {menuOpen && (
+          <div className="sb-foot-pop" role="menu">
+            <div className="sb-foot-pop-label eyebrow">Theme</div>
+            {THEMES.map((th) => (
+              <button
+                key={th.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={theme === th.id}
+                className={"sb-theme-row" + (theme === th.id ? " on" : "")}
+                onClick={() => {
+                  onTheme?.(th.id);
+                  setMenuOpen(false);
+                }}
+              >
+                <span className="sb-theme-row-sw" style={{ background: th.sw }} />
+                <span className="sb-theme-row-lab">{th.label}</span>
+                {theme === th.id && <Icon name="check" size={15} className="sb-theme-row-check" />}
+              </button>
+            ))}
+            {onLogout && (
+              <>
+                <div className="sb-foot-pop-sep" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sb-foot-action"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onLogout();
+                  }}
+                >
+                  <Icon name="logout" size={16} className="sb-foot-action-ico" />
+                  <span>Log out</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );
