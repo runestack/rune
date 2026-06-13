@@ -750,3 +750,40 @@ func TestGetServiceLogs_LiveHasContent_NoFallback(t *testing.T) {
 	assert.NotContains(t, got, "OLD-LOGS-MUST-NOT-LEAK",
 		"tombstone fallback must NOT fire when live instance has content")
 }
+
+// TestIsStatusOnlyChange_ScaleChangeReconciles guards the fix for the restart
+// "hang": scale changes are applied by the ScalingController WITHOUT bumping
+// Generation, so a scale-only update used to look like a status-only change and
+// get skipped — leaving the new replicas (and `rune restart`'s scale-back-up)
+// uncreated until the next 30s reconcile tick. isStatusOnlyChange must treat a
+// scale change as reconcile-worthy.
+func TestIsStatusOnlyChange_ScaleChangeReconciles(t *testing.T) {
+	_, _, _, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+	ns, name := "default", "web"
+
+	svc := &types.Service{Name: name, Namespace: ns, Scale: 1, Metadata: &types.ServiceMetadata{Generation: 1}}
+
+	// Never observed before → must reconcile.
+	assert.False(t, sc.isStatusOnlyChange(svc), "unseen service is not a status-only change")
+
+	// Simulate having reconciled at generation 1, scale 1.
+	sc.recordObservedGeneration(ns, name, 1)
+	sc.recordObservedScale(ns, name, 1)
+
+	// Same generation, same scale → genuine status-only update, skip.
+	assert.True(t, sc.isStatusOnlyChange(svc), "same gen + same scale is status-only")
+
+	// Scale changed (1 → 3) with the SAME generation → must reconcile.
+	svc.Scale = 3
+	assert.False(t, sc.isStatusOnlyChange(svc), "a scale change must trigger reconciliation even at the same generation")
+
+	// Scale back to a value we never reconciled at → must reconcile.
+	svc.Scale = 0
+	assert.False(t, sc.isStatusOnlyChange(svc), "scale-to-0 (restart drain) must trigger reconciliation")
+
+	// Generation bump still forces reconcile regardless of scale.
+	svc.Scale = 1
+	svc.Metadata.Generation = 2
+	assert.False(t, sc.isStatusOnlyChange(svc), "a generation bump is never status-only")
+}

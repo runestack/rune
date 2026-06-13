@@ -61,7 +61,14 @@ type serviceController struct {
 
 	// For tracking observed generations to prevent reconciliation loops
 	serviceObservedGenerations map[string]int64
-	serviceObservedLock        sync.RWMutex
+	// Observed desired scale per service. Scale changes are driven by the
+	// ScalingController without bumping Generation, so a scale-only update would
+	// otherwise look like a status-only change and be skipped — leaving new
+	// replicas (and `rune restart`'s scale-back-up) uncreated until the next
+	// 30s reconcile tick. Tracking the last reconciled scale lets
+	// isStatusOnlyChange detect those and reconcile promptly.
+	serviceObservedScales map[string]int
+	serviceObservedLock   sync.RWMutex
 
 	// For tracking internal updates to prevent reconciliation loops
 	internalUpdates sync.Map
@@ -111,6 +118,7 @@ func NewServiceController(
 		reconciler:                 reconciler,
 		logger:                     logger.WithComponent("service-controller"),
 		serviceObservedGenerations: make(map[string]int64),
+		serviceObservedScales:      make(map[string]int),
 	}, nil
 }
 
@@ -268,6 +276,11 @@ func (sc *serviceController) handleServiceUpdated(ctx context.Context, service *
 				log.Err(err))
 			return err
 		}
+		// Record the scale we just reconciled so a later status-only update at
+		// the same scale is correctly skipped. Recorded only after an actual
+		// reconcile (not in the active-scaling-op skip branch) so a recorded
+		// scale always reflects a reconciled state.
+		sc.recordObservedScale(service.Namespace, service.Name, service.Scale)
 	}
 
 	// Record the observed generation
@@ -796,12 +809,40 @@ func (sc *serviceController) getObservedGeneration(namespace, name string) (int6
 	return gen, exists
 }
 
+// recordObservedScale records the last reconciled desired scale for a service.
+func (sc *serviceController) recordObservedScale(namespace, name string, scale int) {
+	key := fmt.Sprintf("%s/%s", namespace, name)
+	sc.serviceObservedLock.Lock()
+	defer sc.serviceObservedLock.Unlock()
+	sc.serviceObservedScales[key] = scale
+}
+
+// getObservedScale gets the last reconciled desired scale for a service.
+func (sc *serviceController) getObservedScale(namespace, name string) (int, bool) {
+	key := fmt.Sprintf("%s/%s", namespace, name)
+	sc.serviceObservedLock.RLock()
+	defer sc.serviceObservedLock.RUnlock()
+	scale, exists := sc.serviceObservedScales[key]
+	return scale, exists
+}
+
 // isStatusOnlyChange checks if only the status was updated (not the spec)
 func (sc *serviceController) isStatusOnlyChange(service *types.Service) bool {
 	// Check if we've observed this generation before
 	lastObserved, exists := sc.getObservedGeneration(service.Namespace, service.Name)
 	if !exists {
 		return false // We haven't seen this service before
+	}
+
+	// A scale change is a desired-state change that must reconcile, even though
+	// the ScalingController applies it without bumping Generation. If the scale
+	// differs from the last reconciled value (or we've never recorded one),
+	// this is not a status-only change. Without this, scale-ups — including
+	// `rune restart`'s scale-back-up — sit uncreated until the periodic 30s
+	// reconcile tick, which reads as the service "hanging" at the lower scale.
+	lastScale, scaleObserved := sc.getObservedScale(service.Namespace, service.Name)
+	if !scaleObserved || lastScale != service.Scale {
+		return false
 	}
 
 	sc.logger.Debug("Checking if status-only change",

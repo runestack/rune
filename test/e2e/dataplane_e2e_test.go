@@ -137,6 +137,48 @@ service:
 	})
 }
 
+// TestDataplane_ScaleUpConvergesPromptly is the regression for the perceived
+// restart/scale "hang": a scale-up must create the new replicas promptly via
+// the service watch, NOT wait for the periodic 30s reconcile tick. The new
+// instances must be Running well inside that window. (Before the fix, a
+// scale-up's watch event was misclassified as a status-only change and skipped,
+// so the replicas only appeared on the next timer tick ~30s later — which on a
+// restart's drain+start reads as the service hanging at the lower scale.)
+func TestDataplane_ScaleUpConvergesPromptly(t *testing.T) {
+	harness.RequireDocker(t)
+	ctx := harness.New(t)
+
+	svcFile := filepath.Join(t.TempDir(), "web.yaml")
+	if err := os.WriteFile(svcFile, []byte(`
+service:
+  name: web-sp
+  image: nginx:alpine
+  scale: 1
+`), 0o644); err != nil {
+		t.Fatalf("write service file: %v", err)
+	}
+	ctx.CLI.MustRun(t, "cast", svcFile, "--detach", "--release", "web-sp")
+
+	inst := generated.NewInstanceServiceClient(ctx.Conn())
+	ctx.Eventually(3*time.Minute, "web-sp to be Running before scale-up", func() bool {
+		return runningInstanceCount(t, ctx, inst, "web-sp") == 1
+	})
+
+	// Scale up and require convergence well under the 30s reconcile interval.
+	// The image is already pulled, so 3 nginx containers start in a second or
+	// two when the scale-up reconciles promptly; ~20s leaves ample margin while
+	// still failing if it falls back to the 30s timer.
+	ctx.CLI.MustRun(t, "scale", "web-sp", "3", "--detach")
+	ctx.Eventually(20*time.Second, "scale-up to 3 Running via prompt reconcile (not the 30s timer)", func() bool {
+		return runningInstanceCount(t, ctx, inst, "web-sp") == 3
+	})
+
+	ctx.CLI.MustRun(t, "delete", "service", "web-sp", "--force")
+	ctx.Eventually(harness.DefaultConvergeTimeout, "web-sp instances to be gone", func() bool {
+		return runningInstanceCount(t, ctx, inst, "web-sp") == 0
+	})
+}
+
 // TestDataplane_InstanceRuns is the Tier-2 test: with a Docker daemon
 // present, a cast service must converge to an actually-running
 // container. Skipped automatically when Docker is unavailable.
