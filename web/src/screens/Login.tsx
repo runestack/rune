@@ -1,35 +1,16 @@
 import { useState } from "react";
 import { Button, Icon, Logo } from "../components";
 import { loginWithToken } from "../api/session";
-import { clients } from "../api/transport";
 import type { LogoVariant } from "../lib/theme";
 import "./Login.css";
 
 export function Login({ logoVariant, onAuthed }: { logoVariant: LogoVariant; onAuthed: () => void }) {
   const [token, setToken] = useState("");
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
 
   function submitToken() {
     if (!token.trim()) return;
     loginWithToken(token);
     onAuthed();
-  }
-
-  async function bootstrap() {
-    setBusy(true);
-    setErr("");
-    try {
-      const r = await clients.admin.adminBootstrap({});
-      loginWithToken(r.tokenSecret);
-      onAuthed();
-    } catch (e) {
-      setErr(
-        "Bootstrap failed — a cluster admin already exists, or this isn't first run. " +
-          "Paste a token from `rune admin token create`, or run `rune ui`.",
-      );
-      setBusy(false);
-    }
   }
 
   return (
@@ -52,7 +33,6 @@ export function Login({ logoVariant, onAuthed }: { logoVariant: LogoVariant; onA
             <Icon name="arrowup" size={14} style={{ transform: "rotate(90deg)" }} />Sign in
           </Button>
         </div>
-        <div className="login-err">{err}</div>
 
         <div className="login-handoff">
           <b style={{ color: "var(--text)" }}>From the CLI</b><br />
@@ -60,9 +40,9 @@ export function Login({ logoVariant, onAuthed }: { logoVariant: LogoVariant; onA
         </div>
 
         <div className="login-or">first run?</div>
-        <Button onClick={bootstrap} disabled={busy} style={{ width: "100%", justifyContent: "center" }}>
-          <Icon name="bolt" size={14} />{busy ? "Bootstrapping…" : "Bootstrap cluster admin"}
-        </Button>
+        <div className="login-handoff">
+          Bootstrap runs on the server only, not from the browser. Run <code>rune admin bootstrap</code> on the host to mint the cluster-admin token, then paste it above (or use <code>rune ui</code>).
+        </div>
       </div>
     </div>
   );
