@@ -25,11 +25,13 @@ func (s *APIServer) uiLoginHandler(mountPath string) http.HandlerFunc {
 }
 
 // uiLoginPageTemplate has one verb (%[1]s, used twice): the dashboard mount
-// path (e.g. "/ui"). Standalone, brand-matched to the dashboard (warm near-black
-// surface, serif "rune." wordmark, accent dot). No web fonts: this page is
-// served under a strict default-src 'none' CSP before the SPA loads, so it uses
-// system serif/sans stacks that echo Spectral / Hanken Grotesk. Avoid literal
-// '%' in the CSS below — it is run through fmt.Sprintf.
+// path (e.g. "/ui"). Standalone, brand-matched to the dashboard: cool near-black
+// "steel" surface, dotted grid, serif "rune." wordmark, accent dot. Palette is
+// kept in sync with the dashboard's design tokens (web/src/styles/tokens.css);
+// update both together. No web fonts: this page is served under a strict
+// default-src 'none' CSP before the SPA loads, so it uses system serif/sans
+// stacks that echo Spectral / Hanken Grotesk. Avoid literal '%' in the CSS
+// below — it is run through fmt.Sprintf.
 const uiLoginPageTemplate = `<!doctype html>
 <html lang="en">
 <head>
@@ -39,9 +41,10 @@ const uiLoginPageTemplate = `<!doctype html>
 <title>Rune — Sign in</title>
 <style>
   :root {
-    --bg: #161513; --surface: #1f1d1b; --border: #2c2925; --border-strong: #3a3631;
-    --text: #ece8e1; --text-2: #a6a097; --text-3: #726c63;
-    --accent: #9e8cfc; --accent-ink: #1a1626; --fail: #e5484d;
+    --bg: #0f0f0f; --bg-grid: rgba(255,255,255,0.022);
+    --surface: #161616; --border: #262628; --border-strong: #34343a;
+    --text: #ededef; --text-2: #b3b3bc; --text-3: #7d7d88;
+    --accent: #9e8cfc; --accent-text: #b8acff; --accent-ink: #1a1626; --fail: #e5484d;
     --serif: "Spectral", Georgia, "Times New Roman", serif;
     --sans: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
     --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -51,17 +54,20 @@ const uiLoginPageTemplate = `<!doctype html>
     margin: 0; min-height: 100vh; display: grid; place-items: center;
     font-family: var(--sans); font-size: 15px; line-height: 1.5;
     color: var(--text); background: var(--bg);
-    background-image: radial-gradient(60vw 60vw at 50vw -10vh, rgba(158,140,252,0.06), transparent 70vh);
+    background-image:
+      radial-gradient(60vw 60vw at 50vw -10vh, rgba(158,140,252,0.07), transparent 70vh),
+      radial-gradient(circle at 1px 1px, var(--bg-grid) 1px, transparent 0);
+    background-size: auto, 22px 22px;
     -webkit-font-smoothing: antialiased;
   }
   main {
     width: 24rem; max-width: calc(100vw - 2.5rem); padding: 2.25rem 2rem 2rem;
     text-align: center; background: var(--surface);
-    border: 1px solid var(--border); border-radius: 14px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 16px 50px rgba(0,0,0,0.35);
+    border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.4);
   }
   .brand { font-family: var(--serif); font-size: 30px; font-weight: 400; letter-spacing: -0.01em; }
-  .brand .dot { color: var(--accent); font-weight: 500; }
+  .brand .dot { color: var(--accent-text); font-weight: 500; }
   .rule { height: 1px; margin: 1.25rem auto; background: var(--border); }
   #status { margin: 0; color: var(--text-2); min-height: 1.5rem; }
   #status.err { color: var(--fail); }
