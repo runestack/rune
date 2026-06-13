@@ -507,6 +507,18 @@ func securityContextNeedsGate(sc *generated.SecurityContext) bool {
 // admin interceptors (local-only)
 func (s *APIServer) adminUnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		// AdminBootstrap mints an auth-EXEMPT cluster-admin token (it is in
+		// publicMethodSuffixes), so it is locked to a genuinely local caller
+		// REGARDLESS of auth.allow_remote_admin, and fails CLOSED: if the peer
+		// is absent (e.g. an in-process dashboard-transcoder call, where the
+		// caller's locality can't be proven) or non-loopback, it is refused.
+		// The only supported path is `rune admin bootstrap` run on the server.
+		if strings.HasSuffix(info.FullMethod, "/rune.api.AdminService/AdminBootstrap") {
+			if p, ok := peerFromContext(ctx); !ok || !isLocalhost(p) {
+				return nil, statusPermissionDenied("bootstrap must be run locally on the server (run `rune admin bootstrap` on the host)")
+			}
+			return handler(ctx, req)
+		}
 		resource := methodToResource(info.FullMethod)
 		if resource == "admin" && !viper.GetBool("auth.allow_remote_admin") {
 			// If remote admin is allowed, skip the local admin check

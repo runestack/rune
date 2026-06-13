@@ -8,6 +8,8 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/spf13/viper"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestRegistryAdmin_AddListGetUpdateRemove(t *testing.T) {
@@ -109,6 +111,33 @@ func TestAdminBootstrap_LocalOnlyDefault(t *testing.T) {
 	}
 	if resp.TokenSecret == "" {
 		t.Fatalf("expected token secret")
+	}
+}
+
+// TestAdminBootstrap_SecondCallRejected is the security regression for the
+// public/unauthenticated AdminBootstrap endpoint: once a cluster is
+// bootstrapped (root holds an admin token), a second call must be REFUSED.
+// Otherwise anyone who can reach the API could re-bootstrap and mint a fresh
+// cluster-admin token on an already-configured cluster — a privilege
+// escalation, since the endpoint requires no auth.
+func TestAdminBootstrap_SecondCallRejected(t *testing.T) {
+	st := store.NewTestStore()
+	t.Cleanup(func() { st.Close() })
+	svc := NewAdminService(st, nil)
+	ctx := context.Background()
+
+	// First run succeeds.
+	if _, err := svc.AdminBootstrap(ctx, nil); err != nil {
+		t.Fatalf("first bootstrap failed: %v", err)
+	}
+
+	// Second call must be rejected with FailedPrecondition.
+	_, err := svc.AdminBootstrap(ctx, nil)
+	if err == nil {
+		t.Fatal("second bootstrap succeeded — anyone could re-mint a cluster-admin token")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition on re-bootstrap, got %v (%v)", status.Code(err), err)
 	}
 }
 

@@ -52,10 +52,37 @@ func (s *AdminService) SetNetworkStatusProvider(p NetworkStatusProvider) {
 
 // AdminBootstrap creates the built-in root subject and returns a management token (opaque secret once)
 func (s *AdminService) AdminBootstrap(ctx context.Context, _ *generated.AdminBootstrapRequest) (*generated.AdminBootstrapResponse, error) {
-	// Ensure root user exists; create if missing
 	ur := repos.NewUserRepo(s.st)
+	tr := repos.NewTokenRepo(s.st)
+
 	root, err := ur.GetByName(ctx, "root")
-	if store.IsNotFoundError(err) {
+	switch {
+	case store.IsNotFoundError(err):
+		// Genuine first run — root does not exist yet; created below.
+	case err != nil:
+		return nil, err
+	default:
+		// Root already exists. AdminBootstrap is a PUBLIC, unauthenticated
+		// endpoint (publicMethodSuffixes) that mints a cluster-admin token, so
+		// it MUST only work on genuine first run — otherwise anyone who can
+		// reach the API could re-bootstrap and escalate to root on an
+		// already-configured cluster. Refuse if root already holds an active
+		// token. (A first run that created root but failed before issuing a
+		// token leaves no active token, so it stays recoverable.)
+		toks, terr := tr.List(ctx)
+		if terr != nil {
+			return nil, terr
+		}
+		for i := range toks {
+			if toks[i].SubjectID == root.ID && !toks[i].Revoked {
+				return nil, status.Error(codes.FailedPrecondition,
+					"cluster already bootstrapped: a cluster admin already exists")
+			}
+		}
+	}
+
+	// Ensure root user exists; create if missing (first run).
+	if root == nil {
 		createdRoot, err := ur.Create(ctx, &types.User{Name: "root"})
 		if err != nil {
 			return nil, err
@@ -68,7 +95,6 @@ func (s *AdminService) AdminBootstrap(ctx context.Context, _ *generated.AdminBoo
 		return nil, err
 	}
 	// Issue root token with unique name
-	tr := repos.NewTokenRepo(s.st)
 	name := fmt.Sprintf("bootstrap-admin-%d", time.Now().UnixNano())
 	tok, secret, err := tr.IssueStatic(ctx, name, root.ID, "user", "bootstrap-admin", 0)
 	if err != nil {
