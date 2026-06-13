@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -91,6 +92,36 @@ type SecretEngine struct {
 
 	// Engine-specific configuration for this secret
 	Config map[string]interface{} `json:"config,omitempty" yaml:"config,omitempty"`
+}
+
+// MarshalSecretPayload serializes a secret INCLUDING Data for trusted
+// transport (the release Cast payload path). Secret.Data is json:"-" so it
+// never leaks through ordinary API marshaling — but a rendered cast payload
+// must carry the values to the server, or every cast secret arrives empty.
+// UnmarshalSecretPayload is the symmetric decode.
+func MarshalSecretPayload(s *Secret) ([]byte, error) {
+	return json.Marshal(secretPayload{Secret: s, Data: s.Data})
+}
+
+// UnmarshalSecretPayload decodes a secret serialized by MarshalSecretPayload,
+// restoring the Data map that plain unmarshaling would drop.
+func UnmarshalSecretPayload(b []byte) (*Secret, error) {
+	var p struct {
+		Secret
+		Data map[string]string `json:"data,omitempty"`
+	}
+	if err := json.Unmarshal(b, &p); err != nil {
+		return nil, err
+	}
+	p.Secret.Data = p.Data
+	return &p.Secret, nil
+}
+
+// secretPayload is the wire shape for MarshalSecretPayload: the secret plus
+// an explicit data field shadowing the json:"-" original.
+type secretPayload struct {
+	*Secret
+	Data map[string]string `json:"data,omitempty"`
 }
 
 // RotationPolicy defines when and how to rotate a secret.

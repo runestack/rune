@@ -289,7 +289,11 @@ func payloadsToProto(p CastPayloads) *generated.RenderedPayloads {
 		}
 	}
 	for k, v := range p.Secrets {
-		if b, err := json.Marshal(v); err == nil {
+		// Secret.Data is json:"-" (stored encrypted, never serialized in API
+		// views), so a plain Marshal would ship every cast secret EMPTY.
+		// MarshalSecretPayload carries the rendered values; the server decodes
+		// symmetrically in protoToPayloads.
+		if b, err := types.MarshalSecretPayload(v); err == nil {
 			out.Secrets[k] = string(b)
 		}
 	}
