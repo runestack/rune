@@ -1,7 +1,10 @@
 package types
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -47,18 +50,10 @@ func ParseCastFile(filename string, overrideNamespace string) (*CastFile, error)
 	cf.templateMap = templateMap // Store the template map
 	cf.overrideNamespace = overrideNamespace
 
-	// Parse the preprocessed YAML
-	var node yaml.Node
-	if err := yaml.Unmarshal(processedData, &node); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML structure: %w", err)
-	}
-
-	// Validate top-level keys are known nodes
-	if err := validateTopLevelKeys(&node); err != nil {
+	// Parse the preprocessed YAML (handles multi-document `---` streams).
+	if err := decodeCastDocuments(processedData, &cf); err != nil {
 		return nil, err
 	}
-
-	collectRepeatedSpecs(&node, &cf)
 
 	return &cf, nil
 }
@@ -77,20 +72,71 @@ func ParseCastFileFromBytes(data []byte, overrideNamespace string) (*CastFile, e
 	cf.templateMap = templateMap
 	cf.overrideNamespace = overrideNamespace
 
-	// Parse the preprocessed YAML
-	var node yaml.Node
-	if err := yaml.Unmarshal(processedData, &node); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML structure: %w", err)
-	}
-
-	// Validate top-level keys are known nodes
-	if err := validateTopLevelKeys(&node); err != nil {
+	// Parse the preprocessed YAML (handles multi-document `---` streams).
+	if err := decodeCastDocuments(processedData, &cf); err != nil {
 		return nil, err
 	}
 
-	collectRepeatedSpecs(&node, &cf)
-
 	return &cf, nil
+}
+
+// decodeCastDocuments parses a (possibly multi-document) YAML stream and merges
+// every document's resources into cf. gopkg.in/yaml.v3's Unmarshal decodes only
+// the FIRST document of a `---`-separated stream and silently drops the rest, so
+// a castfile with multiple documents would under-deploy without warning (#90);
+// documented behavior (docs.runestack.io/cli/cast) is that multi-document YAML
+// is supported, so we decode the whole stream here. Empty documents (a trailing
+// `---`, a blank section) are skipped rather than rejected.
+func decodeCastDocuments(processedData []byte, cf *CastFile) error {
+	dec := yaml.NewDecoder(bytes.NewReader(processedData))
+	docs := 0
+	for {
+		var node yaml.Node
+		err := dec.Decode(&node)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to parse YAML structure: %w", err)
+		}
+		if isEmptyDocument(&node) {
+			continue
+		}
+		// Validate top-level keys are known nodes, per document.
+		if err := validateTopLevelKeys(&node); err != nil {
+			return err
+		}
+		collectRepeatedSpecs(&node, cf)
+		docs++
+	}
+	if docs == 0 {
+		// Preserve the prior single-shot behavior: a file with no resource
+		// documents (empty, or only `---` separators) is not a valid castfile.
+		return fmt.Errorf("cast file must be a YAML mapping at the top level")
+	}
+	return nil
+}
+
+// isEmptyDocument reports whether a decoded YAML document carries no content —
+// e.g. the empty section produced by a leading/trailing `---`. Such documents
+// are skipped so they don't trip the "must be a YAML mapping" check.
+func isEmptyDocument(node *yaml.Node) bool {
+	if node == nil || node.Kind == 0 {
+		return true
+	}
+	if node.Kind == yaml.DocumentNode {
+		if len(node.Content) == 0 || node.Content[0] == nil {
+			return true
+		}
+		c := node.Content[0]
+		if c.Kind == 0 {
+			return true
+		}
+		if c.Kind == yaml.ScalarNode && (c.Tag == "!!null" || c.Value == "") {
+			return true
+		}
+	}
+	return false
 }
 
 // IsCastFile performs a lightweight detection to determine if a YAML file
