@@ -535,8 +535,8 @@ func (r *reconciler) ensureServiceInstances(ctx context.Context, service *types.
 		}
 
 		r.logger.Info("creating new instance", log.Json("instanceName", instanceName))
-		// Create a new instance
-		if err := r.createNewInstance(ctx, service, instanceName); err != nil {
+		// Create a new instance — i is the per-replica slot ordinal.
+		if err := r.createNewInstance(ctx, service, instanceName, i); err != nil {
 			r.logger.Error("Failed to create new instance",
 				log.Str("service", service.Name),
 				log.Str("instance", instanceName),
@@ -748,13 +748,14 @@ func (r *reconciler) recreateInstance(ctx context.Context, service *types.Servic
 	return nil
 }
 
-// createNewInstance creates a new instance for a service
-func (r *reconciler) createNewInstance(ctx context.Context, service *types.Service, instanceName string) error {
+// createNewInstance creates a new instance for a service. ordinal is the
+// per-replica slot index, stored on the instance for stable volume binding.
+func (r *reconciler) createNewInstance(ctx context.Context, service *types.Service, instanceName string, ordinal int) error {
 	r.logger.Info("Creating instance to achieve desired scale",
 		log.Str("service", service.Name),
 		log.Str("instance", instanceName))
 
-	newInstance, err := r.instanceController.CreateInstance(ctx, service, instanceName)
+	newInstance, err := r.instanceController.CreateInstance(ctx, service, instanceName, ordinal)
 	if err != nil {
 		return fmt.Errorf("failed to create instance: %w", err)
 	}

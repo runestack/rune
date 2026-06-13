@@ -117,7 +117,7 @@ func TestVolumeE2E_ClaimTemplateNStableOrdinals(t *testing.T) {
 	// stamps a Pending row each time.
 	for ord := 0; ord < 3; ord++ {
 		_, err := ic.resolveVolumeMount(context.Background(), svc,
-			&types.Instance{Name: fmt.Sprintf("api-%d", ord)}, mount)
+			&types.Instance{Name: fmt.Sprintf("api-%d", ord), Ordinal: ord}, mount)
 		require.Error(t, err, "first-pass resolver returns not-ready")
 	}
 
@@ -144,7 +144,7 @@ func TestVolumeE2E_ClaimTemplateNStableOrdinals(t *testing.T) {
 	// for each ordinal — proving the per-ordinal binding is stable.
 	for ord, want := range expectedNames {
 		got, err := ic.resolveVolumeMount(context.Background(), svc,
-			&types.Instance{Name: fmt.Sprintf("api-%d", ord)}, mount)
+			&types.Instance{Name: fmt.Sprintf("api-%d", ord), Ordinal: ord}, mount)
 		require.NoError(t, err)
 		assert.Equal(t, want, got.VolumeName, "ord %d must always resolve to %s", ord, want)
 		assert.Equal(t, fmt.Sprintf("/srv/rune/%s", want), got.Source, "ord %d source", ord)
