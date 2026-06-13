@@ -380,13 +380,27 @@ func toProtoAction(a release.Action) generated.Action {
 }
 
 // historicalToRelease coerces a stored historical version back into a Release.
+//
+// The real store (BadgerStore) JSON-marshals each version's resource into an
+// envelope and decodes it back into an interface{} — i.e. a
+// map[string]interface{}, never a typed *types.Release. The typed cases below
+// only match the in-memory fakes used by some unit tests; against the real
+// store every record falls through to the JSON round-trip, which is what
+// recovers the typed shape (mirrors historyToConfigmap / historyToStored).
 func historicalToRelease(v store.HistoricalVersion) (*types.Release, bool) {
 	switch r := v.Resource.(type) {
 	case *types.Release:
-		return r, true
+		return r, r != nil
 	case types.Release:
 		return &r, true
-	default:
+	}
+	b, err := json.Marshal(v.Resource)
+	if err != nil {
 		return nil, false
 	}
+	var rel types.Release
+	if err := json.Unmarshal(b, &rel); err != nil {
+		return nil, false
+	}
+	return &rel, true
 }
