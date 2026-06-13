@@ -125,8 +125,18 @@ func (c *scalingController) watchScalingOperations() {
 				continue
 			}
 
-			// Process the scaling operation event
-			go c.processScalingOperationEvent(c.ctx, event)
+			// Process scaling operation events SERIALLY, in the order the
+			// store delivers them (which is creation order). This previously
+			// ran in a per-event goroutine, which let two immediate ops for the
+			// same service race their read-modify-write of service.Scale: e.g.
+			// `rune restart`'s 1→0 then 0→1 could have the scale-DOWN write land
+			// last, stranding the service at Scale=0 ("restart goes 1→0 and
+			// hangs; restart again to come back"). Serial processing makes the
+			// last-created op deterministically win. Immediate scaling is a
+			// couple of store writes (fast); gradual scaling still runs in its
+			// own long-lived goroutine (see startGradualScaling), so this does
+			// not block the watch loop on long operations.
+			c.processScalingOperationEvent(c.ctx, event)
 		}
 	}
 }
