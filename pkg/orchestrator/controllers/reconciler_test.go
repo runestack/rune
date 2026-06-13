@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,9 @@ func TestReconcileScaleUp(t *testing.T) {
 		logger:             logger.WithComponent("reconciler"),
 	}
 
-	// Create a test service
+	// Create a test service. The claimTemplate makes it stateful, so the
+	// reconciler keeps stable {service}-{ordinal} names — which this test
+	// relies on to match created instances by name (#84 stateful path).
 	service := &types.Service{
 		ID:        "service1",
 		Name:      "service1",
@@ -53,6 +56,11 @@ func TestReconcileScaleUp(t *testing.T) {
 		Scale:     2,
 		Status:    types.ServiceStatusPending,
 		Health:    &types.HealthCheck{}, // Add a health check to trigger the health monitoring
+		Volumes: []types.VolumeMount{{
+			Name:          "data",
+			MountPath:     "/data",
+			ClaimTemplate: &types.VolumeClaimTemplate{Size: "1Gi", AccessMode: types.AccessModeRWO},
+		}},
 	}
 
 	// Add the service to the store
@@ -785,4 +793,81 @@ func TestGCFailedInstancesPrefersToKeepTombstonesWithLastLogs(t *testing.T) {
 	}
 	assert.False(t, evicted["informative"],
 		"the lone tombstone with captured LastLogs must survive cap eviction (even when older than the silent ones)")
+}
+
+// TestReconcileStatelessHashNames verifies the #84 stateless path: a service
+// without a per-replica claimTemplate gets unique {service}-{shorthash} names
+// (not reused {service}-{ordinal} slots), and reconcile is idempotent — a
+// second pass with the instances already present creates no extras.
+func TestReconcileStatelessHashNames(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	fakeHealthController := NewFakeHealthController()
+	reconciler := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   fakeHealthController,
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	// No claimTemplate => stateless => hash names.
+	service := &types.Service{
+		ID:        "service1",
+		Name:      "service1",
+		Namespace: "default",
+		Image:     "test-image",
+		Scale:     2,
+		Status:    types.ServiceStatusPending,
+	}
+	require.NoError(t, testStore.Create(context.Background(), types.ResourceTypeService, "default", "service1", service))
+
+	// Persist whatever the reconciler asks us to create so the second pass sees
+	// them as existing, compatible instances (ServiceID matches the service).
+	instanceController.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, name string, ordinal int) (*types.Instance, error) {
+		inst := &types.Instance{
+			ID: name, Name: name, Ordinal: ordinal,
+			ServiceName: svc.Name, ServiceID: svc.ID, Namespace: svc.Namespace,
+			Status: types.InstanceStatusRunning,
+		}
+		require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", inst.ID, inst))
+		return inst, nil
+	}
+
+	ctx := context.Background()
+	require.NoError(t, reconciler.reconcileService(ctx, service))
+
+	require.Len(t, instanceController.CreateInstanceCalls, 2)
+	n0 := instanceController.CreateInstanceCalls[0].InstanceName
+	n1 := instanceController.CreateInstanceCalls[1].InstanceName
+	for _, n := range []string{n0, n1} {
+		assert.True(t, strings.HasPrefix(n, "service1-"), "name %q should be prefixed with the service name", n)
+		assert.NotContains(t, []string{"service1-0", "service1-1"}, n, "stateless names must not reuse ordinal slots")
+	}
+	assert.NotEqual(t, n0, n1, "stateless instance names must be unique")
+	// Ordinal is still populated (running index) even though it's unused for binding.
+	assert.Equal(t, 0, instanceController.CreateInstanceCalls[0].Ordinal)
+	assert.Equal(t, 1, instanceController.CreateInstanceCalls[1].Ordinal)
+
+	// Idempotency: both instances now exist and are compatible, so a second
+	// reconcile must not create any more.
+	require.NoError(t, reconciler.reconcileService(ctx, service))
+	assert.Len(t, instanceController.CreateInstanceCalls, 2, "second reconcile must not create more instances")
+}
+
+func TestServiceHasStableIdentity(t *testing.T) {
+	stateless := &types.Service{Name: "web"}
+	assert.False(t, serviceHasStableIdentity(stateless), "no claimTemplate => stateless")
+
+	withClaim := &types.Service{Name: "db", Volumes: []types.VolumeMount{{
+		Name: "data", MountPath: "/data",
+		ClaimTemplate: &types.VolumeClaimTemplate{Size: "1Gi"},
+	}}}
+	assert.True(t, serviceHasStableIdentity(withClaim), "claimTemplate => stateful")
+
+	// A plain Claim (not a template) does not confer stable per-replica identity.
+	withClaimRef := &types.Service{Name: "cache", Volumes: []types.VolumeMount{{
+		Name: "data", MountPath: "/data",
+		Claim: &types.VolumeClaim{Name: "shared"},
+	}}}
+	assert.False(t, serviceHasStableIdentity(withClaimRef), "plain claim => stateless")
 }

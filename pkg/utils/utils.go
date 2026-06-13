@@ -3,10 +3,34 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 )
+
+// shortHashLen is the number of base36 characters in a ShortHash suffix.
+const shortHashLen = 5
+
+// ShortHash returns a short, lowercase base36 token derived from input —
+// 5 characters drawn from [0-9a-z], DNS-1123-label safe. It is used to build
+// unique-per-lifetime instance names ("{service}-{shorthash}") for stateless
+// services, so a recreated instance never reuses a predecessor's name and its
+// logs stay distinguishable. Not cryptographic: collision resistance is only
+// "good enough" for the small per-service replica counts it names, so callers
+// needing uniqueness within a set should still guard against the rare clash.
+// Deterministic for a given input.
+func ShortHash(input string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(input))
+	s := strconv.FormatUint(h.Sum64(), 36)
+	if len(s) >= shortHashLen {
+		// Trailing chars carry the well-mixed low bits of the hash.
+		return s[len(s)-shortHashLen:]
+	}
+	return strings.Repeat("0", shortHashLen-len(s)) + s
+}
 
 // Helper to safely convert non-negative ints to int32 with clamping
 func ToInt32NonNegative(n int) int32 {
