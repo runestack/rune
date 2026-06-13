@@ -69,10 +69,18 @@ type Config struct {
 type Store struct {
 	cfg Config
 
-	mu         sync.Mutex
-	db         *sql.DB
-	schemaOnce sync.Once
-	schemaErr  error
+	mu sync.Mutex
+	db *sql.DB
+
+	// schemaMu serializes AutoMigrate attempts and guards schemaDone. It is
+	// deliberately NOT sync.Once: Once consumes its slot on the first call
+	// whether it succeeded or not, so a schema migration that failed because
+	// ClickHouse was unreachable at first connect would be "cached" forever and
+	// every later flush would replay the same frozen error until restart (#104).
+	// ensureSchema is idempotent (CREATE ... IF NOT EXISTS), so retrying until
+	// one attempt succeeds is safe.
+	schemaMu   sync.Mutex
+	schemaDone bool
 }
 
 // New constructs a ClickHouse store. It does not dial; call Health (or any I/O
@@ -125,9 +133,15 @@ func (s *Store) conn(ctx context.Context) (*sql.DB, error) {
 	s.mu.Unlock()
 
 	if s.cfg.AutoMigrate {
-		s.schemaOnce.Do(func() { s.schemaErr = s.ensureSchema(ctx, db) })
-		if s.schemaErr != nil {
-			return nil, s.schemaErr
+		s.schemaMu.Lock()
+		defer s.schemaMu.Unlock()
+		if !s.schemaDone {
+			if err := s.ensureSchema(ctx, db); err != nil {
+				// Do not mark done: the next call retries instead of replaying
+				// a cached error after ClickHouse becomes healthy (#104).
+				return nil, err
+			}
+			s.schemaDone = true
 		}
 	}
 	return db, nil

@@ -16,6 +16,10 @@ package clickhouse_test
 
 import (
 	"context"
+	"io"
+	"net"
+	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,6 +93,126 @@ func collectSamples(t *testing.T, s observe.LogStore, q *observe.Query) []observ
 		t.Fatalf("sample stream err: %v", err)
 	}
 	return out
+}
+
+// toggleProxy is a minimal TCP proxy whose forwarding can be switched on and
+// off at runtime. With forwarding off it accepts a connection and immediately
+// closes it, which breaks ClickHouse's native handshake (connection reset) —
+// simulating a backend that is unreachable / mid-startup. With forwarding on it
+// pipes bytes to the real backend. This lets a single Store instance see the
+// backend go from down to up without recreating it, which is exactly the #104
+// scenario.
+type toggleProxy struct {
+	ln      net.Listener
+	backend string
+	forward atomic.Bool
+}
+
+func newToggleProxy(t *testing.T, backend string) *toggleProxy {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen proxy: %v", err)
+	}
+	p := &toggleProxy{ln: ln, backend: backend}
+	t.Cleanup(func() { _ = ln.Close() })
+	go p.serve()
+	return p
+}
+
+func (p *toggleProxy) addr() string { return p.ln.Addr().String() }
+
+func (p *toggleProxy) serve() {
+	for {
+		c, err := p.ln.Accept()
+		if err != nil {
+			return // listener closed on cleanup
+		}
+		go p.handle(c)
+	}
+}
+
+func (p *toggleProxy) handle(c net.Conn) {
+	if !p.forward.Load() {
+		_ = c.Close() // refuse: downstream handshake fails fast
+		return
+	}
+	up, err := net.Dial("tcp", p.backend)
+	if err != nil {
+		_ = c.Close()
+		return
+	}
+	go func() { _, _ = io.Copy(up, c); _ = up.Close() }()
+	_, _ = io.Copy(c, up)
+	_ = c.Close()
+}
+
+// TestIntegration_AutoMigrateRetriesAfterFailure is the regression test for
+// #104: if the first AutoMigrate attempt happens while ClickHouse is
+// unreachable, the failure must NOT be cached forever. Before the fix the
+// sync.Once consumed its slot on the failed attempt and every later Write
+// replayed the same frozen schema error until runed restarted; the spool then
+// filled and dropped logs. With retry-until-success the Store recovers on its
+// own once the backend is healthy, without being recreated.
+func TestIntegration_AutoMigrateRetriesAfterFailure(t *testing.T) {
+	realDSN := startClickHouse(t)
+	ctx := context.Background()
+
+	// Stand a togglable proxy in front of the real server and point the store at
+	// the proxy. Forwarding starts OFF, so the backend looks down.
+	u, err := url.Parse(realDSN)
+	if err != nil {
+		t.Fatalf("parse dsn: %v", err)
+	}
+	proxy := newToggleProxy(t, u.Host)
+	u.Host = proxy.addr()
+	proxyDSN := u.String()
+
+	s, err := chstore.New(chstore.Config{
+		DSN:         proxyDSN,
+		Database:    "runesight",
+		Table:       "logs",
+		AutoMigrate: true,
+		DialTimeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer s.Close()
+
+	rec := []observe.LogRecord{{
+		Timestamp: time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC),
+		Namespace: "default", Service: "api", Instance: "api-1", Node: "n1",
+		Stream: "stdout", Level: "info", Line: "hello",
+	}}
+
+	// First write while the backend is "down": schema migration must fail.
+	if err := s.Write(ctx, rec); err == nil {
+		t.Fatal("expected first write to fail while backend is unreachable, got nil")
+	}
+
+	// Backend comes up. The SAME store must recover on a subsequent write.
+	proxy.forward.Store(true)
+
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if lastErr = s.Write(ctx, rec); lastErr == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("store never recovered after backend came up (cached schema error?): %v", lastErr)
+	}
+
+	// And the schema/data are genuinely there — not a silently-skipped migration.
+	rows := collectRows(t, s, &observe.Query{
+		RawSQL: "SELECT line FROM runesight.logs WHERE service = 'api'",
+	})
+	if len(rows) == 0 {
+		t.Fatal("expected the recovered write to be queryable, got 0 rows")
+	}
 }
 
 func TestIntegration_ClickHouseRoundTrip(t *testing.T) {
