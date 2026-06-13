@@ -148,6 +148,46 @@ func TestVolumeController_FailsOnMissingStorageClass(t *testing.T) {
 	assert.Empty(t, got.Handle, "no handle when class lookup failed")
 }
 
+// TestVolumeController_StampsDefaultClassOnEmpty is the regression test for
+// #103: a volume created without a storageClassName (e.g. from a claimTemplate
+// that omits it) must have the resolved cluster-default class STAMPED onto the
+// record once provisioned. Before the fix the volume provisioned fine but its
+// StorageClassName stayed empty, so the node agent refused to mount it forever
+// ("volume ... has no storageClassName").
+func TestVolumeController_StampsDefaultClassOnEmpty(t *testing.T) {
+	ctx, _, ts, _, _ := setupVolumeController(t)
+	// The controller seeds the built-in "local" class (Default: true) on Start,
+	// so the cluster-default the empty storageClassName resolves to is "local".
+
+	vol := &types.Volume{
+		ID:        "v-classless",
+		Name:      "data-clickhouse-0",
+		Namespace: "observability",
+		// StorageClassName intentionally empty — the claimTemplate omitted it.
+		Size:          "1Mi",
+		AccessMode:    types.AccessModeRWO,
+		ReclaimPolicy: types.ReclaimPolicyDelete,
+		Status:        types.VolumeStatusPending,
+		CreatedAt:     time.Now().UTC(),
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+
+	waitFor(t, 2*time.Second, func() error {
+		got := loadVolume(t, ts, vol.Namespace, vol.Name)
+		if got.Status != types.VolumeStatusAvailable {
+			return errors.New("not yet available: " + string(got.Status))
+		}
+		return nil
+	})
+
+	got := loadVolume(t, ts, vol.Namespace, vol.Name)
+	// The crux: the persisted record now carries the resolved default class,
+	// so the agent's bringUp check (StorageClassName == "") passes.
+	assert.Equal(t, "local", got.StorageClassName,
+		"resolved default class must be stamped onto the volume record")
+	assert.NotEmpty(t, got.Handle, "volume should have provisioned")
+}
+
 func TestVolumeController_ReclaimsOnDeleteWithDeletePolicy(t *testing.T) {
 	ctx, _, ts, _, root := setupVolumeController(t)
 	putStorageClass(t, ts, "sc-2", local.DriverNameLocal)

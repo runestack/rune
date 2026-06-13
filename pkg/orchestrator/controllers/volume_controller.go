@@ -314,6 +314,18 @@ func (c *volumeController) reconcile(ctx context.Context, vol *types.Volume) err
 		return c.markFailed(ctx, vol, "StorageClassMissing", err.Error())
 	}
 
+	// Stamp the resolved class onto the record when it was left empty. A volume
+	// created from a claimTemplate without an explicit storageClassName
+	// provisions fine here (resolveStorageClass falls back to the cluster-default
+	// class), but the record's StorageClassName stayed empty — and the node agent
+	// refuses to mount a volume with no storageClassName, looping forever (#103).
+	// Persisting the resolved name closes that gap; the updateStatus calls below
+	// write it through to the store. Defaulting is the documented behavior, so
+	// this is the correct place to make it durable.
+	if vol.StorageClassName == "" {
+		vol.StorageClassName = class.Name
+	}
+
 	d, err := c.driverFor(class.Driver)
 	if err != nil {
 		return c.markFailed(ctx, vol, "DriverUnavailable", err.Error())
