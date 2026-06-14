@@ -65,3 +65,26 @@ func TestApplyFromFileFlags_EmptyPathRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty path")
 }
+
+// TestSplitPair_FromLiteral covers the --from-literal / --data parsing: split on
+// the FIRST '=' only, so values containing '=' (e.g. base64 padding from
+// `openssl rand -base64 24`) survive intact.
+func TestSplitPair_FromLiteral(t *testing.T) {
+	cases := []struct{ in, k, v string }{
+		{"POSTGRES_USER=tomoul", "POSTGRES_USER", "tomoul"},
+		{"POSTGRES_PASSWORD=abc/d+E=", "POSTGRES_PASSWORD", "abc/d+E="}, // base64 with '=' padding
+		{"EMPTY=", "EMPTY", ""},
+		{"URL=postgres://u:p@h:5432/db?sslmode=require", "URL", "postgres://u:p@h:5432/db?sslmode=require"},
+	}
+	for _, c := range cases {
+		k, v, err := splitPair(c.in)
+		require.NoError(t, err, "splitPair(%q)", c.in)
+		assert.Equal(t, c.k, k, "key for %q", c.in)
+		assert.Equal(t, c.v, v, "value for %q", c.in)
+	}
+
+	// A bare token with no '=' is rejected.
+	if _, _, err := splitPair("NOEQUALS"); err == nil {
+		t.Fatal("expected error for a pair without '='")
+	}
+}
