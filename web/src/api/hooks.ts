@@ -98,20 +98,36 @@ export function useNamespaces(): Query<Namespace[]> {
   return useQuery<Namespace[]>(
     [],
     async (signal) => {
-      const [nsRes, svcRes, instRes] = await Promise.all([
+      const [nsRes, svcRes, instRes, secRes, cmRes, volRes] = await Promise.all([
         clients.namespaces.listNamespaces({}, { signal }),
         clients.services.listServices({ namespace: ALL_NS }, { signal }),
         clients.instances.listInstances({ namespace: ALL_NS }, { signal }),
+        clients.secrets.listSecrets({ namespace: ALL_NS }, { signal }),
+        clients.configmaps.listConfigmaps({ namespace: ALL_NS }, { signal }),
+        clients.volumes.listVolumes({ namespace: ALL_NS }, { signal }),
       ]);
-      const svcByNs = new Map<string, number>();
-      for (const s of svcRes.services) svcByNs.set(s.namespace, (svcByNs.get(s.namespace) ?? 0) + 1);
+      const countByNs = (items: { namespace: string }[]) => {
+        const m = new Map<string, number>();
+        for (const it of items) m.set(it.namespace, (m.get(it.namespace) ?? 0) + 1);
+        return m;
+      };
+      const svcByNs = countByNs(svcRes.services);
+      const secByNs = countByNs(secRes.secrets);
+      const cmByNs = countByNs(cmRes.configmaps);
+      const volByNs = countByNs(volRes.volumes);
       const instByNs = new Map<string, number>();
       for (const i of instRes.instances) {
         if (i.status === InstanceStatus.DELETED) continue;
         instByNs.set(i.namespace, (instByNs.get(i.namespace) ?? 0) + 1);
       }
       return nsRes.namespaces.map((n) =>
-        mapNamespace(n, { services: svcByNs.get(n.name) ?? 0, instances: instByNs.get(n.name) ?? 0 }),
+        mapNamespace(n, {
+          services: svcByNs.get(n.name) ?? 0,
+          instances: instByNs.get(n.name) ?? 0,
+          secrets: secByNs.get(n.name) ?? 0,
+          configs: cmByNs.get(n.name) ?? 0,
+          volumes: volByNs.get(n.name) ?? 0,
+        }),
       );
     },
   );

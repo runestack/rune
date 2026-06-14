@@ -23,7 +23,11 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
 
   const activeLabel = ns === "all" ? "All namespaces" : ns;
   const pick = (v: string) => { setNs(v); setOpen(false); };
-  const nsWithServices = namespaces.filter((n) => n.services > 0).length;
+  // A namespace is "empty" only with no services AND no data resources — a
+  // secrets/config/volume-only namespace still has content.
+  const dataCount = (n: { secrets: number; configs: number; volumes: number }) => n.secrets + n.configs + n.volumes;
+  const isEmpty = (n: { services: number; secrets: number; configs: number; volumes: number }) => n.services === 0 && dataCount(n) === 0;
+  const nsNonEmpty = namespaces.filter((n) => !isEmpty(n)).length;
 
   return (
     <div className="sb-ctx-wrap" ref={ref}>
@@ -56,7 +60,7 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
             <div className={`ns-item${ns === "all" ? " sel" : ""}`} onClick={() => pick("all")}>
               <Icon name="namespaces" size={15} className="ns-ico" />
               <span className="ns-label">All namespaces</span>
-              <span className="ns-right">{ns === "all" ? <Icon name="check" size={15} className="ns-check" /> : <span className="ns-count">{nsWithServices}</span>}</span>
+              <span className="ns-right">{ns === "all" ? <Icon name="check" size={15} className="ns-check" /> : <span className="ns-count">{nsNonEmpty}</span>}</span>
             </div>
           </div>
           <div className="ns-sep" />
@@ -70,7 +74,9 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
                     ? <Icon name="check" size={15} className="ns-check" />
                     : n.services > 0
                       ? <span className="ns-count">{n.services}</span>
-                      : <span className="ns-count ns-empty">empty</span>}
+                      : dataCount(n) > 0
+                        ? <span className="ns-count">{dataCount(n)}</span>
+                        : <span className="ns-count ns-empty">empty</span>}
                 </span>
               </div>
             ))}
