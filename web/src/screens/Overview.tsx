@@ -13,10 +13,11 @@ import { fmtBytes, getStats, topStreams } from "../api/sources";
 import "./runesight/RuneSight.css";
 
 export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => void; openSvc: (s: Service) => void }) {
-  const { data, loading, error, reload } = useOverview();
-  const { data: feed } = useAuditFeed(6);
-  const { data: observe } = useObserveOverview("1h");
   const { ns: scopeNs } = useScope();
+  const { data, loading, error, reload } = useOverview();
+  // Scope the activity feed and the Sight log metrics to the active namespace.
+  const { data: feed } = useAuditFeed(6, scopeNs);
+  const { data: observe } = useObserveOverview("1h", scopeNs);
   const T = data.totals;
 
   // The namespace scope filters the logical inventory (services & their
@@ -143,7 +144,7 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
       </div>
 
       {/* observability — RuneSight "Sight" card (core, not a plugin) */}
-      {observe.enabled && <SightCard buckets={observe.buckets} total={observe.total} go={go} />}
+      {observe.enabled && <SightCard buckets={observe.buckets} total={observe.total} ns={scopeNs} go={go} />}
 
       {/* activity + usage */}
       <div className="grid g-2-1">
@@ -181,7 +182,7 @@ export function Overview({ go, openSvc }: { go: (r: string, arg?: Service) => vo
  * ObserveService, FIRING from the alerting RPCs, RETENTION from the
  * store stats RPC and SOURCES from a 24h stream count query.
  */
-function SightCard({ buckets, total, go }: { buckets: Bucket[]; total: number; go: (r: string) => void }) {
+function SightCard({ buckets, total, ns, go }: { buckets: Bucket[]; total: number; ns: string; go: (r: string) => void }) {
   const perMin = Math.round(total / 60);
   const [firing, setFiring] = useState<string[]>([]); // firing rule names
   const [retention, setRetention] = useState<{ days: number; storage: string } | null>(null);
@@ -191,6 +192,8 @@ function SightCard({ buckets, total, go }: { buckets: Bucket[]; total: number; g
     listAlertRules()
       .then(({ statuses }) => { if (on) setFiring(statuses.filter((s) => s.state === "firing").map((s) => s.rule)); })
       .catch(() => { /* observe unreachable — the card just shows 0 firing */ });
+    // Retention + disk usage are a store-wide setting (not per-namespace), so
+    // they stay cluster-wide; ingest/volume/sources are scoped to ns.
     getStats()
       .then((s) => {
         if (!on) return;
@@ -200,11 +203,11 @@ function SightCard({ buckets, total, go }: { buckets: Bucket[]; total: number; g
         setRetention({ days: s.retentionDays, storage });
       })
       .catch(() => { /* stats unreachable — keep the "—" placeholder */ });
-    topStreams()
+    topStreams(undefined, ns)
       .then((rows) => { if (on) setSources(rows.length); })
       .catch(() => { /* keep placeholder */ });
     return () => { on = false; };
-  }, []);
+  }, [ns]);
   const sorted = buckets.map((b) => b.total).filter((x) => x > 0).sort((a, b) => b - a);
   const max = Math.max(1, sorted[Math.floor(sorted.length * 0.08)] || sorted[0] || 1);
   const fmt = (t: number) => new Date(t).toISOString().slice(11, 16);

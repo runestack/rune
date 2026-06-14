@@ -406,20 +406,52 @@ export function useOverview(): Query<OverviewData> {
 export interface FeedItem { t: string; kind: string; svc: string; ns: string; msg: string; status: string }
 
 /**
- * useAuditFeed maps recent audit events to the activity-feed shape. Live audit
- * events render as plain text (no HTML) so they are injection-safe via the
- * Feed's innerHTML.
+ * loadActorNames builds an actor-id → display-name map from the user and token
+ * lists, so the audit feed can show "Oreofe" instead of the raw subject UUID.
+ * Best-effort: these are admin RPCs, so a non-admin viewer (or an unreachable
+ * server) just falls back to the raw actor id.
  */
-export function useAuditFeed(limit = 8): Query<FeedItem[]> {
+async function loadActorNames(signal: AbortSignal): Promise<Map<string, string>> {
+  const m = new Map<string, string>();
+  try {
+    const [u, t] = await Promise.all([
+      clients.admin.userList({}, { signal }),
+      clients.admin.tokenList({}, { signal }).catch(() => ({ tokens: [] })),
+    ]);
+    // Audit `actor` is the subject id (authctx.SubjectFrom) — for a user that
+    // is the user's id, so user.id → user.name resolves it.
+    for (const usr of u.users) if (usr.id && usr.name) m.set(usr.id, usr.name);
+    for (const tok of t.tokens ?? []) {
+      if (tok.id && tok.name) m.set(tok.id, tok.name);
+      if (tok.subjectId && tok.name && !m.has(tok.subjectId)) m.set(tok.subjectId, tok.name);
+    }
+  } catch {
+    /* non-admin or unreachable — keep raw actor ids */
+  }
+  return m;
+}
+
+/**
+ * useAuditFeed maps recent audit events to the activity-feed shape, resolving
+ * the actor id to a display name. Pass ns (a namespace, or "all"/undefined for
+ * cluster-wide) to scope the feed. Live audit events render as plain text (no
+ * HTML) so they are injection-safe via the Feed's innerHTML.
+ */
+export function useAuditFeed(limit = 8, ns?: string): Query<FeedItem[]> {
+  const namespace = ns && ns !== "all" ? ns : "";
   return useQuery<FeedItem[]>(
     [],
     async (signal) => {
-      const res = await clients.audit.listAuditEvents({ limit }, { signal });
+      const [res, actorNames] = await Promise.all([
+        clients.audit.listAuditEvents({ limit, ...(namespace ? { namespace } : {}) }, { signal }),
+        loadActorNames(signal),
+      ]);
       return res.events.map((e) => {
         const outcome = (e.outcome || "").toLowerCase();
         const status = outcome === "success" ? "run" : outcome === "denied" ? "warn" : outcome === "error" ? "fail" : "net";
         const ref = e.resourceRef ? ` ${escapeHtml(e.resourceRef)}` : "";
-        const msg = `${escapeHtml(e.actor || "system")} ${escapeHtml(e.action || "acted")}${ref}`;
+        const who = (e.actor && actorNames.get(e.actor)) || e.actor || "system";
+        const msg = `${escapeHtml(who)} ${escapeHtml(e.action || "acted")}${ref}`;
         return {
           t: e.timestamp ? ageFrom(e.timestamp) + " ago" : "—",
           kind: e.action || "event",
@@ -430,7 +462,7 @@ export function useAuditFeed(limit = 8): Query<FeedItem[]> {
         };
       });
     },
-    [limit],
+    [limit, namespace],
   );
 }
 
