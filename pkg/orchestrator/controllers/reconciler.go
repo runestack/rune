@@ -215,12 +215,29 @@ func (r *reconciler) reconcileServices(ctx context.Context) error {
 	if err := r.store.ListAll(ctx, types.ResourceTypeInstance, &allInstances); err != nil {
 		r.logger.Error("Failed to list instances for orphan sweep", log.Err(err))
 	} else {
-		r.cleanUpStoreOrphanInstances(ctx, services, allInstances)
+		// Re-list services AFTER the instances so the "known" set is never
+		// staler than the instance list. `services` above is snapshotted at the
+		// top of the cycle; a service created mid-cycle (cast creates the
+		// service, then its instance) would otherwise be absent from that
+		// snapshot while its just-created instance appears in allInstances — and
+		// the sweep would delete a healthy, in-flight workload (RUNE cast race).
+		var freshServices []types.Service
+		if err := r.store.ListAll(ctx, types.ResourceTypeService, &freshServices); err != nil {
+			r.logger.Error("Failed to list services for orphan sweep", log.Err(err))
+		} else {
+			r.cleanUpStoreOrphanInstances(ctx, freshServices, allInstances)
+		}
 	}
 
 	r.logger.Debug("Service reconciliation completed")
 	return nil
 }
+
+// storeOrphanGrace is how long after creation an instance is immune from the
+// store-orphan sweep. It must comfortably exceed one reconcile interval so an
+// instance created in the same cycle as its service is never mistaken for an
+// orphan before the service becomes visible to the sweep.
+const storeOrphanGrace = 90 * time.Second
 
 // cleanUpStoreOrphanInstances deletes instances whose parent service
 // (by namespace + name) is no longer in the store. Pure function over
@@ -249,6 +266,16 @@ func (r *reconciler) cleanUpStoreOrphanInstances(ctx context.Context, knownServi
 		// delete on the assumption that the finalizer would have
 		// caught real instances anyway.
 		if inst.ServiceName == "" {
+			continue
+		}
+		// Grace window: never sweep a freshly-created instance. `cast` writes the
+		// service then the instance, and a reconcile cycle can list this instance
+		// before its parent service is visible to *this* sweep's service snapshot
+		// — deleting it would tear down a healthy, still-starting workload. A
+		// genuine orphan (service really gone) is older than one reconcile
+		// interval and gets swept on a later pass, so nothing leaks; we only
+		// refuse to act while the create is plausibly still in flight.
+		if !inst.CreatedAt.IsZero() && time.Since(inst.CreatedAt) < storeOrphanGrace {
 			continue
 		}
 		if _, ok := known[inst.Namespace+"/"+inst.ServiceName]; ok {

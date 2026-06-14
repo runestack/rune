@@ -739,6 +739,46 @@ func TestCleanUpStoreOrphanInstances_LeavesKnownAndDeletedAlone(t *testing.T) {
 		"neither live (service known) nor Deleted (already on the way out) instances should be touched")
 }
 
+// TestCleanUpStoreOrphanInstances_SparesFreshlyCreated is the regression guard
+// for the `cast` race: a service and its instance are created in the same
+// reconcile cycle, and a sweep can list the instance before its parent service
+// is visible to that sweep's service snapshot. The grace window must keep the
+// young instance alive instead of deleting a healthy, still-starting workload.
+func TestCleanUpStoreOrphanInstances_SparesFreshlyCreated(t *testing.T) {
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	logger := log.NewLogger()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             logger.WithComponent("reconciler"),
+	}
+
+	// Just-created instance whose service is (transiently) absent from the
+	// known set — exactly the redis-0 case that got wrongly swept in prod.
+	fresh := &types.Instance{
+		ID: "fresh-id", Name: "redis-0", Namespace: "tomoul",
+		ServiceName: "redis", Status: types.InstanceStatusPending,
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, testStore.Create(context.Background(), types.ResourceTypeInstance, "tomoul", fresh.ID, fresh))
+
+	r.cleanUpStoreOrphanInstances(context.Background(), nil, []types.Instance{*fresh})
+
+	assert.Len(t, instanceController.DeleteInstanceCalls, 0,
+		"an instance younger than the grace window must never be swept as an orphan")
+
+	// Past the grace window the same instance, still with no parent service, is
+	// a genuine orphan and must be reaped.
+	aged := *fresh
+	aged.CreatedAt = time.Now().Add(-2 * storeOrphanGrace)
+	r.cleanUpStoreOrphanInstances(context.Background(), nil, []types.Instance{aged})
+
+	assert.Len(t, instanceController.DeleteInstanceCalls, 1,
+		"once older than the grace window an instance with no parent service must be swept")
+}
+
 // TestGCFailedInstancesPrefersToKeepTombstonesWithLastLogs is the
 // regression guard for the cap-prefers-with-logs change: when there
 // are more tombstones than the cap allows, the GC must preferentially
