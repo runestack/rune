@@ -23,7 +23,12 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
 
   const activeLabel = ns === "all" ? "All namespaces" : ns;
   const pick = (v: string) => { setNs(v); setOpen(false); };
-  const nsWithServices = namespaces.filter((n) => n.services > 0).length;
+  // One consistent badge number: the count of distinct logical resources in the
+  // namespace = services + secrets + configmaps + volumes. Instances are
+  // excluded — they're runtime replicas of services, so counting them would
+  // double-count a workload. A namespace is "empty" when this total is 0.
+  const total = (n: { services: number; secrets: number; configs: number; volumes: number }) => n.services + n.secrets + n.configs + n.volumes;
+  const nsNonEmpty = namespaces.filter((n) => total(n) > 0).length;
 
   return (
     <div className="sb-ctx-wrap" ref={ref}>
@@ -56,7 +61,7 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
             <div className={`ns-item${ns === "all" ? " sel" : ""}`} onClick={() => pick("all")}>
               <Icon name="namespaces" size={15} className="ns-ico" />
               <span className="ns-label">All namespaces</span>
-              <span className="ns-right">{ns === "all" ? <Icon name="check" size={15} className="ns-check" /> : <span className="ns-count">{nsWithServices}</span>}</span>
+              <span className="ns-right">{ns === "all" ? <Icon name="check" size={15} className="ns-check" /> : <span className="ns-count">{nsNonEmpty}</span>}</span>
             </div>
           </div>
           <div className="ns-sep" />
@@ -68,8 +73,8 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
                 <span className="ns-right">
                   {ns === n.name
                     ? <Icon name="check" size={15} className="ns-check" />
-                    : n.services > 0
-                      ? <span className="ns-count">{n.services}</span>
+                    : total(n) > 0
+                      ? <span className="ns-count">{total(n)}</span>
                       : <span className="ns-count ns-empty">empty</span>}
                 </span>
               </div>

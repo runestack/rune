@@ -47,6 +47,12 @@ export interface Namespace {
   name: string;
   services: number;
   instances: number;
+  // Data resources living in the namespace. A namespace is only truly "empty"
+  // when it has none of these AND no services — a secrets-only namespace
+  // (e.g. cert/credential stores) still has content.
+  secrets: number;
+  configs: number;
+  volumes: number;
   cpu: number;
   mem: number;
   labels: string[];

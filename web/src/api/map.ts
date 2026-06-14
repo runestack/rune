@@ -183,12 +183,15 @@ export function mapInstance(i: PbInstance, svcNameById?: Map<string, string>): I
 
 export function mapNamespace(
   ns: PbNamespace,
-  counts?: { services: number; instances: number },
+  counts?: { services: number; instances: number; secrets: number; configs: number; volumes: number },
 ): Namespace {
   return {
     name: ns.name || "—",
     services: counts?.services ?? 0,
     instances: counts?.instances ?? 0,
+    secrets: counts?.secrets ?? 0,
+    configs: counts?.configs ?? 0,
+    volumes: counts?.volumes ?? 0,
     cpu: 0,
     mem: 0,
     labels: labelChips(ns.labels),
