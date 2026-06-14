@@ -29,6 +29,7 @@ func newCreateSecretCmd() *cobra.Command {
 	var dataPairs []string
 	var fromFile []string
 	var createNamespace bool
+	var fromLiteral []string
 	cmd := &cobra.Command{
 		Use:   "secret <name>",
 		Short: "Create a secret from key=value pairs or from a file",
@@ -41,8 +42,10 @@ func newCreateSecretCmd() *cobra.Command {
 				return err
 			}
 
-			// Add any additional data pairs from command line
-			for _, pair := range dataPairs {
+			// --data and --from-literal are equivalent (the latter is the
+			// kubectl-compatible spelling); both take key=value split on the
+			// first '=', so base64 values (with '=' padding) survive intact.
+			for _, pair := range append(append([]string{}, dataPairs...), fromLiteral...) {
 				k, v, err := splitPair(pair)
 				if err != nil {
 					return err
@@ -52,7 +55,7 @@ func newCreateSecretCmd() *cobra.Command {
 
 			// Validate that we have some data
 			if len(data) == 0 {
-				return fmt.Errorf("no data provided. Use --data flags or --from-file")
+				return fmt.Errorf("no data provided. Use --from-literal/--data or --from-file")
 			}
 
 			api, err := newAPIClient("", "")
@@ -71,6 +74,7 @@ func newCreateSecretCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "Namespace")
 	cmd.Flags().StringArrayVar(&dataPairs, "data", nil, "Data entry key=value (can repeat; value is taken verbatim — no comma/newline splitting)")
+	cmd.Flags().StringArrayVar(&fromLiteral, "from-literal", nil, "Data entry key=value (kubectl-compatible alias for --data; value verbatim, split on first '='). Can repeat.")
 	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read data from file: --from-file=key=path (file's bytes become the value for key — use for binary or multi-line content like PEM). Can repeat.")
 	cmd.Flags().BoolVar(&createNamespace, "create-namespace", false, "Create the namespace if it doesn't exist")
 	return cmd
@@ -81,6 +85,7 @@ func newCreateConfigCmd() *cobra.Command {
 	var dataPairs []string
 	var fromFile []string
 	var createNamespace bool
+	var fromLiteral []string
 	cmd := &cobra.Command{
 		Use:   "config <name>",
 		Short: "Create a config from key=value pairs or from a file",
@@ -93,8 +98,10 @@ func newCreateConfigCmd() *cobra.Command {
 				return err
 			}
 
-			// Add any additional data pairs from command line
-			for _, pair := range dataPairs {
+			// --data and --from-literal are equivalent (the latter is the
+			// kubectl-compatible spelling); both take key=value split on the
+			// first '='.
+			for _, pair := range append(append([]string{}, dataPairs...), fromLiteral...) {
 				k, v, err := splitPair(pair)
 				if err != nil {
 					return err
@@ -104,7 +111,7 @@ func newCreateConfigCmd() *cobra.Command {
 
 			// Validate that we have some data
 			if len(data) == 0 {
-				return fmt.Errorf("no data provided. Use --data flags or --from-file")
+				return fmt.Errorf("no data provided. Use --from-literal/--data or --from-file")
 			}
 
 			api, err := newAPIClient("", "")
@@ -123,6 +130,7 @@ func newCreateConfigCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "default", "Namespace")
 	cmd.Flags().StringArrayVar(&dataPairs, "data", nil, "Data entry key=value (can repeat; value is taken verbatim — no comma/newline splitting)")
+	cmd.Flags().StringArrayVar(&fromLiteral, "from-literal", nil, "Data entry key=value (kubectl-compatible alias for --data; value verbatim, split on first '='). Can repeat.")
 	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read data from file: --from-file=key=path (file's bytes become the value for key — use for binary or multi-line content). Can repeat.")
 	cmd.Flags().BoolVar(&createNamespace, "create-namespace", false, "Create the namespace if it doesn't exist")
 	return cmd
