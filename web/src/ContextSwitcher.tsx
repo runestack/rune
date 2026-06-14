@@ -23,11 +23,12 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
 
   const activeLabel = ns === "all" ? "All namespaces" : ns;
   const pick = (v: string) => { setNs(v); setOpen(false); };
-  // A namespace is "empty" only with no services AND no data resources — a
-  // secrets/config/volume-only namespace still has content.
-  const dataCount = (n: { secrets: number; configs: number; volumes: number }) => n.secrets + n.configs + n.volumes;
-  const isEmpty = (n: { services: number; secrets: number; configs: number; volumes: number }) => n.services === 0 && dataCount(n) === 0;
-  const nsNonEmpty = namespaces.filter((n) => !isEmpty(n)).length;
+  // One consistent badge number: the count of distinct logical resources in the
+  // namespace = services + secrets + configmaps + volumes. Instances are
+  // excluded — they're runtime replicas of services, so counting them would
+  // double-count a workload. A namespace is "empty" when this total is 0.
+  const total = (n: { services: number; secrets: number; configs: number; volumes: number }) => n.services + n.secrets + n.configs + n.volumes;
+  const nsNonEmpty = namespaces.filter((n) => total(n) > 0).length;
 
   return (
     <div className="sb-ctx-wrap" ref={ref}>
@@ -72,11 +73,9 @@ export function ContextSwitcher({ go }: { go?: (r: string) => void }) {
                 <span className="ns-right">
                   {ns === n.name
                     ? <Icon name="check" size={15} className="ns-check" />
-                    : n.services > 0
-                      ? <span className="ns-count">{n.services}</span>
-                      : dataCount(n) > 0
-                        ? <span className="ns-count">{dataCount(n)}</span>
-                        : <span className="ns-count ns-empty">empty</span>}
+                    : total(n) > 0
+                      ? <span className="ns-count">{total(n)}</span>
+                      : <span className="ns-count ns-empty">empty</span>}
                 </span>
               </div>
             ))}
