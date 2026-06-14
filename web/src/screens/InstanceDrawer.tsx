@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Alert, Badge, Button, Card, Drawer, Icon, KeyValue, Tag, UsageBar, useConfirm } from "../components";
 import type { Instance, Service } from "../api/types";
-import { useServices } from "../api/hooks";
+import { useResourceEvents, useServices } from "../api/hooks";
 import { clients } from "../api/transport";
 
 /**
@@ -12,6 +12,9 @@ import { clients } from "../api/transport";
 export function InstanceDrawer({ inst, onClose, go, openSvc }: { inst: Instance; onClose: () => void; go: (r: string, arg?: Service) => void; openSvc: (s: Service) => void }) {
   const { data: services } = useServices();
   const svc = services.find((s) => s.name === inst.svc && s.ns === inst.ns);
+  // inst.id is the instance name (e.g. "redis-0"), the key events are recorded
+  // under — the same stream `rune get events --for instance/redis-0` returns.
+  const { data: events, loading: evLoading } = useResourceEvents("Instance", inst.id, inst.ns);
   const live = inst.status === "run" || inst.status === "deploy";
   const failed = inst.status === "fail";
 
@@ -87,6 +90,29 @@ export function InstanceDrawer({ inst, onClose, go, openSvc }: { inst: Instance;
             <dt>Restarts</dt><dd style={{ color: inst.restarts > 3 ? "var(--deploy)" : undefined }}>{inst.restarts}</dd>
             <dt>Uptime</dt><dd>{inst.uptime}</dd>
           </KeyValue>
+
+          <div className="eyebrow" style={{ margin: "22px 0 10px" }}>Events</div>
+          {evLoading ? (
+            <div className="metric-empty">Loading…</div>
+          ) : events.length === 0 ? (
+            <div className="metric-empty">No events recorded</div>
+          ) : (
+            <div className="evt-list">
+              {events.map((e) => (
+                <div key={e.id} className="evt-row">
+                  <span className={`evt-dot evt-${e.level.toLowerCase()}`} />
+                  <div className="evt-body">
+                    <div className="evt-head">
+                      <span className="evt-reason">{e.reason || e.level}</span>
+                      {e.count > 1 && <span className="evt-count">×{e.count}</span>}
+                      <span className="evt-age">{e.age}</span>
+                    </div>
+                    {e.message && <div className="evt-msg">{e.message}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </Drawer>
