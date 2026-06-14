@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Alert, Badge, Button, Card, Dot, Drawer, Icon, KeyValue, Replicas, Spinner, Table, Tabs, Tag, UsageBar, useConfirm } from "../components";
 import type { Instance, Service } from "../api/types";
-import { useServiceInstances } from "../api/hooks";
+import { useResourceEvents, useServiceInstances } from "../api/hooks";
 import { clients } from "../api/transport";
 import { ScalingMode } from "../gen/pkg/api/proto/service_pb";
 
 export function ServiceDrawer({ svc, onClose, go, openInst }: { svc: Service; onClose: () => void; go: (r: string, arg?: Service) => void; openInst?: (i: Instance) => void }) {
   const [tab, setTab] = useState("overview");
   const { data: insts, loading: instLoading, reload: reloadInsts } = useServiceInstances(svc.name, svc.ns);
+  const { data: events, loading: evLoading } = useResourceEvents("Service", svc.name, svc.ns);
 
   // Honest per-instance metrics: average across instances that report usage,
   // with a peak callout — not one ambiguous service-level aggregate.
@@ -120,6 +121,7 @@ export function ServiceDrawer({ svc, onClose, go, openInst }: { svc: Service; on
           tabs={[
             { id: "overview", label: "Overview" },
             { id: "instances", label: `Instances (${insts.length})` },
+            { id: "events", label: "Events" },
             { id: "networking", label: "Networking" },
           ]}
           active={tab}
@@ -182,6 +184,32 @@ export function ServiceDrawer({ svc, onClose, go, openInst }: { svc: Service; on
               </Table>
             )}
           </Card>
+        )}
+
+        {tab === "events" && (
+          <div className="fadein">
+            {evLoading ? (
+              <Spinner label="Loading events…" height={120} />
+            ) : events.length === 0 ? (
+              <div className="empty">No events recorded.</div>
+            ) : (
+              <div className="evt-list">
+                {events.map((e) => (
+                  <div key={e.id} className="evt-row">
+                    <span className={`evt-dot evt-${e.level.toLowerCase()}`} />
+                    <div className="evt-body">
+                      <div className="evt-head">
+                        <span className="evt-reason">{e.reason || e.level}</span>
+                        {e.count > 1 && <span className="evt-count">×{e.count}</span>}
+                        <span className="evt-age">{e.age}</span>
+                      </div>
+                      {e.message && <div className="evt-msg">{e.message}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {tab === "networking" && (

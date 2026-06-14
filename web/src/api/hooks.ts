@@ -482,6 +482,46 @@ export function useAuditFeed(limit = 8, ns?: string): Query<FeedItem[]> {
   );
 }
 
+/* ---------------- resource events ---------------- */
+
+export interface UiEvent {
+  id: string;
+  level: string; // INFO | WARN | ERR (uppercased)
+  reason: string;
+  message: string;
+  count: number;
+  age: string; // last-seen, humanised
+}
+
+/**
+ * useResourceEvents fetches the persisted event log for a single resource —
+ * the same stream `rune get events --for <kind>/<name>` surfaces and
+ * `rune describe` folds in. `kind` is canonical ("Instance", "Service", …);
+ * the server normalises case. Returns [] until both kind and name are known so
+ * callers can mount it unconditionally.
+ */
+export function useResourceEvents(kind: string, name: string, ns: string, limit = 50): Query<UiEvent[]> {
+  return useQuery<UiEvent[]>(
+    [],
+    async (signal) => {
+      if (!kind || !name) return [];
+      const res = await clients.events.listEvents(
+        { namespace: ns, for: `${kind}/${name}`, limit },
+        { signal },
+      );
+      return res.events.map((e) => ({
+        id: e.id,
+        level: (e.level || "INFO").toUpperCase(),
+        reason: e.reason || "",
+        message: e.message || "",
+        count: e.count || 1,
+        age: e.lastSeen ? ageFrom(e.lastSeen) + " ago" : "—",
+      }));
+    },
+    [kind, name, ns, limit],
+  );
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c),
