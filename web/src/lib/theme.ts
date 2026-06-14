@@ -20,6 +20,23 @@ export function mix(hex: string, withWhite: number): string {
   const m = (c: number) => Math.round(c + (255 - c) * withWhite);
   return `rgb(${m(r)}, ${m(g)}, ${m(b)})`;
 }
+/** Darken a hex toward black by `amount` (0..1). */
+export function shade(hex: string, towardBlack: number): string {
+  const [r, g, b] = hexToRgb(hex);
+  const m = (c: number) => Math.round(c * (1 - towardBlack));
+  return `rgb(${m(r)}, ${m(g)}, ${m(b)})`;
+}
+/**
+ * accentText derives the accent color used for accent-on-surface TEXT
+ * (active nav item, page-title em, the scope chip). On dark/sand surfaces it is
+ * LIGHTENED so it pops against the dark background; on the light (paper) theme
+ * it must be DARKENED instead, or it washes out on white. Driven by the live
+ * html[data-theme] so it tracks the selected theme.
+ */
+export function accentText(accent: string): string {
+  const light = typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "light";
+  return light ? shade(accent, 0.4) : mix(accent, 0.32);
+}
 export function rgba(hex: string, a: number): string {
   const [r, g, b] = hexToRgb(hex);
   return `rgba(${r}, ${g}, ${b}, ${a})`;
@@ -57,6 +74,10 @@ export function applyThemeMode(mode: ThemeMode): void {
   const root = document.documentElement;
   if (mode === "dark") root.removeAttribute("data-theme");
   else root.setAttribute("data-theme", mode);
+  // --accent-text is theme-dependent (lighten on dark, darken on light), so
+  // re-derive it from the live accent now that the mode changed.
+  const accent = root.style.getPropertyValue("--accent").trim() || TWEAK_DEFAULTS.accent;
+  root.style.setProperty("--accent-text", accentText(accent));
 }
 
 function readThemeMode(): ThemeMode {
@@ -109,7 +130,7 @@ const STORAGE_KEY = "rune.tweaks";
 export function applyTheme(t: Pick<Tweaks, "accent" | "edges">): void {
   const root = document.documentElement;
   root.style.setProperty("--accent", t.accent);
-  root.style.setProperty("--accent-text", mix(t.accent, 0.32));
+  root.style.setProperty("--accent-text", accentText(t.accent));
   root.style.setProperty("--accent-dim", rgba(t.accent, 0.13));
   root.style.setProperty("--accent-line", rgba(t.accent, 0.34));
   const e = EDGE_MAP[t.edges] || EDGE_MAP.crisp;
