@@ -76,10 +76,13 @@ export interface StreamRow {
   lines: number;
 }
 
-/** Busiest streams over the last 24h (lines per namespace/service, top 10). */
-export async function topStreams(signal?: AbortSignal): Promise<StreamRow[]> {
+/** Busiest streams over the last 24h (lines per namespace/service, top 10).
+ *  Pass ns (a namespace, or "all"/undefined) to scope to one namespace. */
+export async function topStreams(signal?: AbortSignal, ns?: string): Promise<StreamRow[]> {
+  // Namespace names are DNS-1123, so safe to interpolate into the selector.
+  const sel = ns && ns !== "all" ? `{namespace="${ns}"}` : '{namespace=~".+"}';
   const series = await sumSeries(
-    'sum by (namespace, service) (count_over_time({namespace=~".+"} [24h]))',
+    `sum by (namespace, service) (count_over_time(${sel} [24h]))`,
     24 * HOUR_MS,
     signal,
   );

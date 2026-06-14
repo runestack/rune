@@ -491,7 +491,8 @@ export interface ObserveOverview {
  * histogram plus error/warn counts. Returns enabled=false (no card) when the
  * handshake reports observability off or the call is unreachable.
  */
-export function useObserveOverview(range: Range = "1h"): Query<ObserveOverview> {
+export function useObserveOverview(range: Range = "1h", ns?: string): Query<ObserveOverview> {
+  const namespace = ns && ns !== "all" ? ns : "";
   const empty: ObserveOverview = { enabled: false, buckets: [], errors: 0, warns: 0, total: 0 };
   const [data, setData] = useState<ObserveOverview>(empty);
   const [loading, setLoading] = useState(true);
@@ -509,7 +510,10 @@ export function useObserveOverview(range: Range = "1h"): Query<ObserveOverview> 
         const caps = await clients.observe.getCapabilities(new CapabilitiesRequest(), { signal: ctrl.signal });
         if (!alive) return;
         if (!caps.enabled) { setData({ ...empty, enabled: false }); setLoading(false); return; }
-        const res = await runQuery(emptyQuery(), range, { signal: ctrl.signal });
+        // Scope the volume/ingest to the active namespace ({namespace="ns"});
+        // an empty namespace queries all ({namespace=~".+"}).
+        const q = namespace ? { ...emptyQuery(), namespaces: [namespace] } : emptyQuery();
+        const res = await runQuery(q, range, { signal: ctrl.signal });
         if (!alive) return;
         let errors = 0, warns = 0, total = 0;
         for (const b of res.buckets) { errors += b.error; warns += b.warn; total += b.total; }
@@ -524,7 +528,7 @@ export function useObserveOverview(range: Range = "1h"): Query<ObserveOverview> 
     })();
     return () => { alive = false; ctrl.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nonce, range]);
+  }, [nonce, range, namespace]);
 
   return { data, loading, error, reload };
 }
