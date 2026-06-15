@@ -277,12 +277,19 @@ func (s *DockerExecStream) Close() error {
 	// Close hijacked connection
 	s.hijackedResp.Close()
 
-	// Wait for I/O goroutines to finish
-	s.wg.Wait()
-
-	// Close pipes
+	// Close the pipes BEFORE waiting on the I/O goroutine. startIOCopy's
+	// stdcopy.StdCopy writes command output into these pipes; a health-probe
+	// caller only ever calls ExitCode(), never Read(), so an unread pipe makes
+	// that write (and thus StdCopy) block forever. Closing the pipes here makes
+	// the parked write return ErrClosedPipe so the goroutine can exit — without
+	// this, wg.Wait() below deadlocks against it and the probe's Execute never
+	// returns (the redis-cli-ping "stuck Starting" bug: readiness never promotes
+	// and liveness never fails, so the instance strands in Starting forever).
 	s.stdout.Close()
 	s.stderr.Close()
+
+	// Wait for I/O goroutines to finish
+	s.wg.Wait()
 
 	return nil
 }

@@ -1,8 +1,12 @@
 package docker
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -219,6 +223,62 @@ func TestDockerExecStreamRunningThenCompletes(t *testing.T) {
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)
+}
+
+// TestDockerExecStreamCloseUnblocksUnreadOutput is the regression guard for the
+// exec-probe "stuck Starting" deadlock. A health probe runs a command, calls
+// ExitCode(), then Close() — it never Read()s the output. startIOCopy copies the
+// command's stdout into an unbuffered io.Pipe, so when the command prints
+// anything (redis-cli ping → "PONG"), stdcopy.StdCopy blocks forever on the
+// unread pipe write. Close() must close the pipes BEFORE wg.Wait(), or it
+// deadlocks against that goroutine and the probe's Execute never returns.
+func TestDockerExecStreamCloseUnblocksUnreadOutput(t *testing.T) {
+	mockClient := new(MockDockerClient)
+	mockClient.On("ContainerExecInspect", mock.Anything, "exec123").
+		Return(0, false, nil)
+
+	// One stdcopy stdout frame carrying output nobody will Read().
+	payload := []byte("PONG\n")
+	frame := make([]byte, 8+len(payload))
+	frame[0] = 1 // stdcopy stdout stream type
+	binary.BigEndian.PutUint32(frame[4:8], uint32(len(payload)))
+	copy(frame[8:], payload)
+
+	// hijackedResp.Close() closes Conn; a net.Pipe end is a real net.Conn.
+	srv, cli := net.Pipe()
+	defer srv.Close()
+
+	r, w := io.Pipe()
+	er, ew := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &DockerExecStream{
+		cli:           mockClient,
+		execID:        "exec123",
+		ctx:           ctx,
+		cancel:        cancel,
+		logger:        log.NewLogger(),
+		hijackedResp:  types.HijackedResponse{Conn: cli, Reader: bufio.NewReader(bytes.NewReader(frame))},
+		stdout:        &readWritePipe{reader: r, writer: w},
+		stderr:        &readWritePipe{reader: er, writer: ew},
+		mutex:         sync.Mutex{},
+		exitCodeMutex: sync.Mutex{},
+	}
+
+	s.startIOCopy()
+	// Give StdCopy time to read the frame and park on the unread pipe write.
+	time.Sleep(100 * time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		_ = s.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close() deadlocked: IO goroutine parked on a pipe write nobody reads")
+	}
 }
 
 func TestDockerExecStreamResizeTerminal(t *testing.T) {
