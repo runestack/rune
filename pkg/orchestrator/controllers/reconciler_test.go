@@ -779,6 +779,92 @@ func TestCleanUpStoreOrphanInstances_SparesFreshlyCreated(t *testing.T) {
 		"once older than the grace window an instance with no parent service must be swept")
 }
 
+// TestCleanUpStoreOrphanInstances_ReclaimsClaimTemplateVolume is the regression
+// guard for the leaked-volume half of the `release delete` bug: when the sweep
+// reaps a store-orphan stateful instance, its claimTemplate volume must be
+// reclaimed too — the per-service VolumeCleanupFinalizer can't run because the
+// parent service is already gone. Operator-managed `claim:` volumes (no
+// OwnerService) must be left untouched.
+func TestCleanUpStoreOrphanInstances_ReclaimsClaimTemplateVolume(t *testing.T) {
+	ctx := context.Background()
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	// Orphan stateful instance (parent service gone, older than the grace
+	// window) carrying a resolved claimTemplate mount.
+	orphan := &types.Instance{
+		ID: "pg-id", Name: "postgres-0", Namespace: "tomoul",
+		ServiceName: "postgres", Status: types.InstanceStatusRunning,
+		CreatedAt: time.Now().Add(-2 * storeOrphanGrace),
+		Metadata: &types.InstanceMetadata{
+			VolumeMounts: []types.ResolvedVolumeMount{{Name: "data", VolumeName: "data-postgres-0"}},
+		},
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "tomoul", orphan.ID, orphan))
+
+	// The instance's claimTemplate volume (owned by the now-absent service).
+	owned := &types.Volume{
+		ID: "data-postgres-0", Name: "data-postgres-0", Namespace: "tomoul",
+		OwnerService: "tomoul/postgres", BoundClaim: "postgres/data/0",
+		BoundNode: "node-1", Handle: "do-vol-123", Status: types.VolumeStatusBound,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeVolume, "tomoul", owned.Name, owned))
+
+	// An operator-managed volume that merely shares the namespace — must survive.
+	operatorOwned := &types.Volume{
+		ID: "shared-cache", Name: "shared-cache", Namespace: "tomoul",
+		Status: types.VolumeStatusAvailable,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeVolume, "tomoul", operatorOwned.Name, operatorOwned))
+
+	r.cleanUpStoreOrphanInstances(ctx, nil, []types.Instance{*orphan})
+
+	require.Len(t, instanceController.DeleteInstanceCalls, 1, "orphan instance must be deleted")
+
+	var gone types.Volume
+	err := testStore.Get(ctx, types.ResourceTypeVolume, "tomoul", "data-postgres-0", &gone)
+	assert.Error(t, err, "the orphan's claimTemplate volume must be reclaimed (deleted)")
+
+	var survivor types.Volume
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeVolume, "tomoul", "shared-cache", &survivor),
+		"operator-managed volumes (no OwnerService) must not be reclaimed")
+}
+
+// TestReconcileService_SkipsServiceDeletedMidCycle is the regression guard for
+// the re-creation race behind the `release delete` volume leak: reconcileServices
+// iterates a snapshot, so a service deleted mid-cycle is still in the stale list.
+// reconcileService must re-read the store and create nothing for a service that
+// has already been removed — otherwise it re-creates the instance (and its
+// claimTemplate volume) for a release that was just uninstalled.
+func TestReconcileService_SkipsServiceDeletedMidCycle(t *testing.T) {
+	ctx := context.Background()
+	testStore := setupStore(t)
+	instanceController := NewFakeInstanceController()
+	r := &reconciler{
+		store:              testStore,
+		instanceController: instanceController,
+		healthController:   NewFakeHealthController(),
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	// Stale snapshot copy: looks alive and scaled, but was never written to the
+	// store (i.e. the deletion task already removed it this cycle).
+	stale := &types.Service{
+		ID: "ghost", Name: "ghost", Namespace: "default",
+		Image: "busybox", Scale: 2, Status: types.ServiceStatusRunning,
+	}
+
+	require.NoError(t, r.reconcileService(ctx, stale))
+	assert.Empty(t, instanceController.CreateInstanceCalls,
+		"reconcileService must not create instances for a service absent from the store")
+}
+
 // TestGCFailedInstancesPrefersToKeepTombstonesWithLastLogs is the
 // regression guard for the cap-prefers-with-logs change: when there
 // are more tombstones than the cap allows, the GC must preferentially
