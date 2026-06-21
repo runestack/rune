@@ -60,6 +60,12 @@ func SeedBuiltinPolicies(ctx context.Context, st store.Store) error {
 			{Resource: "configmaps", Verbs: []string{"get", "list", "create", "update"}, Namespace: "*"},
 			{Resource: "secrets", Verbs: []string{"get", "list", "create", "update"}, Namespace: "*"},
 			{Resource: "namespaces", Verbs: []string{"get", "list", "create"}, Namespace: "*"},
+			// `rune cast` always goes through ReleaseService now (every cast is a
+			// release revision), so the minimum cast permission must include the
+			// release verbs: Plan (get), Cast (create), ListReleases (list). Without
+			// this, `--permissions cast` — the recommended CI scope — cannot deploy.
+			// `delete` (uninstall) is deliberately excluded; it isn't part of cast.
+			{Resource: "releases", Verbs: []string{"get", "list", "create"}, Namespace: "*"},
 			{Resource: "logs", Verbs: []string{"get"}, Namespace: "*"},
 			{Resource: "auth", Verbs: []string{"get"}, Namespace: "*"},
 		}},

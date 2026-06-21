@@ -404,11 +404,13 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 		if isPublicMethod(info.FullMethod) {
 			return handler(ctx, req)
 		}
-		var subjectID string
+		var ai *AuthInfo
 		if v := ctx.Value(authCtxKey); v != nil {
-			if ai, ok := v.(*AuthInfo); ok {
-				subjectID = ai.SubjectID
-			}
+			ai, _ = v.(*AuthInfo)
+		}
+		var subjectID string
+		if ai != nil {
+			subjectID = ai.SubjectID
 		}
 		if subjectID == "" {
 			return nil, statusPermissionDenied("unauthorized, subjectID is empty")
@@ -420,7 +422,7 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Internal, "authorization error: %v", err)
 		}
 		if !allowed {
-			return nil, statusPermissionDenied("access denied for resource: " + resource + " verb: " + verb)
+			return nil, deniedErr(ai, resource, verb, ns)
 		}
 		// Per-request additional RBAC requirements (RUNE-073): some writes
 		// carry a privileged side-effect (e.g. flipping a StorageClass to
@@ -433,7 +435,7 @@ func (s *APIServer) rbacUnaryInterceptor() grpc.UnaryServerInterceptor {
 				return nil, status.Errorf(codes.Internal, "authorization error: %v", err)
 			}
 			if !ok {
-				return nil, statusPermissionDenied("access denied for resource: " + extra.resource + " verb: " + extra.verb)
+				return nil, deniedErr(ai, extra.resource, extra.verb, ns)
 			}
 		}
 		return handler(ctx, req)
@@ -538,11 +540,13 @@ func (s *APIServer) rbacStreamInterceptor() grpc.StreamServerInterceptor {
 		if !s.options.EnableAuth {
 			return handler(srv, ss)
 		}
-		var subjectID string
+		var ai *AuthInfo
 		if v := ss.Context().Value(authCtxKey); v != nil {
-			if ai, ok := v.(*AuthInfo); ok {
-				subjectID = ai.SubjectID
-			}
+			ai, _ = v.(*AuthInfo)
+		}
+		var subjectID string
+		if ai != nil {
+			subjectID = ai.SubjectID
 		}
 		if subjectID == "" {
 			return statusPermissionDenied("unauthorized")
@@ -553,7 +557,7 @@ func (s *APIServer) rbacStreamInterceptor() grpc.StreamServerInterceptor {
 			return status.Errorf(codes.Internal, "authorization error: %v", err)
 		}
 		if !allowed {
-			return statusPermissionDenied("access denied for resource: " + resource + " verb: " + verb)
+			return deniedErr(ai, resource, verb, "")
 		}
 		return handler(srv, ss)
 	}

@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -237,3 +239,121 @@ func (f *fakeServerStream) SetTrailer(md metadata.MD)       {}
 func (f *fakeServerStream) Context() context.Context        { return f.ctx }
 func (f *fakeServerStream) SendMsg(m interface{}) error     { return nil }
 func (f *fakeServerStream) RecvMsg(m interface{}) error     { return nil }
+
+// TestExtractNamespace_NestedSpec guards the namespace extraction used by RBAC:
+// most requests carry a top-level Namespace, but ReleaseService Cast/Plan nest
+// it in Spec.Namespace. extractNamespace must find both, or namespace-scoped
+// tokens are denied on every release RPC.
+func TestExtractNamespace_NestedSpec(t *testing.T) {
+	cases := []struct {
+		name string
+		req  interface{}
+		want string
+	}{
+		{"top-level namespace", &generated.GetServiceRequest{Namespace: "example"}, "example"},
+		{"nested spec (Plan)", &generated.PlanRequest{Spec: &generated.ReleaseSpec{Namespace: "example"}}, "example"},
+		{"nested spec (Cast)", &generated.CastRequest{Spec: &generated.ReleaseSpec{Namespace: "example"}}, "example"},
+		{"nested payload (CreateService)", &generated.CreateServiceRequest{Service: &generated.Service{Namespace: "app"}}, "app"},
+		{"nested payload (CreateSecret)", &generated.CreateSecretRequest{Secret: &generated.Secret{Namespace: "app"}}, "app"},
+		{"nil spec", &generated.PlanRequest{}, ""},
+		{"cluster-scoped payload has no namespace", &generated.CreateStorageClassRequest{StorageClass: &generated.StorageClass{Name: "fast"}}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractNamespace(tc.req); got != tc.want {
+				t.Fatalf("extractNamespace = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRBACReleaseNamespaceScoped is the end-to-end regression for the reported
+// bug: `admin service create --namespace example --permissions admin` mints a
+// token whose grant is `*:*` pinned to "example", but `rune cast --release`
+// (ReleaseService/Plan, namespace nested in Spec) was denied because the check
+// ran with an empty namespace. The scoped token must be allowed to Plan in its
+// own namespace and denied in another — with a message that names both.
+func TestRBACReleaseNamespaceScoped(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewTestStore()
+	_ = st.Open("")
+	_ = SeedBuiltinPolicies(ctx, st)
+
+	pr := repos.NewPolicyRepo(st)
+	_ = pr.Create(ctx, &types.Policy{
+		Name:  "example-admin",
+		Rules: []types.PolicyRule{{Resource: "*", Verbs: []string{"*"}, Namespace: "example"}},
+	})
+	u := &types.User{Name: "ci", ID: "ci", Policies: []string{"example-admin"}}
+	_ = st.Create(ctx, types.ResourceTypeUser, "system", "ci", u)
+
+	s, err := New(WithAuth(nil), WithStore(st))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	callPlan := func(ns string) error {
+		c := context.WithValue(ctx, authCtxKey, &AuthInfo{SubjectID: "ci", SubjectType: "service"})
+		info := &grpc.UnaryServerInfo{FullMethod: "/rune.api.ReleaseService/Plan"}
+		h := func(context.Context, interface{}) (interface{}, error) { return nil, nil }
+		req := &generated.PlanRequest{Spec: &generated.ReleaseSpec{Namespace: ns}}
+		_, e := s.rbacUnaryInterceptor()(c, req, info, h)
+		return e
+	}
+
+	if err := callPlan("example"); err != nil {
+		t.Fatalf("namespace-scoped token must be allowed to Plan in its own namespace: %v", err)
+	}
+
+	err = callPlan("other")
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied for a different namespace, got %v", err)
+	}
+	msg := status.Convert(err).Message()
+	for _, want := range []string{"ci", "releases", "other"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("denied message should mention %q; got: %q", want, msg)
+		}
+	}
+}
+
+// TestRBACCastPolicyAllowsReleases guards the second half of the release-authz
+// fix: every `rune cast` now goes through ReleaseService, so the built-in
+// `cast` policy (the recommended CI scope) must grant the release verbs used by
+// cast — Plan (get), Cast (create), ListReleases (list) — but NOT delete, since
+// uninstall is not part of cast.
+func TestRBACCastPolicyAllowsReleases(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewTestStore()
+	_ = st.Open("")
+	_ = SeedBuiltinPolicies(ctx, st)
+	u := &types.User{Name: "ci", ID: "ci", Policies: []string{"cast"}}
+	_ = st.Create(ctx, types.ResourceTypeUser, "system", "ci", u)
+
+	s, err := New(WithAuth(nil), WithStore(st))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	call := func(method string, req interface{}) error {
+		c := context.WithValue(ctx, authCtxKey, &AuthInfo{SubjectID: "ci", SubjectType: "service"})
+		info := &grpc.UnaryServerInfo{FullMethod: method}
+		h := func(context.Context, interface{}) (interface{}, error) { return nil, nil }
+		_, e := s.rbacUnaryInterceptor()(c, req, info, h)
+		return e
+	}
+
+	castReq := &generated.CastRequest{Spec: &generated.ReleaseSpec{Namespace: "app"}}
+	if err := call("/rune.api.ReleaseService/Cast", castReq); err != nil {
+		t.Fatalf("cast policy must allow ReleaseService/Cast: %v", err)
+	}
+	planReq := &generated.PlanRequest{Spec: &generated.ReleaseSpec{Namespace: "app"}}
+	if err := call("/rune.api.ReleaseService/Plan", planReq); err != nil {
+		t.Fatalf("cast policy must allow ReleaseService/Plan: %v", err)
+	}
+	// Uninstall is NOT part of cast — must be denied.
+	delReq := &generated.DeleteReleaseRequest{Name: "api", Namespace: "app"}
+	if err := call("/rune.api.ReleaseService/DeleteRelease", delReq); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("cast policy must NOT allow DeleteRelease (uninstall), got %v", err)
+	}
+}
