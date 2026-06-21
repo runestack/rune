@@ -292,7 +292,68 @@ func (r *reconciler) cleanUpStoreOrphanInstances(ctx context.Context, knownServi
 			r.logger.Error("Failed to delete store-orphan instance",
 				log.Str("instance", inst.ID),
 				log.Err(err))
+			continue
 		}
+		// The per-service VolumeCleanupFinalizer normally reclaims a stateful
+		// instance's claimTemplate volume, but it can't run here: the parent
+		// service is already gone (that's why this instance is an orphan). Do
+		// it inline or the volume leaks — left Available, bound to a deleted
+		// instance, with its backing store (e.g. a DO block volume) still
+		// provisioned.
+		r.reclaimOrphanInstanceVolumes(ctx, inst)
+	}
+}
+
+// reclaimOrphanInstanceVolumes deletes the claimTemplate volume(s) bound to a
+// store-orphan instance, mirroring the VolumeCleanupFinalizer's per-volume
+// steps: unbind (so the agent's volume subsystem tears down Mount/Attach) then
+// delete the owned row (so the VolumeController's delete handler runs the
+// reclaim policy on the backing store). Keyed off the instance's own resolved
+// VolumeMounts (authoritative) and guarded by OwnerService so operator-managed
+// `claim:` volumes — which outlive any one service — are never touched. Best-
+// effort; logged, never fatal.
+func (r *reconciler) reclaimOrphanInstanceVolumes(ctx context.Context, inst *types.Instance) {
+	if inst.ServiceName == "" || inst.Metadata == nil || len(inst.Metadata.VolumeMounts) == 0 {
+		return
+	}
+	owner := inst.Namespace + "/" + inst.ServiceName
+
+	for _, m := range inst.Metadata.VolumeMounts {
+		if m.VolumeName == "" {
+			continue
+		}
+		var v types.Volume
+		if err := r.store.Get(ctx, types.ResourceTypeVolume, inst.Namespace, m.VolumeName, &v); err != nil {
+			// Already gone (or unreadable) — nothing to reclaim.
+			continue
+		}
+		// Only claimTemplate-owned volumes are reclaimed when their owning
+		// service vanishes; operator-managed `claim:` volumes (no OwnerService)
+		// are independent of any one service's lifetime.
+		if v.OwnerService != owner {
+			continue
+		}
+		// Unbind first so the agent Unmounts/Detaches before the row is gone.
+		if v.BoundNode != "" || v.BoundClaim != "" {
+			v.BoundNode = ""
+			v.BoundClaim = ""
+			if v.Handle != "" {
+				v.Status = types.VolumeStatusAvailable
+			}
+			if err := r.store.Update(ctx, types.ResourceTypeVolume, v.Namespace, v.Name, &v); err != nil {
+				r.logger.Warn("orphan volume reclaim: failed to unbind volume",
+					log.Str("volume", v.Name), log.Err(err))
+			}
+		}
+		if err := r.store.Delete(ctx, types.ResourceTypeVolume, v.Namespace, v.Name); err != nil {
+			r.logger.Warn("orphan volume reclaim: failed to delete volume row",
+				log.Str("volume", v.Name), log.Err(err))
+			continue
+		}
+		r.logger.Info("Reclaimed claimTemplate volume of store-orphan instance",
+			log.Str("volume", v.Name),
+			log.Str("instance", inst.ID),
+			log.Str("namespace", v.Namespace))
 	}
 }
 
@@ -316,6 +377,25 @@ func (r *reconciler) cleanUpOrphanedInstances(ctx context.Context, orphanedInsta
 
 // reconcileService ensures that a single service's instances match the desired state
 func (r *reconciler) reconcileService(ctx context.Context, service *types.Service) error {
+	// reconcileServices iterates a service snapshot captured at the top of the
+	// cycle. A service deleted mid-cycle (DeleteService / `rune release delete`)
+	// is still in that stale list, so acting on the stale copy here re-creates
+	// instances — and their claimTemplate volumes — for a service the deletion
+	// task already removed. Those instances are reaped by the store-orphan
+	// sweep, but the re-created volumes leak (orphaned, bound to a gone
+	// instance). Re-read the service from the store so a just-deleted service
+	// drops out of reconciliation; any error (not-found or transient) means
+	// "don't create against stale state this cycle" and the next tick retries.
+	var fresh types.Service
+	if err := r.store.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &fresh); err != nil {
+		r.logger.Debug("Skipping reconciliation: service not readable from store (deleted mid-cycle?)",
+			log.Str("service", service.Name),
+			log.Str("namespace", service.Namespace),
+			log.Err(err))
+		return nil
+	}
+	service = &fresh
+
 	r.logger.Debug("Reconciling service",
 		log.Str("service", service.Name),
 		log.Str("namespace", service.Namespace))
