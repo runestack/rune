@@ -26,6 +26,10 @@ var authCtxKey authCtxKeyType = "rune-auth"
 // AuthInfo holds minimal identity used by handlers for RBAC checks
 type AuthInfo struct {
 	SubjectID string
+	// SubjectType is "user" | "service"; carried so authorization errors can
+	// name the kind of identity that was denied (useful for debugging CI
+	// service-account tokens).
+	SubjectType string
 }
 
 // authFunc is the authentication function for gRPC requests.
@@ -52,7 +56,7 @@ func (s *APIServer) authFunc(ctx context.Context) (context.Context, error) {
 	}
 
 	// Enrich context with subject only; permissions resolved via policy engine
-	info := &AuthInfo{SubjectID: tok.SubjectID}
+	info := &AuthInfo{SubjectID: tok.SubjectID, SubjectType: tok.SubjectType}
 	ctx = context.WithValue(ctx, authCtxKey, info)
 	// Also publish the subject through the cross-package authctx helper so
 	// that gRPC service handlers (which can't import this package) can read

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"reflect"
 	"strings"
@@ -196,11 +197,48 @@ func extractNamespace(req interface{}) string {
 	if rv.Kind() == reflect.Ptr {
 		rv = rv.Elem()
 	}
-	if rv.Kind() == reflect.Struct {
-		f := rv.FieldByName("Namespace")
-		if f.IsValid() && f.Kind() == reflect.String {
-			return f.String()
+	if rv.Kind() != reflect.Struct {
+		return ""
+	}
+	// Common case: a top-level Namespace field.
+	if ns := stringFieldValue(rv, "Namespace"); ns != "" {
+		return ns
+	}
+	// Otherwise the namespace is nested inside the request's payload message:
+	// CreateServiceRequest.Service.Namespace, CreateSecretRequest.Secret.Namespace,
+	// ReleaseService Cast/Plan's Spec.Namespace, and so on. Scan one level into
+	// the request's exported struct / *struct fields and return the first
+	// Namespace found. Without this the RBAC check runs with an empty namespace,
+	// which never matches a namespace-pinned grant — so a scoped service-account
+	// token (`admin service create --namespace X`) is wrongly denied on every
+	// write whose request wraps its payload.
+	rt := rv.Type()
+	for i := 0; i < rv.NumField(); i++ {
+		if !rt.Field(i).IsExported() {
+			continue
 		}
+		fv := rv.Field(i)
+		if fv.Kind() == reflect.Ptr {
+			if fv.IsNil() {
+				continue
+			}
+			fv = fv.Elem()
+		}
+		if fv.Kind() != reflect.Struct {
+			continue
+		}
+		if ns := stringFieldValue(fv, "Namespace"); ns != "" {
+			return ns
+		}
+	}
+	return ""
+}
+
+// stringFieldValue returns the named string field of a struct value, or "".
+func stringFieldValue(rv reflect.Value, name string) string {
+	f := rv.FieldByName(name)
+	if f.IsValid() && f.Kind() == reflect.String {
+		return f.String()
 	}
 	return ""
 }
@@ -241,3 +279,27 @@ func loopbackDialAddr(listenAddr string) string {
 }
 
 func statusPermissionDenied(msg string) error { return status.Error(codes.PermissionDenied, msg) }
+
+// deniedErr builds an authorization-failure error that names the subject, the
+// (resource, verb) attempted, and the namespace the check ran under. The
+// namespace is the high-signal part: a denial on a namespace-scoped token
+// almost always means the request resolved to a different namespace than the
+// grant is pinned to, and surfacing it makes that diagnosable without server
+// logs.
+func deniedErr(ai *AuthInfo, resource, verb, namespace string) error {
+	subject := "unknown subject"
+	if ai != nil && ai.SubjectID != "" {
+		if ai.SubjectType != "" {
+			subject = fmt.Sprintf("%s (%s)", ai.SubjectID, ai.SubjectType)
+		} else {
+			subject = ai.SubjectID
+		}
+	}
+	nsLabel := fmt.Sprintf("%q", namespace)
+	if namespace == "" {
+		nsLabel = `"" (cluster-scoped)`
+	}
+	return statusPermissionDenied(fmt.Sprintf(
+		"access denied: subject %s is not permitted to %s %s in namespace %s",
+		subject, verb, resource, nsLabel))
+}
