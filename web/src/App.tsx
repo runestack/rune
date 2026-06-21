@@ -19,7 +19,6 @@ import { ServiceDrawer } from "./screens/ServiceDrawer";
 import { InstanceDrawer } from "./screens/InstanceDrawer";
 import { Namespaces } from "./screens/Namespaces";
 import { Storage } from "./screens/Storage";
-import { Networking } from "./screens/Networking";
 import { Identity } from "./screens/Identity";
 import { Logs } from "./screens/Logs";
 import { Secrets } from "./screens/Secrets";
@@ -51,7 +50,6 @@ const NAV: NavGroup[] = [
     items: [
       { id: "storage", label: "Storage", icon: "storage" },
       { id: "secrets", label: "Secrets & Config", icon: "secrets" },
-      { id: "network", label: "Networking", icon: "network" },
     ],
   },
   {
@@ -80,7 +78,6 @@ const CRUMBS: Record<string, string[]> = {
   namespaces: ["Cluster", "Namespaces"],
   storage: ["Data", "Storage"],
   secrets: ["Data", "Secrets & Config"],
-  network: ["Data", "Networking"],
   logs: ["Operate", "Logs & Exec"],
   identity: ["Operate", "Identity & RBAC"],
   "rs-explore": ["Sight", "Explore"],
@@ -188,7 +185,6 @@ export function App({ user, onLogout }: AppProps) {
     case "namespaces": screen = <Namespaces go={go} />; break;
     case "storage": screen = <Storage />; break;
     case "secrets": screen = <Secrets />; break;
-    case "network": screen = <Networking />; break;
     case "logs": screen = <Logs initialSvc={logsSvc} />; break;
     case "identity": screen = <Identity />; break;
     default:

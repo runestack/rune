@@ -8,7 +8,7 @@
    ============================================================ */
 import type { StatusKey } from "../lib/status";
 import type {
-  ConfigMap, Instance, Namespace, Node, Policy, Principal,
+  ConfigMap, Ingress, Instance, Namespace, NetPolicy, Node, Policy, Principal,
   Role, Secret, Service, StorageClass, Volume,
 } from "../api/types";
 
@@ -151,7 +151,37 @@ export function mapService(svc: PbService): Service {
     note: svc.statusMessage || undefined,
     stateful: (svc.volumes?.length ?? 0) > 0,
     volume: svc.volumes?.[0]?.name || undefined,
+    ingress: mapIngress(svc),
+    netpol: mapNetPolicy(svc),
   };
+}
+
+/** Build the ingress view from expose.host (+ TLS + async cert). Returns
+ *  undefined when the service isn't externally exposed. */
+function mapIngress(svc: PbService): Ingress | undefined {
+  const ex = svc.expose;
+  if (!ex?.host) return undefined;
+  const tls = ex.tls ? (ex.tls.mode || (ex.tls.auto ? "auto" : "manual")) : "";
+  const scheme = ex.tls ? "https" : "http";
+  const path = ex.path && ex.path !== "/" ? ex.path : "";
+  const c = svc.ingressCert;
+  return {
+    host: ex.host,
+    url: `${scheme}://${ex.host}${path}`,
+    tls,
+    path: ex.path || undefined,
+    cert: c?.host
+      ? { state: c.state || "Pending", expiresAt: c.expiresAt || undefined, lastError: c.lastError || undefined }
+      : undefined,
+  };
+}
+
+function mapNetPolicy(svc: PbService): NetPolicy | undefined {
+  const np = svc.networkPolicy;
+  const ingress = np?.ingress?.length ?? 0;
+  const egress = np?.egress?.length ?? 0;
+  if (!ingress && !egress) return undefined;
+  return { ingress, egress };
 }
 
 /* ---------------- instance ---------------- */
