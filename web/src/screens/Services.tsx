@@ -66,7 +66,7 @@ export function Services({ openSvc }: { openSvc: (s: Service) => void }) {
       ) : (
         <Card style={{ overflow: "hidden" }}>
           <Table>
-            <thead><tr><th>Service</th><th>Namespace</th><th>Status</th><th>Replicas</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>Age</th></tr></thead>
+            <thead><tr><th>Service</th><th>Namespace</th><th>Status</th><th>Replicas</th><th>CPU</th><th>Memory</th><th>Restarts</th><th>External</th><th>Age</th></tr></thead>
             <tbody>
               {list.map((s) => (
                 <tr key={`${s.ns}/${s.name}`} onClick={() => openSvc(s)}>
@@ -80,6 +80,9 @@ export function Services({ openSvc }: { openSvc: (s: Service) => void }) {
                   <td><UsageBar v={s.cpu} w={54} /></td>
                   <td><UsageBar v={s.mem} w={54} /></td>
                   <td className="num" style={{ color: s.restarts > 3 ? "var(--deploy)" : "var(--text-2)" }}>{s.restarts}</td>
+                  <td>{s.ingress
+                    ? <a href={s.ingress.url} target="_blank" rel="noreferrer" className="inst-link mono" style={{ fontSize: 12 }} onClick={(e) => e.stopPropagation()}>{s.ingress.host}</a>
+                    : <span style={{ color: "var(--text-4)" }}>—</span>}</td>
                   <td className="num" style={{ color: "var(--text-3)" }}>{s.age}</td>
                 </tr>
               ))}

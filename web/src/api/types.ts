@@ -30,6 +30,28 @@ export interface Service {
   stateful?: boolean;
   volume?: string;
   schedule?: string;
+  ingress?: Ingress;
+  netpol?: NetPolicy;
+}
+
+/** External exposure (ingress) for a service: the host it's reachable at plus
+ *  TLS + async cert state. Absent when the service has no `expose.host`. */
+export interface Ingress {
+  host: string;
+  url: string; // scheme://host[path]
+  tls: string; // "manual" | "auto" | "" (plain http)
+  path?: string;
+  cert?: IngressCert;
+}
+export interface IngressCert {
+  state: string; // "Pending" | "Issued" | "Failed"
+  expiresAt?: string; // RFC3339
+  lastError?: string;
+}
+/** Service-to-service network policy rule counts (ingress/egress). */
+export interface NetPolicy {
+  ingress: number;
+  egress: number;
 }
 export interface Instance {
   id: string;

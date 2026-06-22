@@ -150,6 +150,7 @@ export function ServiceDrawer({ svc, onClose, go, openInst }: { svc: Service; on
               <dt>Image</dt><dd style={{ wordBreak: "break-all" }}>{svc.image}</dd>
               <dt>Runeset</dt><dd>{svc.runeset}</dd>
               <dt>Type</dt><dd>{svc.type}</dd>
+              {svc.ingress && <><dt>External</dt><dd><a href={svc.ingress.url} target="_blank" rel="noreferrer" className="inst-link">{svc.ingress.url}</a></dd></>}
               {svc.schedule && <><dt>Schedule</dt><dd>{svc.schedule}</dd></>}
               <dt>Ports</dt><dd>{svc.ports.length ? svc.ports.join("  ") : "—"}</dd>
               <dt>Network policy</dt><dd>{svc.policy}</dd>
@@ -214,10 +215,33 @@ export function ServiceDrawer({ svc, onClose, go, openInst }: { svc: Service; on
 
         {tab === "networking" && (
           <div className="fadein">
+            {svc.ingress && (
+              <>
+                <div className="eyebrow" style={{ marginBottom: 12 }}>Ingress</div>
+                <KeyValue>
+                  <dt>External URL</dt>
+                  <dd><a href={svc.ingress.url} target="_blank" rel="noreferrer" className="inst-link">{svc.ingress.url}</a></dd>
+                  <dt>Host</dt><dd className="mono">{svc.ingress.host}</dd>
+                  <dt>TLS</dt><dd>{svc.ingress.tls ? <Tag>{svc.ingress.tls}</Tag> : "none (http)"}</dd>
+                  {svc.ingress.cert && (
+                    <>
+                      <dt>Certificate</dt>
+                      <dd style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <Badge s={svc.ingress.cert.state === "Issued" ? "run" : svc.ingress.cert.state === "Failed" ? "fail" : "deploy"}>{svc.ingress.cert.state}</Badge>
+                        {svc.ingress.cert.expiresAt && <span style={{ color: "var(--text-3)", fontSize: 12 }}>expires {new Date(svc.ingress.cert.expiresAt).toLocaleDateString()}</span>}
+                      </dd>
+                      {svc.ingress.cert.lastError && <><dt>Cert error</dt><dd style={{ color: "var(--fail)" }}>{svc.ingress.cert.lastError}</dd></>}
+                    </>
+                  )}
+                </KeyValue>
+                <div className="divider" />
+              </>
+            )}
             <KeyValue>
               <dt>Policy</dt><dd>{svc.policy}</dd>
               <dt>Exposed ports</dt><dd>{svc.ports.length ? svc.ports.join("  ") : "none (internal)"}</dd>
-              <dt>Cluster DNS</dt><dd>{svc.name}.{svc.ns}.rune.local</dd>
+              <dt>Cluster DNS</dt><dd className="mono">{svc.name}.{svc.ns}.rune.local</dd>
+              {svc.netpol && <><dt>Network policy</dt><dd>{svc.netpol.ingress} ingress · {svc.netpol.egress} egress rule(s)</dd></>}
             </KeyValue>
             <div className="divider" />
             <div className="eyebrow" style={{ marginBottom: 12 }}>Connections</div>

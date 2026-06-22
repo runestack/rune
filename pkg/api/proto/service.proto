@@ -123,6 +123,15 @@ message Service {
   // control plane on create and is read-only for operators. Populated
   // on Get/List; ignored by Create/Update (server merges from store).
   ServiceDiscovery discovery = 30;
+
+  // IngressCert is the asynchronous TLS certificate status for an exposed
+  // service (RUNE-066), set only when expose.tls uses an ACME-managed cert.
+  // Read-only on the wire; populated on Get/List.
+  IngressCertStatus ingress_cert = 31;
+
+  // NetworkPolicy is the service-to-service ingress/egress allow policy
+  // declared in the service spec.
+  ServiceNetworkPolicy network_policy = 32;
 }
 
 // ServiceDiscovery is persisted cluster discovery state for a service.
@@ -133,6 +142,46 @@ message ServiceDiscovery {
   string mode = 2;
   // Endpoint locality preference for the data-plane proxy.
   string locality_preference = 3;
+}
+
+// IngressCertStatus is the per-service TLS certificate status for an exposed
+// service (RUNE-066). Populated only for ACME-managed certs; manual TLS leaves
+// it empty. Timestamps are RFC 3339 strings.
+message IngressCertStatus {
+  // Host the certificate is issued for, e.g. api.example.com.
+  string host = 1;
+  // State is one of "Pending", "Issued", "Failed".
+  string state = 2;
+  string issued_at = 3;
+  string expires_at = 4;
+  // LastError is set when state == "Failed".
+  string last_error = 5;
+  // NextRetry is set when state == "Failed".
+  string next_retry = 6;
+}
+
+// ServiceNetworkPolicy is the service-to-service traffic policy embedded in a
+// service spec (mirrors types.ServiceNetworkPolicy).
+message ServiceNetworkPolicy {
+  repeated NetworkPolicyIngressRule ingress = 1;
+  repeated NetworkPolicyEgressRule egress = 2;
+}
+
+message NetworkPolicyIngressRule {
+  repeated NetworkPolicyPeer from = 1;
+  repeated string ports = 2;
+}
+
+message NetworkPolicyEgressRule {
+  repeated NetworkPolicyPeer to = 1;
+  repeated string ports = 2;
+}
+
+message NetworkPolicyPeer {
+  string service = 1;
+  string namespace = 2;
+  map<string, string> service_selector = 3;
+  string cidr = 4;
 }
 
 // RunIfSpec encodes the predicate that decides whether an InitStep

@@ -660,7 +660,88 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		}
 	}
 
+	if service.IngressCert != nil {
+		ic := service.IngressCert
+		protoService.IngressCert = &generated.IngressCertStatus{
+			Host:      ic.Host,
+			State:     string(ic.State),
+			IssuedAt:  formatProtoTime(ic.IssuedAt),
+			ExpiresAt: formatProtoTime(ic.ExpiresAt),
+			LastError: ic.LastError,
+			NextRetry: formatProtoTime(ic.NextRetry),
+		}
+	}
+
+	if service.NetworkPolicy != nil {
+		protoService.NetworkPolicy = networkPolicyToProto(service.NetworkPolicy)
+	}
+
 	return protoService
+}
+
+// formatProtoTime renders an optional time as an RFC 3339 string ("" if nil),
+// matching the string-timestamp convention used across the API surface.
+func formatProtoTime(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// networkPolicyFromProto is the inverse of networkPolicyToProto.
+func networkPolicyFromProto(np *generated.ServiceNetworkPolicy) *types.ServiceNetworkPolicy {
+	out := &types.ServiceNetworkPolicy{}
+	peers := func(in []*generated.NetworkPolicyPeer) []types.NetworkPolicyPeer {
+		ps := make([]types.NetworkPolicyPeer, 0, len(in))
+		for _, p := range in {
+			ps = append(ps, types.NetworkPolicyPeer{
+				Service:         p.GetService(),
+				Namespace:       p.GetNamespace(),
+				ServiceSelector: p.GetServiceSelector(),
+				CIDR:            p.GetCidr(),
+			})
+		}
+		return ps
+	}
+	for _, r := range np.GetIngress() {
+		out.Ingress = append(out.Ingress, types.IngressRule{From: peers(r.GetFrom()), Ports: r.GetPorts()})
+	}
+	for _, r := range np.GetEgress() {
+		out.Egress = append(out.Egress, types.EgressRule{To: peers(r.GetTo()), Ports: r.GetPorts()})
+	}
+	return out
+}
+
+// networkPolicyToProto converts the embedded service network policy to its
+// wire form. Peers carry whichever selector the operator set (service,
+// namespace, serviceSelector, or cidr).
+func networkPolicyToProto(np *types.ServiceNetworkPolicy) *generated.ServiceNetworkPolicy {
+	out := &generated.ServiceNetworkPolicy{}
+	peers := func(in []types.NetworkPolicyPeer) []*generated.NetworkPolicyPeer {
+		ps := make([]*generated.NetworkPolicyPeer, 0, len(in))
+		for i := range in {
+			ps = append(ps, &generated.NetworkPolicyPeer{
+				Service:         in[i].Service,
+				Namespace:       in[i].Namespace,
+				ServiceSelector: in[i].ServiceSelector,
+				Cidr:            in[i].CIDR,
+			})
+		}
+		return ps
+	}
+	for i := range np.Ingress {
+		out.Ingress = append(out.Ingress, &generated.NetworkPolicyIngressRule{
+			From:  peers(np.Ingress[i].From),
+			Ports: np.Ingress[i].Ports,
+		})
+	}
+	for i := range np.Egress {
+		out.Egress = append(out.Egress, &generated.NetworkPolicyEgressRule{
+			To:    peers(np.Egress[i].To),
+			Ports: np.Egress[i].Ports,
+		})
+	}
+	return out
 }
 
 func ProtoToService(proto *generated.Service) (*types.Service, error) {
@@ -946,6 +1027,13 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 			Mode:               proto.Discovery.Mode,
 			LocalityPreference: proto.Discovery.LocalityPreference,
 		}
+	}
+
+	// IngressCert is read-only status (server-populated), so there is no reverse
+	// mapping for it here. NetworkPolicy is spec — round-trip it so a service
+	// created/updated through the proto API keeps its policy.
+	if proto.NetworkPolicy != nil {
+		service.NetworkPolicy = networkPolicyFromProto(proto.NetworkPolicy)
 	}
 
 	if len(proto.Instances) > 0 {
