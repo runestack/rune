@@ -149,6 +149,7 @@ func newSecretUpdateCmd() *cobra.Command {
 	var ns string
 	var dataPairs []string
 	var fromFile []string
+	var fromLiteral []string
 	cmd := &cobra.Command{
 		Use:   "update <name>",
 		Short: "Update an existing secret's data (creates a new version)",
@@ -162,7 +163,10 @@ or restored with 'rune secret rollback'.`,
 			if err := applyFromFileFlags(fromFile, data); err != nil {
 				return err
 			}
-			for _, pair := range dataPairs {
+			// --data and --from-literal are equivalent (the latter is the
+			// kubectl-compatible spelling); both take key=value split on the
+			// first '=', so base64 values (with '=' padding) survive intact.
+			for _, pair := range append(append([]string{}, dataPairs...), fromLiteral...) {
 				k, v, err := splitPair(pair)
 				if err != nil {
 					return err
@@ -170,7 +174,7 @@ or restored with 'rune secret rollback'.`,
 				data[k] = v
 			}
 			if len(data) == 0 {
-				return fmt.Errorf("no data provided. Use --data flags or --from-file")
+				return fmt.Errorf("no data provided. Use --from-literal/--data or --from-file")
 			}
 			api, err := newAPIClient("", "")
 			if err != nil {
@@ -187,6 +191,7 @@ or restored with 'rune secret rollback'.`,
 	}
 	addSecretNamespaceFlag(cmd, &ns)
 	cmd.Flags().StringArrayVar(&dataPairs, "data", nil, "Data entry key=value (can repeat; value is taken verbatim — no comma/newline splitting)")
+	cmd.Flags().StringArrayVar(&fromLiteral, "from-literal", nil, "Data entry key=value (kubectl-compatible alias for --data; value verbatim, split on first '='). Can repeat.")
 	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read data from file: --from-file=key=path (file's bytes become the value for key — use for binary or multi-line content like PEM). Can repeat.")
 	return cmd
 }

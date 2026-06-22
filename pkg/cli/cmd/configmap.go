@@ -89,12 +89,13 @@ func newConfigmapUpdateCmd() *cobra.Command {
 	var ns string
 	var dataPairs []string
 	var fromFile []string
+	var fromLiteral []string
 	cmd := &cobra.Command{
 		Use:   "update <name>",
 		Short: "Update an existing configmap's data (replaces the data map)",
 		Long: `Update rewrites the configmap's data map and bumps its version. Provide the
-full desired data with --data and/or --from-file. To change individual keys
-without replacing the rest, use 'rune configmap set' / 'unset'.`,
+full desired data with --from-literal/--data and/or --from-file. To change
+individual keys without replacing the rest, use 'rune configmap set' / 'unset'.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -102,7 +103,10 @@ without replacing the rest, use 'rune configmap set' / 'unset'.`,
 			if err := applyFromFileFlags(fromFile, data); err != nil {
 				return err
 			}
-			for _, pair := range dataPairs {
+			// --data and --from-literal are equivalent (the latter is the
+			// kubectl-compatible spelling); both take key=value split on the
+			// first '='.
+			for _, pair := range append(append([]string{}, dataPairs...), fromLiteral...) {
 				k, v, err := splitPair(pair)
 				if err != nil {
 					return err
@@ -110,7 +114,7 @@ without replacing the rest, use 'rune configmap set' / 'unset'.`,
 				data[k] = v
 			}
 			if len(data) == 0 {
-				return fmt.Errorf("no data provided. Use --data flags or --from-file")
+				return fmt.Errorf("no data provided. Use --from-literal/--data or --from-file")
 			}
 			api, err := newAPIClient("", "")
 			if err != nil {
@@ -127,6 +131,7 @@ without replacing the rest, use 'rune configmap set' / 'unset'.`,
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
 	cmd.Flags().StringArrayVar(&dataPairs, "data", nil, "Data entry key=value (can repeat; value is taken verbatim — no comma/newline splitting)")
+	cmd.Flags().StringArrayVar(&fromLiteral, "from-literal", nil, "Data entry key=value (kubectl-compatible alias for --data; value verbatim, split on first '='). Can repeat.")
 	cmd.Flags().StringArrayVar(&fromFile, "from-file", nil, "Read data from file: --from-file=key=path (file's bytes become the value for key — use for multi-line content). Can repeat.")
 	return cmd
 }
