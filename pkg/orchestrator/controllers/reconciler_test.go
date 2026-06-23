@@ -997,3 +997,41 @@ func TestServiceHasStableIdentity(t *testing.T) {
 	}}}
 	assert.False(t, serviceHasStableIdentity(withClaimRef), "plain claim => stateless")
 }
+
+// TestUpdateServiceStatus_PreservesConcurrentScale is the regression guard for
+// the "restart goes 1→0 and hangs" bug. updateServiceStatus runs on a service
+// snapshot taken at the top of a reconcile cycle; a concurrent scale write (the
+// scaling controller persisting `rune restart`'s 0→1 leg) can land in between.
+// Writing the stale full object back must NOT clobber that newer Scale — the
+// status write has to re-read fresh and touch only the status fields.
+func TestUpdateServiceStatus_PreservesConcurrentScale(t *testing.T) {
+	ctx := context.Background()
+	testStore := setupStore(t)
+	r := &reconciler{
+		store:              testStore,
+		instanceController: NewFakeInstanceController(),
+		healthController:   NewFakeHealthController(),
+		logger:             log.NewLogger().WithComponent("reconciler"),
+	}
+
+	// The store reflects a concurrent scale-up to 5 (Status still Running, no
+	// instances scheduled yet).
+	current := &types.Service{
+		ID: "svc", Name: "svc", Namespace: "default",
+		Scale: 5, Status: types.ServiceStatusRunning,
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, "default", "svc", current))
+
+	// The reconciler holds a STALE snapshot from before the scale-up (Scale=0,
+	// e.g. just after a drain) and computes a new status from it.
+	stale := &types.Service{
+		ID: "svc", Name: "svc", Namespace: "default",
+		Scale: 0, Status: types.ServiceStatusRunning,
+	}
+	require.NoError(t, r.updateServiceStatus(ctx, stale))
+
+	var got types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, "default", "svc", &got))
+	assert.Equal(t, 5, got.Scale, "status update must preserve the concurrently-written Scale, not revert it")
+	assert.Equal(t, types.ServiceStatusPending, got.Status, "status should still be recomputed and persisted (0 instances -> Pending)")
+}

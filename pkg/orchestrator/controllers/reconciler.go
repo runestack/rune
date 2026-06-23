@@ -1047,7 +1047,7 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		}
 	}
 
-	// Update service status if anything changed (status, reason, or message)
+	// Update service status if anything changed (status, reason, or message).
 	if service.Status != newStatus ||
 		service.StatusReason != newReason ||
 		service.StatusMessage != newMessage {
@@ -1057,12 +1057,38 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 			log.Str("to", string(newStatus)),
 			log.Str("reason", newReason))
 
+		// Re-read the service immediately before writing and apply ONLY the
+		// status fields to that fresh copy. updateServiceStatus runs at the end
+		// of a reconcile cycle on a `service` snapshot taken at the top of the
+		// cycle; a concurrent scale write — e.g. `rune restart`'s 0→1 leg via
+		// the scaling controller — can land in between. Writing the stale full
+		// object back would clobber that scale change, reverting Scale 1→0 and
+		// stranding the service Pending 0/0 ("restart goes 1→0 and hangs; run
+		// restart again to recover"). A focused fresh-read status write
+		// preserves the latest Scale (and any other concurrently-updated spec).
+		var fresh types.Service
+		if err := r.store.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &fresh); err != nil {
+			r.logger.Debug("Skipping status update: service no longer readable",
+				log.Str("service", service.Name), log.Err(err))
+			return nil
+		}
+		if fresh.Status == types.ServiceStatusDeleted {
+			return nil
+		}
+		// A concurrent writer may already have set the same status.
+		if fresh.Status == newStatus && fresh.StatusReason == newReason && fresh.StatusMessage == newMessage {
+			return nil
+		}
+		fresh.Status = newStatus
+		fresh.StatusReason = newReason
+		fresh.StatusMessage = newMessage
+		if err := r.store.Update(ctx, types.ResourceTypeService, fresh.Namespace, fresh.Name, &fresh); err != nil {
+			return fmt.Errorf("failed to update service status: %w", err)
+		}
+		// Reflect the persisted status on the caller's copy for consistency.
 		service.Status = newStatus
 		service.StatusReason = newReason
 		service.StatusMessage = newMessage
-		if err := r.store.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, service); err != nil {
-			return fmt.Errorf("failed to update service status: %w", err)
-		}
 	}
 
 	return nil
