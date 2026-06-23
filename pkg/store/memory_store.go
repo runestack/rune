@@ -211,6 +211,51 @@ func (m *MemoryStore) Update(ctx context.Context, resourceType types.ResourceTyp
 	return nil
 }
 
+// UpdateFunc runs read → mutate → write under the store's write lock, so the
+// whole read-modify-write is atomic and no retry is needed (the lock is the
+// concurrency control). Mirrors BadgerStore.UpdateFunc's contract. Unlike
+// Update it does not auto-bump the service Generation — UpdateFunc is for
+// focused status/scale writes that must not look like spec changes.
+func (m *MemoryStore) UpdateFunc(ctx context.Context, resourceType types.ResourceType, namespace, name string, target interface{}, mutate func() error, opts ...UpdateOption) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	_ = ParseUpdateOptions(opts...)
+
+	nsMap, ok := m.data[resourceType]
+	if !ok {
+		return fmt.Errorf("resource type not found: %s", resourceType)
+	}
+	objMap, ok := nsMap[namespace]
+	if !ok {
+		return fmt.Errorf("namespace not found: %s", namespace)
+	}
+	stored, exists := objMap[name]
+	if !exists {
+		return fmt.Errorf("object not found: %s", name)
+	}
+
+	// Load the current value into target (JSON round-trip mirrors Badger).
+	b, err := json.Marshal(stored)
+	if err != nil {
+		return fmt.Errorf("failed to serialize stored resource: %w", err)
+	}
+	if err := json.Unmarshal(b, target); err != nil {
+		return fmt.Errorf("failed to deserialize resource: %w", err)
+	}
+
+	if err := mutate(); err != nil {
+		return err
+	}
+
+	switch v := target.(type) {
+	case *types.Service:
+		objMap[name] = *v
+	default:
+		objMap[name] = target
+	}
+	return nil
+}
+
 // Delete deletes an object from the memory store.
 func (m *MemoryStore) Delete(ctx context.Context, resourceType types.ResourceType, namespace, name string) error {
 	m.mutex.Lock()
