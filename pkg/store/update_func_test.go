@@ -25,11 +25,11 @@ func TestUpdateFunc_NoLostUpdatesUnderConcurrency(t *testing.T) {
 	require.NoError(t, store.Create(ctx, types.ResourceTypeService, "ns", "svc",
 		&types.Service{Name: "svc", Namespace: "ns", Scale: 0, Status: types.ServiceStatusRunning}))
 
-	const incrementers = 50
+	const increments = 50
 	const statusWriters = 20
 	var wg sync.WaitGroup
 
-	for i := 0; i < incrementers; i++ {
+	for i := 0; i < increments; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -38,7 +38,7 @@ func TestUpdateFunc_NoLostUpdatesUnderConcurrency(t *testing.T) {
 				s.Scale++ // touch only our field, on freshly-read state
 				return nil
 			}); err != nil {
-				t.Errorf("incrementer: %v", err)
+				t.Errorf("scale increment: %v", err)
 			}
 		}()
 	}
@@ -63,7 +63,7 @@ func TestUpdateFunc_NoLostUpdatesUnderConcurrency(t *testing.T) {
 
 	var got types.Service
 	require.NoError(t, store.Get(ctx, types.ResourceTypeService, "ns", "svc", &got))
-	assert.Equal(t, incrementers, got.Scale,
+	assert.Equal(t, increments, got.Scale,
 		"every Scale increment must survive concurrent status writes (no lost updates)")
 }
 
