@@ -104,3 +104,26 @@ func TestUpdateFunc_ReappliesOnConflict(t *testing.T) {
 	require.NoError(t, store.Get(ctx, types.ResourceTypeService, "ns", "svc", &got))
 	assert.Equal(t, 1, got.Scale, "the scale-up must not be clobbered by concurrent status writes")
 }
+
+// TestUpdateFunc_SkipUpdate verifies the ErrSkipUpdate sentinel aborts the write
+// (no change, no error) — used by callers that decide, after seeing the fresh
+// value, that no update is needed (e.g. status already set, resource deleted).
+func TestUpdateFunc_SkipUpdate(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.NoError(t, store.Create(ctx, types.ResourceTypeService, "ns", "svc",
+		&types.Service{Name: "svc", Namespace: "ns", Scale: 3, Status: types.ServiceStatusRunning}))
+
+	var s types.Service
+	err := store.UpdateFunc(ctx, types.ResourceTypeService, "ns", "svc", &s, func() error {
+		s.Scale = 99 // mutated, but then we abort — must NOT persist
+		return ErrSkipUpdate
+	})
+	require.NoError(t, err, "ErrSkipUpdate must surface as a nil error")
+
+	var got types.Service
+	require.NoError(t, store.Get(ctx, types.ResourceTypeService, "ns", "svc", &got))
+	assert.Equal(t, 3, got.Scale, "ErrSkipUpdate must leave the stored value unchanged")
+}

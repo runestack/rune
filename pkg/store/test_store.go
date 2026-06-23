@@ -354,6 +354,9 @@ func (s *TestStore) UpdateFunc(ctx context.Context, resourceType types.ResourceT
 	}
 
 	if err := mutate(); err != nil {
+		if errors.Is(err, ErrSkipUpdate) {
+			return nil
+		}
 		return err
 	}
 

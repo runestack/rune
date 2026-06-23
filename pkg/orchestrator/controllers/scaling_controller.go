@@ -239,16 +239,9 @@ func (c *scalingController) CreateScalingOperation(ctx context.Context, service 
 
 // Execute immediate scaling by updating the service directly
 func (c *scalingController) executeImmediateScaling(ctx context.Context, op *types.ScalingOperation) error {
-	// Get the service
-	var service types.Service
-	if err := c.store.Get(ctx, types.ResourceTypeService, op.Namespace, op.ServiceName, &service); err != nil {
-		c.failOperation(ctx, op, fmt.Sprintf("failed to get service: %v", err))
-		return err
-	}
-
 	// Mark as in-progress to prevent circular updates
-	c.inProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
-	defer c.clearInProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
+	c.inProgressUpdate(types.ResourceTypeService, op.Namespace, op.ServiceName)
+	defer c.clearInProgressUpdate(types.ResourceTypeService, op.Namespace, op.ServiceName)
 
 	// Mark the operation completed BEFORE updating service.Scale. The
 	// service-controller's handleServiceUpdated skips reconciliation
@@ -266,15 +259,20 @@ func (c *scalingController) executeImmediateScaling(ctx context.Context, op *typ
 		return err
 	}
 
-	// Update service scale directly
-	service.Scale = op.TargetScale
-	service.Metadata.UpdatedAt = time.Now()
-
-	if err := c.store.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, &service); err != nil {
-		// completeOperation already wrote Completed; the op row no
-		// longer represents the live state. Mark Failed for visibility
-		// (failOperation is idempotent on the Status field) and
-		// surface the error to the caller.
+	// Set ONLY Scale (+ UpdatedAt), atomically, on the freshly-read service.
+	// Using UpdateFunc means a concurrent status write from the reconciler can't
+	// clobber the new Scale (RFC #129) — which is exactly the lost update behind
+	// the `rune restart` 1→0→hang bug.
+	var service types.Service
+	err := c.store.UpdateFunc(ctx, types.ResourceTypeService, op.Namespace, op.ServiceName, &service, func() error {
+		service.Scale = op.TargetScale
+		service.Metadata.UpdatedAt = time.Now()
+		return nil
+	}, store.WithOrchestrator())
+	if err != nil {
+		// completeOperation already wrote Completed; the op row no longer
+		// represents the live state. Mark Failed for visibility (idempotent on
+		// Status) and surface the error.
 		c.failOperation(ctx, op, fmt.Sprintf("failed to update service scale: %v", err))
 		return err
 	}
@@ -431,9 +429,14 @@ func (c *scalingController) processScalingStep(ctx context.Context, op *types.Sc
 			log.Int("from", service.Scale),
 			log.Int("to", nextScale))
 
-		service.Scale = nextScale
-		service.Metadata.UpdatedAt = time.Now()
-		if err := c.store.Update(ctx, types.ResourceTypeService, op.Namespace, op.ServiceName, &service); err != nil {
+		// Set ONLY Scale (+ UpdatedAt) atomically so a concurrent status write
+		// can't clobber this step (RFC #129).
+		var fresh types.Service
+		if err := c.store.UpdateFunc(ctx, types.ResourceTypeService, op.Namespace, op.ServiceName, &fresh, func() error {
+			fresh.Scale = nextScale
+			fresh.Metadata.UpdatedAt = time.Now()
+			return nil
+		}, store.WithOrchestrator()); err != nil {
 			return fmt.Errorf("failed to update service scale: %w", err)
 		}
 	}
