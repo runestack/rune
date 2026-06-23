@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -314,6 +315,81 @@ func (s *BadgerStore) Update(ctx context.Context, resourceType types.ResourceTyp
 	s.emitWatchEvent(WatchEventUpdated, resourceType, namespace, name, resource, options.Source)
 
 	return nil
+}
+
+// updateFuncMaxRetries bounds the optimistic-concurrency retry loop. Conflicts
+// are resolved in microseconds, so this is a runaway backstop, not a tuning
+// knob — real contention on one key clears in 1-2 retries.
+const updateFuncMaxRetries = 100
+
+// UpdateFunc runs read → mutate → write inside one Badger transaction. Because
+// the read (txn.Get) joins the transaction's read set, Badger's serializable
+// snapshot isolation rejects the commit with ErrConflict if another writer
+// changed the key in between — at which point we re-read and re-apply mutate.
+// The plain Update() path can't do this: its read (the caller's store.Get) is a
+// separate transaction, so concurrent writers silently clobber each other.
+func (s *BadgerStore) UpdateFunc(ctx context.Context, resourceType types.ResourceType, namespace string, name string, target interface{}, mutate func() error, opts ...UpdateOption) error {
+	options := ParseUpdateOptions(opts...)
+	key := MakeKey(resourceType, namespace, name)
+
+	for attempt := 0; ; attempt++ {
+		err := func() error {
+			txn := s.db.NewTransaction(true)
+			defer txn.Discard()
+
+			// Read current into target — this enrolls the key in the read set.
+			item, err := txn.Get(key)
+			if err == badger.ErrKeyNotFound {
+				return fmt.Errorf("resource %s/%s/%s not found", resourceType, namespace, name)
+			} else if err != nil {
+				return fmt.Errorf("failed to get resource: %w", err)
+			}
+			if err := item.Value(func(val []byte) error { return json.Unmarshal(val, target) }); err != nil {
+				return fmt.Errorf("failed to deserialize resource: %w", err)
+			}
+
+			// Apply the caller's mutation to the freshly-read target.
+			if err := mutate(); err != nil {
+				return err
+			}
+
+			data, err := json.Marshal(target)
+			if err != nil {
+				return fmt.Errorf("failed to serialize resource: %w", err)
+			}
+			if err := txn.Set(key, data); err != nil {
+				return fmt.Errorf("failed to store resource: %w", err)
+			}
+
+			// Mirror Update's version-history write.
+			versionID := fmt.Sprintf("v%d", time.Now().UnixNano())
+			versionKey := MakeVersionKey(resourceType, namespace, name, versionID)
+			version := struct {
+				ID        string      `json:"id"`
+				Timestamp time.Time   `json:"timestamp"`
+				Resource  interface{} `json:"resource"`
+			}{ID: versionID, Timestamp: time.Now(), Resource: target}
+			versionData, err := json.Marshal(version)
+			if err != nil {
+				return fmt.Errorf("failed to serialize version: %w", err)
+			}
+			if err := txn.Set(versionKey, versionData); err != nil {
+				return fmt.Errorf("failed to store version: %w", err)
+			}
+
+			return txn.Commit()
+		}()
+
+		if err == nil {
+			s.emitWatchEvent(WatchEventUpdated, resourceType, namespace, name, target, options.Source)
+			return nil
+		}
+		// Retry only on a genuine write-write conflict.
+		if errors.Is(err, badger.ErrConflict) && attempt < updateFuncMaxRetries {
+			continue
+		}
+		return err
+	}
 }
 
 // Delete deletes a resource.

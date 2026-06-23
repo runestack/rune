@@ -322,6 +322,53 @@ func (s *TestStore) Update(ctx context.Context, resourceType types.ResourceType,
 	return nil
 }
 
+// UpdateFunc implements the Store interface. The write lock makes the
+// read-modify-write atomic, so no retry is needed. Mirrors BadgerStore's
+// contract: read current into target, run mutate, write target back.
+func (s *TestStore) UpdateFunc(ctx context.Context, resourceType types.ResourceType, namespace string, name string, target interface{}, mutate func() error, opts ...UpdateOption) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	options := ParseUpdateOptions(opts...)
+
+	if !s.opened {
+		return errors.New("store is not opened")
+	}
+	if _, exists := s.data[resourceType]; !exists {
+		return fmt.Errorf("resource type %s not found", resourceType)
+	}
+	if _, exists := s.data[resourceType][namespace]; !exists {
+		return fmt.Errorf("namespace %s not found in resource type %s", namespace, resourceType)
+	}
+	stored, exists := s.data[resourceType][namespace][name]
+	if !exists {
+		return fmt.Errorf("resource %s/%s/%s not found", resourceType, namespace, name)
+	}
+
+	// Load the current value into target (JSON round-trip, same as Get).
+	b, err := json.Marshal(stored)
+	if err != nil {
+		return fmt.Errorf("failed to serialize stored resource: %w", err)
+	}
+	if err := json.Unmarshal(b, target); err != nil {
+		return fmt.Errorf("failed to deserialize resource: %w", err)
+	}
+
+	if err := mutate(); err != nil {
+		return err
+	}
+
+	storeCopy := s.deepCopy(target)
+	s.data[resourceType][namespace][name] = storeCopy
+	version := fmt.Sprintf("%d", time.Now().UnixNano())
+	s.history[resourceType][namespace][name] = append(s.history[resourceType][namespace][name], HistoricalVersion{
+		Version:   version,
+		Timestamp: time.Now(),
+		Resource:  storeCopy,
+	})
+	s.sendWatchEventWithSource(resourceType, namespace, WatchEventUpdated, name, s.deepCopy(storeCopy), options.Source)
+	return nil
+}
+
 // Delete implements the Store interface.
 func (s *TestStore) Delete(ctx context.Context, resourceType types.ResourceType, namespace string, name string) error {
 	s.mutex.Lock()

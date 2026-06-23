@@ -37,6 +37,17 @@ type Store interface {
 	// Update updates an existing resource.
 	Update(ctx context.Context, resourceType types.ResourceType, namespace string, name string, resource interface{}, opts ...UpdateOption) error
 
+	// UpdateFunc atomically reads the named resource into target, runs mutate
+	// (which modifies target in place), and writes target back — all in a single
+	// transaction, retrying on a write-write conflict so the mutation always
+	// applies to the CURRENT stored state. This is the lost-update-safe
+	// replacement for the Get → mutate-snapshot → Update pattern: two
+	// controllers can each touch only their own fields without clobbering one
+	// another. mutate MUST be a deterministic setter of target's fields — it may
+	// be invoked more than once (once per retry) on a freshly-read target.
+	// Returns a not-found error if the resource is absent.
+	UpdateFunc(ctx context.Context, resourceType types.ResourceType, namespace string, name string, target interface{}, mutate func() error, opts ...UpdateOption) error
+
 	// Delete deletes a resource.
 	Delete(ctx context.Context, resourceType types.ResourceType, namespace string, name string) error
 
