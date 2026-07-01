@@ -649,27 +649,38 @@ func (c *healthController) promoteToRunningOnReady(namespace, instanceID string)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	current, err := c.store.GetInstanceByID(ctx, namespace, instanceID)
-	if err != nil {
-		return fmt.Errorf("get instance: %w", err)
-	}
-	if current.Status != types.InstanceStatusStarting {
-		// Nothing to do — instance has moved on (Running already,
-		// or Failed/Stopped/Deleted by some other path).
+	// Flip Starting→Running atomically on the freshly-read instance. UpdateFunc's
+	// CAS closes the read→write window the old GetInstanceByID+Update left open:
+	// a reconciler instance write can no longer be clobbered by this promotion,
+	// nor can it clobber ours (RFC #129 Phase 1c). The Starting guard becomes an
+	// ErrSkipUpdate so we never resurrect an instance the reconciler already
+	// moved to Failed/Stopped/Deleted.
+	var current types.Instance
+	promoted := false
+	err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, namespace, instanceID, &current, func() error {
+		promoted = false // reset per attempt (mutate may re-run on conflict)
+		if current.Status != types.InstanceStatusStarting {
+			return store.ErrSkipUpdate
+		}
+		current.Status = types.InstanceStatusRunning
+		current.StatusMessage = "Ready"
+		current.UpdatedAt = time.Now()
+		promoted = true
 		return nil
+	}, store.WithHealthController())
+	if err != nil {
+		return fmt.Errorf("promote instance to running: %w", err)
 	}
-	current.Status = types.InstanceStatusRunning
-	current.StatusMessage = "Ready"
-	current.UpdatedAt = time.Now()
-	if err := c.store.Update(ctx, types.ResourceTypeInstance, current.Namespace, current.ID, current); err != nil {
-		return fmt.Errorf("update instance status: %w", err)
+	if !promoted {
+		// Instance had already moved on — nothing to republish.
+		return nil
 	}
 	// Republish endpoints so the data plane (load balancer / DNS)
 	// picks up the now-Running instance. Without this, the instance
 	// is correctly marked Running but stays invisible to traffic
 	// until the next event that triggers a republish (e.g. service
 	// update). Nil-safe when no publisher is wired.
-	c.instanceController.RepublishServiceByInstance(ctx, current)
+	c.instanceController.RepublishServiceByInstance(ctx, &current)
 	c.logger.Info("Instance promoted to Running on first readiness pass",
 		log.Str("instance", instanceID))
 	return nil
