@@ -850,9 +850,28 @@ func (c *instanceController) UpdateInstance(ctx context.Context, service *types.
 		instance.UpdatedAt = time.Now()
 	}
 
-	// If we've made any updates to the instance object, save it back to the store
+	// If we've made any updates to the instance object, save it back to the
+	// store. Apply ONLY the spec-sync fields, atomically, on the fresh record —
+	// and skip entirely if the instance is no longer Running (e.g. the health
+	// controller just marked it Failed). A full-object write here would revert
+	// that concurrent status transition, resurrecting a Failed instance
+	// (RFC #129 Phase 1c). This in-place update is defined only for Running
+	// instances anyway (checked against the runner above).
 	if instanceUpdated {
-		if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
+		var fresh types.Instance
+		if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh, func() error {
+			if fresh.Status != types.InstanceStatusRunning {
+				return store.ErrSkipUpdate
+			}
+			fresh.Environment = instance.Environment
+			if fresh.Metadata == nil {
+				fresh.Metadata = &types.InstanceMetadata{}
+			}
+			fresh.Metadata.ServiceGeneration = instance.Metadata.ServiceGeneration
+			fresh.StatusMessage = instance.StatusMessage
+			fresh.UpdatedAt = instance.UpdatedAt
+			return nil
+		}, store.WithReconciler()); err != nil {
 			return fmt.Errorf("failed to update instance in store: %w", err)
 		}
 		c.logger.Info("Instance updated successfully",
@@ -885,20 +904,29 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 		return fmt.Errorf("failed to stop instance: %w", err)
 	}
 
-	// Update instance status to stopped
+	// Update instance status to stopped — write ONLY the status fields atomically
+	// on the fresh record so a concurrent health promotion / status write is not
+	// clobbered (RFC #129 Phase 1c).
 	originalStatus := instance.Status
-	instance.Status = types.InstanceStatusStopped
-	instance.UpdatedAt = time.Now()
-	instance.StatusMessage = "Stopped by user"
-
-	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
+	now := time.Now()
+	var fresh types.Instance
+	if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh, func() error {
+		fresh.Status = types.InstanceStatusStopped
+		fresh.StatusMessage = "Stopped by user"
+		fresh.UpdatedAt = now
+		return nil
+	}); err != nil {
 		c.logger.Error("Failed to update instance status",
 			log.Str("instance", instance.ID),
 			log.Str("from", string(originalStatus)),
-			log.Str("to", string(instance.Status)),
+			log.Str("to", string(types.InstanceStatusStopped)),
 			log.Err(err))
 		return fmt.Errorf("failed to update instance status: %w", err)
 	}
+	// Reflect on the caller's copy for consistency.
+	instance.Status = types.InstanceStatusStopped
+	instance.StatusMessage = "Stopped by user"
+	instance.UpdatedAt = now
 
 	c.logger.Info("Instance stopped successfully",
 		log.Str("instance", instance.ID))
@@ -932,14 +960,26 @@ func (c *instanceController) markInstanceFailedInPlace(ctx context.Context, inst
 	// defeating the whole point of preserving the postmortem.
 	c.snapshotInstanceLogs(ctx, instance)
 	now := time.Now()
+	msg := fmt.Sprintf("Preserved for postmortem after %s", restartReason)
+	// Write ONLY the tombstone status fields atomically on the fresh record, so
+	// a concurrent write (e.g. the reconciler's in-place UpdateInstance) can't
+	// resurrect this Failed instance by clobbering it (RFC #129 Phase 1c).
+	var fresh types.Instance
+	if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh, func() error {
+		fresh.Status = types.InstanceStatusFailed
+		fresh.StatusMessage = msg
+		fresh.FailedAt = &now
+		fresh.FailureReason = string(restartReason)
+		fresh.UpdatedAt = now
+		return nil
+	}, store.WithHealthController()); err != nil {
+		return fmt.Errorf("mark instance failed: %w", err)
+	}
 	instance.Status = types.InstanceStatusFailed
-	instance.StatusMessage = fmt.Sprintf("Preserved for postmortem after %s", restartReason)
+	instance.StatusMessage = msg
 	instance.FailedAt = &now
 	instance.FailureReason = string(restartReason)
 	instance.UpdatedAt = now
-	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
-		return fmt.Errorf("mark instance failed: %w", err)
-	}
 	c.logger.Info("Marked instance Failed (tombstoned in-place)",
 		log.Str("instance", instance.ID),
 		log.Str("container_id", instance.ContainerID),
@@ -964,42 +1004,51 @@ func (c *instanceController) recordCreateFailure(ctx context.Context, instance *
 		return
 	}
 	now := time.Now()
-	instance.CreateAttempts++
-	instance.FailureReason = reason
 
-	// Flip to Stalled when retries are exhausted so operators get a
-	// clear "stop waiting, take action" signal in `rune get instance`.
-	// Mirrors the volume controller's ProvisionRetriesExhausted shape.
-	// While Stalled, NextCreateAttemptAt stays nil — the reconciler
-	// never auto-retries; only `rune restart instance` or `rune cast`
-	// (new generation) re-arms the slot.
-	if instance.CreateAttempts >= maxCreateAttempts {
-		applyInstanceStatus(instance, types.InstanceStatusStalled, reason, err.Error())
-		instance.NextCreateAttemptAt = nil
-		c.logger.Warn("Instance create retries exhausted; marking Stalled",
-			log.Str("instance", instance.ID),
-			log.Str("reason", reason),
-			log.Int("attempts", instance.CreateAttempts))
-		c.emit(types.EventLevelError, instance, reason, err.Error())
-	} else {
-		applyInstanceStatus(instance, types.InstanceStatusFailed, reason, err.Error())
-		next := now.Add(createBackoffFor(instance.CreateAttempts))
-		instance.NextCreateAttemptAt = &next
-		c.emit(types.EventLevelError, instance, reason, err.Error())
-	}
-
-	// Deliberately do NOT set FailedAt here. FailedAt marks a *tombstone*
-	// — a container that successfully ran and was preserved for
-	// postmortem — and is what the retention GC keys off. A
-	// stuck-in-create record (ContainerEverCreatedAt == nil) is neither
-	// a tombstone nor evictable; the reconciler holds the slot in
-	// place via the isInstanceCompatibleWithService gate.
-	if updateErr := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); updateErr != nil {
+	// Apply the failure fields atomically on the fresh record. CreateAttempts is
+	// a counter, so it MUST increment the current stored value (not a possibly
+	// stale snapshot) — UpdateFunc re-reads and re-applies on conflict. Only
+	// this call's own fields are touched, so a concurrent write isn't clobbered
+	// (RFC #129 Phase 1c). Deliberately do NOT set FailedAt: that marks a
+	// tombstone (a container that ran and was preserved), which the retention GC
+	// keys off; a stuck-in-create record is neither a tombstone nor evictable.
+	stalled := false
+	var fresh types.Instance
+	if updateErr := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh, func() error {
+		fresh.CreateAttempts++
+		fresh.FailureReason = reason
+		// Flip to Stalled when retries are exhausted so operators get a clear
+		// "stop waiting, take action" signal; while Stalled, NextCreateAttemptAt
+		// stays nil — the reconciler never auto-retries.
+		if fresh.CreateAttempts >= maxCreateAttempts {
+			applyInstanceStatus(&fresh, types.InstanceStatusStalled, reason, err.Error())
+			fresh.NextCreateAttemptAt = nil
+			stalled = true
+		} else {
+			applyInstanceStatus(&fresh, types.InstanceStatusFailed, reason, err.Error())
+			next := now.Add(createBackoffFor(fresh.CreateAttempts))
+			fresh.NextCreateAttemptAt = &next
+			stalled = false
+		}
+		return nil
+	}, store.WithReconciler()); updateErr != nil {
 		c.logger.Error("Failed to persist create-failure status on instance",
 			log.Str("instance", instance.ID),
 			log.Str("reason", reason),
 			log.Err(updateErr))
+		return
 	}
+
+	// Reflect the persisted state on the caller's copy, then emit/log once
+	// (side effects must not repeat across UpdateFunc retries).
+	*instance = fresh
+	if stalled {
+		c.logger.Warn("Instance create retries exhausted; marking Stalled",
+			log.Str("instance", instance.ID),
+			log.Str("reason", reason),
+			log.Int("attempts", instance.CreateAttempts))
+	}
+	c.emit(types.EventLevelError, instance, reason, err.Error())
 }
 
 // Backoff schedule for CreateInstance retries on a stuck-in-create
