@@ -6,15 +6,9 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
-	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/utils"
 )
-
-// buildWorkItemKey builds a key for a work item
-func buildWorkItemKey(event store.WatchEvent) string {
-	return fmt.Sprintf("%s/%s/%s/%s", event.ResourceType, event.Namespace, event.Name, event.Type)
-}
 
 // areStringSlicesEqual checks if two string slices are equal
 func areStringSlicesEqual(a, b []string) bool {

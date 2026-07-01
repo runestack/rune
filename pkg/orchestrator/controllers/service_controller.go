@@ -70,9 +70,6 @@ type serviceController struct {
 	serviceObservedScales map[string]int
 	serviceObservedLock   sync.RWMutex
 
-	// For tracking internal updates to prevent reconciliation loops
-	internalUpdates sync.Map
-
 	// Deletion system dependencies
 	deletionWorkerPool *pool.WorkerPool
 	finalizerExecutor  *finalizers.FinalizerExecutor
@@ -264,10 +261,6 @@ func (sc *serviceController) handleServiceUpdated(ctx context.Context, service *
 			log.Str("name", service.Name),
 			log.Str("namespace", service.Namespace))
 	} else {
-		// Mark as in progress
-		sc.inProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
-		defer sc.clearInProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
-
 		// Trigger immediate reconciliation to handle the update
 		if err := sc.reconciler.reconcileSingleService(ctx, service); err != nil {
 			sc.logger.Error("Failed to reconcile service after update",
@@ -334,10 +327,6 @@ func (sc *serviceController) GetServiceStatus(ctx context.Context, namespace, na
 }
 
 func (sc *serviceController) UpdateServiceStatus(ctx context.Context, service *types.Service, status types.ServiceStatus) error {
-	// Mark this as an internal update
-	sc.inProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
-	defer sc.clearInProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
-
 	// Write ONLY the Status field, atomically, on the freshly-read service so a
 	// concurrent scale write (the scaling controller) is never clobbered — the
 	// caller's `service` is a snapshot that may be stale by now (RFC #129).
@@ -860,31 +849,6 @@ func (sc *serviceController) isStatusOnlyChange(service *types.Service) bool {
 	return lastObserved == service.Metadata.Generation
 }
 
-// inProgressUpdate marks an update as being in progress to avoid reconciliation loops
-func (sc *serviceController) inProgressUpdate(resourceType types.ResourceType, namespace, name string) {
-	key := fmt.Sprintf("%s/%s/%s", resourceType, namespace, name)
-	sc.internalUpdates.Store(key, time.Now())
-}
-
-// clearInProgressUpdate clears an update marked as in progress
-func (sc *serviceController) clearInProgressUpdate(resourceType types.ResourceType, namespace, name string) {
-	key := fmt.Sprintf("%s/%s/%s", resourceType, namespace, name)
-	sc.internalUpdates.Delete(key)
-}
-
-// isInternalUpdate checks if an event was triggered by the service controller itself
-func (sc *serviceController) isInternalUpdate(event store.WatchEvent) bool {
-	// Check if event has a service controller source
-	if event.Source == "service-controller" {
-		return true
-	}
-
-	// Check if we have a record of this being an internal update
-	key := buildWorkItemKey(event)
-	_, exists := sc.internalUpdates.Load(key)
-	return exists
-}
-
 // StartWatching starts watching for service events
 func (sc *serviceController) StartWatching(ctx context.Context) error {
 	sc.logger.Info("Starting service watch")
@@ -940,17 +904,10 @@ func (sc *serviceController) watchServices() {
 				continue
 			}
 
-			// Check if this is an internal update to avoid reconciliation loops
-			if sc.isInternalUpdate(event) {
-				sc.logger.Debug("Ignoring internally triggered update",
-					log.Any("resource_type", event.ResourceType),
-					log.Str("namespace", event.Namespace),
-					log.Str("name", event.Name),
-					log.Str("source", string(event.Source)))
-				continue
-			}
-
-			// Process the event directly (simplified version without worker queue)
+			// Process the event directly (simplified version without worker queue).
+			// Reconcile-loop suppression is handled downstream by isStatusOnlyChange
+			// (generation + observed-scale tracking); the service controller does not
+			// filter its own writes here.
 			if err := sc.processServiceEvent(sc.ctx, event); err != nil {
 				sc.logger.Error("Failed to process service event",
 					log.Str("name", event.Name),
