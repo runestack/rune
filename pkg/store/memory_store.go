@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -244,6 +245,9 @@ func (m *MemoryStore) UpdateFunc(ctx context.Context, resourceType types.Resourc
 	}
 
 	if err := mutate(); err != nil {
+		if errors.Is(err, ErrSkipUpdate) {
+			return nil
+		}
 		return err
 	}
 

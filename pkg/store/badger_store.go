@@ -348,7 +348,8 @@ func (s *BadgerStore) UpdateFunc(ctx context.Context, resourceType types.Resourc
 				return fmt.Errorf("failed to deserialize resource: %w", err)
 			}
 
-			// Apply the caller's mutation to the freshly-read target.
+			// Apply the caller's mutation to the freshly-read target. A
+			// mutate that returns ErrSkipUpdate aborts the write (handled below).
 			if err := mutate(); err != nil {
 				return err
 			}
@@ -382,6 +383,10 @@ func (s *BadgerStore) UpdateFunc(ctx context.Context, resourceType types.Resourc
 
 		if err == nil {
 			s.emitWatchEvent(WatchEventUpdated, resourceType, namespace, name, target, options.Source)
+			return nil
+		}
+		// The mutate aborted the write — success, no event.
+		if errors.Is(err, ErrSkipUpdate) {
 			return nil
 		}
 		// Retry only on a genuine write-write conflict.

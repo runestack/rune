@@ -338,12 +338,17 @@ func (sc *serviceController) UpdateServiceStatus(ctx context.Context, service *t
 	sc.inProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
 	defer sc.clearInProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
 
-	// Update the service status in the store
-	service.Status = status
-	if err := sc.store.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, service); err != nil {
+	// Write ONLY the Status field, atomically, on the freshly-read service so a
+	// concurrent scale write (the scaling controller) is never clobbered — the
+	// caller's `service` is a snapshot that may be stale by now (RFC #129).
+	var fresh types.Service
+	if err := sc.store.UpdateFunc(ctx, types.ResourceTypeService, service.Namespace, service.Name, &fresh, func() error {
+		fresh.Status = status
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to update service status: %w", err)
 	}
-
+	service.Status = status
 	return nil
 }
 

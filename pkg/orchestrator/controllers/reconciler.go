@@ -1057,32 +1057,29 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 			log.Str("to", string(newStatus)),
 			log.Str("reason", newReason))
 
-		// Re-read the service immediately before writing and apply ONLY the
-		// status fields to that fresh copy. updateServiceStatus runs at the end
-		// of a reconcile cycle on a `service` snapshot taken at the top of the
-		// cycle; a concurrent scale write — e.g. `rune restart`'s 0→1 leg via
-		// the scaling controller — can land in between. Writing the stale full
-		// object back would clobber that scale change, reverting Scale 1→0 and
-		// stranding the service Pending 0/0 ("restart goes 1→0 and hangs; run
-		// restart again to recover"). A focused fresh-read status write
-		// preserves the latest Scale (and any other concurrently-updated spec).
+		// Apply ONLY the status fields, atomically, on the freshly-read service.
+		// updateServiceStatus runs at the end of a reconcile cycle on a `service`
+		// snapshot taken at the top; a concurrent scale write (e.g. `rune
+		// restart`'s 0→1 leg via the scaling controller) can land in between.
+		// UpdateFunc's CAS guarantees the status write never clobbers that Scale
+		// (the "restart goes 1→0 and hangs" bug) — superseding the earlier
+		// re-read-before-write hardening with a hard guarantee (RFC #129).
 		var fresh types.Service
-		if err := r.store.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &fresh); err != nil {
-			r.logger.Debug("Skipping status update: service no longer readable",
-				log.Str("service", service.Name), log.Err(err))
+		err := r.store.UpdateFunc(ctx, types.ResourceTypeService, service.Namespace, service.Name, &fresh, func() error {
+			// Don't resurrect a service that was deleted out from under us, and
+			// skip if another writer already set this exact status.
+			if fresh.Status == types.ServiceStatusDeleted {
+				return store.ErrSkipUpdate
+			}
+			if fresh.Status == newStatus && fresh.StatusReason == newReason && fresh.StatusMessage == newMessage {
+				return store.ErrSkipUpdate
+			}
+			fresh.Status = newStatus
+			fresh.StatusReason = newReason
+			fresh.StatusMessage = newMessage
 			return nil
-		}
-		if fresh.Status == types.ServiceStatusDeleted {
-			return nil
-		}
-		// A concurrent writer may already have set the same status.
-		if fresh.Status == newStatus && fresh.StatusReason == newReason && fresh.StatusMessage == newMessage {
-			return nil
-		}
-		fresh.Status = newStatus
-		fresh.StatusReason = newReason
-		fresh.StatusMessage = newMessage
-		if err := r.store.Update(ctx, types.ResourceTypeService, fresh.Namespace, fresh.Name, &fresh); err != nil {
+		}, store.WithReconciler())
+		if err != nil {
 			return fmt.Errorf("failed to update service status: %w", err)
 		}
 		// Reflect the persisted status on the caller's copy for consistency.

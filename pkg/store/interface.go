@@ -3,10 +3,17 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/runestack/rune/pkg/types"
 )
+
+// ErrSkipUpdate, when returned by an UpdateFunc mutate callback, aborts the
+// write and makes UpdateFunc return nil. It lets a conditional update decide —
+// after seeing the freshly-read value — that no change is needed (e.g. the
+// field is already at the desired value, or the resource is being deleted).
+var ErrSkipUpdate = errors.New("store: skip update")
 
 // Store defines the interface for state storage operations.
 type Store interface {
