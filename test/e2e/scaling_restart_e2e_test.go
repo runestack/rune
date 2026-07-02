@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -129,5 +130,87 @@ func TestScaleDownUp_RapidReturnsToTarget(t *testing.T) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
+	}
+}
+
+// TestParallelScaleRestartStatus_Converges is the RFC #129 Phase 3 acceptance
+// test at the e2e level: 4 goroutines hammer ONE service for 15s with
+// immediate scale ops (targets 1–3) and restart-shaped bounces (0 then N —
+// exactly the sequence `rune restart --detach` issues), then a final
+// ScaleService(2) is the authoritative desired state. The service must
+// converge to scale 2 and HOLD it — "restart is single-shot under load".
+// All hammering is pure gRPC: t.Fatal is illegal off the test goroutine, and
+// transient op-conflict errors during the storm are expected and ignored.
+func TestParallelScaleRestartStatus_Converges(t *testing.T) {
+	ctx := harness.New(t)
+	svc := generated.NewServiceServiceClient(ctx.Conn())
+
+	castScaledService(t, ctx, &svc, "storm", 2)
+
+	scaleTo := func(target int) {
+		c, cancel := ctx.Ctx()
+		defer cancel()
+		// Best-effort: rejections/conflicts under the storm are part of the test.
+		_, _ = svc.ScaleService(c, &generated.ScaleServiceRequest{
+			Name:      "storm",
+			Namespace: "default",
+			Scale:     int32(target),
+			Mode:      generated.ScalingMode_SCALING_MODE_IMMEDIATE,
+		})
+	}
+
+	const hammerFor = 15 * time.Second
+	deadline := time.Now().Add(hammerFor)
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; time.Now().Before(deadline); i++ {
+				if g%2 == 0 {
+					// Scale cycler: targets 1..3.
+					scaleTo(1 + (i % 3))
+				} else {
+					// Restart bounce: 0 then back (the `restart --detach` shape).
+					scaleTo(0)
+					scaleTo(1 + (i % 3))
+				}
+				time.Sleep(time.Duration(75+g*40) * time.Millisecond)
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Authoritative final desired state.
+	const finalTarget = 2
+	c, cancel := ctx.Ctx()
+	if _, err := svc.ScaleService(c, &generated.ScaleServiceRequest{
+		Name:      "storm",
+		Namespace: "default",
+		Scale:     int32(finalTarget),
+		Mode:      generated.ScalingMode_SCALING_MODE_IMMEDIATE,
+	}); err != nil {
+		cancel()
+		t.Fatalf("final scale to %d: %v", finalTarget, err)
+	}
+	cancel()
+
+	// Converge...
+	ctx.Eventually(harness.DefaultConvergeTimeout, "storm to settle at the final target", func() bool {
+		s, err := getScale(ctx, &svc, "storm")
+		return err == nil && s == finalTarget
+	})
+
+	// ...and HOLD (no late scale write may knock it off the target).
+	stableUntil := time.Now().Add(3 * time.Second)
+	for time.Now().Before(stableUntil) {
+		s, err := getScale(ctx, &svc, "storm")
+		if err != nil {
+			t.Fatalf("get scale after storm: %v", err)
+		}
+		if s != finalTarget {
+			t.Fatalf("scale fell to %d after settling at %d (lost update under load)", s, finalTarget)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
