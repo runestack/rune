@@ -270,9 +270,28 @@ func (s *TestStore) List(ctx context.Context, resourceType types.ResourceType, n
 	return UnmarshalResource(result, resource)
 }
 
-// ListAll retrieves all resources of a given type in all namespaces.
+// ListAll retrieves all resources of a given type in all namespaces. Unlike
+// List, a missing namespace map is not an error — it iterates every namespace
+// under the resource type, matching BadgerStore's prefix-scan semantics.
+// (Previously this delegated to List(ctx, type, "", ...), which errored unless
+// resources had been stored under the literal "" namespace — so ListAll never
+// worked on TestStore; callers only survived because they logged and ignored
+// the error.)
 func (s *TestStore) ListAll(ctx context.Context, resourceType types.ResourceType, resource interface{}) error {
-	return s.List(ctx, resourceType, "", resource)
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	if !s.opened {
+		return errors.New("store is not opened")
+	}
+
+	result := make([]interface{}, 0)
+	for _, nsResources := range s.data[resourceType] {
+		for _, r := range nsResources {
+			result = append(result, r)
+		}
+	}
+	return UnmarshalResource(result, resource)
 }
 
 // Update implements the Store interface.

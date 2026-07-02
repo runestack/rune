@@ -15,24 +15,22 @@ import (
 )
 
 // setupTestServiceController creates a service controller with test dependencies
-func setupTestServiceController(t *testing.T) (context.Context, *store.TestStore, *FakeInstanceController, *FakeHealthController, *FakeScalingController, ServiceController) {
+func setupTestServiceController(t *testing.T) (context.Context, *store.TestStore, *FakeInstanceController, *FakeHealthController, ServiceController) {
 	ctx := context.Background()
 	testStore := store.NewTestStore()
 	testInstanceController := NewFakeInstanceController()
 	mockHealthController := NewFakeHealthController()
-	mockScalingController := NewFakeScalingController()
 	testLogger := log.NewLogger()
 
 	controller, err := NewServiceController(
 		testStore,
 		testInstanceController,
 		mockHealthController,
-		mockScalingController,
 		testLogger,
 	)
 	require.NoError(t, err, "Failed to create service controller")
 
-	return ctx, testStore, testInstanceController, mockHealthController, mockScalingController, controller
+	return ctx, testStore, testInstanceController, mockHealthController, controller
 }
 
 // createTestService creates a test service in the store
@@ -81,7 +79,7 @@ func serviceControllerCreateTestInstance(ctx context.Context, t *testing.T, test
 
 // TestServiceControllerLifecycle tests starting and stopping the service controller
 func TestServiceControllerLifecycle(t *testing.T) {
-	ctx, _, _, _, _, controller := setupTestServiceController(t)
+	ctx, _, _, _, controller := setupTestServiceController(t)
 
 	// Start the controller
 	err := controller.Start(ctx)
@@ -94,7 +92,7 @@ func TestServiceControllerLifecycle(t *testing.T) {
 
 // TestGetServiceStatus tests the GetServiceStatus method
 func TestGetServiceStatus(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -115,7 +113,7 @@ func TestGetServiceStatus(t *testing.T) {
 
 // TestUpdateServiceStatus tests the UpdateServiceStatus method
 func TestUpdateServiceStatus(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -133,7 +131,7 @@ func TestUpdateServiceStatus(t *testing.T) {
 
 // TestGetServiceLogs tests the GetServiceLogs method
 func TestGetServiceLogs(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -166,7 +164,7 @@ func TestGetServiceLogs(t *testing.T) {
 
 // TestGetServiceLogsNoInstances tests GetServiceLogs when no instances exist
 func TestGetServiceLogsNoInstances(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
 	// Create a test service without instances
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -182,7 +180,7 @@ func TestGetServiceLogsNoInstances(t *testing.T) {
 
 // TestExecInService tests the ExecInService method
 func TestExecInService(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -214,7 +212,7 @@ func TestExecInService(t *testing.T) {
 
 // TestExecInServiceNoRunningInstances tests ExecInService when no running instances exist
 func TestExecInServiceNoRunningInstances(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -233,7 +231,7 @@ func TestExecInServiceNoRunningInstances(t *testing.T) {
 
 // TestRestartService tests the RestartService method
 func TestRestartService(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -252,7 +250,7 @@ func TestRestartService(t *testing.T) {
 
 // TestStopService tests the StopService method
 func TestStopService(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -271,7 +269,7 @@ func TestStopService(t *testing.T) {
 
 // TestListInstancesForService tests the ListInstancesForService method
 func TestListInstancesForService(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -301,7 +299,7 @@ func TestListInstancesForService(t *testing.T) {
 
 // TestDeleteServiceDryRun tests the DeleteService method with dry run
 func TestDeleteServiceDryRun(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -326,7 +324,7 @@ func TestDeleteServiceDryRun(t *testing.T) {
 
 // TestDeleteServiceReal tests the DeleteService method with real deletion
 func TestDeleteServiceReal(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
 	// Create a test service
 	service := createTestService(ctx, t, testStore, "test-service")
@@ -357,7 +355,7 @@ func TestDeleteServiceReal(t *testing.T) {
 
 // TestGetDeletionStatus tests the GetDeletionStatus method
 func TestGetDeletionStatus(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
 	// Create a deletion operation
 	deletionOp := &types.DeletionOperation{
@@ -385,141 +383,157 @@ func TestGetDeletionStatus(t *testing.T) {
 }
 
 // TestHandleServiceCreated tests the HandleServiceCreated method
-func TestHandleServiceCreated(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
+// TestServiceEvent_EnqueuesKey verifies the watch→queue translation (RFC #129
+// Phase 3): Created, real Updated, and Deleted events all enqueue the service
+// key; duplicates coalesce.
+func TestServiceEvent_EnqueuesKey(t *testing.T) {
+	_, _, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
 
-	// Create a test service
-	service := &types.Service{
-		ID:        "test-service",
-		Name:      "test-service",
-		Namespace: "default",
-		Image:     "test-image:latest",
-		Scale:     2,
-		Status:    types.ServiceStatusPending,
-		Metadata: &types.ServiceMetadata{
-			Generation: 1,
-		},
-	}
-
-	// Create the service in the store first
-	err := testStore.Create(ctx, types.ResourceTypeService, service.Namespace, service.Name, service)
-	require.NoError(t, err, "Failed to create service in store")
-
-	// Handle service created
-	err = controller.handleServiceCreated(ctx, service)
-	require.NoError(t, err, "HandleServiceCreated should not return an error")
-
-	// Verify service was updated in store
-	var storedService types.Service
-	err = testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &storedService)
-	require.NoError(t, err, "Service should be stored")
-	assert.Equal(t, service.Name, storedService.Name, "Service name should match")
-}
-
-// TestHandleServiceUpdated tests the HandleServiceUpdated method
-func TestHandleServiceUpdated(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
-
-	// Create a test service
-	service := createTestService(ctx, t, testStore, "test-service")
-
-	// Update service
-	service.Scale = 3
-	service.Metadata.Generation = 2
-
-	// Handle service updated
-	err := controller.handleServiceUpdated(ctx, service)
-	require.NoError(t, err, "HandleServiceUpdated should not return an error")
-
-	// Verify service was not updated in store (HandleServiceUpdated only triggers reconciliation)
-	var storedService types.Service
-	err = testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &storedService)
-	require.NoError(t, err, "Service should be stored")
-	assert.Equal(t, 2, storedService.Scale, "Service scale should remain unchanged in store")
-}
-
-// TestHandleServiceDeleted tests the HandleServiceDeleted method
-func TestHandleServiceDeleted(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
-
-	// Create a test service
-	service := createTestService(ctx, t, testStore, "test-service")
-
-	// Handle service deleted
-	err := controller.handleServiceDeleted(ctx, service)
-	require.NoError(t, err, "HandleServiceDeleted should not return an error")
-
-	// Service deletion is handled by finalizers, so no immediate action is taken
-	// The service should still exist in the store
-	var storedService types.Service
-	err = testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &storedService)
-	require.NoError(t, err, "Service should still exist in store")
-}
-
-// TestProcessServiceEvent tests the ProcessServiceEvent method
-func TestProcessServiceEvent(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
-
-	// Create a test service
-	service := createTestService(ctx, t, testStore, "test-service")
-
-	// Test created event
-	event := store.WatchEvent{
+	created := store.WatchEvent{
 		Type:         store.WatchEventCreated,
 		ResourceType: types.ResourceTypeService,
-		Namespace:    service.Namespace,
-		Name:         service.Name,
+		Namespace:    "default",
+		Name:         "web",
 	}
+	sc.enqueueServiceEvent(created)
+	assert.Equal(t, 1, sc.reconciler.queue.Len(), "created event must enqueue")
 
-	err := controller.processServiceEvent(ctx, event)
-	require.NoError(t, err, "processServiceEvent should not return an error for created event")
-
-	// Test updated event
-	event.Type = store.WatchEventUpdated
-	err = controller.processServiceEvent(ctx, event)
-	require.NoError(t, err, "processServiceEvent should not return an error for updated event")
-
-	// Test deleted event
-	event.Type = store.WatchEventDeleted
-	err = controller.processServiceEvent(ctx, event)
-	require.NoError(t, err, "processServiceEvent should not return an error for deleted event")
-}
-
-// TestProcessServiceEventUnknownType tests ProcessServiceEvent with unknown event type
-func TestProcessServiceEventUnknownType(t *testing.T) {
-	ctx, testStore, _, _, _, controller := setupTestServiceController(t)
-
-	// Create a test service
-	service := createTestService(ctx, t, testStore, "test-service")
-
-	// Test unknown event type
-	event := store.WatchEvent{
-		Type:         "unknown",
-		ResourceType: types.ResourceTypeService,
-		Namespace:    service.Namespace,
-		Name:         service.Name,
+	// A real desired-state update (generation ahead of observed) enqueues —
+	// and coalesces with the pending created key.
+	updated := created
+	updated.Type = store.WatchEventUpdated
+	updated.Resource = &types.Service{
+		Name: "web", Namespace: "default",
+		Metadata: &types.ServiceMetadata{Generation: 2, ObservedGeneration: 1},
 	}
+	sc.enqueueServiceEvent(updated)
+	assert.Equal(t, 1, sc.reconciler.queue.Len(), "same key must coalesce, not duplicate")
 
-	err := controller.processServiceEvent(ctx, event)
-	require.Error(t, err, "processServiceEvent should return an error for unknown event type")
-	assert.Contains(t, err.Error(), "unknown event type", "Error should mention unknown event type")
-}
-
-// TestProcessServiceEventNotFound tests ProcessServiceEvent when service is not found
-func TestProcessServiceEventNotFound(t *testing.T) {
-	ctx, _, _, _, _, controller := setupTestServiceController(t)
-
-	// Test event for non-existent service
-	event := store.WatchEvent{
-		Type:         store.WatchEventUpdated,
+	// A different service's deleted event enqueues its own key (syncService
+	// treats not-found as settled).
+	deleted := store.WatchEvent{
+		Type:         store.WatchEventDeleted,
 		ResourceType: types.ResourceTypeService,
 		Namespace:    "default",
-		Name:         "non-existent-service",
+		Name:         "gone",
+	}
+	sc.enqueueServiceEvent(deleted)
+	assert.Equal(t, 2, sc.reconciler.queue.Len(), "deleted event must enqueue its own key")
+}
+
+// TestStatusOnlyUpdate_SkipsEnqueue verifies the echo filter: an Updated event
+// whose resource shows ObservedGeneration == Generation is the reconciler's
+// own status write bouncing back through the watch, and must not enqueue.
+// Anything not inspectable must enqueue (never guess toward dropping work).
+func TestStatusOnlyUpdate_SkipsEnqueue(t *testing.T) {
+	_, _, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+
+	converged := &types.ServiceMetadata{Generation: 3, ObservedGeneration: 3}
+
+	// Pointer form: filtered.
+	sc.enqueueServiceEvent(store.WatchEvent{
+		Type: store.WatchEventUpdated, ResourceType: types.ResourceTypeService,
+		Namespace: "default", Name: "web",
+		Resource: &types.Service{Name: "web", Namespace: "default", Metadata: converged},
+	})
+	assert.Equal(t, 0, sc.reconciler.queue.Len(), "status-only echo (pointer) must not enqueue")
+
+	// Value form: filtered too.
+	sc.enqueueServiceEvent(store.WatchEvent{
+		Type: store.WatchEventUpdated, ResourceType: types.ResourceTypeService,
+		Namespace: "default", Name: "web",
+		Resource: types.Service{Name: "web", Namespace: "default", Metadata: converged},
+	})
+	assert.Equal(t, 0, sc.reconciler.queue.Len(), "status-only echo (value) must not enqueue")
+
+	// Uninspectable resource: must enqueue.
+	sc.enqueueServiceEvent(store.WatchEvent{
+		Type: store.WatchEventUpdated, ResourceType: types.ResourceTypeService,
+		Namespace: "default", Name: "web",
+		Resource: map[string]any{"opaque": true},
+	})
+	assert.Equal(t, 1, sc.reconciler.queue.Len(), "uninspectable update must enqueue")
+}
+
+// TestSyncService_NotFoundIsTerminal: a key whose service no longer exists is
+// settled (nil), not retried — deletion cleanup belongs to finalizers and
+// housekeeping.
+func TestSyncService_NotFoundIsTerminal(t *testing.T) {
+	ctx, _, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+
+	err := sc.reconciler.syncService(ctx, "default/ghost")
+	assert.NoError(t, err, "missing service must be terminal, not a requeue")
+}
+
+// TestSyncService_MalformedKeyDropped: a key without a namespace separator can
+// never succeed; it must be dropped (nil) rather than retried forever.
+func TestSyncService_MalformedKeyDropped(t *testing.T) {
+	ctx, _, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+
+	err := sc.reconciler.syncService(ctx, "no-separator")
+	assert.NoError(t, err, "malformed key must be dropped, not requeued")
+}
+
+// TestResyncEnqueuesAll: the periodic resync schedules every service in the
+// store — the level-triggered safety net behind the event-driven flow.
+func TestResyncEnqueuesAll(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+
+	createTestService(ctx, t, testStore, "svc-a")
+	createTestService(ctx, t, testStore, "svc-b")
+	createTestService(ctx, t, testStore, "svc-c")
+
+	require.NoError(t, sc.reconciler.enqueueAllServices(ctx))
+	assert.Equal(t, 3, sc.reconciler.queue.Len(), "every service must be enqueued on resync")
+}
+
+// TestController_EventDrivenReconcileConverges is the end-to-end path through
+// the new machinery: store create → watch event → enqueue → queue worker →
+// reconcileService → instances created → status converges to Running with
+// ObservedGeneration == Generation. Replaces the coverage of the deleted
+// direct-call handler tests.
+func TestController_EventDrivenReconcileConverges(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
+
+	// The fake persists created instances as Running, emulating the real
+	// instance controller + an instantly-healthy workload.
+	fakeInstanceController.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
+		inst := &types.Instance{
+			ID: instanceName, Name: instanceName,
+			Namespace: svc.Namespace, ServiceID: svc.ID, ServiceName: svc.Name,
+			Status:    types.InstanceStatusRunning,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		_ = testStore.Create(ctx, types.ResourceTypeInstance, svc.Namespace, inst.ID, inst)
+		return inst, nil
 	}
 
-	err := controller.processServiceEvent(ctx, event)
-	require.Error(t, err, "processServiceEvent should return an error when service is not found")
-	assert.Contains(t, err.Error(), "failed to get service", "Error should mention failed to get service")
+	require.NoError(t, controller.Start(ctx))
+	defer func() { _ = controller.Stop() }()
+
+	// Creating the service fires the watch → enqueue → worker pipeline.
+	service := createTestService(ctx, t, testStore, "converge-service")
+
+	require.Eventually(t, func() bool {
+		var got types.Service
+		if err := testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got); err != nil {
+			return false
+		}
+		var instances []types.Instance
+		if err := testStore.List(ctx, types.ResourceTypeInstance, service.Namespace, &instances); err != nil {
+			return false
+		}
+		return got.Status == types.ServiceStatusRunning &&
+			len(instances) == service.Scale &&
+			got.Metadata != nil &&
+			got.Metadata.ObservedGeneration == got.Metadata.Generation
+	}, 10*time.Second, 20*time.Millisecond,
+		"service must converge to Running at scale with ObservedGeneration recorded, driven by events (no manual reconcile call)")
 }
 
 // fakeExecStream implements types.ExecStream for testing
@@ -575,7 +589,7 @@ func (fes *fakeExecStream) Stderr() io.Reader {
 // "no instances found" / "all marked as deleted". Operators
 // investigating a crashed service hit this all the time.
 func TestGetServiceLogs_FallsBackToFailedTombstoneSnapshot(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 	service := createTestService(ctx, t, testStore, "test-service")
 
 	// Seed two Failed tombstones with snapshots, plus one Deleted (older).
@@ -615,7 +629,7 @@ func TestGetServiceLogs_FallsBackToFailedTombstoneSnapshot(t *testing.T) {
 // LastLogs snapshot. The fallback must use it rather than returning
 // "no logs available".
 func TestGetServiceLogs_FallsBackToDeletedWhenNoFailed(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 	service := createTestService(ctx, t, testStore, "test-service")
 
 	at := time.Now().Add(-5 * time.Minute)
@@ -646,7 +660,7 @@ func TestGetServiceLogs_FallsBackToDeletedWhenNoFailed(t *testing.T) {
 // Without this, `rune logs gateway` on a crashing-without-stdout
 // service silently returns nothing and operators have no signal.
 func TestGetServiceLogs_NoCapturedOutput_SynthesizesWhyLine(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 	service := createTestService(ctx, t, testStore, "test-service")
 	at := time.Now()
 	tomb := &types.Instance{
@@ -686,7 +700,7 @@ func TestGetServiceLogs_NoCapturedOutput_SynthesizesWhyLine(t *testing.T) {
 // of real crash output. Fix: peek the live stream; if no data,
 // surface the previous tombstone's LastLogs.
 func TestGetServiceLogs_SilentLiveInstance_FallsBackToTombstone(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 	service := createTestService(ctx, t, testStore, "test-service")
 
 	// Live, Running, but the container has zero stdout/stderr.
@@ -722,7 +736,7 @@ func TestGetServiceLogs_SilentLiveInstance_FallsBackToTombstone(t *testing.T) {
 // the tombstone snapshot — that would just be noise for healthy
 // services.
 func TestGetServiceLogs_LiveHasContent_NoFallback(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, _, controller := setupTestServiceController(t)
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
 	service := createTestService(ctx, t, testStore, "test-service")
 	serviceControllerCreateTestInstance(ctx, t, testStore, service.Name, "live-talking", types.InstanceStatusRunning)
 	earlier := time.Now().Add(-1 * time.Minute)
@@ -761,7 +775,7 @@ func TestGetServiceLogs_LiveHasContent_NoFallback(t *testing.T) {
 // Generation (asserted in the scaling controller test), not because a separate
 // map noticed the scale differ.
 func TestIsStatusOnlyChange_GenerationBased(t *testing.T) {
-	_, _, _, _, _, controller := setupTestServiceController(t)
+	_, _, _, _, controller := setupTestServiceController(t)
 	sc := controller.(*serviceController)
 	ns, name := "default", "web"
 
