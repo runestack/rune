@@ -54,6 +54,9 @@ type serviceController struct {
 	// Watch channel for services
 	watchCh <-chan store.WatchEvent
 
+	// Watch channel for instances (event-driven status roll-up, Phase 3c)
+	instanceWatchCh <-chan store.WatchEvent
+
 	// Deletion system dependencies
 	deletionWorkerPool *pool.WorkerPool
 	finalizerExecutor  *finalizers.FinalizerExecutor
@@ -729,6 +732,21 @@ func (sc *serviceController) StartWatching(ctx context.Context) error {
 		sc.watchServices()
 	}()
 
+	// Watch instances too: an instance status change (health promotion,
+	// failure, deletion) enqueues its owning service so status rolls up
+	// event-driven instead of waiting for the 30s resync (RFC #129 Phase 3c).
+	instanceWatchCh, err := sc.store.Watch(ctx, types.ResourceTypeInstance, "")
+	if err != nil {
+		return fmt.Errorf("failed to watch instances: %w", err)
+	}
+	sc.instanceWatchCh = instanceWatchCh
+
+	sc.wg.Add(1)
+	go func() {
+		defer sc.wg.Done()
+		sc.watchInstances()
+	}()
+
 	return nil
 }
 
@@ -772,6 +790,101 @@ func (sc *serviceController) watchServices() {
 			sc.enqueueServiceEvent(event)
 		}
 	}
+}
+
+// watchInstances watches instance events and enqueues the owning service for
+// reconciliation (event-driven status roll-up). Same restart-on-close shape as
+// watchServices.
+func (sc *serviceController) watchInstances() {
+	for {
+		select {
+		case <-sc.ctx.Done():
+			return
+		case event, ok := <-sc.instanceWatchCh:
+			if !ok {
+				sc.logger.Error("Instance watch channel closed, restarting watch")
+				watchCh, err := sc.store.Watch(sc.ctx, types.ResourceTypeInstance, "")
+				if err != nil {
+					sc.logger.Error("Failed to restart instance watch", log.Err(err))
+					if err.Error() == "store is closed, cannot create new watch" {
+						sc.logger.Info("Store is closed, stopping instance watch")
+						return
+					}
+					time.Sleep(5 * time.Second) // Backoff before retry
+					continue
+				}
+				sc.instanceWatchCh = watchCh
+				continue
+			}
+
+			sc.enqueueInstanceEvent(event)
+		}
+	}
+}
+
+// enqueueInstanceEvent maps an instance watch event to its owning service and
+// enqueues that service for reconciliation. This is what makes service status
+// converge within milliseconds of an instance transition (e.g. the health
+// controller's Starting→Running promotion) instead of waiting for the 30s
+// resync tick.
+//
+// Reconciler-sourced instance writes are skipped: the only such write is
+// UpdateInstance during an in-flight sync, whose run already ends with
+// updateServiceStatus — re-enqueueing it would be a pure echo. Every other
+// source (health controller, API, finalizers, empty) enqueues; the reconcile
+// is idempotent, so over-triggering is safe and under-triggering is what the
+// resync safety net exists for.
+func (sc *serviceController) enqueueInstanceEvent(event store.WatchEvent) {
+	if event.Source == store.EventSourceReconciler {
+		return
+	}
+
+	namespace, serviceName, ok := sc.ownerFromInstanceEvent(event)
+	if !ok {
+		return
+	}
+	sc.reconciler.Enqueue(namespace, serviceName)
+}
+
+// ownerFromInstanceEvent resolves the owning service of an instance event.
+// It prefers the resource carried on the event (tolerating pointer and value
+// forms) and falls back to reading the instance from the store. A deleted
+// instance that can no longer be read is dropped — the periodic resync covers
+// any staleness that could leave behind.
+func (sc *serviceController) ownerFromInstanceEvent(event store.WatchEvent) (namespace, serviceName string, ok bool) {
+	var inst *types.Instance
+	switch v := event.Resource.(type) {
+	case *types.Instance:
+		inst = v
+	case types.Instance:
+		inst = &v
+	}
+
+	if inst == nil {
+		ctx := sc.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		var fetched types.Instance
+		if err := sc.store.Get(ctx, types.ResourceTypeInstance, event.Namespace, event.Name, &fetched); err != nil {
+			sc.logger.Debug("Dropping unmappable instance event",
+				log.Str("namespace", event.Namespace),
+				log.Str("instance", event.Name),
+				log.Str("type", string(event.Type)))
+			return "", "", false
+		}
+		inst = &fetched
+	}
+
+	if inst.ServiceName == "" {
+		return "", "", false
+	}
+
+	namespace = inst.Namespace
+	if namespace == "" {
+		namespace = event.Namespace
+	}
+	return namespace, inst.ServiceName, true
 }
 
 // Deletion helper methods
