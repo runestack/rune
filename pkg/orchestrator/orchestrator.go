@@ -216,7 +216,6 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		options.Store,
 		instanceController,
 		healthController,
-		scalingController,
 		options.Logger,
 	)
 	if err != nil {

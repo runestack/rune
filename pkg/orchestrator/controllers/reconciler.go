@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator/queue"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -31,14 +32,25 @@ const (
 	failedInstanceTTL = 1 * time.Hour
 )
 
-// reconciler is responsible for ensuring the actual state of instances
-// matches the desired state defined in the services
+// reconcileWorkerCount is how many queue workers reconcile services in
+// parallel. Per-key exclusivity is guaranteed by the queue regardless of this
+// number — two workers can never reconcile the same service concurrently — so
+// this only bounds cross-service parallelism.
+const reconcileWorkerCount = 4
+
+// reconciler ensures the actual state of instances matches the desired state
+// defined in the services. All per-service reconciliation is serialized
+// through a coalescing per-key workqueue (RFC #129 Phase 3): watch events and
+// the periodic resync enqueue "namespace/name" keys, and queue workers run
+// syncService — so reconciles of one service can never interleave, making the
+// reconciler the single orchestrator-side writer of Service status.
 type reconciler struct {
 	store              store.Store
 	instanceController InstanceController
 	healthController   HealthController
 	logger             log.Logger
 	reconcileInterval  time.Duration
+	queue              *queue.Queue
 	mu                 sync.Mutex
 	isRunning          bool
 	ctx                context.Context
@@ -60,9 +72,54 @@ func newReconciler(
 		healthController:   healthController,
 		logger:             logger.WithComponent("reconciler"),
 		reconcileInterval:  30 * time.Second,
+		queue:              queue.New("service-reconcile", queue.DefaultRateLimiter()),
 		mu:                 sync.Mutex{},
 		wg:                 sync.WaitGroup{},
 	}
+}
+
+// Enqueue schedules a reconcile of one service. Safe to call from any
+// goroutine; duplicate enqueues coalesce and a service being reconciled right
+// now is re-run exactly once afterwards.
+func (r *reconciler) Enqueue(namespace, name string) {
+	r.queue.Add(namespace + "/" + name)
+}
+
+// enqueueAllServices schedules a reconcile for every service in the store —
+// the periodic level-triggered resync that catches anything a lost or filtered
+// event would otherwise leave behind.
+func (r *reconciler) enqueueAllServices(ctx context.Context) error {
+	var services []types.Service
+	if err := r.store.ListAll(ctx, types.ResourceTypeService, &services); err != nil {
+		return fmt.Errorf("failed to list services: %w", err)
+	}
+	for i := range services {
+		r.Enqueue(services[i].Namespace, services[i].Name)
+	}
+	return nil
+}
+
+// syncService is the queue worker handler: reconcile one service by key.
+// A nil return means the key is settled (including "service deleted"); an
+// error requeues the key with backoff.
+func (r *reconciler) syncService(ctx context.Context, key string) error {
+	namespace, name, ok := strings.Cut(key, "/")
+	if !ok {
+		r.logger.Error("Dropping malformed reconcile key", log.Str("key", key))
+		return nil // malformed keys can't succeed on retry
+	}
+
+	var service types.Service
+	if err := r.store.Get(ctx, types.ResourceTypeService, namespace, name, &service); err != nil {
+		if store.IsNotFoundError(err) {
+			// Deleted between enqueue and sync — finalizers and housekeeping
+			// own the cleanup; nothing to reconcile.
+			return nil
+		}
+		return fmt.Errorf("failed to get service %s: %w", key, err)
+	}
+
+	return r.reconcileService(ctx, &service)
 }
 
 // Start begins the periodic reconciliation loop
@@ -79,13 +136,24 @@ func (r *reconciler) Start(ctx context.Context) error {
 
 	r.ctx, r.cancel = context.WithCancel(ctx)
 
-	// Perform an initial reconciliation immediately
-	if err := r.reconcileServices(r.ctx); err != nil {
-		r.logger.Error("Initial reconciliation failed", log.Err(err))
+	// Start the reconcile workers. queue.Work blocks until the context is
+	// cancelled (which shuts the queue down), so it runs under the WaitGroup
+	// and Stop's wg.Wait() covers worker teardown.
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.queue.Work(r.ctx, reconcileWorkerCount, r.syncService)
+	}()
+
+	// Seed an initial full reconcile immediately (level-triggered baseline).
+	if err := r.enqueueAllServices(r.ctx); err != nil {
+		r.logger.Error("Initial reconcile enqueue failed", log.Err(err))
 		// Continue despite error as this will be retried by the ticker
 	}
+	r.runHousekeeping(r.ctx)
 
-	// Start periodic reconciliation
+	// Start the periodic resync: re-enqueue every service (safety net for
+	// anything event-driven flow missed) and run the cross-service sweeps.
 	r.ticker = time.NewTicker(r.reconcileInterval)
 	r.wg.Add(1)
 	go func() {
@@ -100,19 +168,31 @@ func (r *reconciler) Start(ctx context.Context) error {
 			case <-r.ctx.Done():
 				return
 			case <-r.ticker.C:
-				r.logger.Debug("Running periodic reconciliation")
+				// Queue observability: one Debug line per resync tick.
+				stats := r.queue.Stats()
+				r.logger.Debug("Running periodic resync",
+					log.Int("queue_depth", stats.Depth),
+					log.Int("queue_max_depth", stats.MaxDepth),
+					log.Any("adds", stats.Adds),
+					log.Any("coalesced", stats.Coalesced),
+					log.Any("requeues", stats.Requeues),
+					log.Any("processed", stats.Processed),
+					log.Str("work_duration_total", stats.WorkDurationTotal.String()))
 
-				// Reconcile all services
-				if err := r.reconcileServices(r.ctx); err != nil {
-					r.logger.Error("Reconciliation failed", log.Err(err))
+				// Re-enqueue all services for reconciliation
+				if err := r.enqueueAllServices(r.ctx); err != nil {
+					r.logger.Error("Resync enqueue failed", log.Err(err))
 				}
+
+				// Cross-service sweeps (orphaned instances, store orphans)
+				r.runHousekeeping(r.ctx)
 
 				// Clean up deleted services
 				if err := r.handleDeletedServices(r.ctx); err != nil {
 					r.logger.Error("Failed to clean up deleted services", log.Err(err))
 				}
 
-				// Run garbage collection roughly once per hour
+				// Run garbage collection when due
 				if time.Since(lastGC) > garbageCollectionInterval {
 					if err := r.runGarbageCollection(r.ctx); err != nil {
 						r.logger.Error("Garbage collection failed", log.Err(err))
@@ -142,6 +222,10 @@ func (r *reconciler) Stop() {
 		r.cancel()
 	}
 
+	// Shut down the workqueue (idempotent; queue.Work also does this on
+	// context cancellation) so blocked workers wake up and exit.
+	r.queue.ShutDown()
+
 	// Stop the ticker
 	if r.ticker != nil {
 		r.ticker.Stop()
@@ -158,42 +242,31 @@ func (r *reconciler) Stop() {
 	r.logger.Info("Reconciler stopped")
 }
 
-// reconcileServices compares the desired state of services with the actual state
-// and makes any necessary adjustments
-func (r *reconciler) reconcileServices(ctx context.Context) error {
-	r.logger.Debug("Starting service reconciliation")
+// runHousekeeping performs the cross-service sweeps that don't belong to any
+// single per-key reconcile: collecting and cleaning runner-orphaned instances,
+// and the store-orphan instance sweep. Runs on the periodic resync tick.
+func (r *reconciler) runHousekeeping(ctx context.Context) {
+	r.logger.Debug("Starting housekeeping sweep")
 
-	// Get desired state from store
 	var services []types.Service
 	if err := r.store.ListAll(ctx, types.ResourceTypeService, &services); err != nil {
-		return fmt.Errorf("failed to list services: %w", err)
+		r.logger.Error("Failed to list services for housekeeping", log.Err(err))
+		return
 	}
 
-	// Collect all orphaned instances across all services
+	// Collect all orphaned instances across all services (instances found
+	// running in a runner but absent from the desired state).
 	var allOrphanedInstances []*types.Instance
-
-	// Reconcile each service's desired state with actual state
-	for _, service := range services {
-		if err := r.reconcileService(ctx, &service); err != nil {
-			r.logger.Error("Failed to reconcile service",
-				log.Str("service", service.Name),
-				log.Str("namespace", service.Namespace),
-				log.Err(err))
-			// Continue with other services even if one fails
-		}
-
-		// Collect orphaned instances for this service
-		instanceData, err := r.getServiceInstances(ctx, &service)
+	for i := range services {
+		instanceData, err := r.getServiceInstances(ctx, &services[i])
 		if err != nil {
 			r.logger.Error("Failed to get service instances for orphaned detection",
-				log.Str("service", service.Name),
+				log.Str("service", services[i].Name),
 				log.Err(err))
 			continue
 		}
 		allOrphanedInstances = append(allOrphanedInstances, instanceData.OrphanedInstances...)
 	}
-
-	r.logger.Debug("Completed reconciliation for services", log.Int("count", len(services)))
 
 	// Handle orphaned instances (running but not in desired state)
 	if err := r.cleanUpOrphanedInstances(ctx, allOrphanedInstances); err != nil {
@@ -217,7 +290,7 @@ func (r *reconciler) reconcileServices(ctx context.Context) error {
 	} else {
 		// Re-list services AFTER the instances so the "known" set is never
 		// staler than the instance list. `services` above is snapshotted at the
-		// top of the cycle; a service created mid-cycle (cast creates the
+		// top of the sweep; a service created mid-sweep (cast creates the
 		// service, then its instance) would otherwise be absent from that
 		// snapshot while its just-created instance appears in allInstances — and
 		// the sweep would delete a healthy, in-flight workload (RUNE cast race).
@@ -229,8 +302,7 @@ func (r *reconciler) reconcileServices(ctx context.Context) error {
 		}
 	}
 
-	r.logger.Debug("Service reconciliation completed")
-	return nil
+	r.logger.Debug("Housekeeping sweep completed")
 }
 
 // storeOrphanGrace is how long after creation an instance is immune from the
@@ -438,17 +510,6 @@ func (r *reconciler) reconcileService(ctx context.Context, service *types.Servic
 	}
 
 	return nil
-}
-
-// reconcileSingleService reconciles a single service with running instances collection
-// This is used by the service controller for immediate reconciliation on service events
-func (r *reconciler) reconcileSingleService(ctx context.Context, service *types.Service) error {
-	r.logger.Debug("Reconciling single service",
-		log.Str("service", service.Name),
-		log.Str("namespace", service.Namespace))
-
-	// Reconcile the service using the existing logic
-	return r.reconcileService(ctx, service)
 }
 
 // getServiceInstances retrieves and filters instances for a specific service
@@ -1108,13 +1169,20 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 			return fmt.Errorf("failed to update service status: %w", err)
 		}
 		// Reflect the persisted fields on the caller's copy for consistency.
+		// Clone Metadata rather than writing through it: the pointer may be
+		// shared with watch-event consumers and other store readers
+		// (TestStore's copies are shallow; Badger round-trips, but the
+		// discipline holds either way) — an in-place write would race with
+		// their reads. The top-level status fields are our own struct copy.
 		service.Status = newStatus
 		service.StatusReason = newReason
 		service.StatusMessage = newMessage
-		if service.Metadata == nil {
-			service.Metadata = &types.ServiceMetadata{}
+		md := types.ServiceMetadata{}
+		if service.Metadata != nil {
+			md = *service.Metadata
 		}
-		service.Metadata.ObservedGeneration = reconciledGen
+		md.ObservedGeneration = reconciledGen
+		service.Metadata = &md
 	}
 
 	return nil

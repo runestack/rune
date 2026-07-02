@@ -35,7 +35,6 @@ type scalingController struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	operationWatchCh <-chan store.WatchEvent
-	internalUpdates  sync.Map
 }
 
 // NewScalingController creates a new scaling controller
@@ -115,11 +114,6 @@ func (c *scalingController) watchScalingOperations() {
 				continue
 			}
 
-			// Skip internal updates
-			if c.isInternalUpdate(event) {
-				continue
-			}
-
 			// Only handle created and updated events
 			if event.Type != store.WatchEventCreated && event.Type != store.WatchEventUpdated {
 				continue
@@ -178,31 +172,6 @@ func (c *scalingController) processScalingOperationEvent(ctx context.Context, ev
 	}
 }
 
-// Check if an event was triggered internally
-func (c *scalingController) isInternalUpdate(event store.WatchEvent) bool {
-	// Check if event has an orchestrator source
-	if event.Source == "orchestrator" {
-		return true
-	}
-
-	// Check if we have a record of this being an internal update
-	key := fmt.Sprintf("%s/%s/%s", event.ResourceType, event.Namespace, event.Name)
-	_, exists := c.internalUpdates.Load(key)
-	return exists
-}
-
-// Mark an update as being in progress
-func (c *scalingController) inProgressUpdate(resourceType types.ResourceType, namespace, name string) {
-	key := fmt.Sprintf("%s/%s/%s", resourceType, namespace, name)
-	c.internalUpdates.Store(key, time.Now())
-}
-
-// Clear an update marked as in progress
-func (c *scalingController) clearInProgressUpdate(resourceType types.ResourceType, namespace, name string) {
-	key := fmt.Sprintf("%s/%s/%s", resourceType, namespace, name)
-	c.internalUpdates.Delete(key)
-}
-
 // CreateScalingOperation creates a new scaling operation for a service
 func (c *scalingController) CreateScalingOperation(ctx context.Context, service *types.Service, params types.ScalingOperationParams) error {
 	// Create scaling operation
@@ -239,22 +208,13 @@ func (c *scalingController) CreateScalingOperation(ctx context.Context, service 
 
 // Execute immediate scaling by updating the service directly
 func (c *scalingController) executeImmediateScaling(ctx context.Context, op *types.ScalingOperation) error {
-	// Mark as in-progress to prevent circular updates
-	c.inProgressUpdate(types.ResourceTypeService, op.Namespace, op.ServiceName)
-	defer c.clearInProgressUpdate(types.ResourceTypeService, op.Namespace, op.ServiceName)
-
-	// Mark the operation completed BEFORE updating service.Scale. The
-	// service-controller's handleServiceUpdated skips reconciliation
-	// when there's an InProgress scaling operation on the service —
-	// the rationale being "let the ScalingController drive scale
-	// updates". For an immediate op the controller only sets the
-	// final scale value once, so completing first means the service
-	// Update below fires the service watch with the op already
-	// Completed, and the service controller reconciles instead of
-	// skipping. Without this ordering, scale-up (e.g. on `rune
-	// restart`'s 0→1 leg) sets service.Scale=N but the reconciler is
-	// only re-engaged on its 30 s timer — and even then has nothing
-	// to drive a Create event from. (RUNE-BUG-RESTART-STUCK-PENDING.)
+	// Mark the operation completed BEFORE updating service.Scale so the
+	// operation row never claims InProgress for a scale that has already
+	// been applied. (Historically this ordering also dodged a
+	// handleServiceUpdated gate that skipped reconciliation while an op was
+	// InProgress; that gate is gone — the workqueue reconciles on every
+	// desired-state change — but completing first remains the correct
+	// bookkeeping order.)
 	if err := c.completeOperation(ctx, op); err != nil {
 		return err
 	}
@@ -430,9 +390,6 @@ func (c *scalingController) processScalingStep(ctx context.Context, op *types.Sc
 
 	// Update service if scale changed
 	if service.Scale != nextScale {
-		c.inProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
-		defer c.clearInProgressUpdate(types.ResourceTypeService, service.Namespace, service.Name)
-
 		c.logger.Info("Updating service scale",
 			log.Str("operation_id", op.ID),
 			log.Str("service", op.ServiceName),

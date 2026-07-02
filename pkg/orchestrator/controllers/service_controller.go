@@ -32,10 +32,6 @@ type ServiceController interface {
 	DeleteService(ctx context.Context, request *types.DeletionRequest) (*types.DeletionResponse, error)
 	GetDeletionStatus(ctx context.Context, namespace, name string) (*types.DeletionOperation, error)
 	listInstancesForService(ctx context.Context, namespace, serviceName string) ([]*types.Instance, error)
-	processServiceEvent(ctx context.Context, event store.WatchEvent) error
-	handleServiceDeleted(ctx context.Context, service *types.Service) error
-	handleServiceCreated(ctx context.Context, service *types.Service) error
-	handleServiceUpdated(ctx context.Context, service *types.Service) error
 }
 
 // serviceController implements the ServiceController interface
@@ -43,7 +39,6 @@ type serviceController struct {
 	store              store.Store
 	instanceController InstanceController
 	healthController   HealthController
-	scalingController  ScalingController
 	logger             log.Logger
 
 	// Reconciliation system
@@ -59,6 +54,9 @@ type serviceController struct {
 	// Watch channel for services
 	watchCh <-chan store.WatchEvent
 
+	// Watch channel for instances (event-driven status roll-up, Phase 3c)
+	instanceWatchCh <-chan store.WatchEvent
+
 	// Deletion system dependencies
 	deletionWorkerPool *pool.WorkerPool
 	finalizerExecutor  *finalizers.FinalizerExecutor
@@ -69,7 +67,6 @@ func NewServiceController(
 	store store.Store,
 	instanceController InstanceController,
 	healthController HealthController,
-	scalingController ScalingController,
 	logger log.Logger,
 ) (ServiceController, error) {
 	// Create the reconciler once
@@ -100,7 +97,6 @@ func NewServiceController(
 		deletionWorkerPool: deletionWorkerPool,
 		instanceController: instanceController,
 		healthController:   healthController,
-		scalingController:  scalingController,
 		reconciler:         reconciler,
 		logger:             logger.WithComponent("service-controller"),
 	}, nil
@@ -198,80 +194,39 @@ func (sc *serviceController) StopPeriodicReconciliation() error {
 	return nil
 }
 
-func (sc *serviceController) handleServiceCreated(ctx context.Context, service *types.Service) error {
-	sc.logger.Info("Service created",
-		log.Str("name", service.Name),
-		log.Str("namespace", service.Namespace))
-
-	// Set initial service state
-	service.Status = types.ServiceStatusPending
-
-	// Update service status in store
-	if err := sc.UpdateServiceStatus(ctx, service, types.ServiceStatusPending); err != nil {
-		sc.logger.Error("Failed to update service status",
-			log.Str("name", service.Name),
-			log.Str("namespace", service.Namespace),
-			log.Err(err))
-		return err
-	}
-
-	// Trigger immediate reconciliation to create instances
-	if err := sc.reconciler.reconcileSingleService(ctx, service); err != nil {
-		sc.logger.Error("Failed to reconcile service after creation",
-			log.Str("name", service.Name),
-			log.Str("namespace", service.Namespace),
-			log.Err(err))
-		return err
-	}
-
-	return nil
-}
-
-func (sc *serviceController) handleServiceUpdated(ctx context.Context, service *types.Service) error {
-	sc.logger.Info("Service updated",
-		log.Str("name", service.Name),
-		log.Str("namespace", service.Namespace))
-
-	// Check if this is a status-only change
-	if sc.isStatusOnlyChange(service) {
-		sc.logger.Debug("Skipping reconciliation for status-only change",
-			log.Str("name", service.Name),
-			log.Str("namespace", service.Namespace),
-			log.Int64("generation", service.Metadata.Generation))
-		return nil
-	}
-
-	// If there's an active scaling operation for this service, skip direct reconciliation here
-	// and let the ScalingController drive updates to service.Scale.
-	if op, _ := sc.scalingController.GetActiveOperation(ctx, service.Namespace, service.Name); op != nil {
-		sc.logger.Debug("Skipping direct reconciliation due to active scaling operation",
-			log.Str("name", service.Name),
-			log.Str("namespace", service.Namespace))
-	} else {
-		// Trigger immediate reconciliation to handle the update. The reconciler
-		// persists ObservedGeneration = Generation once it has converged, which
-		// is what a subsequent isStatusOnlyChange check reads to skip redundant
-		// reconciles — no in-memory bookkeeping needed here (RFC #129 Phase 2).
-		if err := sc.reconciler.reconcileSingleService(ctx, service); err != nil {
-			sc.logger.Error("Failed to reconcile service after update",
-				log.Str("name", service.Name),
-				log.Str("namespace", service.Namespace),
-				log.Err(err))
-			return err
+// enqueueServiceEvent translates a service watch event into a reconcile
+// enqueue on the per-key workqueue (RFC #129 Phase 3). Status-only echoes —
+// updates whose ObservedGeneration already equals Generation, i.e. the
+// reconciler's own status writes bouncing back through the watch — are dropped
+// here as an optimization; correctness never depends on this filter because
+// the reconcile is idempotent and the periodic resync is level-triggered.
+//
+// Created and Deleted events always enqueue: syncService re-reads fresh state
+// and treats a missing service as settled, so a deleted service's key simply
+// drains. No handler logic runs on the watch goroutine anymore — the queue
+// workers own all reconciliation, which is what makes reconciles of one
+// service impossible to interleave.
+func (sc *serviceController) enqueueServiceEvent(event store.WatchEvent) {
+	if event.Type == store.WatchEventUpdated {
+		// The watch event carries the written resource; tolerate both value
+		// and pointer forms. If it isn't inspectable, enqueue — never guess
+		// in the direction of dropping work.
+		var svc *types.Service
+		switch v := event.Resource.(type) {
+		case *types.Service:
+			svc = v
+		case types.Service:
+			svc = &v
+		}
+		if svc != nil && sc.isStatusOnlyChange(svc) {
+			sc.logger.Debug("Skipping enqueue for status-only change",
+				log.Str("name", event.Name),
+				log.Str("namespace", event.Namespace))
+			return
 		}
 	}
 
-	return nil
-}
-
-func (sc *serviceController) handleServiceDeleted(ctx context.Context, service *types.Service) error {
-	sc.logger.Info("Service deleted event received",
-		log.Str("name", service.Name),
-		log.Str("namespace", service.Namespace))
-
-	// Service is already deleted, finalizers handle cleanup
-	// No additional work needed
-	return nil
+	sc.reconciler.Enqueue(event.Namespace, event.Name)
 }
 
 func (sc *serviceController) GetServiceStatus(ctx context.Context, namespace, name string) (*types.ServiceStatusInfo, error) {
@@ -736,36 +691,6 @@ func (sc *serviceController) WatchServices(ctx context.Context) (<-chan store.Wa
 	return watchCh, nil
 }
 
-func (sc *serviceController) processServiceEvent(ctx context.Context, event store.WatchEvent) error {
-	sc.logger.Debug("Processing service event",
-		log.Str("name", event.Name),
-		log.Str("namespace", event.Namespace),
-		log.Str("type", string(event.Type)))
-
-	// Get the service from the store
-	var service types.Service
-	if err := sc.store.Get(ctx, event.ResourceType, event.Namespace, event.Name, &service); err != nil {
-		// If the resource doesn't exist and this is a delete event, that's ok
-		if event.Type == store.WatchEventDeleted {
-			return nil
-		}
-		return fmt.Errorf("failed to get service %s/%s: %w", event.Namespace, event.Name, err)
-	}
-
-	// Process based on event type
-	switch event.Type {
-	case store.WatchEventCreated:
-		return sc.handleServiceCreated(ctx, &service)
-	case store.WatchEventUpdated:
-		return sc.handleServiceUpdated(ctx, &service)
-	case store.WatchEventDeleted:
-		sc.handleServiceDeleted(ctx, &service)
-		return nil // Explicitly set to nil since handleServiceDeleted doesn't return an error
-	default:
-		return fmt.Errorf("unknown event type: %s", event.Type)
-	}
-}
-
 // Helper methods for service lifecycle management
 
 // isStatusOnlyChange reports whether a service update carries only status /
@@ -807,6 +732,21 @@ func (sc *serviceController) StartWatching(ctx context.Context) error {
 		sc.watchServices()
 	}()
 
+	// Watch instances too: an instance status change (health promotion,
+	// failure, deletion) enqueues its owning service so status rolls up
+	// event-driven instead of waiting for the 30s resync (RFC #129 Phase 3c).
+	instanceWatchCh, err := sc.store.Watch(ctx, types.ResourceTypeInstance, "")
+	if err != nil {
+		return fmt.Errorf("failed to watch instances: %w", err)
+	}
+	sc.instanceWatchCh = instanceWatchCh
+
+	sc.wg.Add(1)
+	go func() {
+		defer sc.wg.Done()
+		sc.watchInstances()
+	}()
+
 	return nil
 }
 
@@ -844,19 +784,107 @@ func (sc *serviceController) watchServices() {
 				continue
 			}
 
-			// Process the event directly (simplified version without worker queue).
-			// Reconcile-loop suppression is handled downstream by isStatusOnlyChange
-			// (generation + observed-scale tracking); the service controller does not
-			// filter its own writes here.
-			if err := sc.processServiceEvent(sc.ctx, event); err != nil {
-				sc.logger.Error("Failed to process service event",
-					log.Str("name", event.Name),
-					log.Str("namespace", event.Namespace),
-					log.Str("type", string(event.Type)),
-					log.Err(err))
-			}
+			// Translate the event into a workqueue enqueue. All reconciliation
+			// happens on the queue workers (single writer per service key);
+			// this goroutine never blocks on reconcile work.
+			sc.enqueueServiceEvent(event)
 		}
 	}
+}
+
+// watchInstances watches instance events and enqueues the owning service for
+// reconciliation (event-driven status roll-up). Same restart-on-close shape as
+// watchServices.
+func (sc *serviceController) watchInstances() {
+	for {
+		select {
+		case <-sc.ctx.Done():
+			return
+		case event, ok := <-sc.instanceWatchCh:
+			if !ok {
+				sc.logger.Error("Instance watch channel closed, restarting watch")
+				watchCh, err := sc.store.Watch(sc.ctx, types.ResourceTypeInstance, "")
+				if err != nil {
+					sc.logger.Error("Failed to restart instance watch", log.Err(err))
+					if err.Error() == "store is closed, cannot create new watch" {
+						sc.logger.Info("Store is closed, stopping instance watch")
+						return
+					}
+					time.Sleep(5 * time.Second) // Backoff before retry
+					continue
+				}
+				sc.instanceWatchCh = watchCh
+				continue
+			}
+
+			sc.enqueueInstanceEvent(event)
+		}
+	}
+}
+
+// enqueueInstanceEvent maps an instance watch event to its owning service and
+// enqueues that service for reconciliation. This is what makes service status
+// converge within milliseconds of an instance transition (e.g. the health
+// controller's Starting→Running promotion) instead of waiting for the 30s
+// resync tick.
+//
+// Reconciler-sourced instance writes are skipped: the only such write is
+// UpdateInstance during an in-flight sync, whose run already ends with
+// updateServiceStatus — re-enqueueing it would be a pure echo. Every other
+// source (health controller, API, finalizers, empty) enqueues; the reconcile
+// is idempotent, so over-triggering is safe and under-triggering is what the
+// resync safety net exists for.
+func (sc *serviceController) enqueueInstanceEvent(event store.WatchEvent) {
+	if event.Source == store.EventSourceReconciler {
+		return
+	}
+
+	namespace, serviceName, ok := sc.ownerFromInstanceEvent(event)
+	if !ok {
+		return
+	}
+	sc.reconciler.Enqueue(namespace, serviceName)
+}
+
+// ownerFromInstanceEvent resolves the owning service of an instance event.
+// It prefers the resource carried on the event (tolerating pointer and value
+// forms) and falls back to reading the instance from the store. A deleted
+// instance that can no longer be read is dropped — the periodic resync covers
+// any staleness that could leave behind.
+func (sc *serviceController) ownerFromInstanceEvent(event store.WatchEvent) (namespace, serviceName string, ok bool) {
+	var inst *types.Instance
+	switch v := event.Resource.(type) {
+	case *types.Instance:
+		inst = v
+	case types.Instance:
+		inst = &v
+	}
+
+	if inst == nil {
+		ctx := sc.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		var fetched types.Instance
+		if err := sc.store.Get(ctx, types.ResourceTypeInstance, event.Namespace, event.Name, &fetched); err != nil {
+			sc.logger.Debug("Dropping unmappable instance event",
+				log.Str("namespace", event.Namespace),
+				log.Str("instance", event.Name),
+				log.Str("type", string(event.Type)))
+			return "", "", false
+		}
+		inst = &fetched
+	}
+
+	if inst.ServiceName == "" {
+		return "", "", false
+	}
+
+	namespace = inst.Namespace
+	if namespace == "" {
+		namespace = event.Namespace
+	}
+	return namespace, inst.ServiceName, true
 }
 
 // Deletion helper methods
