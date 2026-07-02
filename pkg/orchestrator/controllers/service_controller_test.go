@@ -536,6 +536,167 @@ func TestController_EventDrivenReconcileConverges(t *testing.T) {
 		"service must converge to Running at scale with ObservedGeneration recorded, driven by events (no manual reconcile call)")
 }
 
+// TestInstanceEvent_EnqueuesOwner: an instance event maps to its owning
+// service's key (event-driven status roll-up, RFC #129 Phase 3c).
+func TestInstanceEvent_EnqueuesOwner(t *testing.T) {
+	_, _, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+
+	sc.enqueueInstanceEvent(store.WatchEvent{
+		Type:         store.WatchEventUpdated,
+		ResourceType: types.ResourceTypeInstance,
+		Namespace:    "default",
+		Name:         "web-abc12",
+		Source:       store.EventSourceHealthController,
+		Resource: &types.Instance{
+			ID: "web-abc12", Name: "web-abc12",
+			Namespace: "default", ServiceName: "web",
+			Status: types.InstanceStatusRunning,
+		},
+	})
+	assert.Equal(t, 1, sc.reconciler.queue.Len(), "instance event must enqueue its owner")
+
+	// Value form maps too, and coalesces with the pending key.
+	sc.enqueueInstanceEvent(store.WatchEvent{
+		Type:         store.WatchEventUpdated,
+		ResourceType: types.ResourceTypeInstance,
+		Namespace:    "default",
+		Name:         "web-def34",
+		Resource: types.Instance{
+			ID: "web-def34", Namespace: "default", ServiceName: "web",
+		},
+	})
+	assert.Equal(t, 1, sc.reconciler.queue.Len(), "same owner must coalesce")
+
+	// An instance without an owner is dropped.
+	sc.enqueueInstanceEvent(store.WatchEvent{
+		Type:         store.WatchEventUpdated,
+		ResourceType: types.ResourceTypeInstance,
+		Namespace:    "default",
+		Name:         "orphan-xyz",
+		Resource:     &types.Instance{ID: "orphan-xyz", Namespace: "default"},
+	})
+	assert.Equal(t, 1, sc.reconciler.queue.Len(), "ownerless instance must not enqueue")
+}
+
+// TestInstanceEvent_ReconcilerSourceSuppressed: the reconciler's own instance
+// writes (UpdateInstance during a sync) must not re-enqueue their owner — that
+// run already ends with updateServiceStatus, so the event is a pure echo.
+func TestInstanceEvent_ReconcilerSourceSuppressed(t *testing.T) {
+	_, _, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+
+	sc.enqueueInstanceEvent(store.WatchEvent{
+		Type:         store.WatchEventUpdated,
+		ResourceType: types.ResourceTypeInstance,
+		Namespace:    "default",
+		Name:         "web-abc12",
+		Source:       store.EventSourceReconciler,
+		Resource: &types.Instance{
+			ID: "web-abc12", Namespace: "default", ServiceName: "web",
+		},
+	})
+	assert.Equal(t, 0, sc.reconciler.queue.Len(), "reconciler-sourced instance events are echoes and must be dropped")
+}
+
+// TestInstanceEvent_FallsBackToStoreLookup: an event without an inspectable
+// resource is resolved by reading the instance from the store; if the instance
+// is gone too, the event is dropped (resync covers it).
+func TestInstanceEvent_FallsBackToStoreLookup(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+
+	serviceControllerCreateTestInstance(ctx, t, testStore, "web", "web-abc12", types.InstanceStatusRunning)
+
+	// No Resource on the event → store lookup maps the owner.
+	sc.enqueueInstanceEvent(store.WatchEvent{
+		Type:         store.WatchEventUpdated,
+		ResourceType: types.ResourceTypeInstance,
+		Namespace:    "default",
+		Name:         "web-abc12",
+	})
+	assert.Equal(t, 1, sc.reconciler.queue.Len(), "store lookup must resolve the owner")
+
+	// Unmappable: no resource, not in store → dropped.
+	sc.enqueueInstanceEvent(store.WatchEvent{
+		Type:         store.WatchEventDeleted,
+		ResourceType: types.ResourceTypeInstance,
+		Namespace:    "default",
+		Name:         "long-gone",
+	})
+	assert.Equal(t, 1, sc.reconciler.queue.Len(), "unmappable deleted instance must be dropped")
+}
+
+// TestInstanceChange_RollsUpStatusEventDriven is the headline Phase 3c test:
+// with the periodic resync stretched far out of reach, an instance's
+// Starting→Running transition (a health-controller-sourced write) must roll up
+// to service Status=Running within a couple of seconds — proving the roll-up
+// is event-driven, not tick-driven.
+func TestInstanceChange_RollsUpStatusEventDriven(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
+	sc := controller.(*serviceController)
+	sc.reconciler.reconcileInterval = 60 * time.Second // resync can't help us
+
+	// Created instances start as Starting (not yet ready).
+	fakeInstanceController.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
+		inst := &types.Instance{
+			ID: instanceName, Name: instanceName,
+			Namespace: svc.Namespace, ServiceID: svc.ID, ServiceName: svc.Name,
+			Status:    types.InstanceStatusStarting,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		_ = testStore.Create(ctx, types.ResourceTypeInstance, svc.Namespace, inst.ID, inst)
+		return inst, nil
+	}
+
+	require.NoError(t, controller.Start(ctx))
+	defer func() { _ = controller.Stop() }()
+
+	service := &types.Service{
+		ID: "rollup-service", Name: "rollup-service", Namespace: "default",
+		Image: "test-image:latest", Runtime: "container", Scale: 1,
+		Metadata: &types.ServiceMetadata{Generation: 1},
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, service.Namespace, service.Name, service))
+
+	// Wait for the instance to exist (created Starting by the event-driven reconcile).
+	var instanceID string
+	require.Eventually(t, func() bool {
+		var instances []types.Instance
+		if err := testStore.List(ctx, types.ResourceTypeInstance, service.Namespace, &instances); err != nil {
+			return false
+		}
+		for i := range instances {
+			if instances[i].ServiceName == service.Name {
+				instanceID = instances[i].ID
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "instance must be created by the event-driven reconcile")
+
+	// Emulate the health controller's readiness promotion: Starting→Running
+	// via a health-controller-sourced UpdateFunc — exactly the write shape
+	// promoteToRunningOnReady performs.
+	var inst types.Instance
+	require.NoError(t, testStore.UpdateFunc(ctx, types.ResourceTypeInstance, service.Namespace, instanceID, &inst, func() error {
+		inst.Status = types.InstanceStatusRunning
+		return nil
+	}, store.WithHealthController()))
+	promotedAt := time.Now()
+
+	// Service status must flip to Running fast — event-driven, not the 60s tick.
+	require.Eventually(t, func() bool {
+		var got types.Service
+		if err := testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got); err != nil {
+			return false
+		}
+		return got.Status == types.ServiceStatusRunning
+	}, 2*time.Second, 10*time.Millisecond,
+		"service status must roll up within ~2s of instance readiness (event-driven)")
+	t.Logf("status rolled up in %s", time.Since(promotedAt))
+}
+
 // fakeExecStream implements types.ExecStream for testing
 type fakeExecStream struct {
 	stdout   []byte
