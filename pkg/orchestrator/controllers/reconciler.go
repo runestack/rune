@@ -168,7 +168,16 @@ func (r *reconciler) Start(ctx context.Context) error {
 			case <-r.ctx.Done():
 				return
 			case <-r.ticker.C:
-				r.logger.Debug("Running periodic resync")
+				// Queue observability: one Debug line per resync tick.
+				stats := r.queue.Stats()
+				r.logger.Debug("Running periodic resync",
+					log.Int("queue_depth", stats.Depth),
+					log.Int("queue_max_depth", stats.MaxDepth),
+					log.Any("adds", stats.Adds),
+					log.Any("coalesced", stats.Coalesced),
+					log.Any("requeues", stats.Requeues),
+					log.Any("processed", stats.Processed),
+					log.Str("work_duration_total", stats.WorkDurationTotal.String()))
 
 				// Re-enqueue all services for reconciliation
 				if err := r.enqueueAllServices(r.ctx); err != nil {
@@ -1160,13 +1169,20 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 			return fmt.Errorf("failed to update service status: %w", err)
 		}
 		// Reflect the persisted fields on the caller's copy for consistency.
+		// Clone Metadata rather than writing through it: the pointer may be
+		// shared with watch-event consumers and other store readers
+		// (TestStore's copies are shallow; Badger round-trips, but the
+		// discipline holds either way) — an in-place write would race with
+		// their reads. The top-level status fields are our own struct copy.
 		service.Status = newStatus
 		service.StatusReason = newReason
 		service.StatusMessage = newMessage
-		if service.Metadata == nil {
-			service.Metadata = &types.ServiceMetadata{}
+		md := types.ServiceMetadata{}
+		if service.Metadata != nil {
+			md = *service.Metadata
 		}
-		service.Metadata.ObservedGeneration = reconciledGen
+		md.ObservedGeneration = reconciledGen
+		service.Metadata = &md
 	}
 
 	return nil
