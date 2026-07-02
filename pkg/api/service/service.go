@@ -436,6 +436,13 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 		updatedService.Status = existingService.Status
 	}
 
+	// ObservedGeneration is reconciler-owned observed state; this spec-write path
+	// must carry it forward (the incoming proto has no such field, so
+	// updatedService.Metadata carries 0). Dropping it would make an unchanged
+	// re-cast look unreconciled — ObservedGeneration(0) != Generation — and
+	// trigger a spurious reconcile (RFC #129 Phase 2).
+	updatedService.Metadata.ObservedGeneration = existingService.Metadata.ObservedGeneration
+
 	// Use orchestrator to update the service
 	if err := s.orchestrator.UpdateService(ctx, updatedService); err != nil {
 		s.logger.Error("Failed to update service", log.Err(err))

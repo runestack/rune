@@ -265,7 +265,17 @@ func (c *scalingController) executeImmediateScaling(ctx context.Context, op *typ
 	// the `rune restart` 1→0→hang bug.
 	var service types.Service
 	err := c.store.UpdateFunc(ctx, types.ResourceTypeService, op.Namespace, op.ServiceName, &service, func() error {
-		service.Scale = op.TargetScale
+		if service.Metadata == nil {
+			service.Metadata = &types.ServiceMetadata{}
+		}
+		if service.Scale != op.TargetScale {
+			service.Scale = op.TargetScale
+			// Scale is a desired-state change the reconciler must act on. Bump
+			// Generation so the resulting watch event isn't mistaken for a
+			// status-only update; the reconciler advances ObservedGeneration
+			// once it has created/removed instances to match (RFC #129 Phase 2).
+			service.Metadata.Generation++
+		}
 		service.Metadata.UpdatedAt = time.Now()
 		return nil
 	}, store.WithOrchestrator())
@@ -433,7 +443,15 @@ func (c *scalingController) processScalingStep(ctx context.Context, op *types.Sc
 		// can't clobber this step (RFC #129).
 		var fresh types.Service
 		if err := c.store.UpdateFunc(ctx, types.ResourceTypeService, op.Namespace, op.ServiceName, &fresh, func() error {
-			fresh.Scale = nextScale
+			if fresh.Metadata == nil {
+				fresh.Metadata = &types.ServiceMetadata{}
+			}
+			if fresh.Scale != nextScale {
+				fresh.Scale = nextScale
+				// Each gradual step is a new desired scale; bump Generation so the
+				// reconciler treats it as a real change (RFC #129 Phase 2).
+				fresh.Metadata.Generation++
+			}
 			fresh.Metadata.UpdatedAt = time.Now()
 			return nil
 		}, store.WithOrchestrator()); err != nil {

@@ -59,17 +59,6 @@ type serviceController struct {
 	// Watch channel for services
 	watchCh <-chan store.WatchEvent
 
-	// For tracking observed generations to prevent reconciliation loops
-	serviceObservedGenerations map[string]int64
-	// Observed desired scale per service. Scale changes are driven by the
-	// ScalingController without bumping Generation, so a scale-only update would
-	// otherwise look like a status-only change and be skipped — leaving new
-	// replicas (and `rune restart`'s scale-back-up) uncreated until the next
-	// 30s reconcile tick. Tracking the last reconciled scale lets
-	// isStatusOnlyChange detect those and reconcile promptly.
-	serviceObservedScales map[string]int
-	serviceObservedLock   sync.RWMutex
-
 	// Deletion system dependencies
 	deletionWorkerPool *pool.WorkerPool
 	finalizerExecutor  *finalizers.FinalizerExecutor
@@ -106,16 +95,14 @@ func NewServiceController(
 	)
 
 	return &serviceController{
-		store:                      store,
-		finalizerExecutor:          finalizerExecutor,
-		deletionWorkerPool:         deletionWorkerPool,
-		instanceController:         instanceController,
-		healthController:           healthController,
-		scalingController:          scalingController,
-		reconciler:                 reconciler,
-		logger:                     logger.WithComponent("service-controller"),
-		serviceObservedGenerations: make(map[string]int64),
-		serviceObservedScales:      make(map[string]int),
+		store:              store,
+		finalizerExecutor:  finalizerExecutor,
+		deletionWorkerPool: deletionWorkerPool,
+		instanceController: instanceController,
+		healthController:   healthController,
+		scalingController:  scalingController,
+		reconciler:         reconciler,
+		logger:             logger.WithComponent("service-controller"),
 	}, nil
 }
 
@@ -261,7 +248,10 @@ func (sc *serviceController) handleServiceUpdated(ctx context.Context, service *
 			log.Str("name", service.Name),
 			log.Str("namespace", service.Namespace))
 	} else {
-		// Trigger immediate reconciliation to handle the update
+		// Trigger immediate reconciliation to handle the update. The reconciler
+		// persists ObservedGeneration = Generation once it has converged, which
+		// is what a subsequent isStatusOnlyChange check reads to skip redundant
+		// reconciles — no in-memory bookkeeping needed here (RFC #129 Phase 2).
 		if err := sc.reconciler.reconcileSingleService(ctx, service); err != nil {
 			sc.logger.Error("Failed to reconcile service after update",
 				log.Str("name", service.Name),
@@ -269,15 +259,7 @@ func (sc *serviceController) handleServiceUpdated(ctx context.Context, service *
 				log.Err(err))
 			return err
 		}
-		// Record the scale we just reconciled so a later status-only update at
-		// the same scale is correctly skipped. Recorded only after an actual
-		// reconcile (not in the active-scaling-op skip branch) so a recorded
-		// scale always reflects a reconciled state.
-		sc.recordObservedScale(service.Namespace, service.Name, service.Scale)
 	}
-
-	// Record the observed generation
-	sc.recordObservedGeneration(service.Namespace, service.Name, service.Metadata.Generation)
 
 	return nil
 }
@@ -305,9 +287,9 @@ func (sc *serviceController) GetServiceStatus(ctx context.Context, namespace, na
 		return nil, fmt.Errorf("failed to list instances: %w", err)
 	}
 
-	observedGeneration, exists := sc.getObservedGeneration(namespace, name)
-	if !exists {
-		observedGeneration = 0
+	var observedGeneration int64
+	if service.Metadata != nil {
+		observedGeneration = service.Metadata.ObservedGeneration
 	}
 
 	status := &types.ServiceStatusInfo{
@@ -786,67 +768,25 @@ func (sc *serviceController) processServiceEvent(ctx context.Context, event stor
 
 // Helper methods for service lifecycle management
 
-// recordObservedGeneration records the observed generation for a service
-func (sc *serviceController) recordObservedGeneration(namespace, name string, generation int64) {
-	key := fmt.Sprintf("%s/%s", namespace, name)
-	sc.serviceObservedLock.Lock()
-	defer sc.serviceObservedLock.Unlock()
-	sc.serviceObservedGenerations[key] = generation
-}
-
-// getObservedGeneration gets the observed generation for a service
-func (sc *serviceController) getObservedGeneration(namespace, name string) (int64, bool) {
-	key := fmt.Sprintf("%s/%s", namespace, name)
-	sc.serviceObservedLock.RLock()
-	defer sc.serviceObservedLock.RUnlock()
-	gen, exists := sc.serviceObservedGenerations[key]
-	return gen, exists
-}
-
-// recordObservedScale records the last reconciled desired scale for a service.
-func (sc *serviceController) recordObservedScale(namespace, name string, scale int) {
-	key := fmt.Sprintf("%s/%s", namespace, name)
-	sc.serviceObservedLock.Lock()
-	defer sc.serviceObservedLock.Unlock()
-	sc.serviceObservedScales[key] = scale
-}
-
-// getObservedScale gets the last reconciled desired scale for a service.
-func (sc *serviceController) getObservedScale(namespace, name string) (int, bool) {
-	key := fmt.Sprintf("%s/%s", namespace, name)
-	sc.serviceObservedLock.RLock()
-	defer sc.serviceObservedLock.RUnlock()
-	scale, exists := sc.serviceObservedScales[key]
-	return scale, exists
-}
-
-// isStatusOnlyChange checks if only the status was updated (not the spec)
+// isStatusOnlyChange reports whether a service update carries only status /
+// observed fields (no desired-state change), in which case reconciliation can
+// be skipped to avoid a self-triggered loop.
+//
+// Every desired-state change bumps Metadata.Generation — spec edits (via cast)
+// and scale changes (via the scaling controller, RFC #129 Phase 2). The
+// reconciler records the generation it last converged on in
+// Metadata.ObservedGeneration. So when the two are equal, nothing the
+// reconciler acts on has changed since it last ran, and this event is a
+// status-only echo. This replaces the old in-memory
+// serviceObservedGenerations/serviceObservedScales maps, which were wiped on
+// every runed restart and depended on the fragile invariant "scale changes
+// don't bump Generation".
 func (sc *serviceController) isStatusOnlyChange(service *types.Service) bool {
-	// Check if we've observed this generation before
-	lastObserved, exists := sc.getObservedGeneration(service.Namespace, service.Name)
-	if !exists {
-		return false // We haven't seen this service before
-	}
-
-	// A scale change is a desired-state change that must reconcile, even though
-	// the ScalingController applies it without bumping Generation. If the scale
-	// differs from the last reconciled value (or we've never recorded one),
-	// this is not a status-only change. Without this, scale-ups — including
-	// `rune restart`'s scale-back-up — sit uncreated until the periodic 30s
-	// reconcile tick, which reads as the service "hanging" at the lower scale.
-	lastScale, scaleObserved := sc.getObservedScale(service.Namespace, service.Name)
-	if !scaleObserved || lastScale != service.Scale {
+	if service.Metadata == nil {
+		// No generation bookkeeping yet — treat as needing reconciliation.
 		return false
 	}
-
-	sc.logger.Debug("Checking if status-only change",
-		log.Str("namespace", service.Namespace),
-		log.Str("name", service.Name),
-		log.Int64("last_observed", lastObserved),
-		log.Int64("current_generation", service.Metadata.Generation))
-
-	// If the generation hasn't changed, it's a status-only update
-	return lastObserved == service.Metadata.Generation
+	return service.Metadata.ObservedGeneration == service.Metadata.Generation
 }
 
 // StartWatching starts watching for service events

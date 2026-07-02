@@ -175,6 +175,16 @@ type ServiceMetadata struct {
 	// Generation of the service
 	Generation int64 `json:"generation,omitempty" yaml:"generation,omitempty"`
 
+	// ObservedGeneration is the Generation the reconciler last acted on. When it
+	// equals Generation, the desired state (spec + scale) is fully reconciled, so
+	// an incoming update carries only status/observed fields and reconciliation
+	// can be skipped (see serviceController.isStatusOnlyChange). Every
+	// desired-state change bumps Generation — including scale, which the scaling
+	// controller now increments — so this single persisted field replaces the
+	// in-memory serviceObservedGenerations/serviceObservedScales shadow maps and,
+	// unlike them, survives a runed restart (RFC #129 Phase 2).
+	ObservedGeneration int64 `json:"observedGeneration,omitempty" yaml:"observedGeneration,omitempty"`
+
 	// OwnedBy is the system ownership stamp set when a runeset release manages
 	// this service. See _docs/plugins/RUNESET_STATEFUL_RELEASES.md.
 	OwnedBy *OwnedBy `json:"ownedBy,omitempty" yaml:"ownedBy,omitempty"`
