@@ -21,9 +21,8 @@ type BadgerStore struct {
 	db         *badger.DB
 	path       string
 	logger     log.Logger
-	watchChan  chan WatchEvent
 	watchMu    sync.RWMutex
-	watchConns map[string][]chan WatchEvent // key is resourceType:namespace
+	watchConns map[string][]*watchSub // key is resourceType:namespace
 
 	// options
 	opts StoreOptions
@@ -39,8 +38,7 @@ func NewBadgerStore(logger log.Logger) *BadgerStore {
 
 	return &BadgerStore{
 		logger:     logger,
-		watchChan:  make(chan WatchEvent, 100), // Buffered channel for watch events
-		watchConns: make(map[string][]chan WatchEvent),
+		watchConns: make(map[string][]*watchSub),
 	}
 }
 
@@ -66,9 +64,6 @@ func (s *BadgerStore) Open(path string) error {
 	}
 	s.db = db
 
-	// Start watch event handler
-	go s.watchEventHandler()
-
 	s.logger.Info("Rune store opened", log.Str("path", path))
 	return nil
 }
@@ -91,12 +86,12 @@ func (s *BadgerStore) Close() error {
 	if s.db != nil {
 		s.logger.Info("Closing Rune store", log.Str("path", s.path))
 
-		// Clean up watch connections
+		// Clean up watch connections: stop every subscriber's pump, which
+		// closes its out-channel so ranging consumers observe the shutdown.
 		s.watchMu.Lock()
-		close(s.watchChan)
 		for _, conns := range s.watchConns {
-			for _, ch := range conns {
-				close(ch)
+			for _, sub := range conns {
+				sub.stop()
 			}
 		}
 		s.watchConns = nil
@@ -597,53 +592,148 @@ func (s *BadgerStore) GetVersion(ctx context.Context, resourceType types.Resourc
 	return result, err
 }
 
+// watchBacklogWarn is the per-subscriber backlog depth at which we log a
+// warning. Crossing it means a watch consumer is draining slower than events
+// are produced; the backlog is unbounded (we never drop), so a persistently
+// slow/stuck consumer would grow memory — the warning surfaces that.
+const watchBacklogWarn = 1024
+
+// watchSub is a single watch subscription. A dedicated pump goroutine bridges
+// an unbounded internal backlog (buf) to the consumer's out-channel. This makes
+// delivery non-lossy: emitWatchEvent enqueues without ever blocking or dropping,
+// a slow consumer grows only its OWN backlog (never stalling the emit path or
+// other subscribers), and events are delivered in order per subscriber.
+type watchSub struct {
+	out    chan WatchEvent
+	notify chan struct{} // wakes the pump when buf gains items
+	done   chan struct{} // closed by stop() to terminate the pump
+
+	mu  sync.Mutex
+	buf []WatchEvent
+
+	stopOnce sync.Once
+	logger   log.Logger
+	key      string
+	warned   bool
+}
+
+func newWatchSub(logger log.Logger, key string) *watchSub {
+	sub := &watchSub{
+		out:    make(chan WatchEvent),
+		notify: make(chan struct{}, 1),
+		done:   make(chan struct{}),
+		logger: logger,
+		key:    key,
+	}
+	go sub.pump()
+	return sub
+}
+
+// enqueue appends an event to the backlog and wakes the pump. It never blocks
+// and never drops.
+func (sub *watchSub) enqueue(ev WatchEvent) {
+	sub.mu.Lock()
+	sub.buf = append(sub.buf, ev)
+	n := len(sub.buf)
+	warn := n >= watchBacklogWarn && !sub.warned
+	if warn {
+		sub.warned = true
+	} else if n < watchBacklogWarn {
+		sub.warned = false // reset so a later spike warns again
+	}
+	sub.mu.Unlock()
+
+	if warn {
+		sub.logger.Warn("Watch subscriber backlog is large; consumer may be slow",
+			log.Str("key", sub.key), log.Int("backlog", n))
+	}
+
+	// Signal the pump. The buffer of 1 coalesces bursts: if a wake is already
+	// pending the pump will re-check buf anyway, so we can skip.
+	select {
+	case sub.notify <- struct{}{}:
+	default:
+	}
+}
+
+// pump delivers backlog events to out in order, blocking on a slow consumer
+// without affecting anyone else. It exits (closing out) when stop() is called.
+func (sub *watchSub) pump() {
+	defer close(sub.out)
+	for {
+		sub.mu.Lock()
+		if len(sub.buf) == 0 {
+			sub.mu.Unlock()
+			select {
+			case <-sub.notify:
+				continue
+			case <-sub.done:
+				return
+			}
+		}
+		ev := sub.buf[0]
+		if len(sub.buf) == 1 {
+			sub.buf = nil // release the backing array in steady state
+		} else {
+			sub.buf[0] = WatchEvent{} // avoid retaining the delivered event
+			sub.buf = sub.buf[1:]
+		}
+		sub.mu.Unlock()
+
+		select {
+		case sub.out <- ev:
+		case <-sub.done:
+			return
+		}
+	}
+}
+
+// stop terminates the pump. Idempotent and safe to call concurrently.
+func (sub *watchSub) stop() {
+	sub.stopOnce.Do(func() { close(sub.done) })
+}
+
 // Watch sets up a watch for changes to resources of a given type.
 func (s *BadgerStore) Watch(ctx context.Context, resourceType types.ResourceType, namespace string) (<-chan WatchEvent, error) {
 	s.watchMu.Lock()
 	defer s.watchMu.Unlock()
-
-	// Create a filtered channel specific to this watch
-	watchChan := make(chan WatchEvent, 10)
-
-	// Add to active watches
-	key := fmt.Sprintf("%s:%s", resourceType, namespace)
 
 	// Check if watchConns is nil (store might be closed)
 	if s.watchConns == nil {
 		return nil, fmt.Errorf("store is closed, cannot create new watch")
 	}
 
-	s.watchConns[key] = append(s.watchConns[key], watchChan)
+	key := fmt.Sprintf("%s:%s", resourceType, namespace)
+	sub := newWatchSub(s.logger, key)
+	s.watchConns[key] = append(s.watchConns[key], sub)
 
-	// Remove from active watches when context is done
+	// Remove from active watches when the caller's context is done.
 	go func() {
 		<-ctx.Done()
 		s.watchMu.Lock()
-		defer s.watchMu.Unlock()
-
-		// Find and remove this channel
-		conns := s.watchConns[key]
-		for i, ch := range conns {
-			if ch == watchChan {
-				// Remove this channel
-				s.watchConns[key] = append(conns[:i], conns[i+1:]...)
-				close(watchChan)
-				break
+		if s.watchConns != nil {
+			conns := s.watchConns[key]
+			for i, c := range conns {
+				if c == sub {
+					s.watchConns[key] = append(conns[:i], conns[i+1:]...)
+					break
+				}
+			}
+			if len(s.watchConns[key]) == 0 {
+				delete(s.watchConns, key)
 			}
 		}
-
-		// Clean up the key if no more connections
-		if len(s.watchConns[key]) == 0 {
-			delete(s.watchConns, key)
-		}
+		s.watchMu.Unlock()
+		sub.stop() // closes out
 	}()
 
-	return watchChan, nil
+	return sub.out, nil
 }
 
-// emitWatchEvent sends a watch event to all watchers.
+// emitWatchEvent delivers a watch event to every matching subscriber. Delivery
+// is non-lossy: each subscriber enqueues into its own unbounded backlog, so
+// this never blocks and never drops, regardless of consumer speed.
 func (s *BadgerStore) emitWatchEvent(eventType WatchEventType, resourceType types.ResourceType, namespace string, name string, resource interface{}, source EventSource) {
-	// Create the event
 	event := WatchEvent{
 		Type:         eventType,
 		ResourceType: resourceType,
@@ -653,94 +743,25 @@ func (s *BadgerStore) emitWatchEvent(eventType WatchEventType, resourceType type
 		Source:       source,
 	}
 
-	// Send the event to the channel (non-blocking)
-	select {
-	case s.watchChan <- event:
-		// Event sent successfully
-	default:
-		// Channel is full, log a warning
-		s.logger.Warn("Watch channel is full, dropping event",
-			log.Any("type", eventType),
-			log.Any("resourceType", resourceType),
-			log.Str("namespace", namespace),
-			log.Str("name", name))
+	s.watchMu.RLock()
+	defer s.watchMu.RUnlock()
+	if s.watchConns == nil {
+		return
 	}
+
+	// Fan out to the four subscription scopes: exact type+namespace, all types
+	// in this namespace, this type in all namespaces, and everything.
+	s.dispatch(event, fmt.Sprintf("%s:%s", resourceType, namespace))
+	s.dispatch(event, fmt.Sprintf(":%s", namespace))
+	s.dispatch(event, fmt.Sprintf("%s:", resourceType))
+	s.dispatch(event, ":")
 }
 
-// watchEventHandler processes events from the main watch channel and distributes them to watchers.
-func (s *BadgerStore) watchEventHandler() {
-	for event := range s.watchChan {
-		s.watchMu.RLock()
-
-		// Dispatch to watchers for this exact resource type and namespace
-		typeNsKey := fmt.Sprintf("%s:%s", event.ResourceType, event.Namespace)
-		if conns, ok := s.watchConns[typeNsKey]; ok {
-			for _, ch := range conns {
-				select {
-				case ch <- event:
-					// Event sent
-				default:
-					// Channel is full, log and continue
-					s.logger.Warn("Watch client channel is full, dropping event",
-						log.Any("type", event.Type),
-						log.Any("resourceType", event.ResourceType),
-						log.Str("namespace", event.Namespace))
-				}
-			}
-		}
-
-		// Dispatch to watchers for all resource types in this namespace
-		allTypesKey := fmt.Sprintf(":%s", event.Namespace)
-		if conns, ok := s.watchConns[allTypesKey]; ok {
-			for _, ch := range conns {
-				select {
-				case ch <- event:
-					// Event sent
-				default:
-					// Channel is full, log and continue
-					s.logger.Warn("Watch client channel is full, dropping event",
-						log.Any("type", event.Type),
-						log.Any("resourceType", event.ResourceType),
-						log.Str("namespace", event.Namespace))
-				}
-			}
-		}
-
-		// Dispatch to watchers for this resource type in all namespaces
-		typeAllNsKey := fmt.Sprintf("%s:", event.ResourceType)
-		if conns, ok := s.watchConns[typeAllNsKey]; ok {
-			for _, ch := range conns {
-				select {
-				case ch <- event:
-					// Event sent
-				default:
-					// Channel is full, log and continue
-					s.logger.Warn("Watch client channel is full, dropping event",
-						log.Any("type", event.Type),
-						log.Any("resourceType", event.ResourceType),
-						log.Str("namespace", event.Namespace))
-				}
-			}
-		}
-
-		// Dispatch to watchers for all resource types and all namespaces
-		allKey := ":"
-		if conns, ok := s.watchConns[allKey]; ok {
-			for _, ch := range conns {
-				select {
-				case ch <- event:
-					// Event sent
-				default:
-					// Channel is full, log and continue
-					s.logger.Warn("Watch client channel is full, dropping event",
-						log.Any("type", event.Type),
-						log.Any("resourceType", event.ResourceType),
-						log.Str("namespace", event.Namespace))
-				}
-			}
-		}
-
-		s.watchMu.RUnlock()
+// dispatch enqueues an event to every subscriber registered under key. The
+// caller must hold s.watchMu (read lock is sufficient).
+func (s *BadgerStore) dispatch(event WatchEvent, key string) {
+	for _, sub := range s.watchConns[key] {
+		sub.enqueue(event)
 	}
 }
 
