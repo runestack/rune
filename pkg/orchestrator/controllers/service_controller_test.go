@@ -751,39 +751,39 @@ func TestGetServiceLogs_LiveHasContent_NoFallback(t *testing.T) {
 		"tombstone fallback must NOT fire when live instance has content")
 }
 
-// TestIsStatusOnlyChange_ScaleChangeReconciles guards the fix for the restart
-// "hang": scale changes are applied by the ScalingController WITHOUT bumping
-// Generation, so a scale-only update used to look like a status-only change and
-// get skipped — leaving the new replicas (and `rune restart`'s scale-back-up)
-// uncreated until the next 30s reconcile tick. isStatusOnlyChange must treat a
-// scale change as reconcile-worthy.
-func TestIsStatusOnlyChange_ScaleChangeReconciles(t *testing.T) {
+// TestIsStatusOnlyChange_GenerationBased verifies loop-suppression is driven by
+// the persisted Generation vs ObservedGeneration pair (RFC #129 Phase 2). Every
+// desired-state change bumps Generation — spec edits via cast AND scale changes,
+// which the ScalingController now bumps Generation for — and the reconciler
+// advances ObservedGeneration once it converges. Equal ⇒ status-only echo
+// (skip); unequal ⇒ reconcile. This replaces the old scale-tracking shadow map:
+// the restart scale-back-up now reconciles because writing the new Scale bumped
+// Generation (asserted in the scaling controller test), not because a separate
+// map noticed the scale differ.
+func TestIsStatusOnlyChange_GenerationBased(t *testing.T) {
 	_, _, _, _, _, controller := setupTestServiceController(t)
 	sc := controller.(*serviceController)
 	ns, name := "default", "web"
 
-	svc := &types.Service{Name: name, Namespace: ns, Scale: 1, Metadata: &types.ServiceMetadata{Generation: 1}}
+	// Generation 1, never reconciled (ObservedGeneration 0) → must reconcile.
+	svc := &types.Service{Name: name, Namespace: ns, Scale: 1,
+		Metadata: &types.ServiceMetadata{Generation: 1, ObservedGeneration: 0}}
+	assert.False(t, sc.isStatusOnlyChange(svc), "unreconciled generation is not status-only")
 
-	// Never observed before → must reconcile.
-	assert.False(t, sc.isStatusOnlyChange(svc), "unseen service is not a status-only change")
+	// Reconciler has converged on generation 1 → status-only echo, skip.
+	svc.Metadata.ObservedGeneration = 1
+	assert.True(t, sc.isStatusOnlyChange(svc), "converged generation is a status-only change")
 
-	// Simulate having reconciled at generation 1, scale 1.
-	sc.recordObservedGeneration(ns, name, 1)
-	sc.recordObservedScale(ns, name, 1)
-
-	// Same generation, same scale → genuine status-only update, skip.
-	assert.True(t, sc.isStatusOnlyChange(svc), "same gen + same scale is status-only")
-
-	// Scale changed (1 → 3) with the SAME generation → must reconcile.
-	svc.Scale = 3
-	assert.False(t, sc.isStatusOnlyChange(svc), "a scale change must trigger reconciliation even at the same generation")
-
-	// Scale back to a value we never reconciled at → must reconcile.
-	svc.Scale = 0
-	assert.False(t, sc.isStatusOnlyChange(svc), "scale-to-0 (restart drain) must trigger reconciliation")
-
-	// Generation bump still forces reconcile regardless of scale.
-	svc.Scale = 1
+	// A desired-state change (spec edit or scale) bumps Generation ahead of
+	// ObservedGeneration → must reconcile. This is the restart scale-back-up path.
 	svc.Metadata.Generation = 2
-	assert.False(t, sc.isStatusOnlyChange(svc), "a generation bump is never status-only")
+	assert.False(t, sc.isStatusOnlyChange(svc), "a generation ahead of observed must reconcile")
+
+	// Once the reconciler converges on generation 2 → status-only again.
+	svc.Metadata.ObservedGeneration = 2
+	assert.True(t, sc.isStatusOnlyChange(svc), "re-converged generation is status-only")
+
+	// Missing metadata → treated as needing reconciliation (defensive).
+	assert.False(t, sc.isStatusOnlyChange(&types.Service{Name: name, Namespace: ns}),
+		"service without metadata is not status-only")
 }

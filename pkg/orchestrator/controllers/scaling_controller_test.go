@@ -82,6 +82,63 @@ func TestImmediateScaling(t *testing.T) {
 	assert.Equal(t, params.TargetScale, updatedService.Scale, "Service should be scaled immediately to target")
 }
 
+// TestImmediateScaling_BumpsGeneration is the scaling-controller half of the
+// RFC #129 Phase 2 loop-suppression contract: writing a NEW desired scale must
+// bump Metadata.Generation, so the reconciler treats the resulting watch event
+// as a real change (not a status-only echo) and the restart scale-back-up is
+// created promptly. A no-op scale (already at target) must NOT bump it.
+func TestImmediateScaling_BumpsGeneration(t *testing.T) {
+	testStore := store.NewTestStore()
+	defer testStore.Close()
+	ctx := context.Background()
+
+	service := &types.Service{
+		ID: "svc-gen", Name: "gen-service", Namespace: "default", Scale: 1,
+		Metadata: &types.ServiceMetadata{
+			CreatedAt: time.Now(), UpdatedAt: time.Now(), Generation: 1, ObservedGeneration: 1,
+		},
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, service.Namespace, service.Name, service))
+
+	controller := NewScalingController(testStore, log.NewTestLogger())
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+	require.NoError(t, controller.Start(ctxWithCancel))
+	defer controller.Stop()
+
+	// Scale 1 → 3: Scale changes, so Generation must advance past ObservedGeneration.
+	require.NoError(t, controller.CreateScalingOperation(ctx, service, types.ScalingOperationParams{
+		CurrentScale: 1, TargetScale: 3, IntervalSeconds: 1, IsGradual: false,
+	}))
+	require.Eventually(t, func() bool {
+		var s types.Service
+		if err := testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &s); err != nil {
+			return false
+		}
+		return s.Scale == 3 && noScalingOpsInProgress(t, testStore, service.Namespace)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	var scaled types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &scaled))
+	assert.Greater(t, scaled.Metadata.Generation, int64(1),
+		"a scale change must bump Generation so it isn't skipped as status-only")
+	assert.Greater(t, scaled.Metadata.Generation, scaled.Metadata.ObservedGeneration,
+		"post-scale Generation must lead ObservedGeneration until the reconciler converges")
+
+	// No-op scale (3 → 3) must not bump Generation.
+	genBefore := scaled.Metadata.Generation
+	require.NoError(t, controller.CreateScalingOperation(ctx, &scaled, types.ScalingOperationParams{
+		CurrentScale: 3, TargetScale: 3, IntervalSeconds: 1, IsGradual: false,
+	}))
+	require.Eventually(t, func() bool {
+		return noScalingOpsInProgress(t, testStore, service.Namespace)
+	}, 5*time.Second, 50*time.Millisecond)
+	var afterNoop types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &afterNoop))
+	assert.Equal(t, genBefore, afterNoop.Metadata.Generation,
+		"a scale to the current value must not bump Generation")
+}
+
 // scalingTestScale reads the current desired scale of a service from the store.
 func scalingTestScale(t *testing.T, st *store.TestStore, ns, name string) int {
 	t.Helper()

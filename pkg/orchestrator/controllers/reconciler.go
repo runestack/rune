@@ -1047,45 +1047,74 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		}
 	}
 
-	// Update service status if anything changed (status, reason, or message).
-	if service.Status != newStatus ||
-		service.StatusReason != newReason ||
-		service.StatusMessage != newMessage {
-		r.logger.Info("Updating service status",
-			log.Str("service", service.Name),
-			log.Str("from", string(service.Status)),
-			log.Str("to", string(newStatus)),
-			log.Str("reason", newReason))
+	// The generation we just reconciled. Recording it in ObservedGeneration is
+	// how the service controller later recognises a status-only update and skips
+	// a redundant reconcile (RFC #129 Phase 2). Capture the snapshot generation,
+	// not the fresh one — if the desired state changed again mid-reconcile, the
+	// mismatch must persist so the next event reconciles the newer generation.
+	reconciledGen := int64(0)
+	if service.Metadata != nil {
+		reconciledGen = service.Metadata.Generation
+	}
 
-		// Apply ONLY the status fields, atomically, on the freshly-read service.
-		// updateServiceStatus runs at the end of a reconcile cycle on a `service`
-		// snapshot taken at the top; a concurrent scale write (e.g. `rune
-		// restart`'s 0→1 leg via the scaling controller) can land in between.
-		// UpdateFunc's CAS guarantees the status write never clobbers that Scale
-		// (the "restart goes 1→0 and hangs" bug) — superseding the earlier
-		// re-read-before-write hardening with a hard guarantee (RFC #129).
+	statusChanged := service.Status != newStatus ||
+		service.StatusReason != newReason ||
+		service.StatusMessage != newMessage
+	// Even when the status text is unchanged, we must advance ObservedGeneration
+	// so a scale-up that leaves the service "Running" (e.g. `rune restart`'s
+	// scale-back-up) doesn't look unreconciled forever and reconcile-loop.
+	genNeedsObserve := service.Metadata == nil || service.Metadata.ObservedGeneration != reconciledGen
+
+	if statusChanged || genNeedsObserve {
+		if statusChanged {
+			r.logger.Info("Updating service status",
+				log.Str("service", service.Name),
+				log.Str("from", string(service.Status)),
+				log.Str("to", string(newStatus)),
+				log.Str("reason", newReason))
+		}
+
+		// Apply ONLY the status fields (+ ObservedGeneration), atomically, on the
+		// freshly-read service. updateServiceStatus runs at the end of a reconcile
+		// cycle on a `service` snapshot taken at the top; a concurrent scale write
+		// (e.g. `rune restart`'s 0→1 leg via the scaling controller) can land in
+		// between. UpdateFunc's CAS guarantees this write never clobbers that
+		// Scale (the "restart goes 1→0 and hangs" bug) (RFC #129).
 		var fresh types.Service
 		err := r.store.UpdateFunc(ctx, types.ResourceTypeService, service.Namespace, service.Name, &fresh, func() error {
-			// Don't resurrect a service that was deleted out from under us, and
-			// skip if another writer already set this exact status.
+			// Don't resurrect a service that was deleted out from under us.
 			if fresh.Status == types.ServiceStatusDeleted {
 				return store.ErrSkipUpdate
 			}
-			if fresh.Status == newStatus && fresh.StatusReason == newReason && fresh.StatusMessage == newMessage {
+			if fresh.Metadata == nil {
+				fresh.Metadata = &types.ServiceMetadata{}
+			}
+			// Skip only if BOTH the status and the observed generation already
+			// match — otherwise another writer beat us but we still owe the
+			// ObservedGeneration bump (or vice versa).
+			statusMatches := fresh.Status == newStatus &&
+				fresh.StatusReason == newReason &&
+				fresh.StatusMessage == newMessage
+			if statusMatches && fresh.Metadata.ObservedGeneration == reconciledGen {
 				return store.ErrSkipUpdate
 			}
 			fresh.Status = newStatus
 			fresh.StatusReason = newReason
 			fresh.StatusMessage = newMessage
+			fresh.Metadata.ObservedGeneration = reconciledGen
 			return nil
 		}, store.WithReconciler())
 		if err != nil {
 			return fmt.Errorf("failed to update service status: %w", err)
 		}
-		// Reflect the persisted status on the caller's copy for consistency.
+		// Reflect the persisted fields on the caller's copy for consistency.
 		service.Status = newStatus
 		service.StatusReason = newReason
 		service.StatusMessage = newMessage
+		if service.Metadata == nil {
+			service.Metadata = &types.ServiceMetadata{}
+		}
+		service.Metadata.ObservedGeneration = reconciledGen
 	}
 
 	return nil
