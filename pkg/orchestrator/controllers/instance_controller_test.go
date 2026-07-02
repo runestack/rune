@@ -606,7 +606,9 @@ func TestUpdateInstanceIncompatible(t *testing.T) {
 	// Set up test runner status
 	testRunner.StatusResults[instance.ID] = types.InstanceStatusRunning
 
-	// Create a modified service with different image
+	// Create a modified service with different image. An image change is a
+	// TEMPLATE change, so cast stamps TemplateGeneration alongside Generation
+	// (issue #142) — that's what triggers the incompatibility here.
 	modifiedService := &types.Service{
 		ID:            service.ID,
 		Name:          service.Name,
@@ -615,7 +617,8 @@ func TestUpdateInstanceIncompatible(t *testing.T) {
 		Image:         "different-image:latest", // This should trigger incompatibility
 		Runtime:       "docker",
 		Metadata: &types.ServiceMetadata{
-			Generation: 2, // Increment generation to trigger incompatibility
+			Generation:         2,
+			TemplateGeneration: 2,
 		},
 	}
 
@@ -623,6 +626,93 @@ func TestUpdateInstanceIncompatible(t *testing.T) {
 	err = controller.UpdateInstance(ctx, modifiedService, instance)
 	assert.Error(t, err, "UpdateInstance should return an error for incompatible changes")
 	assert.Contains(t, err.Error(), "requires recreation", "Error should indicate recreation is needed")
+}
+
+// TestIsInstanceCompatible_ScaleBumpDoesNotRecreate is the regression test for
+// issue #142: the scaling controller bumps Generation on every scale write
+// (RFC #129 Phase 2), and the old compatibility rule compared the instance's
+// recorded generation against Generation — so every scale op container-bounced
+// its surviving instances. The check now compares TemplateGeneration, which
+// scale never touches.
+func TestIsInstanceCompatible_ScaleBumpDoesNotRecreate(t *testing.T) {
+	ctx, _, testRunner, controller := setupTestController(t)
+
+	// Service after several scale ops: Generation raced ahead, template untouched.
+	service := &types.Service{
+		ID: "svc-scaled", Name: "svc-scaled", Namespace: "default",
+		Image: "app:v1", Scale: 3,
+		Metadata: &types.ServiceMetadata{
+			Generation:         7, // bumped by scale ops
+			TemplateGeneration: 1, // template unchanged since creation
+		},
+	}
+	// Survivor created at template generation 1, still running.
+	instance := &types.Instance{
+		ID: "svc-scaled-abc", Name: "svc-scaled-abc", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status:   types.InstanceStatusRunning,
+		Metadata: &types.InstanceMetadata{ServiceGeneration: 1},
+	}
+	testRunner.StatusResults[instance.ID] = types.InstanceStatusRunning
+
+	compatible, reason := controller.isInstanceCompatibleWithService(ctx, instance, service)
+	assert.True(t, compatible,
+		"a scale-only Generation bump must NOT recreate surviving instances (issue #142); got reason: %s", reason)
+}
+
+// TestIsInstanceCompatible_TemplateChangeRecreates: a cast that changes the
+// template stamps TemplateGeneration, and instances recorded at an older
+// template must be recreated.
+func TestIsInstanceCompatible_TemplateChangeRecreates(t *testing.T) {
+	ctx, _, testRunner, controller := setupTestController(t)
+
+	service := &types.Service{
+		ID: "svc-recast", Name: "svc-recast", Namespace: "default",
+		Image: "app:v2", Scale: 1,
+		Metadata: &types.ServiceMetadata{
+			Generation:         5,
+			TemplateGeneration: 5, // cast just stamped it
+		},
+	}
+	instance := &types.Instance{
+		ID: "svc-recast-abc", Name: "svc-recast-abc", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status:   types.InstanceStatusRunning,
+		Metadata: &types.InstanceMetadata{ServiceGeneration: 1}, // old template
+	}
+	testRunner.StatusResults[instance.ID] = types.InstanceStatusRunning
+
+	compatible, reason := controller.isInstanceCompatibleWithService(ctx, instance, service)
+	assert.False(t, compatible, "a template change must recreate old-template instances")
+	assert.Contains(t, reason, "service template changed")
+}
+
+// TestIsInstanceCompatible_PreMigrationServiceDoesNotBounce: services that
+// predate TemplateGeneration have 0 there, while their instances recorded
+// old-semantics Generation values (> 0). Nothing may bounce on upgrade — only
+// the next real cast (which stamps TemplateGeneration) recreates.
+func TestIsInstanceCompatible_PreMigrationServiceDoesNotBounce(t *testing.T) {
+	ctx, _, testRunner, controller := setupTestController(t)
+
+	service := &types.Service{
+		ID: "svc-legacy", Name: "svc-legacy", Namespace: "default",
+		Image: "app:v1", Scale: 1,
+		Metadata: &types.ServiceMetadata{
+			Generation:         13, // months of history
+			TemplateGeneration: 0,  // pre-migration record
+		},
+	}
+	instance := &types.Instance{
+		ID: "svc-legacy-abc", Name: "svc-legacy-abc", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status:   types.InstanceStatusRunning,
+		Metadata: &types.InstanceMetadata{ServiceGeneration: 13}, // old semantics
+	}
+	testRunner.StatusResults[instance.ID] = types.InstanceStatusRunning
+
+	compatible, reason := controller.isInstanceCompatibleWithService(ctx, instance, service)
+	assert.True(t, compatible,
+		"pre-migration services must not bounce instances on upgrade; got reason: %s", reason)
 }
 
 // TestInterpolateEnv_NonInterpolatedValue tests that regular environment variables are not modified

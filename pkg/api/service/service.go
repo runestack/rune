@@ -95,10 +95,11 @@ func (s *ServiceService) CreateService(ctx context.Context, req *generated.Creat
 		last = 1
 	}
 	service.Metadata = &types.ServiceMetadata{
-		Generation:       1,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-		LastNonZeroScale: last,
+		Generation:         1,
+		TemplateGeneration: 1,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		LastNonZeroScale:   last,
 	}
 
 	// Set initial status
@@ -426,6 +427,13 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 			updatedService.Metadata = &types.ServiceMetadata{}
 		}
 		updatedService.Metadata.Generation = existingService.Metadata.Generation + 1
+		// A cast/force change is a TEMPLATE change: stamp TemplateGeneration
+		// with the new Generation so existing instances (which recorded an
+		// older value) are recreated. Scale-only changes never come through
+		// here — the scaling controller bumps Generation without touching
+		// TemplateGeneration — so survivors of a scale op are left alone
+		// (issue #142).
+		updatedService.Metadata.TemplateGeneration = updatedService.Metadata.Generation
 		updatedService.Status = types.ServiceStatusDeploying
 	} else {
 		// Keep existing generation and status
@@ -433,6 +441,7 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 			updatedService.Metadata = &types.ServiceMetadata{}
 		}
 		updatedService.Metadata.Generation = existingService.Metadata.Generation
+		updatedService.Metadata.TemplateGeneration = existingService.Metadata.TemplateGeneration
 		updatedService.Status = existingService.Status
 	}
 

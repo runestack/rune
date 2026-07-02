@@ -49,6 +49,7 @@ func (r *ServiceRepo) Create(ctx context.Context, s *types.Service) error {
 	}
 	s.Metadata.UpdatedAt = now
 	s.Metadata.Generation = 1
+	s.Metadata.TemplateGeneration = 1
 	return r.base.Create(ctx, s.Namespace, s.Name, s)
 }
 
