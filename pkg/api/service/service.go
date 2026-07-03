@@ -451,6 +451,10 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 	// re-cast look unreconciled — ObservedGeneration(0) != Generation — and
 	// trigger a spurious reconcile (RFC #129 Phase 2).
 	updatedService.Metadata.ObservedGeneration = existingService.Metadata.ObservedGeneration
+	// Same for the restart-restore hint: LastNonZeroScale is orchestrator-owned
+	// bookkeeping the proto doesn't carry — dropping it on every re-cast made
+	// `rune restart` of a stopped service fall back to scale 1.
+	updatedService.Metadata.LastNonZeroScale = existingService.Metadata.LastNonZeroScale
 
 	// Use orchestrator to update the service
 	if err := s.orchestrator.UpdateService(ctx, updatedService); err != nil {
