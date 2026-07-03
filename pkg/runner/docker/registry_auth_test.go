@@ -3,6 +3,8 @@ package docker
 import (
 	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,10 +48,16 @@ func TestMatchWildcardHost(t *testing.T) {
 func TestResolveRegistryAuth_BasicExactAndWildcard(t *testing.T) {
 	r := &DockerRunner{
 		logger: nil,
-		config: &DockerConfig{Registries: []RegistryConfig{
-			{Registry: "ghcr.io", Auth: RegistryAuth{Type: "basic", Username: "u", Password: "p"}},
-			{Registry: "*.internal.registry.local", Auth: RegistryAuth{Type: "basic", Username: "wu", Password: "wp"}},
-		}},
+		config: &DockerConfig{
+			// Keep the test hermetic: without this the ambient
+			// fallback would read the developer's real
+			// ~/.docker/config.json and break the "expected empty"
+			// assertion below on any logged-in machine.
+			DisableAmbientRegistryAuth: true,
+			Registries: []RegistryConfig{
+				{Registry: "ghcr.io", Auth: RegistryAuth{Type: "basic", Username: "u", Password: "p"}},
+				{Registry: "*.internal.registry.local", Auth: RegistryAuth{Type: "basic", Username: "wu", Password: "wp"}},
+			}},
 	}
 
 	// exact host
@@ -81,5 +89,53 @@ func TestResolveRegistryAuth_BasicExactAndWildcard(t *testing.T) {
 	// docker hub (not configured) should be empty
 	if got := r.resolveRegistryAuth("nginx:alpine"); got != "" {
 		t.Fatalf("expected empty auth for docker hub, got %q", got)
+	}
+}
+
+// The ambient docker-config fallback: with no [[docker.registries]]
+// entry matching, a `docker login` of the runed user must still
+// authenticate pulls (issue #144, gap 2).
+func TestResolveRegistryAuth_AmbientDockerConfigFallback(t *testing.T) {
+	dir := t.TempDir()
+	auth := base64.StdEncoding.EncodeToString([]byte("au:ap"))
+	cfgJSON := `{"auths": {"registry.example.com": {"auth": "` + auth + `"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_CONFIG", dir)
+
+	r := &DockerRunner{config: &DockerConfig{}}
+	got := r.resolveRegistryAuth("registry.example.com/team/app:1")
+	if got == "" {
+		t.Fatal("expected ambient docker-config fallback to resolve auth")
+	}
+	m, err := decodeAuth(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m["username"] != "au" || m["password"] != "ap" {
+		t.Fatalf("unexpected ambient auth payload: %+v", m)
+	}
+}
+
+// Explicit [[docker.registries]] config must win over ambient sources.
+func TestResolveRegistryAuth_ConfiguredWinsOverAmbient(t *testing.T) {
+	dir := t.TempDir()
+	auth := base64.StdEncoding.EncodeToString([]byte("ambient:creds"))
+	cfgJSON := `{"auths": {"registry.example.com": {"auth": "` + auth + `"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_CONFIG", dir)
+
+	r := &DockerRunner{config: &DockerConfig{Registries: []RegistryConfig{
+		{Registry: "registry.example.com", Auth: RegistryAuth{Type: "basic", Username: "cfg", Password: "cfgpw"}},
+	}}}
+	m, err := decodeAuth(r.resolveRegistryAuth("registry.example.com/team/app:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m["username"] != "cfg" {
+		t.Fatalf("expected configured provider to win, got %+v", m)
 	}
 }

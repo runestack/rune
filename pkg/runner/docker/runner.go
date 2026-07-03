@@ -51,6 +51,13 @@ type DockerConfig struct {
 	// Registry authentication configuration loaded from runefile
 	Registries []RegistryConfig
 
+	// DisableAmbientRegistryAuth turns off the ambient fallbacks used
+	// when no [[docker.registries]] entry matches an image host: the
+	// GCE metadata service account (Artifact Registry / GCR) and the
+	// docker CLI config of the user runed runs as. Off by default —
+	// ambient auth only engages when explicit config resolved nothing.
+	DisableAmbientRegistryAuth bool
+
 	// Container log rotation for the json-file driver. Caps per-container log
 	// growth on the host — the agent log forwarder reads container logs but does
 	// not truncate them, so without this the daemon's logs grow unbounded.
@@ -102,7 +109,7 @@ type RegistryConfig struct {
 
 // RegistryAuth defines supported auth types
 type RegistryAuth struct {
-	Type     string `mapstructure:"type"` // basic | token | ecr
+	Type     string `mapstructure:"type"` // basic | token | dockerconfigjson | ecr | gcp
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
 	Token    string `mapstructure:"token"`
@@ -905,6 +912,18 @@ func (r *DockerRunner) resolveRegistryAuth(imageRef string) string {
 			})
 		}
 		r.providers = registryauth.BuildProviders(context.Background(), regs)
+		// Ambient fallbacks (GCE metadata SA for *.pkg.dev/gcr.io,
+		// then the docker CLI config of the runed user) go after all
+		// configured providers so explicit config always wins. See
+		// issue #144 — without these, private pulls on a node whose
+		// SA has artifactregistry.reader still went out anonymous.
+		if !r.config.DisableAmbientRegistryAuth {
+			r.providers = append(r.providers, registryauth.AmbientProviders(context.Background())...)
+		}
+		if r.providers == nil {
+			// Non-nil sentinel so we don't rebuild on every pull.
+			r.providers = []registryauth.Provider{}
+		}
 	}
 	for _, p := range r.providers {
 		if p.Match(host) {

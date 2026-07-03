@@ -75,7 +75,7 @@ type DockerRegistryConfig struct {
 
 // DockerRegistryAuth holds authentication configuration for a registry
 type DockerRegistryAuth struct {
-	Type       string            `yaml:"type"` // basic | token | ecr
+	Type       string            `yaml:"type"` // basic | token | dockerconfigjson | ecr | gcp
 	Username   string            `yaml:"username"`
 	Password   string            `yaml:"password"`
 	Token      string            `yaml:"token"`

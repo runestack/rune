@@ -94,6 +94,12 @@ func getDockerConfig() *docker.DockerConfig {
 		config.ConfigFileMode = os.FileMode(utils.ToUint32NonNegative(viper.GetInt("docker.config_file_mode")))
 	}
 
+	// Ambient registry auth (GCE metadata SA, docker CLI config) is on
+	// by default; this opts a node out of it entirely.
+	if viper.IsSet("docker.disable_ambient_registry_auth") {
+		config.DisableAmbientRegistryAuth = viper.GetBool("docker.disable_ambient_registry_auth")
+	}
+
 	// Load registry auth entries from viper if present
 	if viper.IsSet("docker.registries") {
 		var regs []map[string]any
