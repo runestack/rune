@@ -46,6 +46,10 @@ func BuildProviders(ctx context.Context, regs []map[string]any) []Provider {
 			}
 		case "ecr":
 			out = append(out, NewECRProvider(ECRConfig{Registry: host, Region: str(auth["region"])}))
+		case "gcp":
+			// Token minted from the GCE metadata SA at pull time; no
+			// static credentials needed (issue #144).
+			out = append(out, NewGCPProvider(GCPConfig{Registry: host}))
 		case "":
 			logger.Warn("Registry auth has no type; image pulls will be anonymous (did fromSecret resolve?)",
 				log.Str("name", name), log.Str("registry", host))
