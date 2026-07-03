@@ -3,39 +3,14 @@ package cmd
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSplitRestartBudget_DefaultThirtySeventy(t *testing.T) {
-	drain, start := splitRestartBudget(10*time.Minute, 0)
-	// 30% of 10m = 3m, 70% = 7m
-	assert.Equal(t, 3*time.Minute, drain)
-	assert.Equal(t, 7*time.Minute, start)
-}
-
-func TestSplitRestartBudget_DrainOverride(t *testing.T) {
-	drain, start := splitRestartBudget(5*time.Minute, 30*time.Second)
-	assert.Equal(t, 30*time.Second, drain)
-	assert.Equal(t, 5*time.Minute-30*time.Second, start)
-}
-
-func TestSplitRestartBudget_OverrideTooLarge(t *testing.T) {
-	// drain-timeout >= timeout: clamp drain to (total - 10s) so start
-	// still gets a chance to surface its own problems.
-	drain, start := splitRestartBudget(60*time.Second, 90*time.Second)
-	assert.Equal(t, 50*time.Second, drain)
-	assert.Equal(t, 10*time.Second, start)
-}
-
-func TestSplitRestartBudget_TinyTimeoutPreservesStartFloor(t *testing.T) {
-	// A 5s --timeout would otherwise leave start with ~3.5s. Start has
-	// a 10s minimum.
-	_, start := splitRestartBudget(5*time.Second, 0)
-	assert.GreaterOrEqual(t, start, 10*time.Second)
-}
+// (The splitRestartBudget tests were removed with the two-phase restart flow:
+// restart is now a single server-side template restamp — issue #140 — so
+// there is no drain/start budget to split.)
 
 func TestScalingDetachError_FormatsProblemSummary(t *testing.T) {
 	err := scalingDetachError("stalled instance(s)", 3, &generated.ScalingStatusResponse{

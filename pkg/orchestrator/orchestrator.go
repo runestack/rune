@@ -52,7 +52,7 @@ type Orchestrator interface {
 
 	// Lifecycle operations
 	GetInstanceByID(ctx context.Context, namespace, instanceID string) (*types.Instance, error)
-	RestartService(ctx context.Context, namespace, serviceName string) error
+	RestartService(ctx context.Context, namespace, serviceName string) (templateGeneration int64, scale int, err error)
 	RestartInstance(ctx context.Context, namespace, instanceID string) error
 	StopService(ctx context.Context, namespace, serviceName string) error
 	StopInstance(ctx context.Context, namespace, instanceID string) error
@@ -514,7 +514,7 @@ func (o *orchestrator) GetInstanceByID(ctx context.Context, namespace, instanceI
 	return o.instanceController.GetInstanceByID(ctx, namespace, instanceID)
 }
 
-func (o *orchestrator) RestartService(ctx context.Context, namespace, serviceName string) error {
+func (o *orchestrator) RestartService(ctx context.Context, namespace, serviceName string) (int64, int, error) {
 	return o.serviceController.RestartService(ctx, namespace, serviceName)
 }
 

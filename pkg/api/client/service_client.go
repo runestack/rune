@@ -343,6 +343,33 @@ func (s *ServiceClient) ScaleService(namespace, name string, scale int) error {
 	return err
 }
 
+// RestartService restarts a service in place (issue #140): the server stamps
+// a new template generation and the reconciler replaces every instance at the
+// current spec — the desired scale never dips through zero. Returns the
+// stamped template generation and the scale the service converges to; callers
+// wait for all instances to be Running with generation >= the returned value.
+func (s *ServiceClient) RestartService(namespace, name string) (templateGeneration int64, scale int, err error) {
+	s.logger.Debug("Restarting service", log.Str("name", name), log.Str("namespace", namespace))
+
+	ctx, cancel := s.client.Context()
+	defer cancel()
+
+	resp, err := s.svc.RestartService(ctx, &generated.RestartServiceRequest{
+		Name:      name,
+		Namespace: namespace,
+	})
+	if err != nil {
+		statusErr, ok := status.FromError(err)
+		if ok && statusErr.Code() == codes.NotFound {
+			return 0, 0, fmt.Errorf("service not found: %s/%s", namespace, name)
+		}
+		s.logger.Error("Failed to restart service", log.Err(err), log.Str("name", name))
+		return 0, 0, convertGRPCError("restart service", err)
+	}
+
+	return resp.TemplateGeneration, int(resp.Scale), nil
+}
+
 // ScaleServiceWithRequest changes the scale of a service with the full request object.
 func (s *ServiceClient) ScaleServiceWithRequest(req *generated.ScaleServiceRequest) (*generated.ServiceResponse, error) {
 	s.logger.Debug("Scaling service with options",

@@ -27,7 +27,7 @@ type ServiceController interface {
 	GetServiceLogs(ctx context.Context, namespace, name string, opts types.LogOptions) (io.ReadCloser, error)
 	ExecInService(ctx context.Context, namespace, serviceName string, options types.ExecOptions) (types.ExecStream, error)
 	DialInService(ctx context.Context, namespace, serviceName string, port uint32) (net.Conn, *types.Instance, error)
-	RestartService(ctx context.Context, namespace, serviceName string) error
+	RestartService(ctx context.Context, namespace, serviceName string) (templateGeneration int64, scale int, err error)
 	StopService(ctx context.Context, namespace, serviceName string) error
 	DeleteService(ctx context.Context, request *types.DeletionRequest) (*types.DeletionResponse, error)
 	GetDeletionStatus(ctx context.Context, namespace, name string) (*types.DeletionOperation, error)
@@ -564,36 +564,52 @@ func (sc *serviceController) DialInService(ctx context.Context, namespace, servi
 	return conn, runningInstance, nil
 }
 
-func (sc *serviceController) RestartService(ctx context.Context, namespace, serviceName string) error {
-	// Get service from store
-	var service types.Service
-	if err := sc.store.Get(ctx, types.ResourceTypeService, namespace, serviceName, &service); err != nil {
-		return fmt.Errorf("failed to get service: %w", err)
-	}
-
-	// List instances for this service
-	instances, err := sc.listInstancesForService(ctx, namespace, serviceName)
+// RestartService restarts a service the first-class way (issue #140): a
+// single atomic template restamp. Bumping Generation makes the reconciler
+// fire (desired-state change), and stamping TemplateGeneration = Generation
+// makes every existing instance template-stale, so the reconciler replaces
+// them all at the current spec — the `kubectl rollout restart` pattern. The
+// desired scale never dips through zero (the old implementation was two
+// racing scale writes whose drain leg could be skipped entirely).
+// Restarting a stopped service (scale 0) starts it at its last non-zero
+// scale.
+//
+// Returns the stamped template generation and the scale the service will
+// converge to: instances created for this restart record a generation >=
+// the returned value, which is what clients wait on.
+func (sc *serviceController) RestartService(ctx context.Context, namespace, serviceName string) (int64, int, error) {
+	var fresh types.Service
+	err := sc.store.UpdateFunc(ctx, types.ResourceTypeService, namespace, serviceName, &fresh, func() error {
+		if fresh.Status == types.ServiceStatusDeleted {
+			return fmt.Errorf("service %s/%s is deleted", namespace, serviceName)
+		}
+		if fresh.Metadata == nil {
+			fresh.Metadata = &types.ServiceMetadata{}
+		}
+		fresh.Metadata.Generation++
+		fresh.Metadata.TemplateGeneration = fresh.Metadata.Generation
+		// Restarting a stopped service means "start it again".
+		if fresh.Scale == 0 {
+			restored := fresh.Metadata.LastNonZeroScale
+			if restored < 1 {
+				restored = 1
+			}
+			fresh.Scale = restored
+		}
+		fresh.Metadata.UpdatedAt = time.Now()
+		return nil
+	}, store.WithOrchestrator())
 	if err != nil {
-		return fmt.Errorf("failed to list instances: %w", err)
+		return 0, 0, fmt.Errorf("failed to restart service: %w", err)
 	}
 
-	sc.logger.Info("Restarting service",
+	sc.logger.Info("Service restart stamped",
 		log.Str("name", serviceName),
 		log.Str("namespace", namespace),
-		log.Int("instance_count", len(instances)))
+		log.Int64("template_generation", fresh.Metadata.TemplateGeneration),
+		log.Int("scale", fresh.Scale))
 
-	// Restart all instances
-	for _, instance := range instances {
-		if err := sc.instanceController.RestartInstance(ctx, instance, InstanceRestartReasonManual); err != nil {
-			sc.logger.Error("Failed to restart instance",
-				log.Str("instance", instance.ID),
-				log.Str("service", serviceName),
-				log.Err(err))
-			// Continue with other instances
-		}
-	}
-
-	return nil
+	return fresh.Metadata.TemplateGeneration, fresh.Scale, nil
 }
 
 func (sc *serviceController) StopService(ctx context.Context, namespace, serviceName string) error {

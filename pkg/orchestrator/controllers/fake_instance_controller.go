@@ -47,6 +47,7 @@ type FakeInstanceController struct {
 	GetStatusFunc           func(ctx context.Context, instance *types.Instance) (*types.InstanceStatusInfo, error)
 	GetLogsFunc             func(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error)
 	ExecFunc                func(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+	IsCompatibleFunc        func(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string)
 
 	// Default error responses
 	CreateInstanceError      error
@@ -358,6 +359,9 @@ func (c *FakeInstanceController) GetInstanceStatus(ctx context.Context, instance
 }
 
 func (c *FakeInstanceController) isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string) {
+	if c.IsCompatibleFunc != nil {
+		return c.IsCompatibleFunc(ctx, instance, service)
+	}
 	return true, ""
 }
 

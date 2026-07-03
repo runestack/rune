@@ -28,6 +28,7 @@ const (
 	ServiceService_GetDeletionStatus_FullMethodName      = "/rune.api.ServiceService/GetDeletionStatus"
 	ServiceService_ListDeletionOperations_FullMethodName = "/rune.api.ServiceService/ListDeletionOperations"
 	ServiceService_ScaleService_FullMethodName           = "/rune.api.ServiceService/ScaleService"
+	ServiceService_RestartService_FullMethodName         = "/rune.api.ServiceService/RestartService"
 	ServiceService_WatchScaling_FullMethodName           = "/rune.api.ServiceService/WatchScaling"
 	ServiceService_ListInstances_FullMethodName          = "/rune.api.ServiceService/ListInstances"
 )
@@ -56,6 +57,10 @@ type ServiceServiceClient interface {
 	ListDeletionOperations(ctx context.Context, in *ListDeletionOperationsRequest, opts ...grpc.CallOption) (*ListDeletionOperationsResponse, error)
 	// ScaleService changes the scale of a service.
 	ScaleService(ctx context.Context, in *ScaleServiceRequest, opts ...grpc.CallOption) (*ServiceResponse, error)
+	// RestartService replaces every instance of a service in place (template
+	// restamp) without bouncing the desired scale through zero. Restarting a
+	// stopped service starts it at its last non-zero scale.
+	RestartService(ctx context.Context, in *RestartServiceRequest, opts ...grpc.CallOption) (*RestartServiceResponse, error)
 	// WatchScaling watches the scaling progress of a service.
 	WatchScaling(ctx context.Context, in *WatchScalingRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScalingStatusResponse], error)
 	// ListInstances lists instances for a service.
@@ -169,6 +174,16 @@ func (c *serviceServiceClient) ScaleService(ctx context.Context, in *ScaleServic
 	return out, nil
 }
 
+func (c *serviceServiceClient) RestartService(ctx context.Context, in *RestartServiceRequest, opts ...grpc.CallOption) (*RestartServiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestartServiceResponse)
+	err := c.cc.Invoke(ctx, ServiceService_RestartService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *serviceServiceClient) WatchScaling(ctx context.Context, in *WatchScalingRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScalingStatusResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ServiceService_ServiceDesc.Streams[1], ServiceService_WatchScaling_FullMethodName, cOpts...)
@@ -222,6 +237,10 @@ type ServiceServiceServer interface {
 	ListDeletionOperations(context.Context, *ListDeletionOperationsRequest) (*ListDeletionOperationsResponse, error)
 	// ScaleService changes the scale of a service.
 	ScaleService(context.Context, *ScaleServiceRequest) (*ServiceResponse, error)
+	// RestartService replaces every instance of a service in place (template
+	// restamp) without bouncing the desired scale through zero. Restarting a
+	// stopped service starts it at its last non-zero scale.
+	RestartService(context.Context, *RestartServiceRequest) (*RestartServiceResponse, error)
 	// WatchScaling watches the scaling progress of a service.
 	WatchScaling(*WatchScalingRequest, grpc.ServerStreamingServer[ScalingStatusResponse]) error
 	// ListInstances lists instances for a service.
@@ -262,6 +281,9 @@ func (UnimplementedServiceServiceServer) ListDeletionOperations(context.Context,
 }
 func (UnimplementedServiceServiceServer) ScaleService(context.Context, *ScaleServiceRequest) (*ServiceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ScaleService not implemented")
+}
+func (UnimplementedServiceServiceServer) RestartService(context.Context, *RestartServiceRequest) (*RestartServiceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RestartService not implemented")
 }
 func (UnimplementedServiceServiceServer) WatchScaling(*WatchScalingRequest, grpc.ServerStreamingServer[ScalingStatusResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method WatchScaling not implemented")
@@ -445,6 +467,24 @@ func _ServiceService_ScaleService_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ServiceService_RestartService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestartServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ServiceServiceServer).RestartService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ServiceService_RestartService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ServiceServiceServer).RestartService(ctx, req.(*RestartServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ServiceService_WatchScaling_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchScalingRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -512,6 +552,10 @@ var ServiceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ScaleService",
 			Handler:    _ServiceService_ScaleService_Handler,
+		},
+		{
+			MethodName: "RestartService",
+			Handler:    _ServiceService_RestartService_Handler,
 		},
 		{
 			MethodName: "ListInstances",
