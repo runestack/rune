@@ -375,8 +375,8 @@ func (fo *FakeOrchestrator) GetServiceStatus(ctx context.Context, namespace, ser
 }
 
 // RestartService implements the old orchestrator interface for compatibility
-func (fo *FakeOrchestrator) RestartService(ctx context.Context, namespace, serviceName string) error {
-	return nil
+func (fo *FakeOrchestrator) RestartService(ctx context.Context, namespace, serviceName string) (int64, int, error) {
+	return 1, 1, nil
 }
 
 // StopService implements the old orchestrator interface for compatibility

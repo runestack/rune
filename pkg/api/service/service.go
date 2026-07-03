@@ -900,6 +900,45 @@ func (s *ServiceService) ScaleService(ctx context.Context, req *generated.ScaleS
 	}, nil
 }
 
+// RestartService restarts a service in place (issue #140): one atomic
+// template restamp on the server makes the reconciler replace every instance
+// at the current spec, without the desired scale ever dipping through zero.
+// The response carries the stamped template generation — instances created
+// for this restart record a generation >= it, which is what clients wait on.
+func (s *ServiceService) RestartService(ctx context.Context, req *generated.RestartServiceRequest) (*generated.RestartServiceResponse, error) {
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "service name is required")
+	}
+
+	namespace := req.Namespace
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
+
+	templateGeneration, scale, err := s.orchestrator.RestartService(ctx, namespace, req.Name)
+	if err != nil {
+		if IsNotFound(err) {
+			return nil, status.Errorf(codes.NotFound, "service not found: %s", req.Name)
+		}
+		s.logger.Error("Failed to restart service",
+			log.Str("service", req.Name),
+			log.Str("namespace", namespace),
+			log.Err(err))
+		return nil, status.Errorf(codes.Internal, "failed to restart service: %v", err)
+	}
+
+	s.logger.Info("Service restart initiated",
+		log.Str("service", req.Name),
+		log.Str("namespace", namespace),
+		log.Int64("template_generation", templateGeneration),
+		log.Int("scale", scale))
+
+	return &generated.RestartServiceResponse{
+		TemplateGeneration: templateGeneration,
+		Scale:              int32(scale), //nolint:gosec // scale is bounded far below int32
+	}, nil
+}
+
 // IsNotFound returns true if the error is a "not found" error.
 func IsNotFound(err error) bool {
 	if err == nil {

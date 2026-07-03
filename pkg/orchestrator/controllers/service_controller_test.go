@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -229,23 +230,57 @@ func TestExecInServiceNoRunningInstances(t *testing.T) {
 	assert.Contains(t, err.Error(), "no running instances found", "Error should mention no running instances")
 }
 
-// TestRestartService tests the RestartService method
-func TestRestartService(t *testing.T) {
-	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
+// TestRestartService_StampsTemplateGeneration: restart is one atomic template
+// restamp (issue #140) — Generation++ and TemplateGeneration = Generation, so
+// the reconciler replaces every instance; the desired scale is untouched.
+func TestRestartService_StampsTemplateGeneration(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
 
-	// Create a test service
-	service := createTestService(ctx, t, testStore, "test-service")
+	service := createTestService(ctx, t, testStore, "test-service") // Gen 1, Scale 2
 
-	// Create test instances
-	serviceControllerCreateTestInstance(ctx, t, testStore, service.Name, "instance-1", types.InstanceStatusRunning)
-	serviceControllerCreateTestInstance(ctx, t, testStore, service.Name, "instance-2", types.InstanceStatusRunning)
-
-	// Restart service
-	err := controller.RestartService(ctx, service.Namespace, service.Name)
+	templateGen, scale, err := controller.RestartService(ctx, service.Namespace, service.Name)
 	require.NoError(t, err, "RestartService should not return an error")
 
-	// Verify restart was called on all instances
-	assert.Len(t, fakeInstanceController.RestartInstanceCalls, 2, "Restart should be called on both instances")
+	var got types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got))
+	assert.Equal(t, int64(2), got.Metadata.Generation, "restart must bump Generation")
+	assert.Equal(t, int64(2), got.Metadata.TemplateGeneration, "restart must stamp TemplateGeneration = Generation")
+	assert.Equal(t, got.Metadata.TemplateGeneration, templateGen, "returned templateGeneration must match the stamp")
+	assert.Equal(t, 2, got.Scale, "restart must NOT change the desired scale")
+	assert.Equal(t, 2, scale, "returned scale must be the converge target")
+}
+
+// TestRestartService_StoppedServiceStarts: restarting a stopped service
+// (scale 0) starts it at its last non-zero scale, falling back to 1.
+func TestRestartService_StoppedServiceStarts(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+
+	stopped := &types.Service{
+		ID: "stopped-svc", Name: "stopped-svc", Namespace: "default",
+		Image: "test:latest", Runtime: "container", Scale: 0,
+		Metadata: &types.ServiceMetadata{Generation: 4, TemplateGeneration: 2, LastNonZeroScale: 3},
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, stopped.Namespace, stopped.Name, stopped))
+
+	_, scale, err := controller.RestartService(ctx, stopped.Namespace, stopped.Name)
+	require.NoError(t, err)
+	assert.Equal(t, 3, scale, "stopped service must restart at LastNonZeroScale")
+
+	var got types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, stopped.Namespace, stopped.Name, &got))
+	assert.Equal(t, 3, got.Scale)
+	assert.Equal(t, got.Metadata.Generation, got.Metadata.TemplateGeneration, "restart stamps template = generation")
+
+	// No LastNonZeroScale recorded → fall back to 1.
+	bare := &types.Service{
+		ID: "bare-svc", Name: "bare-svc", Namespace: "default",
+		Image: "test:latest", Runtime: "container", Scale: 0,
+		Metadata: &types.ServiceMetadata{Generation: 1},
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, bare.Namespace, bare.Name, bare))
+	_, scale, err = controller.RestartService(ctx, bare.Namespace, bare.Name)
+	require.NoError(t, err)
+	assert.Equal(t, 1, scale, "no LastNonZeroScale → start one instance")
 }
 
 // TestStopService tests the StopService method
@@ -695,6 +730,104 @@ func TestInstanceChange_RollsUpStatusEventDriven(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond,
 		"service status must roll up within ~2s of instance readiness (event-driven)")
 	t.Logf("status rolled up in %s", time.Since(promotedAt))
+}
+
+// TestRestartService_ReplacesAllInstances is the end-to-end path for issue
+// #140: with the controller running, a restart stamp must cause the reconciler
+// to replace every instance (new IDs, current template generation) while the
+// desired scale never changes.
+func TestRestartService_ReplacesAllInstances(t *testing.T) {
+	ctx, testStore, fakeInstanceController, _, controller := setupTestServiceController(t)
+
+	// Fake instance controller persists Running instances recording the
+	// service's CURRENT TemplateGeneration (matching the real controller),
+	// and deletion removes the record so replacement converges.
+	fakeInstanceController.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
+		var tgen int64
+		if svc.Metadata != nil {
+			tgen = svc.Metadata.TemplateGeneration
+		}
+		inst := &types.Instance{
+			ID: instanceName, Name: instanceName,
+			Namespace: svc.Namespace, ServiceID: svc.ID, ServiceName: svc.Name,
+			Status:    types.InstanceStatusRunning,
+			Metadata:  &types.InstanceMetadata{ServiceGeneration: tgen},
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		_ = testStore.Create(ctx, types.ResourceTypeInstance, svc.Namespace, inst.ID, inst)
+		return inst, nil
+	}
+	fakeInstanceController.DeleteInstanceFunc = func(ctx context.Context, instance *types.Instance) error {
+		return testStore.Delete(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID)
+	}
+	// Mirror the real controller's template compatibility rule so the restart
+	// stamp actually drives replacement (the fake defaults to always-compatible).
+	fakeInstanceController.IsCompatibleFunc = func(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string) {
+		var instGen, tmplGen int64
+		if instance.Metadata != nil {
+			instGen = instance.Metadata.ServiceGeneration
+		}
+		if service.Metadata != nil {
+			tmplGen = service.Metadata.TemplateGeneration
+		}
+		if instGen < tmplGen {
+			return false, fmt.Sprintf("service template changed: %d -> %d", instGen, tmplGen)
+		}
+		return true, ""
+	}
+
+	require.NoError(t, controller.Start(ctx))
+	defer func() { _ = controller.Stop() }()
+
+	service := createTestService(ctx, t, testStore, "restart-e2e") // Scale 2
+
+	listLive := func() map[string]int64 {
+		out := map[string]int64{}
+		var instances []types.Instance
+		_ = testStore.List(ctx, types.ResourceTypeInstance, service.Namespace, &instances)
+		for i := range instances {
+			if instances[i].ServiceName != service.Name || instances[i].Status == types.InstanceStatusDeleted {
+				continue
+			}
+			var gen int64
+			if instances[i].Metadata != nil {
+				gen = instances[i].Metadata.ServiceGeneration
+			}
+			out[instances[i].ID] = gen
+		}
+		return out
+	}
+
+	// Converge initial deployment.
+	require.Eventually(t, func() bool { return len(listLive()) == 2 }, 10*time.Second, 20*time.Millisecond)
+	before := listLive()
+
+	// Restart: one stamp, reconciler does the rest.
+	templateGen, scale, err := controller.(*serviceController).RestartService(ctx, service.Namespace, service.Name)
+	require.NoError(t, err)
+	assert.Equal(t, 2, scale, "restart must keep the desired scale")
+
+	require.Eventually(t, func() bool {
+		live := listLive()
+		if len(live) != 2 {
+			return false
+		}
+		for id, gen := range live {
+			if _, existedBefore := before[id]; existedBefore {
+				return false // old instance still present
+			}
+			if gen < templateGen {
+				return false // replacement predates the stamp
+			}
+		}
+		return true
+	}, 10*time.Second, 20*time.Millisecond,
+		"every instance must be replaced with a fresh one at the stamped template generation")
+
+	// Desired scale untouched end-to-end.
+	var got types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got))
+	assert.Equal(t, 2, got.Scale, "scale must never have been part of the restart")
 }
 
 // fakeExecStream implements types.ExecStream for testing

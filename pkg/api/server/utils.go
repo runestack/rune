@@ -27,6 +27,10 @@ func methodToAction(method string) (string, string) {
 		return "services", "delete"
 	case strings.HasPrefix(method, "/rune.api.ServiceService/Scale"):
 		return "services", "scale"
+	case strings.HasPrefix(method, "/rune.api.ServiceService/Restart"):
+		// Restart is scale-class: it changes which containers run without
+		// changing the spec. Reusing the verb keeps existing tokens working.
+		return "services", "scale"
 
 	case strings.HasPrefix(method, "/rune.api.InstanceService/Get"):
 		return "instances", "get"

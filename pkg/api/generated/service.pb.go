@@ -3196,6 +3196,121 @@ func (x *ScaleServiceRequest) GetIntervalSeconds() int32 {
 	return 0
 }
 
+// RestartServiceRequest requests an in-place restart of a service: every
+// instance is replaced with a fresh one at the current spec, without the
+// desired scale ever dipping (no scale-0 bounce). Restarting a stopped
+// service (scale 0) starts it at its last non-zero scale.
+type RestartServiceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Name of the service to restart
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Namespace of the service (optional, default: "default")
+	Namespace     string `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RestartServiceRequest) Reset() {
+	*x = RestartServiceRequest{}
+	mi := &file_pkg_api_proto_service_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RestartServiceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RestartServiceRequest) ProtoMessage() {}
+
+func (x *RestartServiceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_service_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RestartServiceRequest.ProtoReflect.Descriptor instead.
+func (*RestartServiceRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *RestartServiceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RestartServiceRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+// RestartServiceResponse reports the template generation stamped by the
+// restart. Instances created for this restart record a generation >= this
+// value, which is how clients can wait for the replacement to complete.
+type RestartServiceResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The template generation this restart stamped on the service.
+	TemplateGeneration int64 `protobuf:"varint,1,opt,name=template_generation,json=templateGeneration,proto3" json:"template_generation,omitempty"`
+	// The desired scale the service will converge to.
+	Scale         int32 `protobuf:"varint,2,opt,name=scale,proto3" json:"scale,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RestartServiceResponse) Reset() {
+	*x = RestartServiceResponse{}
+	mi := &file_pkg_api_proto_service_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RestartServiceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RestartServiceResponse) ProtoMessage() {}
+
+func (x *RestartServiceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_service_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RestartServiceResponse.ProtoReflect.Descriptor instead.
+func (*RestartServiceResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *RestartServiceResponse) GetTemplateGeneration() int64 {
+	if x != nil {
+		return x.TemplateGeneration
+	}
+	return 0
+}
+
+func (x *RestartServiceResponse) GetScale() int32 {
+	if x != nil {
+		return x.Scale
+	}
+	return 0
+}
+
 // WatchScalingRequest requests to watch the scaling progress of a service.
 type WatchScalingRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -3211,7 +3326,7 @@ type WatchScalingRequest struct {
 
 func (x *WatchScalingRequest) Reset() {
 	*x = WatchScalingRequest{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[37]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3223,7 +3338,7 @@ func (x *WatchScalingRequest) String() string {
 func (*WatchScalingRequest) ProtoMessage() {}
 
 func (x *WatchScalingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[37]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3236,7 +3351,7 @@ func (x *WatchScalingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchScalingRequest.ProtoReflect.Descriptor instead.
 func (*WatchScalingRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{37}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *WatchScalingRequest) GetServiceName() string {
@@ -3300,7 +3415,7 @@ type ScalingStatusResponse struct {
 
 func (x *ScalingStatusResponse) Reset() {
 	*x = ScalingStatusResponse{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[38]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3312,7 +3427,7 @@ func (x *ScalingStatusResponse) String() string {
 func (*ScalingStatusResponse) ProtoMessage() {}
 
 func (x *ScalingStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[38]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3325,7 +3440,7 @@ func (x *ScalingStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScalingStatusResponse.ProtoReflect.Descriptor instead.
 func (*ScalingStatusResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{38}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ScalingStatusResponse) GetCurrentScale() int32 {
@@ -3427,7 +3542,7 @@ type InstanceProblem struct {
 
 func (x *InstanceProblem) Reset() {
 	*x = InstanceProblem{}
-	mi := &file_pkg_api_proto_service_proto_msgTypes[39]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3439,7 +3554,7 @@ func (x *InstanceProblem) String() string {
 func (*InstanceProblem) ProtoMessage() {}
 
 func (x *InstanceProblem) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_service_proto_msgTypes[39]
+	mi := &file_pkg_api_proto_service_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3452,7 +3567,7 @@ func (x *InstanceProblem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceProblem.ProtoReflect.Descriptor instead.
 func (*InstanceProblem) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{39}
+	return file_pkg_api_proto_service_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *InstanceProblem) GetName() string {
@@ -3791,7 +3906,13 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\x05scale\x18\x03 \x01(\x05R\x05scale\x12)\n" +
 	"\x04mode\x18\x04 \x01(\x0e2\x15.rune.api.ScalingModeR\x04mode\x12\x1b\n" +
 	"\tstep_size\x18\x05 \x01(\x05R\bstepSize\x12)\n" +
-	"\x10interval_seconds\x18\x06 \x01(\x05R\x0fintervalSeconds\"y\n" +
+	"\x10interval_seconds\x18\x06 \x01(\x05R\x0fintervalSeconds\"I\n" +
+	"\x15RestartServiceRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"_\n" +
+	"\x16RestartServiceResponse\x12/\n" +
+	"\x13template_generation\x18\x01 \x01(\x03R\x12templateGeneration\x12\x14\n" +
+	"\x05scale\x18\x02 \x01(\x05R\x05scale\"y\n" +
 	"\x13WatchScalingRequest\x12!\n" +
 	"\fservice_name\x18\x01 \x01(\tR\vserviceName\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12!\n" +
@@ -3823,7 +3944,7 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\vScalingMode\x12\x1c\n" +
 	"\x18SCALING_MODE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SCALING_MODE_IMMEDIATE\x10\x01\x12\x18\n" +
-	"\x14SCALING_MODE_GRADUAL\x10\x022\x9c\a\n" +
+	"\x14SCALING_MODE_GRADUAL\x10\x022\xf1\a\n" +
 	"\x0eServiceService\x12J\n" +
 	"\rCreateService\x12\x1e.rune.api.CreateServiceRequest\x1a\x19.rune.api.ServiceResponse\x12D\n" +
 	"\n" +
@@ -3834,7 +3955,8 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\rDeleteService\x12\x1e.rune.api.DeleteServiceRequest\x1a\x1f.rune.api.DeleteServiceResponse\x12\\\n" +
 	"\x11GetDeletionStatus\x12\".rune.api.GetDeletionStatusRequest\x1a#.rune.api.GetDeletionStatusResponse\x12k\n" +
 	"\x16ListDeletionOperations\x12'.rune.api.ListDeletionOperationsRequest\x1a(.rune.api.ListDeletionOperationsResponse\x12H\n" +
-	"\fScaleService\x12\x1d.rune.api.ScaleServiceRequest\x1a\x19.rune.api.ServiceResponse\x12P\n" +
+	"\fScaleService\x12\x1d.rune.api.ScaleServiceRequest\x1a\x19.rune.api.ServiceResponse\x12S\n" +
+	"\x0eRestartService\x12\x1f.rune.api.RestartServiceRequest\x1a .rune.api.RestartServiceResponse\x12P\n" +
 	"\fWatchScaling\x12\x1d.rune.api.WatchScalingRequest\x1a\x1f.rune.api.ScalingStatusResponse0\x01\x12P\n" +
 	"\rListInstances\x12\x1e.rune.api.ListInstancesRequest\x1a\x1f.rune.api.ListInstancesResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
@@ -3851,7 +3973,7 @@ func file_pkg_api_proto_service_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_pkg_api_proto_service_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
+var file_pkg_api_proto_service_proto_msgTypes = make([]protoimpl.MessageInfo, 51)
 var file_pkg_api_proto_service_proto_goTypes = []any{
 	(ServiceStatus)(0),                     // 0: rune.api.ServiceStatus
 	(ScalingMode)(0),                       // 1: rune.api.ScalingMode
@@ -3892,51 +4014,53 @@ var file_pkg_api_proto_service_proto_goTypes = []any{
 	(*Finalizer)(nil),                      // 36: rune.api.Finalizer
 	(*FinalizerDependency)(nil),            // 37: rune.api.FinalizerDependency
 	(*ScaleServiceRequest)(nil),            // 38: rune.api.ScaleServiceRequest
-	(*WatchScalingRequest)(nil),            // 39: rune.api.WatchScalingRequest
-	(*ScalingStatusResponse)(nil),          // 40: rune.api.ScalingStatusResponse
-	(*InstanceProblem)(nil),                // 41: rune.api.InstanceProblem
-	nil,                                    // 42: rune.api.Service.LabelsEntry
-	nil,                                    // 43: rune.api.Service.EnvEntry
-	nil,                                    // 44: rune.api.NetworkPolicyPeer.ServiceSelectorEntry
-	nil,                                    // 45: rune.api.InitStep.EnvEntry
-	nil,                                    // 46: rune.api.VolumeClaimTemplate.ParametersEntry
-	nil,                                    // 47: rune.api.ListServicesRequest.LabelSelectorEntry
-	nil,                                    // 48: rune.api.ListServicesRequest.FieldSelectorEntry
-	nil,                                    // 49: rune.api.WatchServicesRequest.LabelSelectorEntry
-	nil,                                    // 50: rune.api.WatchServicesRequest.FieldSelectorEntry
-	(*ServicePort)(nil),                    // 51: rune.api.ServicePort
-	(*Resources)(nil),                      // 52: rune.api.Resources
-	(*HealthCheck)(nil),                    // 53: rune.api.HealthCheck
-	(*ProcessSpec)(nil),                    // 54: rune.api.ProcessSpec
-	(RestartPolicy)(0),                     // 55: rune.api.RestartPolicy
-	(*ServiceExpose)(nil),                  // 56: rune.api.ServiceExpose
-	(*Instance)(nil),                       // 57: rune.api.Instance
-	(*KeyToPath)(nil),                      // 58: rune.api.KeyToPath
-	(*Status)(nil),                         // 59: rune.api.Status
-	(*PagingParams)(nil),                   // 60: rune.api.PagingParams
-	(EventType)(0),                         // 61: rune.api.EventType
-	(*ListInstancesRequest)(nil),           // 62: rune.api.ListInstancesRequest
-	(*ListInstancesResponse)(nil),          // 63: rune.api.ListInstancesResponse
+	(*RestartServiceRequest)(nil),          // 39: rune.api.RestartServiceRequest
+	(*RestartServiceResponse)(nil),         // 40: rune.api.RestartServiceResponse
+	(*WatchScalingRequest)(nil),            // 41: rune.api.WatchScalingRequest
+	(*ScalingStatusResponse)(nil),          // 42: rune.api.ScalingStatusResponse
+	(*InstanceProblem)(nil),                // 43: rune.api.InstanceProblem
+	nil,                                    // 44: rune.api.Service.LabelsEntry
+	nil,                                    // 45: rune.api.Service.EnvEntry
+	nil,                                    // 46: rune.api.NetworkPolicyPeer.ServiceSelectorEntry
+	nil,                                    // 47: rune.api.InitStep.EnvEntry
+	nil,                                    // 48: rune.api.VolumeClaimTemplate.ParametersEntry
+	nil,                                    // 49: rune.api.ListServicesRequest.LabelSelectorEntry
+	nil,                                    // 50: rune.api.ListServicesRequest.FieldSelectorEntry
+	nil,                                    // 51: rune.api.WatchServicesRequest.LabelSelectorEntry
+	nil,                                    // 52: rune.api.WatchServicesRequest.FieldSelectorEntry
+	(*ServicePort)(nil),                    // 53: rune.api.ServicePort
+	(*Resources)(nil),                      // 54: rune.api.Resources
+	(*HealthCheck)(nil),                    // 55: rune.api.HealthCheck
+	(*ProcessSpec)(nil),                    // 56: rune.api.ProcessSpec
+	(RestartPolicy)(0),                     // 57: rune.api.RestartPolicy
+	(*ServiceExpose)(nil),                  // 58: rune.api.ServiceExpose
+	(*Instance)(nil),                       // 59: rune.api.Instance
+	(*KeyToPath)(nil),                      // 60: rune.api.KeyToPath
+	(*Status)(nil),                         // 61: rune.api.Status
+	(*PagingParams)(nil),                   // 62: rune.api.PagingParams
+	(EventType)(0),                         // 63: rune.api.EventType
+	(*ListInstancesRequest)(nil),           // 64: rune.api.ListInstancesRequest
+	(*ListInstancesResponse)(nil),          // 65: rune.api.ListInstancesResponse
 }
 var file_pkg_api_proto_service_proto_depIdxs = []int32{
-	42, // 0: rune.api.Service.labels:type_name -> rune.api.Service.LabelsEntry
-	43, // 1: rune.api.Service.env:type_name -> rune.api.Service.EnvEntry
+	44, // 0: rune.api.Service.labels:type_name -> rune.api.Service.LabelsEntry
+	45, // 1: rune.api.Service.env:type_name -> rune.api.Service.EnvEntry
 	13, // 2: rune.api.Service.env_from:type_name -> rune.api.EnvFromSource
-	51, // 3: rune.api.Service.ports:type_name -> rune.api.ServicePort
-	52, // 4: rune.api.Service.resources:type_name -> rune.api.Resources
-	53, // 5: rune.api.Service.health:type_name -> rune.api.HealthCheck
+	53, // 3: rune.api.Service.ports:type_name -> rune.api.ServicePort
+	54, // 4: rune.api.Service.resources:type_name -> rune.api.Resources
+	55, // 5: rune.api.Service.health:type_name -> rune.api.HealthCheck
 	0,  // 6: rune.api.Service.status:type_name -> rune.api.ServiceStatus
-	54, // 7: rune.api.Service.process:type_name -> rune.api.ProcessSpec
-	55, // 8: rune.api.Service.restart_policy:type_name -> rune.api.RestartPolicy
+	56, // 7: rune.api.Service.process:type_name -> rune.api.ProcessSpec
+	57, // 8: rune.api.Service.restart_policy:type_name -> rune.api.RestartPolicy
 	16, // 9: rune.api.Service.secret_mounts:type_name -> rune.api.SecretMount
 	17, // 10: rune.api.Service.configmap_mounts:type_name -> rune.api.ConfigmapMount
 	14, // 11: rune.api.Service.metadata:type_name -> rune.api.ServiceMetadata
 	15, // 12: rune.api.Service.dependencies:type_name -> rune.api.DependencyRef
-	56, // 13: rune.api.Service.expose:type_name -> rune.api.ServiceExpose
+	58, // 13: rune.api.Service.expose:type_name -> rune.api.ServiceExpose
 	20, // 14: rune.api.Service.volumes:type_name -> rune.api.VolumeMount
 	12, // 15: rune.api.Service.init_steps:type_name -> rune.api.InitStep
 	11, // 16: rune.api.Service.security_context:type_name -> rune.api.SecurityContext
-	57, // 17: rune.api.Service.instances:type_name -> rune.api.Instance
+	59, // 17: rune.api.Service.instances:type_name -> rune.api.Instance
 	3,  // 18: rune.api.Service.discovery:type_name -> rune.api.ServiceDiscovery
 	4,  // 19: rune.api.Service.ingress_cert:type_name -> rune.api.IngressCertStatus
 	5,  // 20: rune.api.Service.network_policy:type_name -> rune.api.ServiceNetworkPolicy
@@ -3944,42 +4068,42 @@ var file_pkg_api_proto_service_proto_depIdxs = []int32{
 	7,  // 22: rune.api.ServiceNetworkPolicy.egress:type_name -> rune.api.NetworkPolicyEgressRule
 	8,  // 23: rune.api.NetworkPolicyIngressRule.from:type_name -> rune.api.NetworkPolicyPeer
 	8,  // 24: rune.api.NetworkPolicyEgressRule.to:type_name -> rune.api.NetworkPolicyPeer
-	44, // 25: rune.api.NetworkPolicyPeer.service_selector:type_name -> rune.api.NetworkPolicyPeer.ServiceSelectorEntry
+	46, // 25: rune.api.NetworkPolicyPeer.service_selector:type_name -> rune.api.NetworkPolicyPeer.ServiceSelectorEntry
 	10, // 26: rune.api.SecurityContext.seccomp_profile:type_name -> rune.api.SeccompProfile
-	45, // 27: rune.api.InitStep.env:type_name -> rune.api.InitStep.EnvEntry
+	47, // 27: rune.api.InitStep.env:type_name -> rune.api.InitStep.EnvEntry
 	13, // 28: rune.api.InitStep.env_from:type_name -> rune.api.EnvFromSource
-	52, // 29: rune.api.InitStep.resources:type_name -> rune.api.Resources
+	54, // 29: rune.api.InitStep.resources:type_name -> rune.api.Resources
 	9,  // 30: rune.api.InitStep.run_if:type_name -> rune.api.RunIfSpec
 	11, // 31: rune.api.InitStep.security_context:type_name -> rune.api.SecurityContext
-	58, // 32: rune.api.SecretMount.items:type_name -> rune.api.KeyToPath
-	58, // 33: rune.api.ConfigmapMount.items:type_name -> rune.api.KeyToPath
-	46, // 34: rune.api.VolumeClaimTemplate.parameters:type_name -> rune.api.VolumeClaimTemplate.ParametersEntry
+	60, // 32: rune.api.SecretMount.items:type_name -> rune.api.KeyToPath
+	60, // 33: rune.api.ConfigmapMount.items:type_name -> rune.api.KeyToPath
+	48, // 34: rune.api.VolumeClaimTemplate.parameters:type_name -> rune.api.VolumeClaimTemplate.ParametersEntry
 	18, // 35: rune.api.VolumeMount.claim:type_name -> rune.api.VolumeClaim
 	19, // 36: rune.api.VolumeMount.claim_template:type_name -> rune.api.VolumeClaimTemplate
 	2,  // 37: rune.api.CreateServiceRequest.service:type_name -> rune.api.Service
 	2,  // 38: rune.api.ServiceResponse.service:type_name -> rune.api.Service
-	59, // 39: rune.api.ServiceResponse.status:type_name -> rune.api.Status
-	47, // 40: rune.api.ListServicesRequest.label_selector:type_name -> rune.api.ListServicesRequest.LabelSelectorEntry
-	48, // 41: rune.api.ListServicesRequest.field_selector:type_name -> rune.api.ListServicesRequest.FieldSelectorEntry
-	60, // 42: rune.api.ListServicesRequest.paging:type_name -> rune.api.PagingParams
+	61, // 39: rune.api.ServiceResponse.status:type_name -> rune.api.Status
+	49, // 40: rune.api.ListServicesRequest.label_selector:type_name -> rune.api.ListServicesRequest.LabelSelectorEntry
+	50, // 41: rune.api.ListServicesRequest.field_selector:type_name -> rune.api.ListServicesRequest.FieldSelectorEntry
+	62, // 42: rune.api.ListServicesRequest.paging:type_name -> rune.api.PagingParams
 	2,  // 43: rune.api.ListServicesResponse.services:type_name -> rune.api.Service
-	59, // 44: rune.api.ListServicesResponse.status:type_name -> rune.api.Status
-	60, // 45: rune.api.ListServicesResponse.paging:type_name -> rune.api.PagingParams
-	49, // 46: rune.api.WatchServicesRequest.label_selector:type_name -> rune.api.WatchServicesRequest.LabelSelectorEntry
-	50, // 47: rune.api.WatchServicesRequest.field_selector:type_name -> rune.api.WatchServicesRequest.FieldSelectorEntry
+	61, // 44: rune.api.ListServicesResponse.status:type_name -> rune.api.Status
+	62, // 45: rune.api.ListServicesResponse.paging:type_name -> rune.api.PagingParams
+	51, // 46: rune.api.WatchServicesRequest.label_selector:type_name -> rune.api.WatchServicesRequest.LabelSelectorEntry
+	52, // 47: rune.api.WatchServicesRequest.field_selector:type_name -> rune.api.WatchServicesRequest.FieldSelectorEntry
 	2,  // 48: rune.api.WatchServicesResponse.service:type_name -> rune.api.Service
-	61, // 49: rune.api.WatchServicesResponse.event_type:type_name -> rune.api.EventType
-	59, // 50: rune.api.WatchServicesResponse.status:type_name -> rune.api.Status
+	63, // 49: rune.api.WatchServicesResponse.event_type:type_name -> rune.api.EventType
+	61, // 50: rune.api.WatchServicesResponse.status:type_name -> rune.api.Status
 	2,  // 51: rune.api.UpdateServiceRequest.service:type_name -> rune.api.Service
-	59, // 52: rune.api.DeleteServiceResponse.status:type_name -> rune.api.Status
+	61, // 52: rune.api.DeleteServiceResponse.status:type_name -> rune.api.Status
 	36, // 53: rune.api.DeleteServiceResponse.finalizers:type_name -> rune.api.Finalizer
 	35, // 54: rune.api.GetDeletionStatusResponse.operation:type_name -> rune.api.DeletionOperation
 	35, // 55: rune.api.ListDeletionOperationsResponse.operations:type_name -> rune.api.DeletionOperation
 	36, // 56: rune.api.DeletionOperation.finalizers:type_name -> rune.api.Finalizer
 	37, // 57: rune.api.Finalizer.dependencies:type_name -> rune.api.FinalizerDependency
 	1,  // 58: rune.api.ScaleServiceRequest.mode:type_name -> rune.api.ScalingMode
-	59, // 59: rune.api.ScalingStatusResponse.status:type_name -> rune.api.Status
-	41, // 60: rune.api.ScalingStatusResponse.problems:type_name -> rune.api.InstanceProblem
+	61, // 59: rune.api.ScalingStatusResponse.status:type_name -> rune.api.Status
+	43, // 60: rune.api.ScalingStatusResponse.problems:type_name -> rune.api.InstanceProblem
 	21, // 61: rune.api.ServiceService.CreateService:input_type -> rune.api.CreateServiceRequest
 	23, // 62: rune.api.ServiceService.GetService:input_type -> rune.api.GetServiceRequest
 	24, // 63: rune.api.ServiceService.ListServices:input_type -> rune.api.ListServicesRequest
@@ -3989,21 +4113,23 @@ var file_pkg_api_proto_service_proto_depIdxs = []int32{
 	31, // 67: rune.api.ServiceService.GetDeletionStatus:input_type -> rune.api.GetDeletionStatusRequest
 	33, // 68: rune.api.ServiceService.ListDeletionOperations:input_type -> rune.api.ListDeletionOperationsRequest
 	38, // 69: rune.api.ServiceService.ScaleService:input_type -> rune.api.ScaleServiceRequest
-	39, // 70: rune.api.ServiceService.WatchScaling:input_type -> rune.api.WatchScalingRequest
-	62, // 71: rune.api.ServiceService.ListInstances:input_type -> rune.api.ListInstancesRequest
-	22, // 72: rune.api.ServiceService.CreateService:output_type -> rune.api.ServiceResponse
-	22, // 73: rune.api.ServiceService.GetService:output_type -> rune.api.ServiceResponse
-	25, // 74: rune.api.ServiceService.ListServices:output_type -> rune.api.ListServicesResponse
-	27, // 75: rune.api.ServiceService.WatchServices:output_type -> rune.api.WatchServicesResponse
-	22, // 76: rune.api.ServiceService.UpdateService:output_type -> rune.api.ServiceResponse
-	30, // 77: rune.api.ServiceService.DeleteService:output_type -> rune.api.DeleteServiceResponse
-	32, // 78: rune.api.ServiceService.GetDeletionStatus:output_type -> rune.api.GetDeletionStatusResponse
-	34, // 79: rune.api.ServiceService.ListDeletionOperations:output_type -> rune.api.ListDeletionOperationsResponse
-	22, // 80: rune.api.ServiceService.ScaleService:output_type -> rune.api.ServiceResponse
-	40, // 81: rune.api.ServiceService.WatchScaling:output_type -> rune.api.ScalingStatusResponse
-	63, // 82: rune.api.ServiceService.ListInstances:output_type -> rune.api.ListInstancesResponse
-	72, // [72:83] is the sub-list for method output_type
-	61, // [61:72] is the sub-list for method input_type
+	39, // 70: rune.api.ServiceService.RestartService:input_type -> rune.api.RestartServiceRequest
+	41, // 71: rune.api.ServiceService.WatchScaling:input_type -> rune.api.WatchScalingRequest
+	64, // 72: rune.api.ServiceService.ListInstances:input_type -> rune.api.ListInstancesRequest
+	22, // 73: rune.api.ServiceService.CreateService:output_type -> rune.api.ServiceResponse
+	22, // 74: rune.api.ServiceService.GetService:output_type -> rune.api.ServiceResponse
+	25, // 75: rune.api.ServiceService.ListServices:output_type -> rune.api.ListServicesResponse
+	27, // 76: rune.api.ServiceService.WatchServices:output_type -> rune.api.WatchServicesResponse
+	22, // 77: rune.api.ServiceService.UpdateService:output_type -> rune.api.ServiceResponse
+	30, // 78: rune.api.ServiceService.DeleteService:output_type -> rune.api.DeleteServiceResponse
+	32, // 79: rune.api.ServiceService.GetDeletionStatus:output_type -> rune.api.GetDeletionStatusResponse
+	34, // 80: rune.api.ServiceService.ListDeletionOperations:output_type -> rune.api.ListDeletionOperationsResponse
+	22, // 81: rune.api.ServiceService.ScaleService:output_type -> rune.api.ServiceResponse
+	40, // 82: rune.api.ServiceService.RestartService:output_type -> rune.api.RestartServiceResponse
+	42, // 83: rune.api.ServiceService.WatchScaling:output_type -> rune.api.ScalingStatusResponse
+	65, // 84: rune.api.ServiceService.ListInstances:output_type -> rune.api.ListInstancesResponse
+	73, // [73:85] is the sub-list for method output_type
+	61, // [61:73] is the sub-list for method input_type
 	61, // [61:61] is the sub-list for extension type_name
 	61, // [61:61] is the sub-list for extension extendee
 	0,  // [0:61] is the sub-list for field type_name
@@ -4022,7 +4148,7 @@ func file_pkg_api_proto_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_service_proto_rawDesc), len(file_pkg_api_proto_service_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   49,
+			NumMessages:   51,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

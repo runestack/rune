@@ -599,6 +599,29 @@ message ScaleServiceRequest {
   int32 interval_seconds = 6;
 }
 
+// RestartServiceRequest requests an in-place restart of a service: every
+// instance is replaced with a fresh one at the current spec, without the
+// desired scale ever dipping (no scale-0 bounce). Restarting a stopped
+// service (scale 0) starts it at its last non-zero scale.
+message RestartServiceRequest {
+  // Name of the service to restart
+  string name = 1;
+
+  // Namespace of the service (optional, default: "default")
+  string namespace = 2;
+}
+
+// RestartServiceResponse reports the template generation stamped by the
+// restart. Instances created for this restart record a generation >= this
+// value, which is how clients can wait for the replacement to complete.
+message RestartServiceResponse {
+  // The template generation this restart stamped on the service.
+  int64 template_generation = 1;
+
+  // The desired scale the service will converge to.
+  int32 scale = 2;
+}
+
 // WatchScalingRequest requests to watch the scaling progress of a service.
 message WatchScalingRequest {
   // Name of the service to watch
@@ -723,7 +746,12 @@ service ServiceService {
 
   // ScaleService changes the scale of a service.
   rpc ScaleService(ScaleServiceRequest) returns (ServiceResponse);
-  
+
+  // RestartService replaces every instance of a service in place (template
+  // restamp) without bouncing the desired scale through zero. Restarting a
+  // stopped service starts it at its last non-zero scale.
+  rpc RestartService(RestartServiceRequest) returns (RestartServiceResponse);
+
   // WatchScaling watches the scaling progress of a service.
   rpc WatchScaling(WatchScalingRequest) returns (stream ScalingStatusResponse);
   

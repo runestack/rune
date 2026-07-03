@@ -52,26 +52,46 @@ func getScale(ctx *harness.Context, svc *generated.ServiceServiceClient, name st
 //
 // Looped, because the failure is a goroutine race in how scaling operations are
 // applied — it does not reproduce every single time.
+//
+// UPDATED for issue #140: restart is now one server-side template restamp, so
+// the assertions strengthened — the desired scale must never LEAVE 1 (no
+// drain-through-zero at all), and the instance must be genuinely replaced
+// every time (the old detach path could silently no-op the bounce).
 func TestRestartDetach_ReturnsToScale(t *testing.T) {
 	ctx := harness.New(t)
 	svc := generated.NewServiceServiceClient(ctx.Conn())
+	inst := generated.NewInstanceServiceClient(ctx.Conn())
 
 	castScaledService(t, ctx, &svc, "web", 1)
 
-	const iterations = 5
+	const iterations = 3
 	for i := 0; i < iterations; i++ {
-		ctx.CLI.MustRun(t, "restart", "web", "--detach")
-
-		// The desired scale must return to 1. If the restart race strands the
-		// service at 0, this never becomes true and the test fails (rather than
-		// hanging) at the timeout.
-		ctx.Eventually(harness.DefaultConvergeTimeout, "scale to return to 1 after restart", func() bool {
-			s, err := getScale(ctx, &svc, "web")
-			return err == nil && s == 1
+		// castScaledService only waits for the desired scale to land; the
+		// instance record may still be seconds away. Wait for it before
+		// snapshotting the pre-restart IDs.
+		var before map[string]bool
+		ctx.Eventually(harness.DefaultConvergeTimeout, "live instance before restart", func() bool {
+			before = liveInstanceIDs(ctx, inst, "web")
+			return len(before) == 1
 		})
 
-		// And it must STAY at 1 — guard against a late scale-down write winning
-		// the race and knocking it back to 0 after we observed 1.
+		ctx.CLI.MustRun(t, "restart", "web", "--detach")
+
+		// The restart must genuinely replace the instance.
+		ctx.Eventually(harness.DefaultConvergeTimeout, "instance to be replaced after detached restart", func() bool {
+			now := liveInstanceIDs(ctx, inst, "web")
+			if len(now) != 1 {
+				return false
+			}
+			for id := range now {
+				if before[id] {
+					return false // old instance still live
+				}
+			}
+			return true
+		})
+
+		// The desired scale must never have been part of the restart.
 		stableUntil := time.Now().Add(2 * time.Second)
 		for time.Now().Before(stableUntil) {
 			s, err := getScale(ctx, &svc, "web")
@@ -79,9 +99,90 @@ func TestRestartDetach_ReturnsToScale(t *testing.T) {
 				t.Fatalf("iteration %d: get scale: %v", i, err)
 			}
 			if s != 1 {
-				t.Fatalf("iteration %d: scale fell back to %d after returning to 1 (restart race stranded the service)", i, s)
+				t.Fatalf("iteration %d: scale is %d — restart must not touch the desired scale", i, s)
 			}
 			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+// liveInstanceIDs returns the IDs of non-Deleted instances of a service.
+func liveInstanceIDs(ctx *harness.Context, inst generated.InstanceServiceClient, service string) map[string]bool {
+	c, cancel := ctx.Ctx()
+	defer cancel()
+	resp, err := inst.ListInstances(c, &generated.ListInstancesRequest{Namespace: "default"})
+	if err != nil {
+		return nil
+	}
+	ids := map[string]bool{}
+	for _, in := range resp.GetInstances() {
+		if in.GetServiceName() != service {
+			continue
+		}
+		if in.GetStatus() == generated.InstanceStatus_INSTANCE_STATUS_DELETED {
+			continue
+		}
+		ids[in.GetId()] = true
+	}
+	return ids
+}
+
+// TestRestart_ReplacesInstancesInPlace covers the synchronous restart (issue
+// #140): the CLI must block until the instance has been replaced at the new
+// template generation and be Running, exit 0 — and the desired scale must
+// never be observed at 0 during the whole operation (the old implementation
+// drained through zero).
+func TestRestart_ReplacesInstancesInPlace(t *testing.T) {
+	ctx := harness.New(t)
+	svc := generated.NewServiceServiceClient(ctx.Conn())
+	inst := generated.NewInstanceServiceClient(ctx.Conn())
+
+	castScaledService(t, ctx, &svc, "api", 1)
+	var before map[string]bool
+	ctx.Eventually(harness.DefaultConvergeTimeout, "live instance before restart", func() bool {
+		before = liveInstanceIDs(ctx, inst, "api")
+		return len(before) == 1
+	})
+
+	// Watch the scale in the background during the restart: it must never
+	// dip to 0.
+	stopWatch := make(chan struct{})
+	sawZero := make(chan struct{}, 1)
+	go func() {
+		for {
+			select {
+			case <-stopWatch:
+				return
+			default:
+			}
+			if s, err := getScale(ctx, &svc, "api"); err == nil && s == 0 {
+				select {
+				case sawZero <- struct{}{}:
+				default:
+				}
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	res := ctx.CLI.MustRun(t, "restart", "api")
+	close(stopWatch)
+
+	select {
+	case <-sawZero:
+		t.Fatal("desired scale was observed at 0 during restart — restart must replace in place, not drain through zero")
+	default:
+	}
+
+	// The synchronous CLI already waited: the instance must be replaced now.
+	after := liveInstanceIDs(ctx, inst, "api")
+	if len(after) != 1 {
+		t.Fatalf("expected 1 live instance after restart, got %d", len(after))
+	}
+	for id := range after {
+		if before[id] {
+			t.Fatalf("instance %s survived the restart — replacement did not happen (CLI output: %s)", id, res.Stdout)
 		}
 	}
 }
@@ -135,10 +236,11 @@ func TestScaleDownUp_RapidReturnsToTarget(t *testing.T) {
 
 // TestParallelScaleRestartStatus_Converges is the RFC #129 Phase 3 acceptance
 // test at the e2e level: 4 goroutines hammer ONE service for 15s with
-// immediate scale ops (targets 1–3) and restart-shaped bounces (0 then N —
-// exactly the sequence `rune restart --detach` issues), then a final
+// immediate scale ops (targets 1–3) and 0-then-N bounces, then a final
 // ScaleService(2) is the authoritative desired state. The service must
-// converge to scale 2 and HOLD it — "restart is single-shot under load".
+// converge to scale 2 and HOLD it. (Since issue #140 `rune restart` no longer
+// bounces the scale at all — the 0→N pattern here remains as a raw
+// scaling-pipeline stress shape, not a model of restart.)
 // All hammering is pure gRPC: t.Fatal is illegal off the test goroutine, and
 // transient op-conflict errors during the storm are expected and ignored.
 func TestParallelScaleRestartStatus_Converges(t *testing.T) {
