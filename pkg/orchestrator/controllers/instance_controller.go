@@ -538,10 +538,13 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 	// container. Init steps carry their own SecurityContext.
 	instance.SecurityContext = service.SecurityContext
 
-	// Store the service generation in instance metadata. ServiceMetadata
+	// Store the service TEMPLATE generation in instance metadata — the
+	// counter that only advances on spec/template changes (cast), never on
+	// scale (issue #142). The compatibility check compares against it, so a
+	// later scale-up doesn't make this instance look stale. ServiceMetadata
 	// may be nil for hand-built services in tests; treat as generation 0.
 	if service.Metadata != nil {
-		instance.Metadata.ServiceGeneration = service.Metadata.Generation
+		instance.Metadata.ServiceGeneration = service.Metadata.TemplateGeneration
 	}
 
 	// Propagate ports and expose spec for runner use and later status
@@ -552,9 +555,9 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 		instance.Metadata.Expose = service.Expose
 	}
 	if service.Metadata != nil {
-		c.logger.Debug("Storing service generation in instance",
+		c.logger.Debug("Storing service template generation in instance",
 			log.Str("instance", instanceName),
-			log.Int64("generation", service.Metadata.Generation))
+			log.Int64("template_generation", service.Metadata.TemplateGeneration))
 	}
 
 	// Save instance to store
@@ -835,14 +838,16 @@ func (c *instanceController) UpdateInstance(ctx context.Context, service *types.
 		instance.Metadata = &types.InstanceMetadata{}
 	}
 
-	// Check if service generation has changed
-	generationUpdated := instance.Metadata.ServiceGeneration != service.Metadata.Generation
+	// Check if the service TEMPLATE generation has changed. Instances key on
+	// TemplateGeneration (not Generation, which also bumps on scale) so this
+	// in-place sync only fires on genuine template drift (issue #142).
+	generationUpdated := instance.Metadata.ServiceGeneration != service.Metadata.TemplateGeneration
 	if generationUpdated {
-		instance.Metadata.ServiceGeneration = service.Metadata.Generation
+		instance.Metadata.ServiceGeneration = service.Metadata.TemplateGeneration
 		instanceUpdated = true
-		c.logger.Debug("Updating service generation in instance",
+		c.logger.Debug("Updating service template generation in instance",
 			log.Str("instance", instance.ID),
-			log.Int64("generation", service.Metadata.Generation))
+			log.Int64("template_generation", service.Metadata.TemplateGeneration))
 	}
 
 	// Update timestamp only if we made meaningful changes
@@ -1791,24 +1796,31 @@ func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context
 		return false, fmt.Sprintf("instance is in failed state: %s", string(instance.Status))
 	}
 
-	// Check the service generation
+	// Check the service TEMPLATE generation — not Generation, which also
+	// advances on scale changes (RFC #129 Phase 2). Comparing Generation here
+	// made every scale op recreate its surviving containers (issue #142); the
+	// template counter only moves on cast/force, where recreation is correct.
+	// Pre-migration state is safe by construction: services from before this
+	// change have TemplateGeneration 0, which is never "newer" than any
+	// recorded instance generation, so nothing bounces until the next real
+	// cast stamps it.
 	if instance.Metadata != nil {
 		if instanceGen := instance.Metadata.ServiceGeneration; instanceGen != 0 {
-			// Convert instance's stored generation to int64
-			if instanceGen < service.Metadata.Generation {
-				c.logger.Debug("Service generation changed, instance needs recreation",
+			if instanceGen < service.Metadata.TemplateGeneration {
+				c.logger.Debug("Service template changed, instance needs recreation",
 					log.Str("instance", instance.ID),
 					log.Int64("instance_generation", instanceGen),
-					log.Int64("service_generation", service.Metadata.Generation))
-				return false, fmt.Sprintf("service generation changed: %d -> %d", instanceGen, service.Metadata.Generation)
+					log.Int64("template_generation", service.Metadata.TemplateGeneration))
+				return false, fmt.Sprintf("service template changed: %d -> %d", instanceGen, service.Metadata.TemplateGeneration)
 			}
 		} else {
-			// If instance doesn't have a stored generation but service has one, recreate
-			if service.Metadata.Generation > 0 {
-				c.logger.Debug("Instance missing service generation, needs recreation",
+			// If the instance has no recorded generation but the service's
+			// template has been stamped, recreate to adopt the template.
+			if service.Metadata.TemplateGeneration > 0 {
+				c.logger.Debug("Instance missing template generation, needs recreation",
 					log.Str("instance", instance.ID),
-					log.Int64("service_generation", service.Metadata.Generation))
-				return false, "instance missing service generation"
+					log.Int64("template_generation", service.Metadata.TemplateGeneration))
+				return false, "instance missing service template generation"
 			}
 		}
 	}

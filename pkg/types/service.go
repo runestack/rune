@@ -175,6 +175,19 @@ type ServiceMetadata struct {
 	// Generation of the service
 	Generation int64 `json:"generation,omitempty" yaml:"generation,omitempty"`
 
+	// TemplateGeneration tracks changes to the instance TEMPLATE — the parts
+	// of the spec that define what a container looks like (image, env, mounts,
+	// ports, ...) — as opposed to Generation, which advances on EVERY
+	// desired-state change including scale. Cast bumps both (to the same
+	// value); the scaling controller bumps only Generation. Instances record
+	// TemplateGeneration at creation, and the compatibility check compares
+	// against it — so a scale-up never recreates surviving containers, while
+	// a spec change still does (issue #142; mirrors the K8s
+	// Deployment-generation vs pod-template-hash split). Pre-existing services
+	// have 0 here, which compares as "not newer than any instance" until the
+	// next cast stamps it.
+	TemplateGeneration int64 `json:"templateGeneration,omitempty" yaml:"templateGeneration,omitempty"`
+
 	// ObservedGeneration is the Generation the reconciler last acted on. When it
 	// equals Generation, the desired state (spec + scale) is fully reconciled, so
 	// an incoming update carries only status/observed fields and reconciliation

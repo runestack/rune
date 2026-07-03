@@ -95,7 +95,8 @@ func TestImmediateScaling_BumpsGeneration(t *testing.T) {
 	service := &types.Service{
 		ID: "svc-gen", Name: "gen-service", Namespace: "default", Scale: 1,
 		Metadata: &types.ServiceMetadata{
-			CreatedAt: time.Now(), UpdatedAt: time.Now(), Generation: 1, ObservedGeneration: 1,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			Generation: 1, TemplateGeneration: 1, ObservedGeneration: 1,
 		},
 	}
 	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, service.Namespace, service.Name, service))
@@ -124,6 +125,8 @@ func TestImmediateScaling_BumpsGeneration(t *testing.T) {
 		"a scale change must bump Generation so it isn't skipped as status-only")
 	assert.Greater(t, scaled.Metadata.Generation, scaled.Metadata.ObservedGeneration,
 		"post-scale Generation must lead ObservedGeneration until the reconciler converges")
+	assert.Equal(t, int64(1), scaled.Metadata.TemplateGeneration,
+		"a scale change must NOT bump TemplateGeneration — that's what keeps surviving instances from being recreated (issue #142)")
 
 	// No-op scale (3 → 3) must not bump Generation.
 	genBefore := scaled.Metadata.Generation
