@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
@@ -367,6 +368,30 @@ func (o *orchestrator) CreateService(ctx context.Context, service *types.Service
 	o.logger.Info("Creating service",
 		log.Str("name", service.Name),
 		log.Str("namespace", service.Namespace))
+
+	// Seed metadata defaults at the single choke point every create path
+	// funnels through (API CreateService pre-fills these; cast/releasectl does
+	// not — its services used to land with Generation 0, no
+	// TemplateGeneration, and no LastNonZeroScale, which broke the
+	// restart-a-stopped-service restore). Guarded assignments so callers that
+	// set explicit values win.
+	if service.Metadata == nil {
+		service.Metadata = &types.ServiceMetadata{}
+	}
+	now := time.Now()
+	if service.Metadata.CreatedAt.IsZero() {
+		service.Metadata.CreatedAt = now
+	}
+	service.Metadata.UpdatedAt = now
+	if service.Metadata.Generation == 0 {
+		service.Metadata.Generation = 1
+	}
+	if service.Metadata.TemplateGeneration == 0 {
+		service.Metadata.TemplateGeneration = service.Metadata.Generation
+	}
+	if service.Metadata.LastNonZeroScale == 0 && service.Scale > 0 {
+		service.Metadata.LastNonZeroScale = service.Scale
+	}
 
 	// Store the service - service controller watcher will pick this up
 	if err := o.store.Create(ctx, types.ResourceTypeService, service.Namespace, service.Name, service); err != nil {

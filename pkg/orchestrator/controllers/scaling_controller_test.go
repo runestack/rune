@@ -142,6 +142,58 @@ func TestImmediateScaling_BumpsGeneration(t *testing.T) {
 		"a scale to the current value must not bump Generation")
 }
 
+// TestImmediateScaling_PersistsLastNonZeroScale: the scaling controller must
+// persist the restart-restore hint on the record itself — a non-zero target
+// records itself; a scale-to-zero remembers the pre-stop scale. (The API
+// handler used to set this on a fetched copy that was never written back, so
+// `rune restart` of a stopped cast-created service fell back to scale 1.)
+func TestImmediateScaling_PersistsLastNonZeroScale(t *testing.T) {
+	testStore := store.NewTestStore()
+	defer testStore.Close()
+	ctx := context.Background()
+
+	service := &types.Service{
+		ID: "svc-lnz", Name: "lnz-service", Namespace: "default", Scale: 2,
+		Metadata: &types.ServiceMetadata{
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			Generation: 1, TemplateGeneration: 1, ObservedGeneration: 1,
+		},
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, service.Namespace, service.Name, service))
+
+	controller := NewScalingController(testStore, log.NewTestLogger())
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+	require.NoError(t, controller.Start(ctxWithCancel))
+	defer controller.Stop()
+
+	scaleTo := func(current, target int) {
+		var s types.Service
+		require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &s))
+		require.NoError(t, controller.CreateScalingOperation(ctx, &s, types.ScalingOperationParams{
+			CurrentScale: current, TargetScale: target, IntervalSeconds: 1,
+		}))
+		require.Eventually(t, func() bool {
+			var got types.Service
+			if err := testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got); err != nil {
+				return false
+			}
+			return got.Scale == target && noScalingOpsInProgress(t, testStore, service.Namespace)
+		}, 5*time.Second, 50*time.Millisecond)
+	}
+
+	// Scale up to 3: LNZ records the non-zero target.
+	scaleTo(2, 3)
+	var got types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got))
+	assert.Equal(t, 3, got.Metadata.LastNonZeroScale, "non-zero scale must persist as LastNonZeroScale")
+
+	// Scale to 0 (stop): LNZ remembers the pre-stop scale.
+	scaleTo(3, 0)
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got))
+	assert.Equal(t, 3, got.Metadata.LastNonZeroScale, "scale-to-zero must keep the pre-stop scale for restart restore")
+}
+
 // scalingTestScale reads the current desired scale of a service from the store.
 func scalingTestScale(t *testing.T, st *store.TestStore, ns, name string) int {
 	t.Helper()

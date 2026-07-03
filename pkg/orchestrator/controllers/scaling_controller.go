@@ -229,6 +229,16 @@ func (c *scalingController) executeImmediateScaling(ctx context.Context, op *typ
 			service.Metadata = &types.ServiceMetadata{}
 		}
 		if service.Scale != op.TargetScale {
+			// Persist the restart-restore hint: a non-zero target IS the last
+			// non-zero scale; a scale-to-zero remembers what it had before, so
+			// `rune restart` on a stopped service comes back at the right size.
+			// (The API handler used to set this on a fetched copy that was
+			// never written back — cast-created services had it empty.)
+			if op.TargetScale > 0 {
+				service.Metadata.LastNonZeroScale = op.TargetScale
+			} else if service.Scale > 0 {
+				service.Metadata.LastNonZeroScale = service.Scale
+			}
 			service.Scale = op.TargetScale
 			// Scale is a desired-state change the reconciler must act on. Bump
 			// Generation so the resulting watch event isn't mistaken for a
@@ -404,6 +414,15 @@ func (c *scalingController) processScalingStep(ctx context.Context, op *types.Sc
 				fresh.Metadata = &types.ServiceMetadata{}
 			}
 			if fresh.Scale != nextScale {
+				// Persist the restart-restore hint. Use the OPERATION's
+				// endpoints, not the intermediate step: a gradual 5→0 must
+				// remember 5 (what the user had), not the 1 of its final
+				// non-zero step; a gradual up/down to N>0 remembers N.
+				if op.TargetScale > 0 {
+					fresh.Metadata.LastNonZeroScale = op.TargetScale
+				} else if op.CurrentScale > 0 {
+					fresh.Metadata.LastNonZeroScale = op.CurrentScale
+				}
 				fresh.Scale = nextScale
 				// Each gradual step is a new desired scale; bump Generation so the
 				// reconciler treats it as a real change (RFC #129 Phase 2).
