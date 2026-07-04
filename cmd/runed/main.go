@@ -686,12 +686,12 @@ func main() {
 		// also try a non-privileged loopback port and skip DNS entirely
 		// if nothing binds — laptop dev still works via dataplane.
 		bindAddrs := dnsBindCandidates(*devMode, logger)
-		bindAddrs = dnssub.FilterBindable(bindAddrs, logger)
+		bindAddrs, bindSkipped := dnssub.FilterBindable(bindAddrs, logger)
 		if len(bindAddrs) == 0 {
 			if *devMode {
 				logger.Warn("DNS subsystem skipped: no bindable addresses on this host (common on macOS/Docker Desktop); use dataplane on 127.0.0.1 for host access")
 			} else {
-				return fmt.Errorf("dns: no bindable addresses")
+				return fmt.Errorf("dns: no bindable addresses: %s", dnssub.DiagnoseEmptyBind(bindSkipped))
 			}
 		} else {
 			dnsSub, derr = dnssub.New(dnssub.Config{
