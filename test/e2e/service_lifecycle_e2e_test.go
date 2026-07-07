@@ -32,11 +32,15 @@ func TestServiceLifecycle(t *testing.T) {
 	}
 
 	// Create.
+	// imagePull: missing starts from the locally cached image so the lifecycle
+	// test (create → scale → delete of the CONTROL plane) doesn't depend on
+	// registry connectivity, and a hung pull can't stall the delete teardown.
 	svcFile := filepath.Join(t.TempDir(), "web.yaml")
 	if err := os.WriteFile(svcFile, []byte(`
 service:
   name: web
   image: nginx:alpine
+  imagePull: missing
   scale: 1
 `), 0o644); err != nil {
 		t.Fatalf("write service file: %v", err)
