@@ -2,8 +2,6 @@ package types
 
 import (
 	"time"
-
-	"github.com/runestack/rune/pkg/worker"
 )
 
 // DeletionOperationStatus represents the status of a deletion operation
@@ -132,18 +130,6 @@ type DeletionOperation struct {
 	Finalizers []Finalizer `json:"finalizers,omitempty"`
 }
 
-// FinalizerTimeoutConfig configures timeout behavior for finalizers
-type FinalizerTimeoutConfig struct {
-	// Default timeout for all finalizers
-	DefaultTimeout time.Duration `json:"default_timeout"`
-
-	// Timeout for specific finalizer types
-	TypeTimeouts map[FinalizerType]time.Duration `json:"type_timeouts,omitempty"`
-
-	// Whether to fail the entire operation if a finalizer times out
-	FailOnTimeout bool `json:"fail_on_timeout"`
-}
-
 // DeletionRequest represents a request to delete a service
 type DeletionRequest struct {
 	// Namespace of the service
@@ -196,21 +182,4 @@ type DeletionResponse struct {
 
 	// Finalizers that will be executed
 	Finalizers []Finalizer `json:"finalizers,omitempty"`
-}
-
-// DeletionTask represents a deletion task for the worker pool
-type DeletionTask struct {
-	*worker.BaseTask
-
-	// Service to delete
-	Service *Service `json:"service"`
-
-	// Deletion request parameters
-	Request *DeletionRequest `json:"request"`
-
-	// Finalizers to execute
-	FinalizerTypes []FinalizerType `json:"finalizer_types"`
-
-	// Timeout configuration
-	TimeoutConfig FinalizerTimeoutConfig `json:"timeout_config"`
 }

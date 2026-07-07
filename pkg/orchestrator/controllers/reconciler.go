@@ -184,13 +184,10 @@ func (r *reconciler) Start(ctx context.Context) error {
 					r.logger.Error("Resync enqueue failed", log.Err(err))
 				}
 
-				// Cross-service sweeps (orphaned instances, store orphans)
+				// Runner-orphan sweep (runtime drift). Deleted-service cleanup
+				// is no longer a sweep: reconcileDeletion (Phase 4) removes the
+				// record as the terminal step of the per-service teardown.
 				r.runHousekeeping(r.ctx)
-
-				// Clean up deleted services
-				if err := r.handleDeletedServices(r.ctx); err != nil {
-					r.logger.Error("Failed to clean up deleted services", log.Err(err))
-				}
 
 				// Run garbage collection when due
 				if time.Since(lastGC) > garbageCollectionInterval {
@@ -242,9 +239,16 @@ func (r *reconciler) Stop() {
 	r.logger.Info("Reconciler stopped")
 }
 
-// runHousekeeping performs the cross-service sweeps that don't belong to any
-// single per-key reconcile: collecting and cleaning runner-orphaned instances,
-// and the store-orphan instance sweep. Runs on the periodic resync tick.
+// runHousekeeping performs the one remaining cross-service sweep: reaping
+// RUNNER-orphaned instances — instances a runner reports running that are
+// absent from any service's desired state (runtime drift, e.g. a container
+// that outlived its record). Runs on the periodic resync tick.
+//
+// The STORE-orphan sweep (instances whose parent service is gone) + its 90s
+// grace window + inline volume reclaim were retired in RFC #129 Phase 4b:
+// foreground deletion (reconcileDeletion) removes the service record only
+// AFTER its instances and owned volumes are gone, so a store-orphan instance
+// (or a leaked claimTemplate volume) can no longer exist by construction.
 func (r *reconciler) runHousekeeping(ctx context.Context) {
 	r.logger.Debug("Starting housekeeping sweep")
 
@@ -273,160 +277,7 @@ func (r *reconciler) runHousekeeping(ctx context.Context) {
 		r.logger.Error("Failed to clean up orphaned instances", log.Err(err))
 	}
 
-	// Sweep store-orphan instances: any instance whose parent service
-	// no longer exists in the store. The InstanceCleanupFinalizer
-	// handles cascade-delete on the happy path, but live experience
-	// (prod/tombstone-test-0 surviving 13h after its service was
-	// deleted) shows the finalizer can miss instances when it
-	// crashes mid-sweep, when the service was removed by a path that
-	// bypassed the finalizer, or when a new instance is created
-	// against a service ID that has since gone. This is the safety
-	// net so `rune delete <service>` never leaves a long-lived
-	// orphan that operators can't address — they show up in
-	// `rune get instances` with a serviceName pointing at nothing.
-	var allInstances []types.Instance
-	if err := r.store.ListAll(ctx, types.ResourceTypeInstance, &allInstances); err != nil {
-		r.logger.Error("Failed to list instances for orphan sweep", log.Err(err))
-	} else {
-		// Re-list services AFTER the instances so the "known" set is never
-		// staler than the instance list. `services` above is snapshotted at the
-		// top of the sweep; a service created mid-sweep (cast creates the
-		// service, then its instance) would otherwise be absent from that
-		// snapshot while its just-created instance appears in allInstances — and
-		// the sweep would delete a healthy, in-flight workload (RUNE cast race).
-		var freshServices []types.Service
-		if err := r.store.ListAll(ctx, types.ResourceTypeService, &freshServices); err != nil {
-			r.logger.Error("Failed to list services for orphan sweep", log.Err(err))
-		} else {
-			r.cleanUpStoreOrphanInstances(ctx, freshServices, allInstances)
-		}
-	}
-
 	r.logger.Debug("Housekeeping sweep completed")
-}
-
-// storeOrphanGrace is how long after creation an instance is immune from the
-// store-orphan sweep. It must comfortably exceed one reconcile interval so an
-// instance created in the same cycle as its service is never mistaken for an
-// orphan before the service becomes visible to the sweep.
-const storeOrphanGrace = 90 * time.Second
-
-// cleanUpStoreOrphanInstances deletes instances whose parent service
-// (by namespace + name) is no longer in the store. Pure function over
-// the supplied snapshot of services + instances — the caller owns
-// the store I/O so this is straightforward to unit-test.
-func (r *reconciler) cleanUpStoreOrphanInstances(ctx context.Context, knownServices []types.Service, instances []types.Instance) {
-	known := make(map[string]struct{}, len(knownServices))
-	for i := range knownServices {
-		known[knownServices[i].Namespace+"/"+knownServices[i].Name] = struct{}{}
-	}
-
-	for i := range instances {
-		inst := &instances[i]
-		// Already on the way out — let the existing deleted-instance
-		// retention path finish its job. Terminating means a
-		// teardown is mid-flight (runner.Stop/Remove in progress);
-		// hitting DeleteInstance again would just re-enter the same
-		// idempotent flow and clutter the audit trail.
-		if inst.Status == types.InstanceStatusDeleted ||
-			inst.Status == types.InstanceStatusTerminating {
-			continue
-		}
-		// ServiceName is the contract: the InstanceCleanupFinalizer,
-		// reconciler slot lookup, and rune CLI all key off it. An
-		// empty value would be a separate bug; skip rather than mass-
-		// delete on the assumption that the finalizer would have
-		// caught real instances anyway.
-		if inst.ServiceName == "" {
-			continue
-		}
-		// Grace window: never sweep a freshly-created instance. `cast` writes the
-		// service then the instance, and a reconcile cycle can list this instance
-		// before its parent service is visible to *this* sweep's service snapshot
-		// — deleting it would tear down a healthy, still-starting workload. A
-		// genuine orphan (service really gone) is older than one reconcile
-		// interval and gets swept on a later pass, so nothing leaks; we only
-		// refuse to act while the create is plausibly still in flight.
-		if !inst.CreatedAt.IsZero() && time.Since(inst.CreatedAt) < storeOrphanGrace {
-			continue
-		}
-		if _, ok := known[inst.Namespace+"/"+inst.ServiceName]; ok {
-			continue
-		}
-		r.logger.Info("Cleaning up store-orphan instance (parent service no longer exists)",
-			log.Str("instance", inst.ID),
-			log.Str("service", inst.ServiceName),
-			log.Str("namespace", inst.Namespace),
-			log.Str("status", string(inst.Status)))
-		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
-			// Log and continue; missing one orphan shouldn't block the
-			// rest of the sweep.
-			r.logger.Error("Failed to delete store-orphan instance",
-				log.Str("instance", inst.ID),
-				log.Err(err))
-			continue
-		}
-		// The per-service VolumeCleanupFinalizer normally reclaims a stateful
-		// instance's claimTemplate volume, but it can't run here: the parent
-		// service is already gone (that's why this instance is an orphan). Do
-		// it inline or the volume leaks — left Available, bound to a deleted
-		// instance, with its backing store (e.g. a DO block volume) still
-		// provisioned.
-		r.reclaimOrphanInstanceVolumes(ctx, inst)
-	}
-}
-
-// reclaimOrphanInstanceVolumes deletes the claimTemplate volume(s) bound to a
-// store-orphan instance, mirroring the VolumeCleanupFinalizer's per-volume
-// steps: unbind (so the agent's volume subsystem tears down Mount/Attach) then
-// delete the owned row (so the VolumeController's delete handler runs the
-// reclaim policy on the backing store). Keyed off the instance's own resolved
-// VolumeMounts (authoritative) and guarded by OwnerService so operator-managed
-// `claim:` volumes — which outlive any one service — are never touched. Best-
-// effort; logged, never fatal.
-func (r *reconciler) reclaimOrphanInstanceVolumes(ctx context.Context, inst *types.Instance) {
-	if inst.ServiceName == "" || inst.Metadata == nil || len(inst.Metadata.VolumeMounts) == 0 {
-		return
-	}
-	owner := inst.Namespace + "/" + inst.ServiceName
-
-	for _, m := range inst.Metadata.VolumeMounts {
-		if m.VolumeName == "" {
-			continue
-		}
-		var v types.Volume
-		if err := r.store.Get(ctx, types.ResourceTypeVolume, inst.Namespace, m.VolumeName, &v); err != nil {
-			// Already gone (or unreadable) — nothing to reclaim.
-			continue
-		}
-		// Only claimTemplate-owned volumes are reclaimed when their owning
-		// service vanishes; operator-managed `claim:` volumes (no OwnerService)
-		// are independent of any one service's lifetime.
-		if v.OwnerService != owner {
-			continue
-		}
-		// Unbind first so the agent Unmounts/Detaches before the row is gone.
-		if v.BoundNode != "" || v.BoundClaim != "" {
-			v.BoundNode = ""
-			v.BoundClaim = ""
-			if v.Handle != "" {
-				v.Status = types.VolumeStatusAvailable
-			}
-			if err := r.store.Update(ctx, types.ResourceTypeVolume, v.Namespace, v.Name, &v); err != nil {
-				r.logger.Warn("orphan volume reclaim: failed to unbind volume",
-					log.Str("volume", v.Name), log.Err(err))
-			}
-		}
-		if err := r.store.Delete(ctx, types.ResourceTypeVolume, v.Namespace, v.Name); err != nil {
-			r.logger.Warn("orphan volume reclaim: failed to delete volume row",
-				log.Str("volume", v.Name), log.Err(err))
-			continue
-		}
-		r.logger.Info("Reclaimed claimTemplate volume of store-orphan instance",
-			log.Str("volume", v.Name),
-			log.Str("instance", inst.ID),
-			log.Str("namespace", v.Namespace))
-	}
 }
 
 func (r *reconciler) cleanUpOrphanedInstances(ctx context.Context, orphanedInstances []*types.Instance) error {
@@ -1202,48 +1053,6 @@ type RunningInstance struct {
 	Instance   *types.Instance
 	IsOrphaned bool
 	Runner     types.RunnerType
-}
-
-// handleDeletedServices cleans up services that are marked as deleted
-func (r *reconciler) handleDeletedServices(ctx context.Context) error {
-	// Get all services from store
-	var services []types.Service
-	err := r.store.ListAll(ctx, types.ResourceTypeService, &services)
-	if err != nil {
-		return fmt.Errorf("failed to list services: %w", err)
-	}
-
-	// Check for services marked as deleted
-	for _, service := range services {
-		// If service is marked as deleted, remove it from the store
-		if service.Status == types.ServiceStatusDeleted {
-			// Check if all instances have been cleaned up
-			instances, err := r.listInstancesForService(ctx, service.Namespace, service.Name)
-			if err != nil {
-				r.logger.Error("Failed to list instances for deleted service",
-					log.Str("name", service.Name),
-					log.Str("namespace", service.Namespace),
-					log.Err(err))
-				continue
-			}
-
-			if len(instances) == 0 {
-				// All instances are gone, we can remove the service from the store
-				r.logger.Info("Removing deleted service from store",
-					log.Str("name", service.Name),
-					log.Str("namespace", service.Namespace))
-
-				if err := r.store.Delete(ctx, types.ResourceTypeService, service.Namespace, service.Name); err != nil {
-					r.logger.Error("Failed to remove deleted service from store",
-						log.Str("name", service.Name),
-						log.Str("namespace", service.Namespace),
-						log.Err(err))
-				}
-			}
-		}
-	}
-
-	return nil
 }
 
 // listInstancesForService lists all instances for a service
