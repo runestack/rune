@@ -1602,6 +1602,11 @@ func (c *instanceController) RestartInstance(ctx context.Context, instance *type
 		if err := c.store.Get(ctx, types.ResourceTypeService, currentInstance.Namespace, currentInstance.ServiceName, &service); err != nil {
 			return fmt.Errorf("failed to get service for restart: %w", err)
 		}
+		if serviceBeingDeleted(&service) {
+			c.logger.Info("Skipping restart: service is being deleted",
+				log.Str("instance", currentInstance.ID), log.Str("service", service.Name))
+			return nil
+		}
 		c.logger.Info("Operator restart on stuck-in-create instance; resetting attempt counter",
 			log.Str("instance", currentInstance.ID),
 			log.Int("prior_attempts", currentInstance.CreateAttempts))
@@ -1622,6 +1627,16 @@ func (c *instanceController) RestartInstance(ctx context.Context, instance *type
 	var service types.Service
 	if err := c.store.Get(ctx, types.ResourceTypeService, instance.Namespace, instance.ServiceName, &service); err != nil {
 		return fmt.Errorf("failed to get service for restart policy: %w", err)
+	}
+
+	// Never resurrect an instance for a service that's being torn down
+	// (RFC #129 Phase 4): the reconcileDeletion cascade is removing these
+	// instances, and a health-triggered replacement here would race it and
+	// leave an orphan the (now-retired) store-orphan sweep used to catch.
+	if serviceBeingDeleted(&service) {
+		c.logger.Info("Skipping restart: service is being deleted",
+			log.Str("instance", instance.ID), log.Str("service", service.Name))
+		return nil
 	}
 
 	// Manual restarts always override any policy

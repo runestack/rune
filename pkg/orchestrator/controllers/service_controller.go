@@ -10,12 +10,9 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
-	"github.com/runestack/rune/pkg/orchestrator/finalizers"
-	"github.com/runestack/rune/pkg/orchestrator/tasks"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/utils"
-	"github.com/runestack/rune/pkg/worker/pool"
 )
 
 // ServiceController implements the Controller interface for service management
@@ -56,10 +53,6 @@ type serviceController struct {
 
 	// Watch channel for instances (event-driven status roll-up, Phase 3c)
 	instanceWatchCh <-chan store.WatchEvent
-
-	// Deletion system dependencies
-	deletionWorkerPool *pool.WorkerPool
-	finalizerExecutor  *finalizers.FinalizerExecutor
 }
 
 // NewServiceController creates a new service controller
@@ -69,7 +62,10 @@ func NewServiceController(
 	healthController HealthController,
 	logger log.Logger,
 ) (ServiceController, error) {
-	// Create the reconciler once
+	// Create the reconciler once. It owns the deletion cascade too: a
+	// tombstoned service (Metadata.DeletionTimestamp set) is torn down by
+	// reconcileDeletion on the single-writer workqueue — no separate deletion
+	// worker pool or async finalizer executor (RFC #129 Phase 4).
 	reconciler := newReconciler(
 		store,
 		instanceController,
@@ -77,24 +73,8 @@ func NewServiceController(
 		logger.WithComponent("service-reconciler"),
 	)
 
-	// Create worker pool for deletion tasks
-	deletionWorkerPool, err := pool.DeletionWorkerPool(3)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create deletion worker pool: %w", err)
-	}
-
-	// Create finalizer executor
-	finalizerExecutor := finalizers.DefaultFinalizerExecutor(
-		store,
-		instanceController,
-		healthController,
-		logger,
-	)
-
 	return &serviceController{
 		store:              store,
-		finalizerExecutor:  finalizerExecutor,
-		deletionWorkerPool: deletionWorkerPool,
 		instanceController: instanceController,
 		healthController:   healthController,
 		reconciler:         reconciler,
@@ -109,14 +89,10 @@ func (sc *serviceController) Start(ctx context.Context) error {
 	// Create a context with cancel for all background operations
 	sc.ctx, sc.cancel = context.WithCancel(ctx)
 
-	// Start the deletion worker pool
-	sc.deletionWorkerPool.Start()
-	sc.logger.Info("Started deletion worker pool")
-
-	// Recover deletion operations interrupted by a crash/restart (mirrors scaling recovery).
-	if err := sc.recoverInProgressDeletions(ctx); err != nil {
-		sc.logger.Error("Error recovering in-progress deletion operations", log.Err(err))
-	}
+	// No deletion-recovery step: a tombstoned service is just another service
+	// the reconciler re-drives on boot (enqueueAllServices lists it because
+	// its record still exists) and on the 30s resync, so an interrupted
+	// teardown resumes with no separate recovery path (RFC #129 Phase 4).
 
 	// Start watching for service events
 	if err := sc.StartWatching(ctx); err != nil {
@@ -141,10 +117,6 @@ func (sc *serviceController) Stop() error {
 	if sc.cancel != nil {
 		sc.cancel()
 	}
-
-	// Stop the deletion worker pool
-	sc.deletionWorkerPool.Stop()
-	sc.logger.Info("Stopped deletion worker pool")
 
 	// Stop watching for service events
 	if err := sc.StopWatching(); err != nil {
@@ -973,23 +945,62 @@ func (sc *serviceController) handleDryRunDeletion(ctx context.Context, service *
 	}, nil
 }
 
-// handleRealDeletion handles real deletion requests
+// handleRealDeletion tombstones the service for foreground deletion (RFC #129
+// Phase 4): it stamps Metadata.DeletionTimestamp + the finalizer list on the
+// record (via CAS) and enqueues it. The single-writer reconciler then drives
+// reconcileDeletion — instances → volumes → record removal — with the record
+// never leaving the store until every finalizer clears. There is no async
+// worker pool: the deletion is just reconciliation of a tombstoned service.
 func (sc *serviceController) handleRealDeletion(ctx context.Context, service *types.Service, request *types.DeletionRequest, finalizerTypes []types.FinalizerType) (*types.DeletionResponse, error) {
-	// Use shared validation logic
-	errors, _ := sc.validateDeletionRequest(ctx, service, request)
-
-	// If there are validation errors, return failure response
-	if len(errors) > 0 {
-		return &types.DeletionResponse{
-			Status: "failed",
-			Errors: errors,
-		}, fmt.Errorf("deletion validation failed: %s", strings.Join(errors, "; "))
+	// Idempotent re-issue: an already-tombstoned service is a no-op success,
+	// not an error — the teardown is already in flight (checkServiceState
+	// would otherwise reject "already deleted").
+	if service.Metadata != nil && service.Metadata.DeletionTimestamp != nil {
+		return sc.inProgressDeletionResponse(ctx, service), nil
 	}
 
-	// Create deletion task ID
-	taskID := fmt.Sprintf("delete-%s-%s-%d", service.Namespace, service.Name, time.Now().Unix())
+	// Validate (dependents/Force enforced upstream in the API handler; this
+	// covers service-state and existing-deletion checks).
+	errs, _ := sc.validateDeletionRequest(ctx, service, request)
+	if len(errs) > 0 {
+		return &types.DeletionResponse{
+			Status: "failed",
+			Errors: errs,
+		}, fmt.Errorf("deletion validation failed: %s", strings.Join(errs, "; "))
+	}
 
-	// Create and store the deletion operation
+	// The finalizers the reconciler will run, in order. ServiceDeregister is
+	// NOT a finalizer — record removal is the terminal transition when the
+	// list empties, which is what makes the record provably outlive cleanup.
+	fins := deletionFinalizerList(service)
+
+	// Stamp the tombstone atomically. A concurrent re-issue that already
+	// stamped it loses the CAS race and is treated as idempotent success.
+	taskID := fmt.Sprintf("delete-%s-%s-%d", service.Namespace, service.Name, time.Now().Unix())
+	var fresh types.Service
+	err := sc.store.UpdateFunc(ctx, types.ResourceTypeService, service.Namespace, service.Name, &fresh, func() error {
+		if fresh.Metadata == nil {
+			fresh.Metadata = &types.ServiceMetadata{}
+		}
+		if fresh.Metadata.DeletionTimestamp != nil {
+			return store.ErrSkipUpdate // already tombstoned by a racing re-issue
+		}
+		now := time.Now()
+		fresh.Metadata.DeletionTimestamp = &now
+		fresh.Metadata.Finalizers = fins
+		fresh.Status = types.ServiceStatusDeleted
+		return nil
+	}, store.WithOrchestrator())
+	if err != nil {
+		return &types.DeletionResponse{
+			Status: "failed",
+			Errors: []string{fmt.Sprintf("failed to tombstone service: %v", err)},
+		}, err
+	}
+
+	// Compatibility shim: the DeletionOperation record the CLI/dashboard poll
+	// via GetDeletionStatus. reconcileDeletion advances it as teardown
+	// progresses. Best-effort — the tombstoned service is the source of truth.
 	deletionOperation := &types.DeletionOperation{
 		ID:               taskID,
 		Namespace:        service.Namespace,
@@ -998,24 +1009,22 @@ func (sc *serviceController) handleRealDeletion(ctx context.Context, service *ty
 		DeletedInstances: 0,
 		FailedInstances:  0,
 		StartTime:        time.Now(),
-		Status:           types.DeletionOperationStatusInitializing,
+		Status:           types.DeletionOperationStatusDeletingInstances,
 		DryRun:           false,
 		Finalizers:       sc.createFinalizersFromTypes(finalizerTypes),
 	}
-
-	// Store the deletion operation
 	if err := sc.store.Create(ctx, types.ResourceTypeDeletionOperation, service.Namespace, taskID, deletionOperation); err != nil {
-		sc.logger.Error("Failed to store deletion operation", log.Err(err))
-		// Continue anyway - the operation can still proceed
+		sc.logger.Error("Failed to store deletion operation shim", log.Err(err))
+		// Non-fatal: teardown proceeds regardless.
 	}
 
-	// Submit to worker pool
-	if err := sc.submitDeletionTask(ctx, taskID, service, request, finalizerTypes, deletionOperation); err != nil {
-		return &types.DeletionResponse{
-			Status: "failed",
-			Errors: []string{fmt.Sprintf("failed to submit deletion task: %v", err)},
-		}, err
-	}
+	// Drive the teardown promptly (the 30s resync would otherwise pick it up).
+	sc.reconciler.Enqueue(service.Namespace, service.Name)
+
+	sc.logger.Info("Service tombstoned for deletion",
+		log.Str("service", service.Name),
+		log.Str("namespace", service.Namespace),
+		log.Any("finalizers", fins))
 
 	return &types.DeletionResponse{
 		DeletionID: taskID,
@@ -1024,122 +1033,49 @@ func (sc *serviceController) handleRealDeletion(ctx context.Context, service *ty
 	}, nil
 }
 
-// submitDeletionTask submits a deletion task to the worker pool
-func (sc *serviceController) submitDeletionTask(ctx context.Context, taskID string, service *types.Service, request *types.DeletionRequest, finalizerTypes []types.FinalizerType, deletionOperation *types.DeletionOperation) error {
-	// Create deletion task
-	deletionTask := tasks.NewDeletionTask(
-		taskID,
-		service,
-		request,
-		finalizerTypes,
-		sc.finalizerExecutor,
-		sc.store,
-		sc.logger,
-	)
-	// Submit to worker pool
-	if err := sc.deletionWorkerPool.Submit(ctx, deletionTask); err != nil {
-		// Update deletion operation status to failed
-		deletionOperation.Status = types.DeletionOperationStatusFailed
-		deletionOperation.FailureReason = fmt.Sprintf("failed to submit deletion task: %v", err)
-		if updateErr := sc.store.Update(ctx, types.ResourceTypeDeletionOperation, service.Namespace, deletionTask.GetID(), deletionOperation); updateErr != nil {
-			sc.logger.Error("Failed to update deletion operation status", log.Err(updateErr))
-		}
-
-		return err
+// deletionFinalizerList returns the ordered finalizers the reconciler runs when
+// tearing a service down: instance-cleanup first, then volume-cleanup iff the
+// service auto-provisioned per-replica claimTemplate volumes. ServiceDeregister
+// is intentionally absent — the record is removed as the terminal step once
+// this list empties.
+func deletionFinalizerList(service *types.Service) []types.FinalizerType {
+	fins := []types.FinalizerType{types.FinalizerTypeInstanceCleanup}
+	if serviceHasClaimTemplate(service) {
+		fins = append(fins, types.FinalizerTypeVolumeCleanup)
 	}
-
-	sc.logger.Info("Submitted deletion task",
-		log.Str("task_id", taskID),
-		log.Str("service", deletionOperation.ServiceName),
-		log.Str("namespace", deletionOperation.Namespace))
-	return nil
+	return fins
 }
 
-// recoverInProgressDeletions marks stale in-progress deletion operations as failed so
-// they do not block new delete requests after a runed crash or restart.
-//
-// This runs from serviceController.Start, which the server invokes (via
-// orchestrator.Start) before the gRPC server is constructed — so no delete
-// request can be in flight here. Any operation still in a non-terminal status
-// is therefore orphaned by a dead process and safe to fail unconditionally.
-//
-// Recovery only unblocks retries: it does not resume the interrupted teardown.
-// The service and any instances/finalizers are left in their partial state and
-// the operation's progress counters are not corrected — the caller must
-// re-issue the delete to finish the job.
-func (sc *serviceController) recoverInProgressDeletions(ctx context.Context) error {
-	sc.logger.Info("Checking for in-progress deletion operations to recover")
-
-	var operations []types.DeletionOperation
-	if err := sc.store.ListAll(ctx, types.ResourceTypeDeletionOperation, &operations); err != nil {
-		return fmt.Errorf("failed to list deletion operations: %w", err)
+// inProgressDeletionResponse builds the idempotent-re-issue response for an
+// already-tombstoned service, reusing the existing shim operation if present.
+func (sc *serviceController) inProgressDeletionResponse(ctx context.Context, service *types.Service) *types.DeletionResponse {
+	resp := &types.DeletionResponse{
+		DeletionID: fmt.Sprintf("delete-%s-%s", service.Namespace, service.Name),
+		Status:     "in_progress",
 	}
-
-	var recovered int
-	for _, op := range operations {
-		switch op.Status {
-		case types.DeletionOperationStatusInitializing,
-			types.DeletionOperationStatusDeletingInstances,
-			types.DeletionOperationStatusRunningFinalizers:
-			// fall through
-		default:
-			continue
+	var ops []types.DeletionOperation
+	if err := sc.store.List(ctx, types.ResourceTypeDeletionOperation, service.Namespace, &ops); err == nil {
+		for i := range ops {
+			if ops[i].ServiceName == service.Name {
+				resp.DeletionID = ops[i].ID
+				resp.Finalizers = ops[i].Finalizers
+				break
+			}
 		}
-
-		age := time.Since(op.StartTime)
-		reason := "interrupted by server restart"
-		if age > time.Hour {
-			reason = "timed out during server recovery"
-		}
-
-		opCopy := op
-		opCopy.Status = types.DeletionOperationStatusFailed
-		opCopy.FailureReason = reason
-		now := time.Now()
-		opCopy.EndTime = &now
-
-		if err := sc.store.Update(ctx, types.ResourceTypeDeletionOperation, opCopy.Namespace, opCopy.ID, &opCopy); err != nil {
-			sc.logger.Error("Failed to mark stale deletion operation as failed",
-				log.Str("operation_id", op.ID),
-				log.Str("service", op.ServiceName),
-				log.Str("namespace", op.Namespace),
-				log.Err(err))
-			continue
-		}
-
-		sc.logger.Warn("Marked stale deletion operation as failed",
-			log.Str("operation_id", op.ID),
-			log.Str("service", op.ServiceName),
-			log.Str("namespace", op.Namespace),
-			log.Str("previous_status", string(op.Status)),
-			log.Duration("age", age))
-		recovered++
 	}
-
-	sc.logger.Info("Deletion operation recovery complete", log.Int("recovered", recovered))
-	return nil
+	return resp
 }
 
-// checkExistingDeletion checks if there's already a deletion operation in progress
+// checkExistingDeletion reports an error if the service is already being torn
+// down. The source of truth is the tombstone on the record itself
+// (Metadata.DeletionTimestamp), not a separate operation record. In practice
+// handleRealDeletion short-circuits a tombstoned re-issue to success before
+// validation ever runs, so this is a belt-and-suspenders guard for any other
+// caller of validateDeletionRequest.
 func (sc *serviceController) checkExistingDeletion(ctx context.Context, service *types.Service) error {
-	// List existing deletion operations for this service
-	var operations []types.DeletionOperation
-	err := sc.store.List(ctx, types.ResourceTypeDeletionOperation, service.Namespace, &operations)
-	if err != nil {
-		return fmt.Errorf("failed to list deletion operations: %w", err)
+	if service.Metadata != nil && service.Metadata.DeletionTimestamp != nil {
+		return fmt.Errorf("service %s/%s is already being deleted", service.Namespace, service.Name)
 	}
-
-	// Check for in-progress operations
-	for _, op := range operations {
-		if op.ServiceName == service.Name &&
-			(op.Status == types.DeletionOperationStatusInitializing ||
-				op.Status == types.DeletionOperationStatusDeletingInstances ||
-				op.Status == types.DeletionOperationStatusRunningFinalizers) {
-			return fmt.Errorf("deletion operation already in progress for service %s/%s (ID: %s)",
-				service.Namespace, service.Name, op.ID)
-		}
-	}
-
 	return nil
 }
 
