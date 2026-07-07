@@ -836,6 +836,128 @@ func TestCleanUpStoreOrphanInstances_ReclaimsClaimTemplateVolume(t *testing.T) {
 		"operator-managed volumes (no OwnerService) must not be reclaimed")
 }
 
+// tombstonedService builds a service already stamped for foreground deletion
+// with the given finalizers.
+func tombstonedService(ns, name string, scale int, claimTemplate bool, fins ...types.FinalizerType) *types.Service {
+	now := time.Now()
+	svc := &types.Service{
+		ID: name, Name: name, Namespace: ns, Image: "img", Scale: scale,
+		Status:   types.ServiceStatusDeleted,
+		Metadata: &types.ServiceMetadata{Generation: 1, DeletionTimestamp: &now, Finalizers: fins},
+	}
+	if claimTemplate {
+		svc.Volumes = []types.VolumeMount{{
+			Name: "data", MountPath: "/data",
+			ClaimTemplate: &types.VolumeClaimTemplate{Size: "1Gi", AccessMode: types.AccessModeRWO},
+		}}
+	}
+	return svc
+}
+
+func liveInstanceCount(t *testing.T, st *store.TestStore, ns, svcName string) int {
+	t.Helper()
+	var insts []types.Instance
+	require.NoError(t, st.List(context.Background(), types.ResourceTypeInstance, ns, &insts))
+	n := 0
+	for i := range insts {
+		if insts[i].ServiceName == svcName {
+			n++
+		}
+	}
+	return n
+}
+
+// TestReconcileDeletion_CascadeAndRecordOutlivesInstances is the core RFC #129
+// Phase 4 invariant (the #124 volume-leak / 13h-orphan class made structural):
+// reconcileDeletion tears down instances → volumes → record IN ORDER, the
+// service record is never removed while any instance exists, owned claimTemplate
+// volumes are reclaimed, and operator-managed volumes are left alone.
+func TestReconcileDeletion_CascadeAndRecordOutlivesInstances(t *testing.T) {
+	ctx := context.Background()
+	testStore := setupStore(t)
+	r := newReconciler(testStore, NewFakeInstanceController(), NewFakeHealthController(), log.NewLogger())
+
+	ns, name := "default", "db"
+	svc := tombstonedService(ns, name, 2, true,
+		types.FinalizerTypeInstanceCleanup, types.FinalizerTypeVolumeCleanup)
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, ns, name, svc))
+
+	for _, id := range []string{"db-0", "db-1"} {
+		require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, ns, id, &types.Instance{
+			ID: id, Name: id, Namespace: ns, ServiceName: name, ServiceID: name,
+			Status: types.InstanceStatusRunning,
+		}))
+	}
+	owned := &types.Volume{ID: "data-db-0", Name: "data-db-0", Namespace: ns, OwnerService: ns + "/" + name, Handle: "h1", Status: types.VolumeStatusBound}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeVolume, ns, owned.Name, owned))
+	operator := &types.Volume{ID: "operator-vol", Name: "operator-vol", Namespace: ns, Status: types.VolumeStatusAvailable}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeVolume, ns, operator.Name, operator))
+
+	// Pass 1: instance-cleanup removes the instance records but must NOT remove
+	// the service record — the record outlives its instances (the #124 gate).
+	var s1 types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, ns, name, &s1))
+	require.NoError(t, r.reconcileDeletion(ctx, &s1))
+	assert.Zero(t, liveInstanceCount(t, testStore, ns, name), "instances removed in the first cleanup pass")
+	var stillThere types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, ns, name, &stillThere),
+		"service record MUST survive while finalizers remain (record outlives instances)")
+	require.NotEmpty(t, stillThere.Metadata.Finalizers, "finalizers still pending after instance cleanup")
+
+	// Drive the rest to fixpoint (each call is independent → resumable).
+	for step := 0; step < 10; step++ {
+		var cur types.Service
+		if err := testStore.Get(ctx, types.ResourceTypeService, ns, name, &cur); err != nil {
+			break // record gone
+		}
+		require.NoError(t, r.reconcileDeletion(ctx, &cur))
+	}
+
+	// Terminal state: record gone, instances gone, owned volume reclaimed,
+	// operator volume untouched.
+	var gone types.Service
+	assert.Error(t, testStore.Get(ctx, types.ResourceTypeService, ns, name, &gone),
+		"service record must be removed once all finalizers clear")
+	assert.Zero(t, liveInstanceCount(t, testStore, ns, name))
+	assert.Error(t, testStore.Get(ctx, types.ResourceTypeVolume, ns, "data-db-0", &types.Volume{}),
+		"owned claimTemplate volume must be reclaimed")
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeVolume, ns, "operator-vol", &types.Volume{}),
+		"operator-managed volume must be left untouched")
+}
+
+// TestReconcileDeletion_ResumesAfterRestart proves crash-resumability with no
+// recovery code: a FRESH reconciler (simulating a restarted runed) picks up a
+// half-torn-down tombstoned service (instance-cleanup already popped) and
+// finishes it.
+func TestReconcileDeletion_ResumesAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	testStore := setupStore(t)
+
+	ns, name := "default", "half"
+	// Persisted mid-teardown state: instance-cleanup already done (popped),
+	// only volume-cleanup remains, one owned volume still present.
+	svc := tombstonedService(ns, name, 1, true, types.FinalizerTypeVolumeCleanup)
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeService, ns, name, svc))
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeVolume, ns, "data-half-0", &types.Volume{
+		ID: "data-half-0", Name: "data-half-0", Namespace: ns, OwnerService: ns + "/" + name,
+	}))
+
+	// A brand-new reconciler (no in-memory carryover) resumes from the store.
+	r := newReconciler(testStore, NewFakeInstanceController(), NewFakeHealthController(), log.NewLogger())
+	for step := 0; step < 10; step++ {
+		var cur types.Service
+		if err := testStore.Get(ctx, types.ResourceTypeService, ns, name, &cur); err != nil {
+			break
+		}
+		require.NoError(t, r.reconcileDeletion(ctx, &cur))
+	}
+
+	assert.Error(t, testStore.Get(ctx, types.ResourceTypeService, ns, name, &types.Service{}),
+		"resumed teardown must complete and remove the record")
+	assert.Error(t, testStore.Get(ctx, types.ResourceTypeVolume, ns, "data-half-0", &types.Volume{}),
+		"resumed teardown must reclaim the remaining owned volume")
+}
+
 // TestReconcileService_SkipsServiceDeletedMidCycle is the regression guard for
 // the re-creation race behind the `release delete` volume leak: reconcileServices
 // iterates a snapshot, so a service deleted mid-cycle is still in the stale list.

@@ -204,6 +204,23 @@ type ServiceMetadata struct {
 
 	// LastNonZeroScale tracks the most recent non-zero scale to support restart semantics
 	LastNonZeroScale int `json:"lastNonZeroScale,omitempty" yaml:"lastNonZeroScale,omitempty"`
+
+	// DeletionTimestamp marks the service as being torn down (Kubernetes-style
+	// foreground deletion, RFC #129 Phase 4). Once set, the reconciler drives
+	// reconcileDeletion instead of reconciling toward the spec, and the record
+	// is NOT removed from the store until every finalizer has cleared. Being
+	// persisted, an interrupted teardown resumes on the next reconcile with no
+	// separate recovery path.
+	DeletionTimestamp *time.Time `json:"deletionTimestamp,omitempty" yaml:"deletionTimestamp,omitempty"`
+
+	// Finalizers are the ordered cleanup steps that must complete before the
+	// service record may be removed. Populated when DeletionTimestamp is set
+	// (instance-cleanup, then volume-cleanup iff the service has claimTemplate
+	// volumes). The reconciler pops each entry only after its work is fully
+	// done; when the list is empty the record is deleted (the terminal
+	// transition). This gate is what makes the record provably outlive its
+	// instances and volumes — orphans become impossible by construction.
+	Finalizers []FinalizerType `json:"finalizers,omitempty" yaml:"finalizers,omitempty"`
 }
 
 // ServicePort represents a port exposed by a service.

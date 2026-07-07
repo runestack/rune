@@ -472,12 +472,15 @@ func (r *reconciler) reconcileService(ctx context.Context, service *types.Servic
 		log.Str("service", service.Name),
 		log.Str("namespace", service.Namespace))
 
-	// Skip reconciliation if the service is marked as deleted
-	if service.Status == types.ServiceStatusDeleted {
-		r.logger.Debug("Skipping reconciliation for deleted service",
-			log.Str("service", service.Name),
-			log.Str("namespace", service.Namespace))
-		return nil
+	// Foreground deletion takes precedence over spec reconciliation: a
+	// tombstoned service (DeletionTimestamp set) is torn down by
+	// reconcileDeletion — instances → volumes → record removal — and is never
+	// reconciled toward its spec. This branch replaces the old
+	// "skip if Status==Deleted" guard; keying off DeletionTimestamp is what
+	// makes the teardown actually run (a bare Status==Deleted would just be
+	// skipped) (RFC #129 Phase 4).
+	if service.Metadata != nil && service.Metadata.DeletionTimestamp != nil {
+		return r.reconcileDeletion(ctx, service)
 	}
 
 	// Scale down if needed

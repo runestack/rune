@@ -302,6 +302,42 @@ func TestStopService(t *testing.T) {
 	assert.Len(t, fakeInstanceController.StopInstanceCalls, 2, "Stop should be called on both instances")
 }
 
+// TestDeleteService_TombstonesRecord verifies the RFC #129 Phase 4 foreground
+// deletion contract: DeleteService STAMPS a tombstone (DeletionTimestamp +
+// Finalizers) on the service record instead of removing it or spinning up an
+// async task; a re-issue is an idempotent no-op success.
+func TestDeleteService_TombstonesRecord(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "svc") // scale 2, no claimTemplate
+
+	resp, err := controller.DeleteService(ctx, &types.DeletionRequest{
+		Namespace: service.Namespace, Name: service.Name,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", resp.Status)
+
+	// The record must still exist, now tombstoned — NOT removed.
+	var got types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got))
+	require.NotNil(t, got.Metadata.DeletionTimestamp, "DeleteService must tombstone, not remove the record")
+	assert.Equal(t, []types.FinalizerType{types.FinalizerTypeInstanceCleanup}, got.Metadata.Finalizers,
+		"no claimTemplate volumes → only instance-cleanup is a finalizer (ServiceDeregister is terminal, not a finalizer)")
+	assert.Equal(t, types.ServiceStatusDeleted, got.Status)
+
+	// Re-issuing delete on a tombstoned service is a no-op success, and must
+	// not re-stamp the timestamp.
+	firstTS := got.Metadata.DeletionTimestamp.UnixNano()
+	resp2, err := controller.DeleteService(ctx, &types.DeletionRequest{
+		Namespace: service.Namespace, Name: service.Name,
+	})
+	require.NoError(t, err, "re-issuing delete on a tombstoned service must be idempotent success")
+	assert.Equal(t, "in_progress", resp2.Status)
+
+	var got2 types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got2))
+	assert.Equal(t, firstTS, got2.Metadata.DeletionTimestamp.UnixNano(), "re-issue must not re-stamp the tombstone")
+}
+
 // TestListInstancesForService tests the ListInstancesForService method
 func TestListInstancesForService(t *testing.T) {
 	ctx, testStore, _, _, controller := setupTestServiceController(t)

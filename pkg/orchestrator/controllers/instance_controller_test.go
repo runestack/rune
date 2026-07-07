@@ -363,6 +363,36 @@ func TestRestartInstance(t *testing.T) {
 
 	ctx := context.Background()
 
+	t.Run("SkipsTombstonedService", func(t *testing.T) {
+		// RFC #129 Phase 4: a service being torn down must never have an
+		// instance resurrected under it — the reconcileDeletion cascade owns
+		// those instances, and a health-triggered replacement here would
+		// orphan a container the retired store-orphan sweep used to catch.
+		st := store.NewTestStore()
+		rm := manager.NewTestRunnerManager(nil)
+		tr := runner.NewTestRunner()
+		rm.SetDockerRunner(tr)
+		rm.SetProcessRunner(tr)
+		c := NewInstanceController(st, rm, log.NewLogger())
+
+		now := time.Now()
+		deleting := &types.Service{
+			ID: "svc-del", Name: "svc-del", Namespace: "default", Runtime: "container",
+			RestartPolicy: types.RestartPolicyAlways,
+			Metadata:      &types.ServiceMetadata{DeletionTimestamp: &now},
+		}
+		require.NoError(t, st.CreateService(ctx, deleting))
+		inst := &types.Instance{
+			ID: "svc-del-0", Name: "svc-del-0", Namespace: "default",
+			ServiceID: "svc-del", ServiceName: "svc-del", Status: types.InstanceStatusRunning,
+		}
+		require.NoError(t, st.CreateInstance(ctx, inst))
+
+		err := c.RestartInstance(ctx, inst, InstanceRestartReasonHealthCheckFailure)
+		require.NoError(t, err, "restart on a deleting service must be a quiet no-op")
+		assert.Empty(t, tr.CreatedInstances, "no replacement instance may be created for a tombstoned service")
+	})
+
 	t.Run("RestartPolicy=Always", func(t *testing.T) {
 		// Create test service with Always restart policy
 		serviceAlways := &types.Service{
