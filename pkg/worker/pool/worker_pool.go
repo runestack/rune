@@ -192,32 +192,6 @@ func DefaultWorkerPool(name string, numWorkers int) (*WorkerPool, error) {
 	return NewWorkerPool(config)
 }
 
-// DeletionWorkerPool creates a worker pool optimized for deletion tasks
-func DeletionWorkerPool(numWorkers int) (*WorkerPool, error) {
-	if numWorkers <= 0 {
-		numWorkers = 3 // Default to 3 workers for deletion tasks
-	}
-
-	config := WorkerPoolConfig{
-		Name:           "deletion",
-		NumWorkers:     numWorkers,
-		QueueType:      queue.QueueTypePriority, // Priority queue for deletion urgency
-		QueueCapacity:  50,                      // Smaller capacity for deletion tasks
-		DefaultTimeout: 15 * time.Minute,        // Longer timeout for deletion operations
-		DefaultRetryPolicy: worker.RetryPolicy{
-			MaxAttempts:       5, // More retries for deletion tasks
-			InitialDelay:      2 * time.Second,
-			MaxDelay:          2 * time.Minute,
-			BackoffMultiplier: 2.0,
-		},
-		EnableMetrics:           true,
-		EnablePersistence:       false, // Keep simple for deletion tasks
-		DeadLetterQueueCapacity: 5,     // Smaller DLQ for deletion tasks
-	}
-
-	return NewWorkerPool(config)
-}
-
 // collectMetrics periodically collects and updates metrics
 func (p *WorkerPool) collectMetrics() {
 	ticker := time.NewTicker(time.Second)

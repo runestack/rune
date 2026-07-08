@@ -338,6 +338,60 @@ func TestDeleteService_TombstonesRecord(t *testing.T) {
 	assert.Equal(t, firstTS, got2.Metadata.DeletionTimestamp.UnixNano(), "re-issue must not re-stamp the tombstone")
 }
 
+// TestController_DeleteRemovesServiceRecord exercises the full foreground-
+// deletion path in-process: a running controller, DeleteService tombstones the
+// record, and the reconcile workqueue must tear down the instances and remove
+// the record — no manual reconcile loop. This is the integration analogue of
+// the e2e delete test, catching drive/enqueue regressions fast.
+func TestController_DeleteRemovesServiceRecord(t *testing.T) {
+	ctx, testStore, fakeIC, _, controller := setupTestServiceController(t)
+
+	fakeIC.CreateInstanceFunc = func(ctx context.Context, svc *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
+		inst := &types.Instance{
+			ID: instanceName, Name: instanceName,
+			Namespace: svc.Namespace, ServiceID: svc.ID, ServiceName: svc.Name,
+			Status:    types.InstanceStatusRunning,
+			Metadata:  &types.InstanceMetadata{ServiceGeneration: svcTemplateGen(svc)},
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		_ = testStore.Create(ctx, types.ResourceTypeInstance, svc.Namespace, inst.ID, inst)
+		return inst, nil
+	}
+
+	require.NoError(t, controller.Start(ctx))
+	defer func() { _ = controller.Stop() }()
+
+	service := createTestService(ctx, t, testStore, "doomed") // scale 2
+	require.Eventually(t, func() bool {
+		var insts []types.Instance
+		_ = testStore.List(ctx, types.ResourceTypeInstance, service.Namespace, &insts)
+		n := 0
+		for i := range insts {
+			if insts[i].ServiceName == service.Name {
+				n++
+			}
+		}
+		return n == 2
+	}, 10*time.Second, 20*time.Millisecond, "instances must be created before delete")
+
+	_, err := controller.DeleteService(ctx, &types.DeletionRequest{Namespace: service.Namespace, Name: service.Name})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		var got types.Service
+		err := testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &got)
+		return store.IsNotFoundError(err)
+	}, 10*time.Second, 20*time.Millisecond,
+		"the reconcile-driven teardown must remove the service record")
+}
+
+func svcTemplateGen(svc *types.Service) int64 {
+	if svc.Metadata != nil {
+		return svc.Metadata.TemplateGeneration
+	}
+	return 0
+}
+
 // TestListInstancesForService tests the ListInstancesForService method
 func TestListInstancesForService(t *testing.T) {
 	ctx, testStore, _, _, controller := setupTestServiceController(t)

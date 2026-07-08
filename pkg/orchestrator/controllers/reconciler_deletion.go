@@ -53,8 +53,10 @@ func (r *reconciler) reconcileDeletion(ctx context.Context, service *types.Servi
 			return err // requeue with backoff
 		}
 		if !done {
-			// Instances still present; their store.Delete emits instance-delete
-			// watch events that re-enqueue this service, so we progress promptly.
+			// Instances still terminating. Self-enqueue so teardown progresses
+			// promptly without depending on an instance-delete watch event
+			// (which we may filter or miss); the queue coalesces duplicates.
+			r.Enqueue(ns, name)
 			return nil
 		}
 	case types.FinalizerTypeVolumeCleanup:
@@ -119,6 +121,7 @@ func (r *reconciler) cleanupServiceInstances(ctx context.Context, service *types
 		log.Str("namespace", service.Namespace),
 		log.Int("count", len(mine)))
 
+	removed := 0
 	for _, inst := range mine {
 		if err := r.instanceController.StopInstance(ctx, inst); err != nil {
 			r.logger.Warn("Failed to stop instance during teardown",
@@ -135,13 +138,28 @@ func (r *reconciler) cleanupServiceInstances(ctx context.Context, service *types
 		if err := r.store.Delete(ctx, types.ResourceTypeInstance, service.Namespace, inst.ID); err != nil {
 			r.logger.Warn("Failed to remove instance record during teardown",
 				log.Str("instance", inst.ID), log.Err(err))
+			continue
 		}
+		removed++
 	}
 
-	// Instances were still present this pass; the store.Delete calls above emit
-	// instance-delete watch events that re-enqueue this service. Report not-done
-	// so the next pass confirms zero remain before popping the finalizer.
-	return false, nil
+	// store.Delete is synchronous, so re-list to confirm convergence within
+	// THIS pass — done as soon as no records remain, without waiting for a
+	// second reconcile. (If a delete failed above, `removed < len(mine)` and
+	// the re-list still reflects reality.)
+	if removed == len(mine) {
+		return true, nil
+	}
+	var remaining []types.Instance
+	if err := r.store.List(ctx, types.ResourceTypeInstance, service.Namespace, &remaining); err != nil {
+		return false, nil // couldn't confirm; caller self-enqueues to retry
+	}
+	for i := range remaining {
+		if remaining[i].ServiceName == service.Name {
+			return false, nil // some records still linger; retry next pass
+		}
+	}
+	return true, nil
 }
 
 // cleanupServiceVolumes unbinds and deletes the service's owned claimTemplate
