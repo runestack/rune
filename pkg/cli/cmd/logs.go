@@ -14,6 +14,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/utils"
 	"github.com/spf13/cobra"
 )
@@ -47,6 +48,13 @@ type logsOptions struct {
 	// init steps will land in a follow-up once the log subsystem can
 	// resolve InitStepState.LogRef.
 	initStep string
+
+	// previous shows the logs of the most-recent FAILED generation for
+	// the target (kubectl logs --previous). Normal resolution prefers the
+	// live instance; a health restart tombstones the crashed one in place
+	// under the same Name, so its last output is otherwise unreachable by
+	// name. Resolved CLI-side to the tombstone's UUID.
+	previous bool
 }
 
 func newLogsCmd() *cobra.Command {
@@ -65,6 +73,9 @@ Examples:
 
   # View logs from a specific instance by name
   rune logs api-instance-123
+
+  # Show the last failed generation's logs (postmortem of a crashed instance)
+  rune logs api --previous
 
   # Use the explicit TYPE/NAME format
   rune logs service/api
@@ -111,6 +122,7 @@ Examples:
 	cmd.Flags().BoolVar(&opts.noColor, "no-color", false, "Disable colorized output")
 	cmd.Flags().StringVarP(&opts.outputFormat, "output", "o", OutputFormatText, "Output format: text, json, or raw")
 	cmd.Flags().StringVar(&opts.initStep, "init-step", "", "Show init step state for the named step on the service (RUNE-121)")
+	cmd.Flags().BoolVar(&opts.previous, "previous", false, "Show logs from the most recent failed generation of the target (like kubectl logs --previous)")
 
 	// API client flags
 	cmd.Flags().StringVar(&opts.addressOverride, "api-server", "", "Address of the API server")
@@ -144,6 +156,22 @@ func runLogs(cmd *cobra.Command, args []string, opts *logsOptions) error {
 		return printInitStepLogs(apiClient, opts, resourceArg)
 	}
 
+	// --previous: retarget to the most-recent failed generation. Stream by
+	// its UUID (precise: the exact crashed record's live/snapshot path), but
+	// query persisted history by its NAME — RuneSight labels logs by instance
+	// name, so the crashed generation's retained output lives there even after
+	// its container is garbage-collected (the live snapshot is best-effort and
+	// often empty by the time you look).
+	histTarget := resourceArg
+	if opts.previous {
+		prev, err := resolvePreviousInstance(apiClient, opts.namespace, resourceArg)
+		if err != nil {
+			return err
+		}
+		resourceArg = prev.ID
+		histTarget = prev.Name
+	}
+
 	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -162,13 +190,48 @@ func runLogs(cmd *cobra.Command, args []string, opts *logsOptions) error {
 	// enabled. Falls through to the live ephemeral stream when disabled,
 	// unreachable, or in follow mode. No new verb.
 	if !opts.follow {
-		handled, err := tryObserveHistory(ctx, apiClient, resourceArg, opts)
+		handled, err := tryObserveHistory(ctx, apiClient, histTarget, opts)
 		if handled {
 			return err
 		}
 	}
 
 	return streamLogs(ctx, apiClient, resourceArg, opts)
+}
+
+// resolvePreviousInstance finds the most-recent FAILED tombstone matching
+// target (an instance name, a service name, or a UUID whose record is a
+// tombstone) and returns its UUID. This is the `--previous` resolution: a
+// health restart marks the crashed instance Failed in place under the same
+// Name, so the live replacement shadows it in normal name resolution.
+func resolvePreviousInstance(apiClient *client.Client, namespace, target string) (*types.Instance, error) {
+	name := target
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		name = name[i+1:] // strip an "instance/" prefix
+	}
+
+	instances, err := client.NewInstanceClient(apiClient).ListInstances(namespace, "", "", "")
+	if err != nil {
+		return nil, fmt.Errorf("list instances to resolve --previous: %w", err)
+	}
+
+	var newest *types.Instance
+	for _, in := range instances {
+		if in.Status != types.InstanceStatusFailed || in.FailedAt == nil {
+			continue
+		}
+		// Match on the instance Name, the parent service, or an exact UUID.
+		if in.Name != name && in.ServiceName != name && in.ID != name {
+			continue
+		}
+		if newest == nil || in.FailedAt.After(*newest.FailedAt) {
+			newest = in
+		}
+	}
+	if newest == nil {
+		return nil, fmt.Errorf("no previous (failed) instance found for %q in namespace %s", target, namespace)
+	}
+	return newest, nil
 }
 
 // parseLogsOptions parses and validates command line flags into TraceOptions

@@ -199,6 +199,22 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 	return t.tableRenderer.WithData(rows).Render()
 }
 
+// shortInstanceID abbreviates a UUID to its first segment (8 hex chars),
+// matching how the Docker runner names containers (<ns>-<name>-<id8>). The
+// full UUID is noise in the table — instance NAMES are unique among live
+// instances, and the short id still disambiguates a Failed tombstone from its
+// live replacement. `rune logs`/`get` accept this prefix (unique prefixes
+// resolve like git/docker short ids); the full id remains in -o json/yaml.
+func shortInstanceID(id string) string {
+	if i := strings.IndexByte(id, '-'); i > 0 {
+		return id[:i]
+	}
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 // RenderInstances renders a table of instances
 func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 	if len(instances) == 0 {
@@ -238,7 +254,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 			row = []string{
 				instance.Namespace,
 				instance.Name,
-				instance.ID,
+				shortInstanceID(instance.ID),
 				instance.ServiceName,
 				instance.NodeID,
 				status,
@@ -248,7 +264,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 		} else {
 			row = []string{
 				instance.Name,
-				instance.ID,
+				shortInstanceID(instance.ID),
 				instance.ServiceName,
 				instance.NodeID,
 				status,
