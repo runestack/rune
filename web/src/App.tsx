@@ -107,6 +107,10 @@ export function App({ user, onLogout }: AppProps) {
   const [svc, setSvc] = useState<Service | null>(null);
   const [inst, setInst] = useState<Instance | null>(null);
   const [logsSvc, setLogsSvc] = useState<string | null>(null);
+  // When the Logs page is opened for a specific instance (e.g. from the
+  // instance drawer's Logs button), pre-select it so a FAILED instance's
+  // output is one click away instead of buried behind a manual scope pick.
+  const [logsInst, setLogsInst] = useState<string | null>(null);
   // RuneSight state is lifted here so tab navigation (Saved Views -> Explore)
   // preserves the active query / range / live-tail across the route remount.
   const [rsQuery, setRsQuery] = useState<LogQuery>(emptyQuery);
@@ -138,12 +142,25 @@ export function App({ user, onLogout }: AppProps) {
 
   function go(r: string, arg?: Service) {
     if (r === "logs" && arg) setLogsSvc(arg.name);
+    // Service-level (or any non-instance) navigation clears a prior
+    // instance target so the Logs page defaults to the service scope.
+    if (r === "logs") setLogsInst(null);
     setRoute(r);
     setSvc(null);
     setInst(null);
     const c = document.querySelector(".content");
     if (c) c.scrollTop = 0;
   }
+  // Open the Logs page targeted at a specific instance.
+  const openInstLogs = (i: Instance) => {
+    setLogsSvc(i.svc);
+    setLogsInst(i.id);
+    setRoute("logs");
+    setSvc(null);
+    setInst(null);
+    const c = document.querySelector(".content");
+    if (c) c.scrollTop = 0;
+  };
   // Service and instance drawers are mutually exclusive.
   const openSvc = (s: Service) => { setInst(null); setSvc(s); };
   const openInst = (i: Instance) => { setSvc(null); setInst(i); };
@@ -185,7 +202,7 @@ export function App({ user, onLogout }: AppProps) {
     case "namespaces": screen = <Namespaces go={go} />; break;
     case "storage": screen = <Storage />; break;
     case "secrets": screen = <Secrets />; break;
-    case "logs": screen = <Logs initialSvc={logsSvc} />; break;
+    case "logs": screen = <Logs initialSvc={logsSvc} initialInst={logsInst} />; break;
     case "identity": screen = <Identity />; break;
     default:
       if (route in RS_ROUTES) {
@@ -248,7 +265,7 @@ export function App({ user, onLogout }: AppProps) {
       )}
 
       {svc && <ServiceDrawer svc={svc} onClose={() => setSvc(null)} go={go} openInst={openInst} />}
-      {inst && <InstanceDrawer inst={inst} onClose={() => setInst(null)} go={go} openSvc={openSvc} />}
+      {inst && <InstanceDrawer inst={inst} onClose={() => setInst(null)} openSvc={openSvc} openInstLogs={openInstLogs} />}
 
       {DEVTOOLS && (
         <TweaksPanel>

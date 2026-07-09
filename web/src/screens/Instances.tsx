@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Badge, Card, Dot, Dropdown, EmptyState, Icon, PageHead, Spinner, Table } from "../components";
+import { Badge, Card, Dot, Dropdown, EmptyState, Icon, PageHead, Segmented, Spinner, Table } from "../components";
 import { useInstances } from "../api/hooks";
 import { useScope } from "../lib/scope";
 import type { Instance } from "../api/types";
@@ -8,6 +8,9 @@ export function Instances({ openInst }: { openInst: (i: Instance) => void }) {
   const { data: instances, loading, error, reload } = useInstances();
   const { ns: scopeNs } = useScope();
   const [node, setNode] = useState("all");
+  // Status sub-filter: "failed" surfaces the Failed tombstones an operator
+  // needs for a postmortem (open the instance → Logs shows its last output).
+  const [status, setStatus] = useState("all");
 
   // Namespace scope is the base filter; node is a sub-filter within it.
   const scoped = scopeNs === "all" ? instances : instances.filter((i) => i.ns === scopeNs);
@@ -17,17 +20,29 @@ export function Instances({ openInst }: { openInst: (i: Instance) => void }) {
   for (const i of scoped) nodeCounts.set(i.node, (nodeCounts.get(i.node) ?? 0) + 1);
   const nodes = [...nodeCounts.keys()].filter((n) => n && n !== "—").sort();
 
-  const list = scoped.filter((i) => node === "all" || i.node === node);
+  const list = scoped.filter(
+    (i) => (node === "all" || i.node === node) && (status === "all" || i.status === status),
+  );
   const running = scoped.filter((i) => i.status === "run").length;
+  const failed = scoped.filter((i) => i.status === "fail").length;
 
   return (
     <div className="wrap">
       <PageHead
-        eyebrow={`${running} running · ${scoped.length} total`}
+        eyebrow={`${running} running${failed ? ` · ${failed} failed` : ""} · ${scoped.length} total`}
         title="Instances"
         sub="Individual running copies of each service, scheduled across the cluster's nodes."
       />
       <div style={{ display: "flex", gap: 12, marginBottom: 16, alignItems: "center" }}>
+        <Segmented
+          options={[
+            { value: "all", label: "All" },
+            { value: "run", label: "Running" },
+            { value: "fail", label: failed ? `Failed · ${failed}` : "Failed" },
+          ]}
+          value={status}
+          onChange={setStatus}
+        />
         <Dropdown width={260} label={<span className="dd-lab"><span className="eyebrow">node</span><b>{node === "all" ? "All nodes" : node}</b></span>}>
           {(close) => (
             <div className="dd-list">

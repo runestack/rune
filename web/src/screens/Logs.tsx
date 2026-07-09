@@ -43,7 +43,7 @@ function ScopePicker({ mode, svc, inst, setInst, instances }: { mode: string; sv
       {(close) => (
         <div className="dd-list">
           <div className={`dd-item${!inst ? " sel" : ""}`} onClick={() => { setInst(null); close(); }}>
-            <Icon name={mode === "logs" ? "instances" : "bolt"} size={14} /><span>{autoLabel}</span><span className="tag ddi-sub">{insts.length} live</span>
+            <Icon name={mode === "logs" ? "instances" : "bolt"} size={14} /><span>{autoLabel}</span><span className="tag ddi-sub">{insts.length}</span>
           </div>
           <div className="dd-sep" />
           {insts.map((i) => (
@@ -408,7 +408,7 @@ function LiveExecTerminal({ svc, instId, ns }: { svc: string; instId: string | n
   );
 }
 
-export function Logs({ initialSvc }: { initialSvc?: string | null }) {
+export function Logs({ initialSvc, initialInst }: { initialSvc?: string | null; initialInst?: string | null }) {
   const { data: services } = useServices();
   const { data: instances } = useInstances();
 
@@ -416,15 +416,24 @@ export function Logs({ initialSvc }: { initialSvc?: string | null }) {
   const fallback = svcNames[0] || services[0]?.name || "";
   const [mode, setMode] = useState("logs");
   const [svc, setSvc] = useState(initialSvc && svcNames.includes(initialSvc) ? initialSvc : fallback);
-  const [inst, setInst] = useState<string | null>(null);
+  const [inst, setInst] = useState<string | null>(initialInst ?? null);
   const pickSvc = (n: string) => { setSvc(n); setInst(null); };
+
+  // Re-sync when the caller re-targets the page (e.g. an instance drawer opens
+  // Logs for a specific — possibly Failed — instance). initialInst may not be
+  // in the loaded instance list yet, but LiveLogsView targets it by id anyway.
+  useEffect(() => {
+    if (initialSvc && svcNames.includes(initialSvc)) setSvc(initialSvc);
+    setInst(initialInst ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSvc, initialInst]);
 
   // Once live data arrives, snap the selection to a real service if the
   // current pick isn't present yet.
   useEffect(() => {
     if (services.length && !services.some((s) => s.name === svc)) {
       setSvc(initialSvc && svcNames.includes(initialSvc) ? initialSvc : fallback);
-      setInst(null);
+      setInst(initialInst ?? null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [services.length]);
