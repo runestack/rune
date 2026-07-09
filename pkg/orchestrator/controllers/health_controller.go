@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -171,6 +172,24 @@ func (c *healthController) AddInstance(service *types.Service, instance *types.I
 		return nil
 	}
 
+	// Seed CrashLoopBackoff state from the slot's PERSISTED restart
+	// history. Every health restart replaces the instance with a new
+	// UUID, so keying backoff purely on in-memory per-UUID state reset
+	// it to zero each cycle — a chronically failing probe restarted the
+	// slot every ~40s forever (the probed-services churn loop) instead
+	// of backing off. RestartInstance carries Metadata.RestartCount to
+	// the replacement, and the replacement's CreatedAt IS the moment of
+	// that restart; restartInstanceWithBackoff forgives the history
+	// after healthBackoffResetWindow of stable running.
+	priorRestarts := 0
+	if instance.Metadata != nil {
+		priorRestarts = instance.Metadata.RestartCount
+	}
+	lastRestart := time.Time{} // zero = no prior restarts
+	if priorRestarts > 0 {
+		lastRestart = instance.CreatedAt
+	}
+
 	// Create a health state entry for the instance
 	healthState := &instanceHealth{
 		instance:            instance,
@@ -179,8 +198,8 @@ func (c *healthController) AddInstance(service *types.Service, instance *types.I
 		readinessResults:    make([]types.HealthCheckResult, 0),
 		lastCheck:           time.Now(),
 		consecutiveFailures: 0,
-		healthRestartCount:  0,           // Health restart count starts at 0
-		lastRestartTime:     time.Time{}, // Zero time represents no prior restarts
+		healthRestartCount:  priorRestarts,
+		lastRestartTime:     lastRestart,
 	}
 
 	// If no health checks are configured, consider the instance healthy by default
@@ -572,13 +591,22 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 				log.Int("consecutive_failures", ih.consecutiveFailures),
 				log.Duration("duration", result.Duration))
 
-			// Trigger a restart if we have had enough failures
-			// (typically 3-5 consecutive failures)
-			if ih.consecutiveFailures >= 3 {
+			// Trigger a restart once the probe's configured
+			// failureThreshold is reached (default 3). This was
+			// hardcoded to 3, silently ignoring the user's
+			// `failureThreshold:` — services tuned for slow starts
+			// restarted two probes early.
+			if ih.consecutiveFailures >= livenessFailureThreshold(ih.service) {
 				if err := c.restartInstanceWithBackoff(instanceID, ih); err != nil {
-					c.logger.Error("Failed to restart unhealthy instance",
-						log.Str("instance", instanceID),
-						log.Err(err))
+					if errors.Is(err, errRestartBackoff) {
+						c.logger.Debug("Restart deferred by CrashLoopBackoff",
+							log.Str("instance", instanceID),
+							log.Err(err))
+					} else {
+						c.logger.Error("Failed to restart unhealthy instance",
+							log.Str("instance", instanceID),
+							log.Err(err))
+					}
 				}
 			}
 		}
@@ -686,14 +714,49 @@ func (c *healthController) promoteToRunningOnReady(namespace, instanceID string)
 	return nil
 }
 
+// errRestartBackoff marks a restart deferred by CrashLoopBackoff — a
+// normal pacing condition, not a failure. Callers match with errors.Is.
+var errRestartBackoff = errors.New("restart deferred by backoff")
+
+// healthBackoffResetWindow is how long a slot must run since its last
+// restart before its backoff history is forgiven (K8s CrashLoopBackoff
+// resets after 10 minutes of successful running). Failing again INSIDE
+// the window means the slot is still crash-looping — escalate; failing
+// after it is a fresh incident — start over at the base backoff.
+const healthBackoffResetWindow = 10 * time.Minute
+
+// livenessFailureThreshold returns the service's configured liveness
+// failureThreshold, defaulting to 3 (K8s default) when unset.
+func livenessFailureThreshold(service *types.Service) int {
+	if service != nil && service.Health != nil && service.Health.Liveness != nil &&
+		service.Health.Liveness.FailureThreshold > 0 {
+		return service.Health.Liveness.FailureThreshold
+	}
+	return 3
+}
+
 // restartInstanceWithBackoff restarts an instance with exponential backoff
 func (c *healthController) restartInstanceWithBackoff(instanceID string, ih *instanceHealth) error {
 	// Get the current time
 	now := time.Now()
 
-	// Calculate the backoff duration based on health restart count
-	// Base backoff is 10 seconds, doubles each restart up to a max of 5 minutes
-	backoff := 10 * time.Second * time.Duration(1<<utils.ToUintNonNegative(ih.healthRestartCount))
+	// A slot that ran healthy past the reset window since its last
+	// restart is a fresh incident, not a continuing crash loop.
+	if ih.healthRestartCount > 0 && !ih.lastRestartTime.IsZero() &&
+		now.Sub(ih.lastRestartTime) > healthBackoffResetWindow {
+		ih.healthRestartCount = 0
+	}
+
+	// Calculate the backoff duration based on health restart count.
+	// Base backoff is 10 seconds, doubles each restart up to a max of
+	// 5 minutes. The shift is capped BEFORE the multiply: the count is
+	// seeded from the slot's persisted RestartCount, so large values
+	// would otherwise overflow the duration.
+	shift := utils.ToUintNonNegative(ih.healthRestartCount)
+	if shift > 5 {
+		shift = 5 // 10s<<5 = 320s, already past maxBackoff
+	}
+	backoff := 10 * time.Second * time.Duration(1<<shift)
 	maxBackoff := 5 * time.Minute
 	if backoff > maxBackoff {
 		backoff = maxBackoff
@@ -702,8 +765,8 @@ func (c *healthController) restartInstanceWithBackoff(instanceID string, ih *ins
 	// Check if enough time has elapsed since the last restart
 	if !ih.lastRestartTime.IsZero() && now.Sub(ih.lastRestartTime) < backoff {
 		// Not enough time has elapsed, skip this restart
-		return fmt.Errorf("skipping restart due to backoff, next eligible in %v",
-			backoff-(now.Sub(ih.lastRestartTime)))
+		return fmt.Errorf("%w: next eligible in %v",
+			errRestartBackoff, backoff-(now.Sub(ih.lastRestartTime)))
 	}
 
 	// Log the restart attempt
