@@ -283,20 +283,43 @@ func tryObserveHistory(ctx context.Context, apiClient *client.Client, targetName
 		return false, nil
 	}
 
-	// Build a Core-tier LogQL query from the resource target. `rune logs api`
-	// selects the service stream; the embedded store also accepts instance
-	// matches, but the CLI resolves by service name for parity with the live
-	// path's service-level default.
-	logql := fmt.Sprintf("{service=%q}", targetName)
-	if opts.pattern != "" {
-		logql += fmt.Sprintf(" |= %q", opts.pattern)
+	// The live path (serveLogs → resolveResourceTarget) accepts a service
+	// name, an instance name, OR an instance UUID. History must resolve the
+	// same target space. Querying only {service=X} matched nothing for an
+	// instance target (e.g. `rune logs api-se467`), and because this function
+	// still claimed the request (handled=true), the CLI never fell back to the
+	// live stream — producing silent empty output with observability enabled
+	// (#156). So: try the service label, then the instance label, and if
+	// neither has persisted rows, hand the request back to the live stream.
+	// Matching by instance name also surfaces a FAILED generation's history
+	// (all UUIDs for a name land under the same instance label), which is the
+	// postmortem case that motivated this.
+	mkQuery := func(label string) string {
+		q := fmt.Sprintf("{%s=%q}", label, targetName)
+		if opts.pattern != "" {
+			q += fmt.Sprintf(" |= %q", opts.pattern)
+		}
+		return q
 	}
 
-	rows, err := obs.QueryLogs(ctx, logql, opts.namespace, opts.since, opts.until, opts.tail, false /* newest-first */)
+	// Surface query errors rather than silently degrading: the operator
+	// explicitly has observability on and asked for history.
+	rows, err := obs.QueryLogs(ctx, mkQuery("service"), opts.namespace, opts.since, opts.until, opts.tail, false /* newest-first */)
 	if err != nil {
-		// Surface the error rather than silently degrading: the operator
-		// explicitly has observability on and asked for history.
 		return true, fmt.Errorf("query log history: %w", err)
+	}
+	if len(rows) == 0 {
+		instRows, ierr := obs.QueryLogs(ctx, mkQuery("instance"), opts.namespace, opts.since, opts.until, opts.tail, false /* newest-first */)
+		if ierr != nil {
+			return true, fmt.Errorf("query instance log history: %w", ierr)
+		}
+		rows = instRows
+	}
+	if len(rows) == 0 {
+		// No persisted history for this target (an instance UUID, or a target
+		// with nothing retained in range). Fall back to the live ephemeral
+		// stream instead of returning empty.
+		return false, nil
 	}
 
 	// Print oldest-first for readability (query returned newest-first).
