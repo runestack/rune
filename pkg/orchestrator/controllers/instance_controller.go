@@ -288,6 +288,40 @@ func (c *instanceController) persistInstanceIP(ctx context.Context, inst *types.
 	inst.IP = ip
 }
 
+// persistHealedContainerMapping writes a runner-healed instance→container
+// mapping (ContainerID + ContainerIP, see DockerRunner.Status) back to the
+// store. Without this the heal only lives on the reconcile pass's in-hand
+// copy: the health controller re-reads the record before every probe and
+// would keep dialing the dead container's IP — probe timeout → restart →
+// churn. CAS via UpdateFunc so a concurrent status write is never clobbered;
+// best-effort because the next compat check heals again if the write loses.
+func (c *instanceController) persistHealedContainerMapping(ctx context.Context, inst *types.Instance) {
+	var fresh types.Instance
+	if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
+		if fresh.ContainerID == inst.ContainerID {
+			return store.ErrSkipUpdate // another pass already persisted the heal
+		}
+		fresh.ContainerID = inst.ContainerID
+		if fresh.Metadata == nil {
+			fresh.Metadata = &types.InstanceMetadata{}
+		}
+		if inst.Metadata != nil && inst.Metadata.ContainerIP != "" {
+			fresh.Metadata.ContainerIP = inst.Metadata.ContainerIP
+			fresh.IP = inst.Metadata.ContainerIP
+		}
+		fresh.UpdatedAt = time.Now()
+		return nil
+	}, store.WithOrchestrator()); err != nil {
+		c.logger.Warn("Failed to persist healed container mapping",
+			log.Str("instance", inst.ID),
+			log.Err(err))
+		return
+	}
+	c.logger.Info("Persisted healed container mapping",
+		log.Str("instance", inst.ID),
+		log.Str("container_id", inst.ContainerID))
+}
+
 // republishService recomputes the endpoint set for a service from
 // the current store contents and publishes it. Best-effort: errors
 // are logged but never surfaced because a failure to publish must
@@ -1846,10 +1880,20 @@ func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context
 		return false, fmt.Sprintf("failed to get runner: %v", err)
 	}
 
-	// Check if the instance still exists in the runner
+	// Check if the instance still exists in the runner. The Docker
+	// runner self-heals a stale ContainerID here (re-resolving via the
+	// rune.instance.id label and mutating the in-hand instance); if it
+	// did, persist the healed mapping so the health controller's next
+	// probe dials the LIVE container's IP — an unpersisted heal leaves
+	// probes timing out against the dead container's address, which is
+	// the restart-churn loop this exists to break.
+	prevContainerID := instance.ContainerID
 	status, err := runner.Status(ctx, instance)
 	if err != nil {
 		return false, fmt.Sprintf("instance not found in runner: %v", err)
+	}
+	if instance.ContainerID != prevContainerID {
+		c.persistHealedContainerMapping(ctx, instance)
 	}
 
 	// If instance exists but is in a terminal state, it's incompatible

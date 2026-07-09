@@ -515,6 +515,16 @@ func (r *DockerRunner) GetLogs(ctx context.Context, instance *runetypes.Instance
 }
 
 // Status retrieves the current status of a container.
+//
+// Self-heal: when the stored instance.ContainerID no longer inspects
+// (RUNE-BUG: a stale mapping made the reconciler recreate healthy
+// probed services forever), the container is re-resolved through the
+// rune.instance.id label — a label match is definitively THIS
+// instance's container, since every UUID gets exactly one. On a hit
+// the in-memory instance is updated (ContainerID + ContainerIP); the
+// orchestrator persists the healed mapping when it observes the
+// change. If the label lookup finds nothing the container is
+// genuinely gone and the not-found error stands (recreate is correct).
 func (r *DockerRunner) Status(ctx context.Context, instance *runetypes.Instance) (runetypes.InstanceStatus, error) {
 	containerID, err := r.getContainerID(ctx, instance)
 	if err != nil {
@@ -522,19 +532,54 @@ func (r *DockerRunner) Status(ctx context.Context, instance *runetypes.Instance)
 	}
 
 	// Get container information
-	container, err := r.client.ContainerInspect(ctx, containerID)
+	inspected, err := r.client.ContainerInspect(ctx, containerID)
+	if client.IsErrNotFound(err) && instance.ContainerID != "" {
+		inspected, err = r.healStaleContainerMapping(ctx, instance, containerID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to inspect container: %w", err)
 	}
 
 	// Map Docker state to Rune instance status
-	if container.State.Running {
+	if inspected.State.Running {
 		return runetypes.InstanceStatusRunning, nil
-	} else if container.State.ExitCode != 0 {
+	} else if inspected.State.ExitCode != 0 {
 		return runetypes.InstanceStatusFailed, nil
 	} else {
 		return runetypes.InstanceStatusStopped, nil
 	}
+}
+
+// healStaleContainerMapping re-resolves an instance whose stored
+// ContainerID failed to inspect, via the rune.instance.id label. On
+// success it rewrites instance.ContainerID and refreshes
+// Metadata.ContainerIP from the live container (a stale ID implies the
+// recorded IP belongs to the dead container too — probes dialing it
+// time out and trigger restart churn). Returns the inspect result of
+// the healed container, or the original not-found wrapped with context.
+func (r *DockerRunner) healStaleContainerMapping(ctx context.Context, instance *runetypes.Instance, staleID string) (container.InspectResponse, error) {
+	liveID, lookupErr := r.lookupContainerByInstanceLabel(ctx, instance)
+	if lookupErr != nil {
+		return container.InspectResponse{}, fmt.Errorf("stale container ID %s and no labeled replacement: %w", staleID, lookupErr)
+	}
+	inspected, err := r.client.ContainerInspect(ctx, liveID)
+	if err != nil {
+		return container.InspectResponse{}, fmt.Errorf("stale container ID %s; labeled container %s failed to inspect: %w", staleID, liveID, err)
+	}
+
+	instance.ContainerID = liveID
+	if instance.Metadata == nil {
+		instance.Metadata = &runetypes.InstanceMetadata{}
+	}
+	if ip := pickContainerIP(inspected.NetworkSettings); ip != "" {
+		instance.Metadata.ContainerIP = ip
+	}
+	r.logger.Warn("Healed stale container mapping via instance label",
+		log.Str("instance_id", instance.ID),
+		log.Str("stale_container_id", staleID),
+		log.Str("live_container_id", liveID),
+		log.Str("container_ip", instance.Metadata.ContainerIP))
+	return inspected, nil
 }
 
 // List lists all service instances managed by this runner.
@@ -808,7 +853,15 @@ func (r *DockerRunner) getContainerID(ctx context.Context, instance *runetypes.I
 	if instance.ContainerID != "" {
 		return instance.ContainerID, nil
 	}
-	// Try to get the container directly from the instance ID using labels
+	return r.lookupContainerByInstanceLabel(ctx, instance)
+}
+
+// lookupContainerByInstanceLabel resolves an instance's container through
+// the rune.instance.id label — the authoritative identity every rune
+// container carries. Used on first creation, after a server restart that
+// lost the in-memory ContainerID, and by the Status self-heal when a
+// stored ContainerID turns out to be stale.
+func (r *DockerRunner) lookupContainerByInstanceLabel(ctx context.Context, instance *runetypes.Instance) (string, error) {
 	args := filters.NewArgs(
 		filters.Arg("label", "rune.managed=true"),
 		filters.Arg("label", "rune.instance.id="+instance.ID),
