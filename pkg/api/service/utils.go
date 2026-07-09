@@ -101,9 +101,42 @@ func resolveResourceTarget(ctx context.Context, _store store.Store, arg string, 
 		if winner != nil {
 			return ResourceTarget{Type: types.ResourceTypeInstance, Resource: winner}, nil
 		}
+
+		// Unique UUID-prefix match: `rune get instances` prints a short 8-hex
+		// id, so accept it like a git/docker short id. Gated on a hex-looking
+		// arg so it can't hijack a partial service/instance name.
+		if isHexIDPrefix(arg) {
+			var matches []*types.Instance
+			for i := range allInstances {
+				if strings.HasPrefix(allInstances[i].ID, arg) {
+					matches = append(matches, &allInstances[i])
+				}
+			}
+			if len(matches) == 1 {
+				return ResourceTarget{Type: types.ResourceTypeInstance, Resource: matches[0]}, nil
+			}
+			if len(matches) > 1 {
+				return ResourceTarget{}, fmt.Errorf("instance id prefix %q is ambiguous: %d instances match in namespace %s", arg, len(matches), namespace)
+			}
+		}
 	}
 
 	return ResourceTarget{}, fmt.Errorf("no service or instance %q found in namespace %s", arg, namespace)
+}
+
+// isHexIDPrefix reports whether s is a plausible UUID prefix: at least 6
+// lowercase-hex characters (the table prints 8). Short of 6 the collision risk
+// and the chance of shadowing a real name are too high to auto-resolve.
+func isHexIDPrefix(s string) bool {
+	if len(s) < 6 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func getResourceByType(ctx context.Context, _store store.Store, resourceType string, resourceName string, namespace string) (interface{}, error) {
