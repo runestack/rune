@@ -9,7 +9,7 @@ import { clients } from "../api/transport";
  * link back to the parent service. Distinct from the service drawer (clicking
  * an instance no longer reuses the service view).
  */
-export function InstanceDrawer({ inst, onClose, go, openSvc }: { inst: Instance; onClose: () => void; go: (r: string, arg?: Service) => void; openSvc: (s: Service) => void }) {
+export function InstanceDrawer({ inst, onClose, openSvc, openInstLogs }: { inst: Instance; onClose: () => void; openSvc: (s: Service) => void; openInstLogs: (i: Instance) => void }) {
   const { data: services } = useServices();
   const svc = services.find((s) => s.name === inst.svc && s.ns === inst.ns);
   // inst.id is the instance name (e.g. "redis-0"), the key events are recorded
@@ -24,7 +24,9 @@ export function InstanceDrawer({ inst, onClose, go, openSvc }: { inst: Instance;
   const confirm = useConfirm();
 
   const openParent = () => { if (svc) { onClose(); openSvc(svc); } };
-  const toLogs = () => { onClose(); go("logs", svc); };
+  // Target THIS instance's logs/exec (not just the parent service) so a
+  // failed instance's last output is one click from its drawer.
+  const toLogs = () => { onClose(); openInstLogs(inst); };
 
   const onRestart = async () => {
     const ok = await confirm({
