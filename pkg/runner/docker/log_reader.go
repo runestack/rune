@@ -34,9 +34,19 @@ func (r *dockerLogReader) Read(p []byte) (int, error) {
 	if r.buffer.Len() > 0 {
 		return r.buffer.Read(p)
 	}
+	if len(p) == 0 {
+		return 0, nil
+	}
 
-	// If we don't have any data remaining in the current frame, read a new frame
-	if r.remain == 0 {
+	// Advance to the next non-empty frame. Docker emits zero-length frames
+	// (an empty write, interleaved stdout/stderr boundaries), for which
+	// remain stays 0 after reading the header. The old code then fell
+	// through to io.ReadFull(p[:0]) and returned (0, nil) — a no-progress
+	// read that violates the io.Reader contract bufio.Scanner relies on:
+	// after enough consecutive (0, nil) reads Scanner aborts with
+	// io.ErrNoProgress, silently truncating the log stream (#160). Loop past
+	// zero-length frames so we only ever return real data or io.EOF.
+	for r.remain == 0 {
 		// Read the 8-byte header
 		if _, err := io.ReadFull(r.reader, r.header[:]); err != nil {
 			if err == io.EOF {
