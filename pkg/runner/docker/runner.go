@@ -614,13 +614,18 @@ func (r *DockerRunner) List(ctx context.Context, namespace string) ([]*runetypes
 			continue
 		}
 
-		// Create instance object. ServiceName is required for the
-		// reconciler's orphan detection to match a running container to
-		// its service; without it, replaced containers are never reaped.
+		// Create instance object. ServiceName + Namespace are required for
+		// the reconciler's orphan detection to match a running container to
+		// its service; without ServiceName, replaced containers are never
+		// reaped, and without Namespace, a same-named service in a DIFFERENT
+		// namespace on this daemon is mistaken for an orphan and its live
+		// container reaped (cross-namespace churn — RUNE bug: prod/api and
+		// staging/api deleting each other).
 		instance := &runetypes.Instance{
 			ID:          instanceID,
 			ContainerID: c.ID,
 			Name:        c.Names[0][1:], // Remove leading slash from container name
+			Namespace:   c.Labels["rune.namespace"],
 			ServiceID:   c.Labels["rune.service.id"],
 			ServiceName: c.Labels["rune.service.name"],
 			NodeID:      "local", // Assume local node for now
