@@ -415,15 +415,29 @@ func (r *reconciler) getServiceInstances(ctx context.Context, service *types.Ser
 		serviceRunningInstances[instance.ID] = true
 	}
 
-	// Check for orphaned instances (running but not in store for this service)
+	// Check for orphaned instances (running but not in store for this service).
+	// Match on BOTH namespace and service name: a same-named service in another
+	// namespace on this daemon (e.g. staging/api vs prod/api) is a different
+	// service, and matching by name alone made each namespace reap the other's
+	// live containers in a continuous loop. Namespace comes from the container's
+	// rune.namespace label (docker runner List); if it's empty (pre-label
+	// container) we leave the container alone rather than risk a cross-namespace
+	// false positive.
 	for instanceID, runningInst := range runningInstances {
-		if !serviceRunningInstances[instanceID] {
-			// This instance is running but not in our service's store instances
-			// Check if it belongs to this service
-			if runningInst.Instance != nil && runningInst.Instance.ServiceName == service.Name {
-				orphanedInstances = append(orphanedInstances, runningInst.Instance)
-			}
+		if serviceRunningInstances[instanceID] {
+			continue
 		}
+		inst := runningInst.Instance
+		if inst == nil {
+			continue
+		}
+		if inst.Namespace != service.Namespace {
+			continue // different (or unknown) namespace — not ours to reap
+		}
+		if inst.ServiceName != service.Name {
+			continue
+		}
+		orphanedInstances = append(orphanedInstances, inst)
 	}
 
 	return &ServiceInstanceData{
