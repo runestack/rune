@@ -3,11 +3,19 @@ package types
 import (
 	"crypto/sha256"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// oomTokenRe matches "oom" only as a standalone token (surrounded by
+// non-letters), so it recognises real OOM signals ("OOM", "oom killed")
+// without firing on innocent substrings — most importantly a service NAMED
+// with "oom" in it, e.g. "greenroom", which previously misreported as
+// OutOfMemory. "OOMKilled"/"out of memory" are matched explicitly.
+var oomTokenRe = regexp.MustCompile(`(^|[^a-z])oom([^a-z]|$)`)
 
 var _ Resource = (*Service)(nil)
 
@@ -495,7 +503,9 @@ func DeriveServiceReason(status InstanceStatus, message string) string {
 		strings.Contains(m, "pull failed"),
 		strings.Contains(m, "unauthorized") && strings.Contains(m, "image"):
 		return ServiceReasonImageUnreachable
-	case strings.Contains(m, "oom"), strings.Contains(m, "out of memory"):
+	case strings.Contains(m, "oomkilled"),
+		strings.Contains(m, "out of memory"),
+		oomTokenRe.MatchString(m):
 		return ServiceReasonOutOfMemory
 	case strings.Contains(m, "probe"), strings.Contains(m, "health check"):
 		return ServiceReasonUnhealthy
