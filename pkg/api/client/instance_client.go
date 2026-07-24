@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -45,7 +46,15 @@ func (i *InstanceClient) GetInstance(namespace, id string) (*types.Instance, err
 	resp, err := i.inst.GetInstance(ctx, req)
 	if err != nil {
 		statusErr, ok := status.FromError(err)
-		if ok && statusErr.Code() == codes.NotFound {
+		// "Not found" is an expected outcome, not an error worth shouting
+		// about: the CLI target resolver probes GetInstance by id before
+		// falling back to a by-name / short-id match. Servers older than the
+		// NotFound mapping report a missing instance as Internal with a
+		// "not found" message, so match on the message too — otherwise every
+		// successful `rune exec <name>` prints a spurious ERROR line.
+		if ok && (statusErr.Code() == codes.NotFound ||
+			(statusErr.Code() == codes.Internal && strings.Contains(statusErr.Message(), "not found"))) {
+			i.logger.Debug("Instance not found", log.Str("id", id), log.Str("namespace", namespace))
 			return nil, fmt.Errorf("instance not found: %s/%s", namespace, id)
 		}
 		i.logger.Error("Failed to get instance", log.Err(err), log.Str("id", id))

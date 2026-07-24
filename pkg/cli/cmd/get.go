@@ -432,12 +432,19 @@ func handleInstanceGet(cmd *cobra.Command, opts *getOptions, resourceName string
 		return watchInstances(cmd.Context(), instanceClient, resourceName, opts)
 	}
 
-	// If a specific instance name is provided, get that instance
+	// If a specific instance is named, get it. The argument may be a full
+	// UUID, an instance NAME, or the abbreviated 8-hex id this command's own
+	// table prints — GetInstance alone only accepts the full UUID, so fall
+	// back to name/short-id resolution over the namespace's instances.
 	if resourceName != "" {
 		namespace := opts.namespace
 		instance, err := instanceClient.GetInstance(namespace, resourceName)
 		if err != nil {
-			return fmt.Errorf("failed to get instance: %w", err)
+			resolved, rerr := resolveInstanceByNameOrIDPrefix(instanceClient, namespace, resourceName)
+			if rerr != nil {
+				return rerr
+			}
+			instance = resolved
 		}
 
 		// Render a single instance

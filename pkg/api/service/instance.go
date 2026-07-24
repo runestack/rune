@@ -48,7 +48,15 @@ func (s *InstanceService) GetInstance(ctx context.Context, req *generated.GetIns
 
 	instance, err := s.store.GetInstanceByID(ctx, req.Namespace, req.Id)
 	if err != nil {
-		// Handle error case
+		// A missing instance is NotFound, not Internal. Blanket-wrapping it as
+		// Internal made "this id doesn't exist" indistinguishable from a real
+		// store failure, so callers that probe-then-fall-back (the CLI target
+		// resolver tries GetInstance by id before matching by name) logged a
+		// scary ERROR on every successful name lookup. Matches the mapping the
+		// namespace/volume/describe services already use.
+		if store.IsNotFoundError(err) {
+			return nil, status.Errorf(codes.NotFound, "instance %s/%s not found", req.Namespace, req.Id)
+		}
 		return nil, status.Errorf(codes.Internal, "failed to get instance: %v", err)
 	}
 

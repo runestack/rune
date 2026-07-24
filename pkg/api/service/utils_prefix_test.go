@@ -7,6 +7,7 @@ import (
 
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
 )
 
 func seedInst(t *testing.T, st *store.TestStore, id, name string, status types.InstanceStatus, failedAt *time.Time) {
@@ -61,6 +62,10 @@ func TestResolveResourceTarget_IDPrefix(t *testing.T) {
 	}
 }
 
+// TestIsHexIDPrefix covers the shared gate in pkg/utils, which BOTH the
+// server-side resolver and the CLI resolver now use (they previously carried
+// separate copies — the drift that made `rune logs <short-id>` work while
+// `rune exec <short-id>` did not).
 func TestIsHexIDPrefix(t *testing.T) {
 	cases := map[string]bool{
 		"0f238d0c": true,
@@ -72,8 +77,8 @@ func TestIsHexIDPrefix(t *testing.T) {
 		"":         false,
 	}
 	for in, want := range cases {
-		if got := isHexIDPrefix(in); got != want {
-			t.Errorf("isHexIDPrefix(%q) = %v, want %v", in, got, want)
+		if got := utils.IsHexIDPrefix(in); got != want {
+			t.Errorf("utils.IsHexIDPrefix(%q) = %v, want %v", in, got, want)
 		}
 	}
 }
