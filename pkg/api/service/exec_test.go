@@ -143,6 +143,13 @@ func TestExecServiceStreamExec(t *testing.T) {
 		t.Fatal("Test timed out - possible deadlock or infinite loop")
 	}
 
+	// StreamExec pumps stdout and stderr from separate goroutines, so a Send
+	// can still be in flight when StreamExec returns (the exit-code send can
+	// win the race). Asserting immediately made these tests flaky in CI with
+	// "5 out of 6 expectation(s) were met ... needs to make 1 more call".
+	// Wait for the expected Send count to settle before asserting.
+	waitForStreamFlush(t, mockStream)
+
 	// Verify the results with more detailed assertions
 	mockStream.AssertExpectations(t)
 
@@ -217,6 +224,13 @@ func TestExecServiceWithTestRunner(t *testing.T) {
 		t.Fatal("Test timed out - possible deadlock or infinite loop")
 	}
 
+	// StreamExec pumps stdout and stderr from separate goroutines, so a Send
+	// can still be in flight when StreamExec returns (the exit-code send can
+	// win the race). Asserting immediately made these tests flaky in CI with
+	// "5 out of 6 expectation(s) were met ... needs to make 1 more call".
+	// Wait for the expected Send count to settle before asserting.
+	waitForStreamFlush(t, mockStream)
+
 	// Verify the results with more detailed assertions
 	mockStream.AssertExpectations(t)
 
@@ -225,4 +239,20 @@ func TestExecServiceWithTestRunner(t *testing.T) {
 	assert.Equal(t, "instance123", testOrchestrator.ExecInInstanceCalls[0].InstanceID)
 	assert.Equal(t, []string{"ls", "-la"}, testOrchestrator.ExecInInstanceCalls[0].Options.Command)
 	assert.True(t, testOrchestrator.ExecInInstanceCalls[0].Options.TTY)
+}
+
+// waitForStreamFlush blocks until the stdout, stderr and exit frames have all
+// been sent. StreamExec drives completion from the stdout pump while stderr is
+// handled by a separate, best-effort goroutine (ExecService.handleStderr), so
+// StreamExec can return before stderr has been flushed. Asserting the mock's
+// strict .Once() expectations immediately after return was therefore racy —
+// CI saw "5 out of 6 expectation(s) were met ... needs to make 1 more call",
+// always the stderr expectation.
+func waitForStreamFlush(t *testing.T, stream *MockExecServiceStream) {
+	t.Helper()
+	assert.Eventually(t, func() bool {
+		stdout, stderr, exit := stream.SawStreams()
+		return stdout && stderr && exit
+	}, 2*time.Second, 10*time.Millisecond,
+		"stdout/stderr/exit frames were not all sent; stream goroutines had not flushed")
 }

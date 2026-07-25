@@ -11,6 +11,7 @@ import (
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -111,24 +112,38 @@ func resolveTargetInstance(apiClient *client.Client, target string, namespace st
 		return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: target, namespace: namespace}, nil
 	}
 
-	// Fallback: walk the namespace's instances and match by Name. Lets
-	// the user pass the human-readable name (`gateway-0`) from
-	// `rune get instances` rather than copying a UUID.
-	//
-	// In the post-rename naming scheme, multiple records can share a
-	// Name within a namespace: at most one live instance (Status not
-	// Failed/Deleted) plus zero-or-more Failed tombstones from prior
-	// restart cycles. Disambiguate by preferring:
-	//   1. The live record (current container, what the user almost
-	//      always wants for `rune logs <name>` / `rune exec <name>`)
-	//   2. The most-recent Failed tombstone (so postmortem commands
-	//      against a fully-failed service still hit the latest crash)
-	insts, listErr := instanceClient.ListInstances(namespace, "", "", "")
-	if listErr != nil {
+	// Fallback: match by NAME, then by unique short (hex-prefix) id — the
+	// human-readable name and the abbreviated 8-hex id that
+	// `rune get instances` prints. Name matching prefers the live record over
+	// a Failed tombstone. Adding the short-id leg here is what makes
+	// `rune exec <short-id>` / `rune port-forward <short-id>` work; before,
+	// only `rune logs` resolved them (server-side).
+	inst, err := resolveInstanceByNameOrIDPrefix(instanceClient, namespace, target)
+	if err != nil {
+		// Ambiguous prefixes carry an actionable message; surface those.
+		// Anything else collapses to the resolver's standard miss so the
+		// caller can try other resource kinds.
+		if strings.Contains(err.Error(), "ambiguous") {
+			return nil, err
+		}
 		return nil, fmt.Errorf("instance not found by id or name: %s", target)
 	}
-	var live *types.Instance
-	var newestFailed *types.Instance
+	return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: inst.ID, namespace: namespace}, nil
+}
+
+// resolveInstanceByNameOrIDPrefix finds an instance by NAME or by a unique
+// short (hex-prefix) id within a namespace. Used where the server's
+// GetInstance — which accepts only a full UUID — has already missed, so
+// `rune get instance <name|short-id>` accepts the same targets as
+// `rune exec` / `rune logs`. Name matching prefers the live record over a
+// Failed tombstone, mirroring the target resolver.
+func resolveInstanceByNameOrIDPrefix(instanceClient *client.InstanceClient, namespace, target string) (*types.Instance, error) {
+	insts, err := instanceClient.ListInstances(namespace, "", "", "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get instance %q: %w", target, err)
+	}
+
+	var live, newestFailed *types.Instance
 	for _, inst := range insts {
 		if inst.Name != target {
 			continue
@@ -142,21 +157,46 @@ func resolveTargetInstance(apiClient *client.Client, target string, namespace st
 			}
 		}
 	}
-	winner := live
-	if winner == nil {
-		winner = newestFailed
+	if live != nil {
+		return live, nil
 	}
-	if winner != nil {
-		return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: winner.ID, namespace: namespace}, nil
+	if newestFailed != nil {
+		return newestFailed, nil
 	}
-	// Keep the original by-name loop pattern as a no-op fallback so the
-	// shape below (continue/return) doesn't change syntactically.
+
+	match, err := matchInstanceByIDPrefix(insts, target, namespace)
+	if err != nil {
+		return nil, err
+	}
+	if match != nil {
+		return match, nil
+	}
+	return nil, fmt.Errorf("no instance named %q in namespace %q", target, namespace)
+}
+
+// matchInstanceByIDPrefix resolves a git/docker style short instance id against
+// an already-fetched instance list. Returns (nil, nil) when the target isn't a
+// plausible hex prefix or nothing matches, so callers can continue their own
+// fallback chain; returns an error only for an ambiguous prefix, which must
+// never silently resolve to one of several candidates.
+func matchInstanceByIDPrefix(insts []*types.Instance, target, namespace string) (*types.Instance, error) {
+	if !utils.IsHexIDPrefix(target) {
+		return nil, nil
+	}
+	var matches []*types.Instance
 	for _, inst := range insts {
-		if inst.Name == target {
-			return &resolvedResourceTarget{targetType: types.ResourceTypeInstance, target: inst.ID, namespace: namespace}, nil
+		if strings.HasPrefix(inst.ID, target) {
+			matches = append(matches, inst)
 		}
 	}
-	return nil, fmt.Errorf("instance not found by id or name: %s", target)
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, fmt.Errorf("instance id prefix %q is ambiguous: %d instances match in namespace %s", target, len(matches), namespace)
+	}
 }
 
 // buildClientOptions builds ClientOptions using current context from viper and an optional address override.
