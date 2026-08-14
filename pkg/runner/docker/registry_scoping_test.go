@@ -70,6 +70,13 @@ func TestResolveRegistryAuth_ScopedDoesNotLeakToOtherRepos(t *testing.T) {
 	if auth := r.resolveRegistryAuth("ghcr.io/floruntime/flo:0.1.0-dev.9"); auth != "" {
 		t.Fatalf("scoped credential must NOT be attached to another org's public image, got %q", auth)
 	}
+	// Any repository the configured patterns don't claim is implicitly
+	// anonymous — no `type = "none"` entry is required to make it so. That
+	// entry is only load-bearing when a BROADER pattern would otherwise
+	// cover the repo (see TestResolveRegistryAuth_AnonymousEntryOverrides...).
+	if auth := r.resolveRegistryAuth("ghcr.io/anotherrepo/app:v1"); auth != "" {
+		t.Fatalf("an unmatched repository must pull anonymously, got %q", auth)
+	}
 }
 
 // TestResolveRegistryAuth_MostSpecificWins: a narrow entry beats a broad one
