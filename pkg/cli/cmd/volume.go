@@ -76,7 +76,7 @@ func newVolumeListCmd() *cobra.Command {
 				}
 				return vols[i].Name < vols[j].Name
 			})
-			return renderVolumes(vols, format, allNamespaces)
+			return renderVolumes(vols, format, allNamespaces, volumeTableOpts{namespace: ns})
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "default", "Namespace")
@@ -254,7 +254,16 @@ is given.`,
 
 // --- rendering helpers ---
 
-func renderVolumes(vols []*types.Volume, format string, allNamespaces bool) error {
+// renderVolumes renders a volume list in the requested output format.
+// tableOpts carries the presentation knobs the table renderer needs
+// (namespace for the empty-state message, header suppression); callers that
+// don't have them can pass a zero value.
+type volumeTableOpts struct {
+	namespace string
+	noHeaders bool
+}
+
+func renderVolumes(vols []*types.Volume, format string, allNamespaces bool, tableOpts volumeTableOpts) error {
 	switch strings.ToLower(format) {
 	case "json":
 		return writeJSON(vols)
@@ -270,38 +279,15 @@ func renderVolumes(vols []*types.Volume, format string, allNamespaces bool) erro
 		}
 		return nil
 	case "", "table":
-		if len(vols) == 0 {
-			fmt.Println("No volumes found")
-			return nil
-		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		if allNamespaces {
-			fmt.Fprintln(w, "NAMESPACE\tNAME\tSTATUS\tCLASS\tSIZE\tACCESS\tBOUND\tAGE")
-		} else {
-			fmt.Fprintln(w, "NAME\tSTATUS\tCLASS\tSIZE\tACCESS\tBOUND\tAGE")
-		}
-		for _, v := range vols {
-			bound := "-"
-			if v.BoundClaim != "" {
-				bound = v.BoundClaim
-			}
-			access := string(v.AccessMode)
-			if access == "" {
-				access = "-"
-			}
-			size := v.Size
-			if size == "" {
-				size = "-"
-			}
-			if allNamespaces {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					v.Namespace, v.Name, v.Status, v.StorageClassName, size, access, bound, formatAgeTable(v.CreatedAt))
-			} else {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					v.Name, v.Status, v.StorageClassName, size, access, bound, formatAgeTable(v.CreatedAt))
-			}
-		}
-		return w.Flush()
+		// Render through the shared ResourceTable so volumes match every
+		// other `rune get`: identical header styling and separators, plus a
+		// colorized STATUS column. This previously used a hand-rolled
+		// text/tabwriter with no color at all.
+		table := NewResourceTable()
+		table.AllNamespaces = allNamespaces
+		table.Namespace = tableOpts.namespace
+		table.ShowHeaders = !tableOpts.noHeaders
+		return table.RenderVolumes(vols)
 	default:
 		return fmt.Errorf("unknown output format: %s", format)
 	}

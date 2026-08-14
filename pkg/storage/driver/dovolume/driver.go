@@ -127,6 +127,27 @@ func (d *doVolumeDriver) Attach(ctx context.Context, opctx driver.OpContext, han
 	if node == "" {
 		return "", fmt.Errorf("dovolume: Attach: empty node id")
 	}
+	// Fast path: adopt a volume that is already attached to this host.
+	//
+	// DO creates /dev/disk/by-id/scsi-0DO_Volume_<name> only for volumes
+	// attached to THIS droplet, so the link's presence proves attachment
+	// locally — the same fact the hasDroplet() check below derives from the
+	// API. The volume name is computable offline (same derivation Provision
+	// used), so nothing here needs the provider.
+	//
+	// This matters after a reboot: the cloud reattaches volumes on boot, and
+	// requiring an API call to notice that made every restart depend on live
+	// provider credentials. An expired API token left correctly-attached,
+	// correctly-mounted volumes stranded, with their workloads stuck on
+	// "not yet mounted" indefinitely. Attaching is idempotent, so checking
+	// locally first is safe; anything we can't confirm falls through to the
+	// authoritative API path below.
+	if opctx.Volume != nil {
+		if dev := doDevicePath(d.doVolumeName(opctx.Volume)); d.mounts.DeviceExists(string(dev)) {
+			return dev, nil
+		}
+	}
+
 	ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 	vol, err := d.client.getVolume(ctx, string(handle))
 	if err != nil {
@@ -210,6 +231,17 @@ func (d *doVolumeDriver) Mount(ctx context.Context, opctx driver.OpContext, opts
 	if dev == "" {
 		// Caller (the agent) may not have populated Device — derive
 		// it from the volume name (which we set during Provision).
+		//
+		// Prefer the offline derivation: if that device node is present the
+		// answer is identical to the API's and needs no credentials, so a
+		// mount can still proceed while the provider is unreachable.
+		if opctx.Volume != nil {
+			if local := doDevicePath(d.doVolumeName(opctx.Volume)); d.mounts.DeviceExists(string(local)) {
+				dev = string(local)
+			}
+		}
+	}
+	if dev == "" {
 		ctx = withToken(ctx, mergedParam(opctx.Parameters, "apiToken"))
 		vol, err := d.client.getVolume(ctx, string(opts.Handle))
 		if err != nil {

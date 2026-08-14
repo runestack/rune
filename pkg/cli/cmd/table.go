@@ -422,6 +422,76 @@ func (t *ResourceTable) RenderConfigmaps(configmaps []*types.Configmap) error {
 	return t.tableRenderer.WithData(rows).Render()
 }
 
+// RenderVolumes renders a table of volumes. Volumes previously rendered
+// through a hand-rolled text/tabwriter, which produced an uncoloured table
+// with different separators from every other `rune get` — including no status
+// highlighting, so a Failed or Stalled volume looked identical to a healthy
+// one.
+func (t *ResourceTable) RenderVolumes(volumes []*types.Volume) error {
+	if len(volumes) == 0 {
+		fmt.Println(t.emptyMessage("volumes"))
+		return nil
+	}
+
+	// Set default headers if not provided
+	if len(t.Headers) == 0 {
+		if t.AllNamespaces {
+			t.Headers = []string{"NAMESPACE", "NAME", "STATUS", "CLASS", "SIZE", "ACCESS", "BOUND", "AGE"}
+		} else {
+			t.Headers = []string{"NAME", "STATUS", "CLASS", "SIZE", "ACCESS", "BOUND", "AGE"}
+		}
+	}
+
+	// Create rows
+	rows := [][]string{t.Headers} // Start with headers
+
+	// Generate data rows
+	for _, volume := range volumes {
+		bound := "-"
+		if volume.BoundClaim != "" {
+			bound = volume.BoundClaim
+		}
+		access := string(volume.AccessMode)
+		if access == "" {
+			access = "-"
+		}
+		size := volume.Size
+		if size == "" {
+			size = "-"
+		}
+		status := format.PTermStatusLabel(string(volume.Status))
+		age := formatAgeTable(volume.CreatedAt)
+
+		var row []string
+		if t.AllNamespaces {
+			row = []string{
+				volume.Namespace,
+				volume.Name,
+				status,
+				volume.StorageClassName,
+				size,
+				access,
+				bound,
+				age,
+			}
+		} else {
+			row = []string{
+				volume.Name,
+				status,
+				volume.StorageClassName,
+				size,
+				access,
+				bound,
+				age,
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	// Render the table with pterm
+	return t.tableRenderer.WithData(rows).Render()
+}
+
 // RenderEvents renders a table of resource events, newest-first as
 // supplied by the caller. The TARGET column is "<kind>/<name>" with the
 // kind lowercased (e.g. instance/gateway-0) to match the resource-ref
