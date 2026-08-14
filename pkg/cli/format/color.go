@@ -156,11 +156,20 @@ func PTermStatusLabel(status string) string {
 	statusLower := strings.ToLower(status)
 
 	switch statusLower {
-	case "running", "success", "succeeded", "healthy", "active", "ready":
+	// "available"/"bound" are Volume phases: provisioned and usable, or
+	// already claimed. Both are healthy resting states.
+	case "running", "success", "succeeded", "healthy", "active", "ready",
+		"available", "bound":
 		return pterm.NewStyle(pterm.FgGreen, pterm.Bold).Sprint(status)
-	case "pending", "waiting", "starting", "initializing", "updating", "deploying":
+	// "provisioning" is the Volume equivalent of deploying; "released" is a
+	// volume whose claim went away and is awaiting reclaim — in flight, not
+	// an error.
+	case "pending", "waiting", "starting", "initializing", "updating", "deploying",
+		"provisioning", "released":
 		return pterm.NewStyle(pterm.FgYellow, pterm.Bold).Sprint(status)
-	case "failed", "error", "unhealthy", "terminated", "deleted":
+	// "stalled" means progress stopped and an operator must intervene, so it
+	// reads like a failure rather than a healthy state.
+	case "failed", "error", "unhealthy", "terminated", "deleted", "stalled":
 		return pterm.NewStyle(pterm.FgRed, pterm.Bold).Sprint(status)
 	default:
 		return pterm.NewStyle(pterm.FgWhite).Sprint(status)
