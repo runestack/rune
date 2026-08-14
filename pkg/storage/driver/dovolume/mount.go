@@ -30,6 +30,13 @@ type mountExec interface {
 
 	// MkdirAll creates the target directory (and parents) with mode.
 	MkdirAll(target string, mode os.FileMode) error
+
+	// DeviceExists reports whether dev resolves to a device node on this
+	// host. DigitalOcean only creates the /dev/disk/by-id/scsi-0DO_Volume_*
+	// link for volumes attached to THIS droplet, so its presence is a
+	// local, API-free proof of attachment — which is what lets Attach skip
+	// the provider round-trip after a reboot.
+	DeviceExists(dev string) bool
 }
 
 // execMounter is the production mountExec. Mount/Unmount use the
@@ -43,6 +50,18 @@ type execMounter struct{}
 
 func (execMounter) MkdirAll(target string, mode os.FileMode) error {
 	return os.MkdirAll(filepath.Clean(target), mode)
+}
+
+// DeviceExists stats the path, following the by-id symlink to the real
+// device node. A dangling link (volume detached while the link lingers)
+// therefore reports false, which is the conservative answer: we fall back
+// to asking the provider.
+func (execMounter) DeviceExists(dev string) bool {
+	if dev == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Clean(dev))
+	return err == nil
 }
 
 // EnsureFormatted: lsblk reports the current FSTYPE; if non-empty,
