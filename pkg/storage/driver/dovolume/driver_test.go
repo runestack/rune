@@ -41,6 +41,16 @@ type fakeDO struct {
 	actionErr bool                        // when set, all actions report errored after first poll
 }
 
+// recorded returns a snapshot of the requests the fake has served. Guarded by
+// the same mutex the handler writes under.
+func (f *fakeDO) recorded() []recordedRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]recordedRequest, len(f.requests))
+	copy(out, f.requests)
+	return out
+}
+
 type recordedRequest struct {
 	method string
 	path   string
@@ -301,6 +311,7 @@ type fakeMounter struct {
 	formatted map[string]string // dev -> fsType
 	mounts    map[string]string // target -> dev
 	dirs      map[string]bool   // target -> created
+	devices   map[string]bool   // dev -> present on this host
 	failOn    string            // method name to fail (one-shot)
 	failErr   error
 }
@@ -310,6 +321,7 @@ func newFakeMounter() *fakeMounter {
 		formatted: map[string]string{},
 		mounts:    map[string]string{},
 		dirs:      map[string]bool{},
+		devices:   map[string]bool{},
 	}
 }
 
@@ -353,6 +365,23 @@ func (f *fakeMounter) Mount(_ context.Context, dev, target, _ string, _ bool) er
 	f.mounts[target] = dev
 	return nil
 }
+
+// DeviceExists reports whether the test has staged this device as present
+// on the host (i.e. the volume is already attached to this droplet).
+func (f *fakeMounter) DeviceExists(dev string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.devices[dev]
+}
+
+// addDevice stages a device node as present, simulating a volume the cloud
+// has already attached to this host (e.g. reattached across a reboot).
+func (f *fakeMounter) addDevice(dev string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.devices[dev] = true
+}
+
 func (f *fakeMounter) Unmount(_ context.Context, target string) error {
 	if err := f.maybeFail("Unmount"); err != nil {
 		return err
@@ -866,5 +895,94 @@ func TestProvision_ServerError(t *testing.T) {
 	_, err := d.Provision(context.Background(), nyc3OpCtx(mkVolume("d")), driver.ProvisionRequest{SizeBytes: 1 << 30})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("expected HTTP 500 error, got %v", err)
+	}
+}
+
+// ============================================================================
+// #170 — adopt volumes the cloud already attached, without a provider call
+// ============================================================================
+
+// TestAttach_AdoptsAlreadyAttachedDeviceWithoutAPI reproduces the incident that
+// motivated this: a droplet rebooted, DO reattached the block devices, but the
+// API token had expired. Attach's provider lookup 401'd, so the agent never
+// recorded the mounts and every stateful workload sat on "not yet mounted"
+// forever — even though the volumes were attached and healthy the whole time.
+//
+// With the local device probe, an already-attached volume is adopted with zero
+// API traffic, so a reboot no longer depends on live provider credentials.
+func TestAttach_AdoptsAlreadyAttachedDeviceWithoutAPI(t *testing.T) {
+	fake := newFakeDO(t)
+	ts := fake.server()
+	defer ts.Close()
+	d, mounter := newTestDriver(t, fake, ts)
+
+	// Every provider call fails the way an expired token does.
+	unauthorized := func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"id":"Unauthorized","message":"Unable to authenticate you"}`))
+	}
+	fake.hooks["/v2/volumes"] = unauthorized
+	fake.hooks["/v2/droplets"] = unauthorized
+
+	vol := mkVolume("data")
+	opctx := nyc3OpCtx(vol)
+
+	// Sanity: without the device present, Attach must still fail — we are not
+	// papering over a genuinely unreachable provider.
+	if _, err := d.Attach(context.Background(), opctx, "vol-123", "node-a"); err == nil {
+		t.Fatal("expected Attach to fail when the device is absent and the API is unauthorized")
+	}
+
+	// Stage the device the way DO does after a reboot.
+	dev := string(doDevicePath(d.doVolumeName(vol)))
+	mounter.addDevice(dev)
+
+	before := len(fake.recorded())
+	got, err := d.Attach(context.Background(), opctx, "vol-123", "node-a")
+	if err != nil {
+		t.Fatalf("Attach should adopt the already-attached device despite the 401: %v", err)
+	}
+	if string(got) != dev {
+		t.Fatalf("Attach returned %q, want the local device %q", got, dev)
+	}
+	if after := len(fake.recorded()); after != before {
+		t.Fatalf("Attach made %d provider request(s); the local fast path must make none", after-before)
+	}
+}
+
+// Mount must likewise not need the provider when it can derive the device
+// locally: the agent normally passes Device through from Attach, but the
+// device-less path used to issue its own getVolume call.
+func TestMount_DerivesDeviceLocallyWithoutAPI(t *testing.T) {
+	fake := newFakeDO(t)
+	ts := fake.server()
+	defer ts.Close()
+	d, mounter := newTestDriver(t, fake, ts)
+	fake.hooks["/v2/volumes"] = func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"id":"Unauthorized","message":"Unable to authenticate you"}`))
+	}
+
+	vol := mkVolume("data")
+	opctx := nyc3OpCtx(vol)
+	dev := string(doDevicePath(d.doVolumeName(vol)))
+	mounter.addDevice(dev)
+
+	before := len(fake.recorded())
+	target, err := d.Mount(context.Background(), opctx, driver.MountOpts{
+		Handle: "vol-123",
+		Target: driver.MountTarget(t.TempDir() + "/mnt"),
+	})
+	if err != nil {
+		t.Fatalf("Mount with no Device should derive it locally: %v", err)
+	}
+	if target == "" {
+		t.Fatal("Mount returned an empty target")
+	}
+	if after := len(fake.recorded()); after != before {
+		t.Fatalf("Mount made %d provider request(s); it should have derived the device locally", after-before)
+	}
+	if mounter.mounts[string(target)] != dev {
+		t.Fatalf("mounted %q at %q, want device %q", mounter.mounts[string(target)], target, dev)
 	}
 }
