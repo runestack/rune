@@ -98,7 +98,10 @@ func handleVolumeGet(_ *cobra.Command, opts *getOptions, resourceName string) er
 	if opts.limit > 0 && len(vols) > opts.limit {
 		vols = vols[:opts.limit]
 	}
-	return renderVolumes(vols, format, opts.allNamespaces)
+	return renderVolumes(vols, format, opts.allNamespaces, volumeTableOpts{
+		namespace: opts.namespace,
+		noHeaders: opts.noHeaders,
+	})
 }
 
 // handleSnapshotGet handles `rune get snapshot(s) [<name>]`.
