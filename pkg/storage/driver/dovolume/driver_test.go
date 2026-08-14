@@ -868,3 +868,31 @@ func TestProvision_ServerError(t *testing.T) {
 		t.Fatalf("expected HTTP 500 error, got %v", err)
 	}
 }
+
+// TestClient_AuthFailureIsTypedAndTerminal: a rejected credential must be
+// classifiable as driver.ErrAuth rather than an opaque HTTP string. Callers
+// use it to tell an operator "fix the token" instead of describing a terminal
+// failure as a transient "will retry" (#169).
+func TestClient_AuthFailureIsTypedAndTerminal(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		fake := newFakeDO(t)
+		ts := fake.server()
+		fake.hooks["/v2/volumes"] = func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte(`{"id":"Unauthorized","message":"Unable to authenticate you"}`))
+		}
+		d, _ := newTestDriver(t, fake, ts)
+
+		_, err := d.Attach(context.Background(), nyc3OpCtx(mkVolume("data")), "vol-123", "node-a")
+		ts.Close()
+		if err == nil {
+			t.Fatalf("HTTP %d: expected an error", code)
+		}
+		if !errors.Is(err, driver.ErrAuth) {
+			t.Errorf("HTTP %d: error is not classifiable as driver.ErrAuth: %v", code, err)
+		}
+		if !strings.Contains(err.Error(), "apiToken") {
+			t.Errorf("HTTP %d: error should point at the credential to fix: %v", code, err)
+		}
+	}
+}

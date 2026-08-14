@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/runestack/rune/pkg/storage/driver"
 	"time"
 )
 
@@ -152,6 +154,14 @@ func (c *httpClient) doRequest(ctx context.Context, method, path string, body an
 	}
 	if resp.StatusCode == http.StatusConflict {
 		return fmt.Errorf("%w: %s %s -> HTTP 409: %s", errDOConflict, method, path, strings.TrimSpace(string(respBody)))
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// Credential problems are terminal, not transient: no amount of
+		// retrying fixes an expired or revoked token. Wrap the shared
+		// sentinel so callers can say "check the driver credentials"
+		// instead of surfacing a bare HTTP status.
+		return fmt.Errorf("%w: %s %s -> HTTP %d: %s (check the storage class's apiToken)",
+			driver.ErrAuth, method, path, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("dovolume: %s %s -> HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(respBody)))

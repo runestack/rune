@@ -134,6 +134,19 @@ type Subsystem struct {
 	// MountTargetFor don't contend with lifecycle calls.
 	stateMu sync.RWMutex
 	mounts  map[string]trackedMount
+
+	// lastErr records why a volume is NOT mounted (volumeID -> most
+	// recent bring-up failure), so the orchestrator can tell an operator
+	// the actual cause instead of a bare "not yet mounted (will retry)".
+	// Cleared when the volume comes up. Guarded by stateMu.
+	lastErr map[string]mountFailure
+}
+
+// mountFailure is the most recent reason a volume failed to come up on
+// this node, kept purely for operator-facing diagnostics.
+type mountFailure struct {
+	Err  error
+	When time.Time
 }
 
 // trackedMount is the per-volume bookkeeping the subsystem keeps for
@@ -186,6 +199,7 @@ func New(cfg Config) (*Subsystem, error) {
 		log:     cfg.Logger.With(log.Str("node_id", cfg.NodeID)),
 		readyCh: make(chan struct{}),
 		mounts:  make(map[string]trackedMount),
+		lastErr: make(map[string]mountFailure),
 	}, nil
 }
 
@@ -414,7 +428,7 @@ func (s *Subsystem) reconcile(ctx context.Context, vol *types.Volume) error {
 
 	switch {
 	case want && !isTracked:
-		return s.bringUp(ctx, vol, id)
+		return s.recordBringUp(id, s.bringUp(ctx, vol, id))
 	case !want && isTracked:
 		s.stateMu.Lock()
 		delete(s.mounts, id)
@@ -433,10 +447,39 @@ func (s *Subsystem) reconcile(ctx context.Context, vol *types.Volume) error {
 					log.Str("volume_id", id),
 					log.Err(err))
 			}
-			return s.bringUp(ctx, vol, id)
+			return s.recordBringUp(id, s.bringUp(ctx, vol, id))
 		}
 	}
 	return nil
+}
+
+// recordBringUp remembers why a volume failed to come up (or clears the
+// previous reason on success) so MountErrorFor can explain a "not yet
+// mounted" instance failure. Returns err unchanged for call-site brevity.
+func (s *Subsystem) recordBringUp(id string, err error) error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if err != nil {
+		s.lastErr[id] = mountFailure{Err: err, When: time.Now()}
+	} else {
+		delete(s.lastErr, id)
+	}
+	return err
+}
+
+// MountErrorFor returns the most recent reason the named volume failed to
+// mount on this node, if any. The orchestrator uses it to turn a bare
+// "not yet mounted (will retry)" into an actionable message — the incident
+// that motivated this had a volume attached and mounted the whole time
+// while an expired provider token made the reconcile fail invisibly.
+func (s *Subsystem) MountErrorFor(volumeID string) (string, bool) {
+	s.stateMu.RLock()
+	f, ok := s.lastErr[volumeID]
+	s.stateMu.RUnlock()
+	if !ok || f.Err == nil {
+		return "", false
+	}
+	return f.Err.Error(), true
 }
 
 // shouldMount returns true when the volume should be attached + mounted

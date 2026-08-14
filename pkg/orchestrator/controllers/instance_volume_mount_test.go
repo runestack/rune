@@ -408,3 +408,88 @@ func TestResolveVolumeMount_NoResolverUsesHandle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/var/lib/rune/volumes/default/data", got.Source)
 }
+
+// shortenMountWait shrinks waitForMountTarget's bounds for the duration of a
+// test so the "gave up waiting" branch is reachable without a 45s sleep.
+func shortenMountWait(t *testing.T) {
+	t.Helper()
+	oldTimeout, oldPoll := mountTargetTimeout, mountTargetPollInterval
+	mountTargetTimeout, mountTargetPollInterval = 100*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() {
+		mountTargetTimeout, mountTargetPollInterval = oldTimeout, oldPoll
+	})
+}
+
+// reportingMountResolver is a MountResolver that also implements the optional
+// MountErrorReporter, mimicking the agent's volumes Subsystem.
+type reportingMountResolver struct {
+	targets map[string]string
+	errs    map[string]string
+}
+
+func (r *reportingMountResolver) MountTargetFor(volumeID string) (string, bool) {
+	t, ok := r.targets[volumeID]
+	return t, ok
+}
+
+func (r *reportingMountResolver) MountErrorFor(volumeID string) (string, bool) {
+	e, ok := r.errs[volumeID]
+	return e, ok
+}
+
+// TestResolveVolumeMount_SurfacesAgentMountError is the #169 regression: when
+// the agent knows why a volume never mounted, the instance error must say so.
+// A DigitalOcean token expired across a droplet reboot; the volumes were
+// attached and mounted the whole time, but the instance only ever reported
+// "not yet mounted (will retry)" — the HTTP 401 lived solely in the agent's
+// startup log, so the failure was undiagnosable from the CLI.
+func TestResolveVolumeMount_SurfacesAgentMountError(t *testing.T) {
+	shortenMountWait(t)
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	putVolume(t, ts, "default", "data", "/var/lib/rune/volumes/default/data", types.VolumeStatusAvailable)
+
+	const cause = "attach default/data: storage driver: provider rejected credentials: " +
+		"GET /v2/volumes/abc -> HTTP 401 (check the storage class's apiToken)"
+	ic.SetMountResolver(&reportingMountResolver{
+		targets: map[string]string{},
+		// keyed by volumeMountKey(), which prefers Volume.ID
+		errs: map[string]string{"vol-data": cause},
+	})
+
+	svc := &types.Service{Name: "api", Namespace: "default"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := ic.resolveVolumeMount(ctx, svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+		Name:      "data",
+		MountPath: "/data",
+		Claim:     &types.VolumeClaim{Name: "data"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "HTTP 401",
+		"the operator-facing error must carry the driver's cause, not just 'not yet mounted'")
+	assert.Contains(t, err.Error(), "apiToken",
+		"the error should point at the credential to fix")
+	assert.NotContains(t, err.Error(), "will retry",
+		"a terminal credential failure must not be described as a transient retry")
+}
+
+// A resolver that does NOT implement MountErrorReporter (or has no recorded
+// cause) keeps the original transient message — the optional interface must
+// not change behaviour for implementations that don't provide it.
+func TestResolveVolumeMount_NoReporterKeepsTransientMessage(t *testing.T) {
+	shortenMountWait(t)
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	putVolume(t, ts, "default", "data", "/var/lib/rune/volumes/default/data", types.VolumeStatusAvailable)
+	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{}})
+
+	svc := &types.Service{Name: "api", Namespace: "default"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := ic.resolveVolumeMount(ctx, svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+		Name:      "data",
+		MountPath: "/data",
+		Claim:     &types.VolumeClaim{Name: "data"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not yet mounted")
+}
