@@ -262,6 +262,14 @@ var (
 	// ErrAccessModeUnsupported is returned by Provision when the requested
 	// AccessMode is not in Capabilities.AccessModes.
 	ErrAccessModeUnsupported = errors.New("storage driver: access mode unsupported")
+
+	// ErrAuth is returned when the provider rejects the driver's
+	// credentials (HTTP 401/403). It is deliberately distinct from a
+	// transient failure: retrying cannot fix it, an operator has to repair
+	// the credential. Drivers SHOULD wrap it with %w so callers can
+	// errors.Is it and say so, instead of reporting a generic
+	// "not ready, will retry" that buries the real cause.
+	ErrAuth = errors.New("storage driver: provider rejected credentials")
 )
 
 // UsageReporter is an OPTIONAL capability: drivers that can measure a

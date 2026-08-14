@@ -446,3 +446,51 @@ func TestSubsystem_DriverRewritesTarget(t *testing.T) {
 		return nil
 	})
 }
+
+// TestSubsystem_RecordsAndClearsMountError covers the #169 plumbing: when a
+// volume fails to come up, the subsystem must remember WHY so the
+// orchestrator can put the real cause on the blocked instance instead of a
+// bare "not yet mounted (will retry)". The reason must clear once the volume
+// mounts, so a recovered volume doesn't keep reporting a stale failure.
+func TestSubsystem_RecordsAndClearsMountError(t *testing.T) {
+	s, st, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+
+	drv.attachErr = errors.New("storage driver: provider rejected credentials: HTTP 401")
+
+	vol := &types.Volume{
+		ID: "vol-1", Name: "data", Namespace: "default",
+		StorageClassName: "fake",
+		Handle:           "h-1", BoundNode: "node-a", Status: types.VolumeStatusBound,
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+
+	// Failing bring-up records the cause.
+	require.Error(t, s.reconcile(ctx, vol))
+	cause, ok := s.MountErrorFor("vol-1")
+	require.True(t, ok, "a failed bring-up must record its cause")
+	require.Contains(t, cause, "HTTP 401")
+
+	// Nothing is mounted, so the resolver still reports absent.
+	_, mounted := s.MountTargetFor("vol-1")
+	require.False(t, mounted)
+
+	// Once the underlying problem is fixed, the next reconcile clears it.
+	drv.attachErr = nil
+	require.NoError(t, s.reconcile(ctx, vol))
+	if _, still := s.MountErrorFor("vol-1"); still {
+		t.Fatal("a successful bring-up must clear the recorded failure")
+	}
+	if _, mounted := s.MountTargetFor("vol-1"); !mounted {
+		t.Fatal("volume should be tracked as mounted after a successful bring-up")
+	}
+}
+
+// A volume that never failed has no recorded cause, so the orchestrator keeps
+// its ordinary transient wording.
+func TestSubsystem_NoMountErrorForHealthyVolume(t *testing.T) {
+	s, _, _ := newSubsystem(t, "node-a")
+	if _, ok := s.MountErrorFor("never-seen"); ok {
+		t.Fatal("unknown volume must not report a mount error")
+	}
+}

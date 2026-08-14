@@ -183,6 +183,17 @@ type MountResolver interface {
 	MountTargetFor(volumeID string) (string, bool)
 }
 
+// MountErrorReporter is an optional companion to MountResolver that explains
+// WHY a volume is not mounted. Without it, an instance blocked on storage only
+// ever reported "not yet mounted (will retry)", which reads as a benign
+// transient. In practice an expired cloud credential once stranded volumes
+// that were attached and mounted the whole time, with the real HTTP 401
+// visible only in the agent's startup log — undiagnosable from the CLI.
+// Implementations return the most recent bring-up failure for the volume.
+type MountErrorReporter interface {
+	MountErrorFor(volumeID string) (string, bool)
+}
+
 // EndpointPublisher is the orchestrator-side surface of the
 // networking data plane. The runed agent supplies an implementation
 // backed by pkg/networking/endpoints + pkg/networking/localinstances.
@@ -2254,11 +2265,16 @@ func (c *instanceController) resolveMounts(ctx context.Context, service *types.S
 const (
 	volumeReadyPollInterval = 2 * time.Second
 	volumeReadyTimeout      = 60 * time.Second
+)
 
-	// mountTargetPollInterval / mountTargetTimeout bound waitForMountTarget.
-	// After stamping BoundNode the agent volumes Subsystem still needs a
-	// watch/reconcile tick to Attach+Mount and record the target; without
-	// this wait a fresh cast always races into LaunchFailed/VolumeNotReady.
+// mountTargetPollInterval / mountTargetTimeout bound waitForMountTarget.
+// After stamping BoundNode the agent volumes Subsystem still needs a
+// watch/reconcile tick to Attach+Mount and record the target; without
+// this wait a fresh cast always races into LaunchFailed/VolumeNotReady.
+//
+// Vars rather than consts purely so tests can shorten the wait; nothing in
+// production reassigns them.
+var (
 	mountTargetPollInterval = 500 * time.Millisecond
 	mountTargetTimeout      = 45 * time.Second
 )
@@ -2313,6 +2329,16 @@ func (c *instanceController) waitForMountTarget(ctx context.Context, vol types.V
 			return target, nil
 		}
 		if time.Now().After(deadline) {
+			// Include the agent's last bring-up failure when it can report
+			// one. "not yet mounted (will retry)" on its own is actively
+			// misleading for a non-transient cause like a rejected cloud
+			// credential: it implies waiting will fix it, and hides the only
+			// detail an operator can act on.
+			if reporter, ok := c.mountResolver.(MountErrorReporter); ok {
+				if cause, has := reporter.MountErrorFor(key); has && cause != "" {
+					return "", fmt.Errorf("volume %s/%s not yet mounted on node %s: %s", ns, name, c.nodeID, cause)
+				}
+			}
 			return "", fmt.Errorf("volume %s/%s not yet mounted on node %s (will retry)", ns, name, c.nodeID)
 		}
 		select {
