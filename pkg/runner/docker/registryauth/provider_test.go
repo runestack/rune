@@ -25,7 +25,7 @@ func TestDockerConfigJSONProvider(t *testing.T) {
 	dcj := `{"auths": {"ghcr.io": {"auth": "` + auth + `"}}}`
 
 	p := NewDockerConfigJSONProvider("ghcr.io", dcj)
-	if !p.Match("ghcr.io") {
+	if !p.Match("ghcr.io", "ghcr.io/org/app:v1") {
 		t.Fatal("provider should match ghcr.io")
 	}
 	b64, err := p.Resolve(context.Background(), "ghcr.io", "ghcr.io/acme/app:1.0")

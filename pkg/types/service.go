@@ -56,6 +56,13 @@ type Service struct {
 	// "always" (re-pull on every deploy/restart).
 	ImagePull string `json:"imagePull,omitempty" yaml:"imagePull,omitempty"`
 
+	// ImagePullAnonymous forces this image to be pulled WITHOUT registry
+	// credentials, even when a configured registry entry matches its host.
+	// Use it for a public image on a registry you also hold private
+	// credentials for — otherwise a host-wide credential is attached to the
+	// pull, and an expired token breaks an image that needs no auth.
+	ImagePullAnonymous bool `json:"imagePullAnonymous,omitempty" yaml:"imagePullAnonymous,omitempty"`
+
 	// Command to run in the container (overrides image CMD)
 	Command string `json:"command,omitempty" yaml:"command,omitempty"`
 

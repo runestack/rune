@@ -16,7 +16,7 @@ func TestGCPProviderDefaultHostMatching(t *testing.T) {
 		"us.gcr.io",
 		"eu.gcr.io",
 	} {
-		if !p.Match(host) {
+		if !p.Match(host, host+"/proj/app:v1") {
 			t.Errorf("expected default GCP provider to match %s", host)
 		}
 	}
@@ -26,7 +26,7 @@ func TestGCPProviderDefaultHostMatching(t *testing.T) {
 		"notgcr.io.evil.com",
 		"pkg.dev", // bare apex is not a registry host
 	} {
-		if p.Match(host) {
+		if p.Match(host, host+"/proj/app:v1") {
 			t.Errorf("expected default GCP provider NOT to match %s", host)
 		}
 	}
@@ -34,10 +34,10 @@ func TestGCPProviderDefaultHostMatching(t *testing.T) {
 
 func TestGCPProviderExplicitPattern(t *testing.T) {
 	p := NewGCPProvider(GCPConfig{Registry: "*.pkg.dev"})
-	if !p.Match("europe-west2-docker.pkg.dev") {
+	if !p.Match("europe-west2-docker.pkg.dev", "europe-west2-docker.pkg.dev/proj/app:v1") {
 		t.Error("expected pattern *.pkg.dev to match AR host")
 	}
-	if p.Match("gcr.io") {
+	if p.Match("gcr.io", "gcr.io/proj/app:v1") {
 		t.Error("explicit pattern should override default host set")
 	}
 }

@@ -410,17 +410,18 @@ func ServiceToProto(service *types.Service) *generated.Service {
 	}
 
 	protoService := &generated.Service{
-		Id:            service.ID,
-		Name:          service.Name,
-		Namespace:     service.Namespace,
-		Image:         service.Image,
-		Command:       service.Command,
-		Scale:         utils.ToInt32NonNegative(service.Scale),
-		Runtime:       string(service.Runtime),
-		ImagePull:     service.ImagePull,
-		StatusReason:  service.StatusReason,
-		StatusMessage: service.StatusMessage,
-		Labels:        service.Labels,
+		Id:                 service.ID,
+		Name:               service.Name,
+		Namespace:          service.Namespace,
+		Image:              service.Image,
+		Command:            service.Command,
+		Scale:              utils.ToInt32NonNegative(service.Scale),
+		Runtime:            string(service.Runtime),
+		ImagePull:          service.ImagePull,
+		ImagePullAnonymous: service.ImagePullAnonymous,
+		StatusReason:       service.StatusReason,
+		StatusMessage:      service.StatusMessage,
+		Labels:             service.Labels,
 	}
 
 	if service.Metadata != nil {
@@ -778,17 +779,18 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 
 	// Create an initial service with basic fields
 	service := &types.Service{
-		ID:            proto.Id,
-		Name:          proto.Name,
-		Namespace:     proto.Namespace,
-		Image:         proto.Image,
-		Command:       proto.Command,
-		Scale:         int(proto.Scale),
-		Runtime:       types.RuntimeType(proto.Runtime),
-		ImagePull:     proto.ImagePull,
-		StatusReason:  proto.StatusReason,
-		StatusMessage: proto.StatusMessage,
-		Labels:        proto.Labels,
+		ID:                 proto.Id,
+		Name:               proto.Name,
+		Namespace:          proto.Namespace,
+		Image:              proto.Image,
+		Command:            proto.Command,
+		Scale:              int(proto.Scale),
+		Runtime:            types.RuntimeType(proto.Runtime),
+		ImagePull:          proto.ImagePull,
+		ImagePullAnonymous: proto.ImagePullAnonymous,
+		StatusReason:       proto.StatusReason,
+		StatusMessage:      proto.StatusMessage,
+		Labels:             proto.Labels,
 	}
 
 	// Convert metadata

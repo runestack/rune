@@ -180,6 +180,12 @@ type Service struct {
 	// ImagePull controls when the runner pulls the container image.
 	// Allowed values: "always" (default), "missing", "never".
 	ImagePull string `protobuf:"bytes,23,opt,name=image_pull,json=imagePull,proto3" json:"image_pull,omitempty"`
+	// ImagePullAnonymous forces the pull to send NO registry credentials,
+	// even when a [[docker.registries]] entry matches this image's registry.
+	// Set it for a public image hosted on a registry you also hold private
+	// credentials for: without it, a host-wide credential is attached to the
+	// pull and an expired token fails an image that needs no auth at all.
+	ImagePullAnonymous bool `protobuf:"varint,33,opt,name=image_pull_anonymous,json=imagePullAnonymous,proto3" json:"image_pull_anonymous,omitempty"`
 	// StatusReason is a short, machine-friendly slug describing why
 	// the service is in its current Status. Examples:
 	// "ImagePullBackOff", "ProbeFailed", "OOMKilled", "ScheduleFailed".
@@ -409,6 +415,13 @@ func (x *Service) GetImagePull() string {
 		return x.ImagePull
 	}
 	return ""
+}
+
+func (x *Service) GetImagePullAnonymous() bool {
+	if x != nil {
+		return x.ImagePullAnonymous
+	}
+	return false
 }
 
 func (x *Service) GetStatusReason() string {
@@ -3609,7 +3622,7 @@ var File_pkg_api_proto_service_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\xaa\f\n" +
+	"\x1bpkg/api/proto/service.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\x1a\x1cpkg/api/proto/instance.proto\"\xdc\f\n" +
 	"\aService\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -3635,7 +3648,8 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\fdependencies\x18\x15 \x03(\v2\x17.rune.api.DependencyRefR\fdependencies\x12/\n" +
 	"\x06expose\x18\x16 \x01(\v2\x17.rune.api.ServiceExposeR\x06expose\x12\x1d\n" +
 	"\n" +
-	"image_pull\x18\x17 \x01(\tR\timagePull\x12#\n" +
+	"image_pull\x18\x17 \x01(\tR\timagePull\x120\n" +
+	"\x14image_pull_anonymous\x18! \x01(\bR\x12imagePullAnonymous\x12#\n" +
 	"\rstatus_reason\x18\x18 \x01(\tR\fstatusReason\x12%\n" +
 	"\x0estatus_message\x18\x19 \x01(\tR\rstatusMessage\x12/\n" +
 	"\avolumes\x18\x1a \x03(\v2\x15.rune.api.VolumeMountR\avolumes\x121\n" +

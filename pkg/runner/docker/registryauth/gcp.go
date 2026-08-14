@@ -43,12 +43,16 @@ func NewGCPProvider(cfg GCPConfig) *GCPProvider {
 	return &GCPProvider{cfg: cfg, fetchToken: fetchGCEMetadataToken}
 }
 
-func (p *GCPProvider) Match(host string) bool {
+func (p *GCPProvider) Match(host, imageRef string) bool {
 	if p.cfg.Registry != "" {
-		return hostMatches(p.cfg.Registry, host)
+		return patternMatches(p.cfg.Registry, host, imageRef)
 	}
 	return isGoogleRegistryHost(host)
 }
+
+// Pattern implements Scoped. Empty when the provider is ambient (metadata
+// credentials for any Google registry), which ranks it last.
+func (p *GCPProvider) Pattern() string { return p.cfg.Registry }
 
 func isGoogleRegistryHost(host string) bool {
 	h := strings.ToLower(host)

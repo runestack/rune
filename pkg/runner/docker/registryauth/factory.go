@@ -46,6 +46,15 @@ func BuildProviders(ctx context.Context, regs []map[string]any) []Provider {
 			}
 		case "ecr":
 			out = append(out, NewECRProvider(ECRConfig{Registry: host, Region: str(auth["region"])}))
+		case "none", "anonymous":
+			// An explicitly credential-free entry. Paired with
+			// most-specific-wins this is how an operator declares a PUBLIC
+			// repository on an otherwise-credentialed registry, so no token
+			// is ever sent for it.
+			out = append(out, NewBasicTokenProvider(BasicTokenConfig{
+				Registry:      host,
+				AnonymousOnly: true,
+			}))
 		case "gcp":
 			// Token minted from the GCE metadata SA at pull time; no
 			// static credentials needed (issue #144).

@@ -692,6 +692,7 @@ func (c *instanceController) runCreateAttempt(ctx context.Context, service *type
 		}
 		instance.Metadata.Image = service.Image
 		instance.Metadata.ImagePull = service.ImagePull
+		instance.Metadata.ImagePullAnonymous = service.ImagePullAnonymous
 	}
 
 	// Propagate the main container's command/args so the runner can

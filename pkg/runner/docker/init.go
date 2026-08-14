@@ -54,10 +54,16 @@ func (r *DockerRunner) RunInit(ctx context.Context, instance *runetypes.Instance
 	// are typically the same as the parent (e.g. tigerbeetle running
 	// `format` then `start`) so the cache hit is the common case.
 	pullPolicy := runetypes.ImagePullAlways
-	if instance.Metadata != nil && instance.Metadata.ImagePull != "" {
-		pullPolicy = instance.Metadata.ImagePull
+	anonymousPull := false
+	if instance.Metadata != nil {
+		if instance.Metadata.ImagePull != "" {
+			pullPolicy = instance.Metadata.ImagePull
+		}
+		// Inherit imagePullAnonymous too: an init step usually runs the
+		// parent's own image, so it must make the same credential choice.
+		anonymousPull = instance.Metadata.ImagePullAnonymous
 	}
-	if err := r.pullImage(ctx, step.Image, pullPolicy); err != nil {
+	if err := r.pullImage(ctx, step.Image, pullPolicy, anonymousPull); err != nil {
 		return 0, fmt.Errorf("init step %q: failed to pull image %s: %w", step.Name, step.Image, err)
 	}
 

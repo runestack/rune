@@ -200,6 +200,10 @@ type InstanceMetadata struct {
 	// Service spec; empty defaults to "always".
 	ImagePull string `json:"imagePull,omitempty" yaml:"imagePull,omitempty"`
 
+	// ImagePullAnonymous mirrors Service.ImagePullAnonymous: pull this
+	// image with no registry credentials at all.
+	ImagePullAnonymous bool `json:"imagePullAnonymous,omitempty" yaml:"imagePullAnonymous,omitempty"`
+
 	// ServiceGeneration is the generation of the service that the instance belongs to
 	ServiceGeneration int64 `json:"serviceGeneration,omitempty" yaml:"serviceGeneration,omitempty"`
 

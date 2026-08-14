@@ -35,7 +35,7 @@ func NewDockerConfigFileProvider() *DockerConfigFileProvider {
 // Match is intentionally broad: this provider is appended after all
 // configured providers as an ambient fallback, and Resolve returns ""
 // (anonymous) when the config has no entry for the host.
-func (p *DockerConfigFileProvider) Match(host string) bool {
+func (p *DockerConfigFileProvider) Match(host, imageRef string) bool {
 	_, err := os.Stat(p.configPath())
 	return err == nil
 }
