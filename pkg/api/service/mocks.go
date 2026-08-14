@@ -35,6 +35,12 @@ func NewMockExecServiceStream(ctx context.Context) *MockExecServiceStream {
 
 // Send mocks the Send method
 func (m *MockExecServiceStream) Send(resp *generated.ExecResponse) error {
+	// Record the frame only AFTER m.Called has registered it with testify.
+	// Marking it beforehand let a waiting test observe "stderr was sent"
+	// while m.Called was still mid-flight, so AssertExpectations could run
+	// against bookkeeping that had not caught up yet and report
+	// "5 out of 6 expectation(s) were met".
+	args := m.Called(resp)
 	m.sendMu.Lock()
 	m.sendCount++
 	switch resp.GetResponse().(type) {
@@ -46,7 +52,6 @@ func (m *MockExecServiceStream) Send(resp *generated.ExecResponse) error {
 		m.sawExit = true
 	}
 	m.sendMu.Unlock()
-	args := m.Called(resp)
 	return args.Error(0)
 }
 
