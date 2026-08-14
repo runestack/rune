@@ -35,7 +35,14 @@ func NewDockerConfigFileProvider() *DockerConfigFileProvider {
 // Match is intentionally broad: this provider is appended after all
 // configured providers as an ambient fallback, and Resolve returns ""
 // (anonymous) when the config has no entry for the host.
-func (p *DockerConfigFileProvider) Match(host, imageRef string) bool {
+//
+// Both parameters are ignored — required by the Provider interface, which
+// passes the image reference so CONFIGURED patterns can scope by repository
+// path (#178). Ambient credentials carry no pattern: the docker CLI config is
+// host-keyed and the per-host lookup happens inside Resolve, and this
+// provider ranks last in the resolver's ordering so it can never shadow a
+// scoped entry.
+func (p *DockerConfigFileProvider) Match(_, _ string) bool {
 	_, err := os.Stat(p.configPath())
 	return err == nil
 }
