@@ -614,7 +614,7 @@ func TestNoHealthCheckService(t *testing.T) {
 
 // TestInvalidHealthCheckType tests health check with invalid type
 func TestInvalidHealthCheckType(t *testing.T) {
-	ctx, testStore, _, controller := setupHealthController(t)
+	ctx, testStore, testRunner, controller := setupHealthController(t)
 
 	// Start controller
 	err := controller.Start(ctx)
@@ -659,14 +659,27 @@ func TestInvalidHealthCheckType(t *testing.T) {
 	err = controller.AddInstance(service, instance)
 	require.NoError(t, err)
 
-	// Wait for the health check to run and mark the instance unhealthy due
-	// to the invalid check type. Poll rather than sleeping a fixed duration
-	// so the test tolerates scheduling delays under load.
+	// An invalid probe type must be treated as a liveness FAILURE. Assert on
+	// either observable signal:
+	//
+	//   1. the health status reports unhealthy, or
+	//   2. the instance was restarted (only reachable via a liveness failure).
+	//
+	// Polling for (1) alone was racy. This service sets failureThreshold: 1,
+	// and since the controller began honouring the configured threshold
+	// (previously hardcoded to 3) the restart fires on the FIRST failure —
+	// which immediately removes the instance from monitoring, so
+	// GetHealthStatus starts erroring. The window in which (1) is observable
+	// collapsed to microseconds and a loaded CI runner would miss it entirely.
+	// Accepting the restart as proof keeps the test's intent while removing
+	// the dependence on catching a transient state.
 	require.Eventually(t, func() bool {
-		status, err := controller.GetHealthStatus(ctx, instance.ID)
-		return err == nil && !status.Liveness
-	}, 5*time.Second, 100*time.Millisecond,
-		"Invalid health check type should report as unhealthy")
+		if status, err := controller.GetHealthStatus(ctx, instance.ID); err == nil && !status.Liveness {
+			return true
+		}
+		return slices.Contains(testRunner.GetStoppedInstances(), instance.ID)
+	}, 5*time.Second, 50*time.Millisecond,
+		"Invalid health check type should be treated as a liveness failure")
 }
 
 // TestHealthControllerNilContext tests that the health controller handles nil context gracefully
