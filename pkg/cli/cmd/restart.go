@@ -115,6 +115,7 @@ func waitForRestartComplete(apiClient *client.Client, serviceName, namespace str
 
 		var freshRunning, freshOther, stale int
 		var failed []string
+		var stuck []string
 		for _, inst := range instances {
 			if inst.Status == types.InstanceStatusDeleted {
 				continue
@@ -134,7 +135,27 @@ func waitForRestartComplete(apiClient *client.Client, serviceName, namespace str
 				}
 			} else {
 				stale++
+				// A stale Stalled instance is not progress waiting to happen:
+				// it holds the slot and the reconciler will not retry it, so
+				// the replacement never gets created. It carries the OLD
+				// generation, so the fresh-instance check above never sees it
+				// and the wait used to print "0/N replaced and ready" until
+				// the timeout expired. Surface it and give up promptly. (A
+				// stale Failed instance is genuinely mid-retry — leave it.)
+				if inst.Status == types.InstanceStatusStalled {
+					stuck = append(stuck, fmt.Sprintf("%s (%s)", inst.Name, inst.Status))
+				}
 			}
+		}
+
+		if len(stuck) > 0 {
+			return fmt.Errorf("restart cannot proceed: %s never got a container and remain stalled, "+
+				"so the replacement cannot be created. Either the instance exhausted its create "+
+				"attempts again (check `rune describe service %s -n %s` for the reason — an unpullable "+
+				"image or rejected registry credential is the usual cause), or this server predates "+
+				"the restart re-arm fix, in which case `rune scale %s 0 -n %s && rune scale %s 1 -n %s` "+
+				"clears the slot",
+				strings.Join(stuck, ", "), serviceName, namespace, serviceName, namespace, serviceName, namespace)
 		}
 
 		if line := fmt.Sprintf("[rune] restarting: %d/%d replaced and ready", freshRunning, scale); line != lastLine {

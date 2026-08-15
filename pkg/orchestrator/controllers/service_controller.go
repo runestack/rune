@@ -575,13 +575,87 @@ func (sc *serviceController) RestartService(ctx context.Context, namespace, serv
 		return 0, 0, fmt.Errorf("failed to restart service: %w", err)
 	}
 
+	// Re-arm stuck-in-create records.
+	//
+	// A restamped template generation replaces normal instances, but does
+	// nothing for one that never got a container: the compatibility gate
+	// deliberately reports those as "compatible" (so automatic reconciles
+	// don't spew UUID confetti), and the reconciler holds a Stalled one
+	// outright as "operator action required". Restart IS that operator
+	// action — the reconciler's own comment says a Stalled record is re-armed
+	// by running restart — so without this, `rune restart` on a service whose
+	// instance is Stalled silently did nothing while the CLI waited out its
+	// full timeout printing "0/N replaced and ready".
+	//
+	// Clearing the backoff as well as the status matters: restart means "try
+	// again NOW", not "try again when the schedule next allows". Resetting
+	// CreateAttempts gives the slot a fresh budget before it can re-stall.
+	rearmed := sc.rearmStuckInCreateInstances(ctx, namespace, serviceName)
+
 	sc.logger.Info("Service restart stamped",
 		log.Str("name", serviceName),
 		log.Str("namespace", namespace),
 		log.Int64("template_generation", fresh.Metadata.TemplateGeneration),
-		log.Int("scale", fresh.Scale))
+		log.Int("scale", fresh.Scale),
+		log.Int("rearmed_instances", rearmed))
 
 	return fresh.Metadata.TemplateGeneration, fresh.Scale, nil
+}
+
+// rearmStuckInCreateInstances resets instances that never got a container
+// (Stalled, or Failed with a pending backoff) so the reconciler retries them
+// immediately, and reports how many were re-armed. Best-effort: the restamp
+// above is already durable, so a failure here is logged rather than surfaced.
+func (sc *serviceController) rearmStuckInCreateInstances(ctx context.Context, namespace, serviceName string) int {
+	instances, err := sc.listInstancesForService(ctx, namespace, serviceName)
+	if err != nil {
+		sc.logger.Warn("Could not list instances to re-arm on restart",
+			log.Str("service", serviceName), log.Err(err))
+		return 0
+	}
+
+	rearmed := 0
+	for _, inst := range instances {
+		if inst == nil || inst.ContainerEverCreatedAt != nil {
+			continue // had a container: the generation restamp replaces it normally
+		}
+		if inst.Status != types.InstanceStatusStalled && inst.Status != types.InstanceStatusFailed {
+			continue
+		}
+		var fresh types.Instance
+		skipped := false
+		err := sc.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
+			// Re-check on the fresh copy: it may have moved on since listing.
+			if fresh.ContainerEverCreatedAt != nil ||
+				(fresh.Status != types.InstanceStatusStalled && fresh.Status != types.InstanceStatusFailed) {
+				skipped = true
+				return store.ErrSkipUpdate
+			}
+			// Failed is the state the reconciler's retry-in-place branch acts
+			// on; clearing NextCreateAttemptAt makes it act on the next tick.
+			fresh.Status = types.InstanceStatusFailed
+			fresh.CreateAttempts = 0
+			fresh.NextCreateAttemptAt = nil
+			fresh.UpdatedAt = time.Now()
+			return nil
+		}, store.WithOrchestrator())
+		if err != nil {
+			sc.logger.Warn("Failed to re-arm stuck-in-create instance on restart",
+				log.Str("instance", inst.Name), log.Err(err))
+			continue
+		}
+		if skipped {
+			// ErrSkipUpdate surfaces as a nil error, so the write only
+			// happened if the re-check let it through.
+			continue
+		}
+		rearmed++
+		sc.logger.Info("Re-armed stuck-in-create instance on restart",
+			log.Str("service", serviceName),
+			log.Str("namespace", namespace),
+			log.Str("instance", inst.Name))
+	}
+	return rearmed
 }
 
 func (sc *serviceController) StopService(ctx context.Context, namespace, serviceName string) error {
