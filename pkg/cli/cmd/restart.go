@@ -8,6 +8,7 @@ import (
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/cli/format"
 	"github.com/runestack/rune/pkg/types"
+	"github.com/runestack/rune/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -70,16 +71,10 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	wallStart := time.Now()
-	if err := waitForRestartComplete(apiClient, serviceName, restartNamespace, templateGen, scale, restartTimeout); err != nil {
-		return err
-	}
-
-	fmt.Printf("%s %s restarted (%s)\n",
-		format.Success("✓"),
-		format.Highlight("%s", serviceName),
-		formatDuration(time.Since(wallStart)))
-	return nil
+	// Same progress display as scale/stop: the renderer owns the phase line
+	// and its terminal ✓/✗, so all three commands read identically.
+	renderer := newPhaseRenderer("Restarting", scale)
+	return waitForRestartComplete(apiClient, serviceName, restartNamespace, templateGen, scale, restartTimeout, renderer)
 }
 
 // waitForRestartComplete polls the instance list until the restart has
@@ -88,16 +83,26 @@ func runRestart(cmd *cobra.Command, args []string) error {
 // instances draining away show up as either stale-generation or Terminating,
 // so this criterion cannot report success before the replacement actually
 // happened.
-func waitForRestartComplete(apiClient *client.Client, serviceName, namespace string, templateGen int64, scale int, timeout time.Duration) error {
+//
+// Progress is rendered through the given phaseRenderer, whose finish() this
+// function calls exactly once on every exit path. Note that unlike
+// scale/stop, this polls rather than consuming a watch stream: the wait is
+// generation-aware, and the scaling watch reports counts only, which cannot
+// distinguish a replacement from the instance it replaced. The renderer's
+// animation ticks independently of this poll, so a 1s poll still animates
+// smoothly without polling the server any harder.
+func waitForRestartComplete(apiClient *client.Client, serviceName, namespace string, templateGen int64, scale int, timeout time.Duration, renderer *phaseRenderer) error {
 	instanceClient := client.NewInstanceClient(apiClient)
 
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	lastLine := ""
+	renderer.start()
+
 	for {
 		if time.Now().After(deadline) {
+			renderer.finish(false, "timeout")
 			problems := restartProblems(instanceClient, serviceName, namespace, templateGen)
 			hint := fmt.Sprintf("run `rune get instances -n %s` or `rune describe service %s -n %s` to investigate", namespace, serviceName, namespace)
 			if problems != "" {
@@ -149,6 +154,7 @@ func waitForRestartComplete(apiClient *client.Client, serviceName, namespace str
 		}
 
 		if len(stuck) > 0 {
+			renderer.finish(false, "stalled")
 			return fmt.Errorf("restart cannot proceed: %s never got a container and remain stalled, "+
 				"so the replacement cannot be created. Either the instance exhausted its create "+
 				"attempts again (check `rune describe service %s -n %s` for the reason — an unpullable "+
@@ -158,15 +164,16 @@ func waitForRestartComplete(apiClient *client.Client, serviceName, namespace str
 				strings.Join(stuck, ", "), serviceName, namespace, serviceName, namespace, serviceName, namespace)
 		}
 
-		if line := fmt.Sprintf("[rune] restarting: %d/%d replaced and ready", freshRunning, scale); line != lastLine {
-			fmt.Println(line)
-			lastLine = line
-		}
+		// "pending" is everything still standing between us and a converged
+		// restart: replacements not yet Running, plus old instances that have
+		// not drained away.
+		renderer.update(utils.ToInt32NonNegative(freshRunning), utils.ToInt32NonNegative(freshOther+stale))
 		if len(failed) > 0 {
-			fmt.Printf("  %s replacement instance(s) unhealthy: %s\n", format.Dim("⚠"), strings.Join(failed, ", "))
+			renderer.note(fmt.Sprintf("replacement instance(s) unhealthy: %s", strings.Join(failed, ", ")))
 		}
 
 		if freshRunning == scale && freshOther == 0 && stale == 0 {
+			renderer.finish(true, "")
 			return nil
 		}
 
