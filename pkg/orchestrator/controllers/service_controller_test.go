@@ -1185,3 +1185,94 @@ func TestIsStatusOnlyChange_GenerationBased(t *testing.T) {
 	assert.False(t, sc.isStatusOnlyChange(&types.Service{Name: name, Namespace: ns}),
 		"service without metadata is not status-only")
 }
+
+// seedStuckInCreateInstance writes an instance that never got a container —
+// the state a service lands in when every create attempt failed (e.g. an
+// image pull rejected by an expired registry credential).
+func seedStuckInCreateInstance(ctx context.Context, t *testing.T, ts *store.TestStore, svc *types.Service, name string, status types.InstanceStatus) *types.Instance {
+	t.Helper()
+	next := time.Now().Add(10 * time.Minute) // backoff far in the future
+	inst := &types.Instance{
+		ID:          name + "-uuid",
+		Name:        name,
+		Namespace:   svc.Namespace,
+		ServiceID:   svc.ID,
+		ServiceName: svc.Name,
+		Status:      status,
+		// ContainerEverCreatedAt deliberately nil: never had a container.
+		CreateAttempts:      7,
+		NextCreateAttemptAt: &next,
+		Metadata:            &types.InstanceMetadata{},
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, inst))
+	return inst
+}
+
+// TestRestartService_ReArmsStalledStuckInCreate is the fix for a real outage
+// shape: three production services sat Stalled for days after an expired
+// registry credential exhausted their create attempts. `rune restart` was a
+// silent no-op — the compatibility gate reports a container-less instance as
+// "compatible", and the reconciler holds a Stalled one as "operator action
+// required" — so the CLI printed "0/1 replaced and ready" until it timed out.
+// Restart IS the operator action, so it must re-arm the record.
+func TestRestartService_ReArmsStalledStuckInCreate(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+	stalled := seedStuckInCreateInstance(ctx, t, testStore, service, "test-service-0", types.InstanceStatusStalled)
+
+	_, _, err := controller.RestartService(ctx, service.Namespace, service.Name)
+	require.NoError(t, err)
+
+	var got types.Instance
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, stalled.Namespace, stalled.ID, &got))
+
+	assert.Equal(t, types.InstanceStatusFailed, got.Status,
+		"restart must move a Stalled stuck-in-create record to Failed, the state the reconciler retries")
+	assert.Nil(t, got.NextCreateAttemptAt,
+		"restart means retry NOW — the pending backoff must be cleared")
+	assert.Zero(t, got.CreateAttempts,
+		"restart must give the slot a fresh attempt budget before it can re-stall")
+}
+
+// A Failed stuck-in-create record with a pending backoff is also re-armed:
+// restart should not mean "retry whenever the schedule next allows".
+func TestRestartService_ClearsBackoffOnFailedStuckInCreate(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+	failed := seedStuckInCreateInstance(ctx, t, testStore, service, "test-service-0", types.InstanceStatusFailed)
+
+	_, _, err := controller.RestartService(ctx, service.Namespace, service.Name)
+	require.NoError(t, err)
+
+	var got types.Instance
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, failed.Namespace, failed.ID, &got))
+	assert.Nil(t, got.NextCreateAttemptAt, "restart must clear the pending backoff")
+	assert.Zero(t, got.CreateAttempts, "restart must reset the attempt budget")
+}
+
+// An instance that DID get a container must be left alone: the generation
+// restamp already replaces it, and rewriting its status here would fight the
+// reconciler's normal replacement path.
+func TestRestartService_LeavesInstancesThatHadContainers(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+	service := createTestService(ctx, t, testStore, "test-service")
+
+	created := time.Now().Add(-time.Hour)
+	inst := &types.Instance{
+		ID: "had-container-uuid", Name: "test-service-0",
+		Namespace: service.Namespace, ServiceID: service.ID, ServiceName: service.Name,
+		Status:                 types.InstanceStatusFailed,
+		ContainerEverCreatedAt: &created, // had a container
+		CreateAttempts:         3,
+		Metadata:               &types.InstanceMetadata{},
+	}
+	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, inst))
+
+	_, _, err := controller.RestartService(ctx, service.Namespace, service.Name)
+	require.NoError(t, err)
+
+	var got types.Instance
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &got))
+	assert.Equal(t, 3, got.CreateAttempts,
+		"an instance that had a container must not be re-armed; the generation restamp replaces it")
+}
