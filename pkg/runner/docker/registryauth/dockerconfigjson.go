@@ -17,9 +17,12 @@ func NewDockerConfigJSONProvider(registryPattern, raw string) *DockerConfigJSONP
 	return &DockerConfigJSONProvider{registryPattern: registryPattern, rawJSON: raw}
 }
 
-func (p *DockerConfigJSONProvider) Match(host string) bool {
-	return hostMatches(p.registryPattern, host)
+func (p *DockerConfigJSONProvider) Match(host, imageRef string) bool {
+	return patternMatches(p.registryPattern, host, imageRef)
 }
+
+// Pattern implements Scoped.
+func (p *DockerConfigJSONProvider) Pattern() string { return p.registryPattern }
 
 func (p *DockerConfigJSONProvider) Resolve(ctx context.Context, host, imageRef string) (string, error) {
 	// Minimal parsing: look under auths for an entry matching host

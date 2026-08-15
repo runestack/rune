@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -153,6 +154,11 @@ type DockerRunner struct {
 	// (runner.StatsProvider) can compute deltas across calls without a
 	// blocking two-sample read every time. See stats.go.
 	stats *statsCache
+
+	// lastAuthPattern records which configured registry pattern supplied the
+	// credential for the most recent pull of an image, so a rejected pull can
+	// name the entry (and therefore the secret) to fix.
+	lastAuthPattern sync.Map
 }
 
 func (r *DockerRunner) Type() types.RunnerType {
@@ -325,10 +331,14 @@ func (r *DockerRunner) Create(ctx context.Context, instance *runetypes.Instance)
 
 	// Pull the image first
 	pullPolicy := runetypes.ImagePullAlways
-	if instance.Metadata != nil && instance.Metadata.ImagePull != "" {
-		pullPolicy = instance.Metadata.ImagePull
+	anonymousPull := false
+	if instance.Metadata != nil {
+		if instance.Metadata.ImagePull != "" {
+			pullPolicy = instance.Metadata.ImagePull
+		}
+		anonymousPull = instance.Metadata.ImagePullAnonymous
 	}
-	if err := r.pullImage(ctx, containerConfig.Image, pullPolicy); err != nil {
+	if err := r.pullImage(ctx, containerConfig.Image, pullPolicy, anonymousPull); err != nil {
 		return fmt.Errorf("failed to pull image %s: %w", containerConfig.Image, err)
 	}
 
@@ -705,7 +715,8 @@ func (r *DockerRunner) RunDebug(ctx context.Context, instance *runetypes.Instanc
 	// certainly already cached locally (it was just running). Skipping
 	// "always" avoids a redundant network round-trip when starting a
 	// postmortem session.
-	if err := r.pullImage(ctx, cfg.Image, runetypes.ImagePullMissing); err != nil {
+	debugAnonymous := instance.Metadata != nil && instance.Metadata.ImagePullAnonymous
+	if err := r.pullImage(ctx, cfg.Image, runetypes.ImagePullMissing, debugAnonymous); err != nil {
 		return nil, fmt.Errorf("pull sidecar image: %w", err)
 	}
 
@@ -902,7 +913,7 @@ func (r *DockerRunner) lookupContainerByInstanceLabel(ctx context.Context, insta
 // imagePull mode ("always", "missing", "never"). Empty defaults to
 // "always". For "never", no pull is attempted; container creation will
 // fail later if the image is missing locally.
-func (r *DockerRunner) pullImage(ctx context.Context, image string, policy string) error {
+func (r *DockerRunner) pullImage(ctx context.Context, image string, policy string, anonymous bool) error {
 	switch policy {
 	case runetypes.ImagePullNever:
 		r.logger.Debug("Skipping image pull (imagePull=never)", log.Str("image", image))
@@ -923,9 +934,19 @@ func (r *DockerRunner) pullImage(ctx context.Context, image string, policy strin
 	r.logger.Info("Pulling Docker image",
 		log.Str("image", image), log.Str("policy", policy))
 
-	// Resolve registry auth for this image if configured
+	// Resolve registry auth for this image if configured. imagePullAnonymous
+	// short-circuits it entirely: the service author has declared this image
+	// public, so no credential is sent even if a configured entry matches its
+	// registry. Sending a credential that a public repo doesn't need is how an
+	// expired token takes down an image that would pull fine anonymously.
 	host := parseImageHost(image)
-	registryAuth := r.resolveRegistryAuth(image)
+	registryAuth := ""
+	if anonymous {
+		r.logger.Debug("Pulling anonymously (imagePullAnonymous)",
+			log.Str("image", image), log.Str("host", host))
+	} else {
+		registryAuth = r.resolveRegistryAuth(image)
+	}
 	if registryAuth == "" {
 		r.logger.Debug("No registry auth resolved for image",
 			log.Str("image", image),
@@ -939,13 +960,69 @@ func (r *DockerRunner) pullImage(ctx context.Context, image string, policy strin
 	// Pull the image
 	reader, err := r.client.ImagePull(ctx, image, imageTypes.PullOptions{RegistryAuth: registryAuth})
 	if err != nil {
-		return err
+		return r.annotatePullError(image, registryAuth != "", err)
 	}
 	defer reader.Close()
 
-	// Read the output to complete the pull
-	_, err = io.Copy(io.Discard, reader)
-	return err
+	// Read the output to complete the pull. Registry-side failures (including
+	// auth rejections) surface here rather than from ImagePull itself, because
+	// the daemon streams them back as part of the pull output.
+	if _, err = io.Copy(io.Discard, reader); err != nil {
+		return r.annotatePullError(image, registryAuth != "", err)
+	}
+	return nil
+}
+
+// annotatePullError enriches an authentication rejection with the context an
+// operator needs to act. A bare "denied" from the registry gives no indication
+// that a CONFIGURED CREDENTIAL was involved at all — during one incident a
+// public image failed to pull because a host-wide credential had expired, and
+// the error read as though the image itself were private. Naming the pattern
+// that supplied the credential points straight at the entry (and therefore the
+// secret) to fix, and at the alternative of scoping it more narrowly.
+func (r *DockerRunner) annotatePullError(image string, usedAuth bool, err error) error {
+	if err == nil || !isRegistryAuthError(err) {
+		return err
+	}
+	if !usedAuth {
+		return fmt.Errorf("%w (registry requires credentials; no [[docker.registries]] entry matches %s)",
+			err, image)
+	}
+	pattern := r.authPatternFor(image)
+	if pattern == "" {
+		pattern = parseImageHost(image)
+	}
+	r.logOrDefault().Warn("Registry rejected the configured credential",
+		log.Str("image", image),
+		log.Str("registry_pattern", pattern),
+		log.Err(err))
+	return fmt.Errorf("%w (the credential configured for registry pattern %q was rejected; "+
+		"renew it, or if this image is public scope the pattern to your private repositories "+
+		"or mark it anonymous)", err, pattern)
+}
+
+// isRegistryAuthError reports whether a pull failure is a credential
+// rejection rather than a transient/network problem. Docker surfaces these as
+// message text, so matching is by substring.
+func isRegistryAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "denied") ||
+		strings.Contains(msg, "unauthorized") ||
+		strings.Contains(msg, "authentication required") ||
+		strings.Contains(msg, "forbidden")
+}
+
+// logOrDefault returns the runner's logger, falling back to the global one.
+// Some construction paths (notably tests) leave logger nil, and the auth
+// resolution path must stay usable there rather than panicking.
+func (r *DockerRunner) logOrDefault() log.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return log.GetDefaultLogger().WithComponent("docker-runner")
 }
 
 // resolveRegistryAuth selects an auth entry based on image host and encodes it for Docker ImagePull
@@ -983,11 +1060,80 @@ func (r *DockerRunner) resolveRegistryAuth(imageRef string) string {
 			r.providers = []registryauth.Provider{}
 		}
 	}
+	// Collect every provider that claims this image, then prefer the MOST
+	// SPECIFIC one. Previously this was first-match on the host alone, so a
+	// credential registered for a whole registry was attached to every image
+	// on it — including public repositories that need no auth, which turned an
+	// expired token into a hard failure for images that would pull anonymously.
+	// Repository-scoped patterns now win over host-wide ones (the precedence
+	// Kubernetes' credential keyring uses); ambient providers carry no pattern
+	// and rank last, preserving "explicit config wins".
+	type candidate struct {
+		p       registryauth.Provider
+		pattern string
+		scoped  bool
+	}
+	var candidates []candidate
 	for _, p := range r.providers {
-		if p.Match(host) {
-			if auth, _ := p.Resolve(context.Background(), host, imageRef); auth != "" {
-				return auth
+		if !p.Match(host, imageRef) {
+			continue
+		}
+		c := candidate{p: p}
+		if s, ok := p.(registryauth.Scoped); ok {
+			if pat := s.Pattern(); pat != "" {
+				c.pattern, c.scoped = pat, true
 			}
+		}
+		candidates = append(candidates, c)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		// Unscoped (ambient) providers always sort last; among scoped ones,
+		// the more specific pattern wins.
+		if candidates[i].scoped != candidates[j].scoped {
+			return candidates[i].scoped
+		}
+		if !candidates[i].scoped {
+			return false // preserve configured order among ambient providers
+		}
+		return registryauth.MoreSpecific(candidates[i].pattern, candidates[j].pattern)
+	})
+
+	if len(candidates) == 0 && len(r.config.Registries) > 0 {
+		// Nothing matched, yet registries ARE configured. Most often a
+		// pattern that can never match anything — e.g. before path-scoped
+		// matching existed, `registry = "ghcr.io/myorg"` parsed fine and
+		// then silently matched nothing, so the credential looked configured
+		// but was never used. Say so rather than pulling anonymously in
+		// silence.
+		r.logOrDefault().Debug("No configured registry matched image; pulling anonymously",
+			log.Str("image", imageRef), log.Str("host", host))
+	}
+
+	for _, c := range candidates {
+		// An explicitly anonymous entry short-circuits: the operator has
+		// declared this repository public, so no credential is sent and no
+		// broader entry gets a chance to attach one.
+		if a, ok := c.p.(registryauth.Anonymous); ok && a.IsAnonymous() {
+			r.logOrDefault().Debug("Pulling anonymously: registry pattern is marked anonymous",
+				log.Str("image", imageRef), log.Str("pattern", c.pattern))
+			return ""
+		}
+		if auth, _ := c.p.Resolve(context.Background(), host, imageRef); auth != "" {
+			r.lastAuthPattern.Store(imageRef, c.pattern)
+			return auth
+		}
+	}
+	return ""
+}
+
+// authPatternFor reports which configured registry pattern supplied the
+// credential for the last pull attempt of imageRef, if any. Used to name the
+// offending entry when a registry rejects the credential — a bare "denied"
+// gives an operator no indication a *configured credential* was even involved.
+func (r *DockerRunner) authPatternFor(imageRef string) string {
+	if v, ok := r.lastAuthPattern.Load(imageRef); ok {
+		if s, _ := v.(string); s != "" {
+			return s
 		}
 	}
 	return ""

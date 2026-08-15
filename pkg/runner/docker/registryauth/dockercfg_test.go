@@ -23,7 +23,7 @@ func TestDockerConfigFileProviderInlineAuths(t *testing.T) {
 	auth := base64.StdEncoding.EncodeToString([]byte("user:pass"))
 	p := writeDockerConfig(t, `{"auths": {"europe-west2-docker.pkg.dev": {"auth": "`+auth+`"}}}`)
 
-	if !p.Match("europe-west2-docker.pkg.dev") {
+	if !p.Match("europe-west2-docker.pkg.dev", "europe-west2-docker.pkg.dev/proj/app:v1") {
 		t.Fatal("provider should match any host when config file exists")
 	}
 	b64, err := p.Resolve(context.Background(), "europe-west2-docker.pkg.dev", "europe-west2-docker.pkg.dev/p/r/app:1")
@@ -64,7 +64,7 @@ func TestDockerConfigFileProviderNoEntryIsAnonymous(t *testing.T) {
 
 func TestDockerConfigFileProviderMissingFile(t *testing.T) {
 	p := &DockerConfigFileProvider{path: filepath.Join(t.TempDir(), "nope", "config.json")}
-	if p.Match("ghcr.io") {
+	if p.Match("ghcr.io", "ghcr.io/org/app:v1") {
 		t.Fatal("provider should not match when config file is absent")
 	}
 	b64, err := p.Resolve(context.Background(), "ghcr.io", "ghcr.io/acme/app:1")

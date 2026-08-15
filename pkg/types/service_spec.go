@@ -86,6 +86,11 @@ type ServiceSpec struct {
 	// Allowed values: "always" (default), "missing", "never".
 	ImagePull string `json:"imagePull,omitempty" yaml:"imagePull,omitempty"`
 
+	// ImagePullAnonymous forces the pull to send no registry credentials,
+	// even when a configured registry entry matches this image's host. For a
+	// public image on a registry you also hold private credentials for.
+	ImagePullAnonymous bool `json:"imagePullAnonymous,omitempty" yaml:"imagePullAnonymous,omitempty"`
+
 	// Skip indicates this spec should be ignored by castfile parsing
 	Skip bool `json:"skip,omitempty" yaml:"skip,omitempty"`
 
@@ -654,35 +659,36 @@ func (s *ServiceSpec) ToService() (*Service, error) {
 	}
 
 	return &Service{
-		ID:              uuid.New().String(),
-		Name:            s.Name,
-		Namespace:       namespace,
-		Labels:          s.Labels,
-		Image:           s.Image,
-		ImageRegistry:   s.ImageRegistry,
-		Registry:        s.Registry,
-		ImagePull:       s.ImagePull,
-		Command:         s.Command,
-		Args:            s.Args,
-		Env:             s.Env,
-		EnvFrom:         normalizeEnvFrom(namespace, s.EnvFrom),
-		Scale:           s.Scale,
-		Ports:           s.Ports,
-		Resources:       resources,
-		Health:          s.Health,
-		NetworkPolicy:   s.NetworkPolicy,
-		Expose:          s.Expose,
-		Affinity:        s.Affinity,
-		Autoscale:       s.Autoscale,
-		SecretMounts:    s.SecretMounts,
-		ConfigmapMounts: s.ConfigmapMounts,
-		Volumes:         s.Volumes,
-		Discovery:       serviceDiscoveryFromSpec(s.Discovery),
-		Dependencies:    deps,
-		InitSteps:       s.InitSteps,
-		SecurityContext: s.SecurityContext,
-		Status:          ServiceStatusPending,
-		Metadata:        &ServiceMetadata{CreatedAt: now, UpdatedAt: now},
+		ID:                 uuid.New().String(),
+		Name:               s.Name,
+		Namespace:          namespace,
+		Labels:             s.Labels,
+		Image:              s.Image,
+		ImageRegistry:      s.ImageRegistry,
+		Registry:           s.Registry,
+		ImagePull:          s.ImagePull,
+		ImagePullAnonymous: s.ImagePullAnonymous,
+		Command:            s.Command,
+		Args:               s.Args,
+		Env:                s.Env,
+		EnvFrom:            normalizeEnvFrom(namespace, s.EnvFrom),
+		Scale:              s.Scale,
+		Ports:              s.Ports,
+		Resources:          resources,
+		Health:             s.Health,
+		NetworkPolicy:      s.NetworkPolicy,
+		Expose:             s.Expose,
+		Affinity:           s.Affinity,
+		Autoscale:          s.Autoscale,
+		SecretMounts:       s.SecretMounts,
+		ConfigmapMounts:    s.ConfigmapMounts,
+		Volumes:            s.Volumes,
+		Discovery:          serviceDiscoveryFromSpec(s.Discovery),
+		Dependencies:       deps,
+		InitSteps:          s.InitSteps,
+		SecurityContext:    s.SecurityContext,
+		Status:             ServiceStatusPending,
+		Metadata:           &ServiceMetadata{CreatedAt: now, UpdatedAt: now},
 	}, nil
 }
 

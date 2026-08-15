@@ -35,9 +35,12 @@ func NewECRProvider(cfg ECRConfig) *ECRProvider {
 	return &ECRProvider{cfg: cfg, cache: make(map[string]ecrEntry)}
 }
 
-func (p *ECRProvider) Match(host string) bool {
-	return hostMatches(p.cfg.Registry, host)
+func (p *ECRProvider) Match(host, imageRef string) bool {
+	return patternMatches(p.cfg.Registry, host, imageRef)
 }
+
+// Pattern implements Scoped.
+func (p *ECRProvider) Pattern() string { return p.cfg.Registry }
 
 func (p *ECRProvider) Resolve(ctx context.Context, host, imageRef string) (string, error) {
 	p.mu.Lock()

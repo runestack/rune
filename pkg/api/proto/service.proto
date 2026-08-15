@@ -88,6 +88,13 @@ message Service {
   // Allowed values: "always" (default), "missing", "never".
   string image_pull = 23;
 
+  // ImagePullAnonymous forces the pull to send NO registry credentials,
+  // even when a [[docker.registries]] entry matches this image's registry.
+  // Set it for a public image hosted on a registry you also hold private
+  // credentials for: without it, a host-wide credential is attached to the
+  // pull and an expired token fails an image that needs no auth at all.
+  bool image_pull_anonymous = 33;
+
   // StatusReason is a short, machine-friendly slug describing why
   // the service is in its current Status. Examples:
   // "ImagePullBackOff", "ProbeFailed", "OOMKilled", "ScheduleFailed".
