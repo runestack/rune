@@ -501,42 +501,48 @@ func (s *ServiceSpec) Validate() error {
 	return nil
 }
 
+// validServiceFields is the set of keys accepted directly under `service:` in a
+// cast file. It is a hand-maintained mirror of ServiceSpec's yaml tags: adding a
+// field to the struct is NOT enough, it must be listed here too or cast rejects
+// it as unknown. TestValidServiceFieldsMatchesSpec guards the two against drift
+// (imagePullAnonymous shipped in v0.0.1-dev.139 with the struct field but not
+// this list, so every cast using it failed validation).
+var validServiceFields = map[string]bool{
+	"name":               true,
+	"namespace":          true,
+	"labels":             true,
+	"image":              true,
+	"command":            true,
+	"args":               true,
+	"env":                true,
+	"envFrom":            true,
+	"scale":              true,
+	"ports":              true,
+	"resources":          true,
+	"health":             true,
+	"networkPolicy":      true,
+	"expose":             true,
+	"affinity":           true,
+	"autoscale":          true,
+	"secretMounts":       true,
+	"configmapMounts":    true,
+	"volumes":            true,
+	"discovery":          true,
+	"imageRegistry":      true,
+	"registry":           true,
+	"imagePull":          true,
+	"imagePullAnonymous": true,
+	"skip":               true,
+	"dependencies":       true,
+	"initSteps":          true,
+	"securityContext":    true,
+}
+
 // validateStructureFromNode validates unknown fields using the captured raw YAML node.
 // If no raw node is available (e.g., constructed programmatically), it is a no-op.
 func (s *ServiceSpec) validateStructureFromNode() error {
 	if s.rawNode == nil {
 		return nil
-	}
-
-	// Define valid service fields based on ServiceSpec
-	validServiceFields := map[string]bool{
-		"name":            true,
-		"namespace":       true,
-		"labels":          true,
-		"image":           true,
-		"command":         true,
-		"args":            true,
-		"env":             true,
-		"envFrom":         true,
-		"scale":           true,
-		"ports":           true,
-		"resources":       true,
-		"health":          true,
-		"networkPolicy":   true,
-		"expose":          true,
-		"affinity":        true,
-		"autoscale":       true,
-		"secretMounts":    true,
-		"configmapMounts": true,
-		"volumes":         true,
-		"discovery":       true,
-		"imageRegistry":   true,
-		"registry":        true,
-		"imagePull":       true,
-		"skip":            true,
-		"dependencies":    true,
-		"initSteps":       true,
-		"securityContext": true,
 	}
 
 	validHealthFields := map[string]bool{
