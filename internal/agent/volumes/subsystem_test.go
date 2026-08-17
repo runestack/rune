@@ -3,13 +3,16 @@ package volumes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -493,4 +496,263 @@ func TestSubsystem_NoMountErrorForHealthyVolume(t *testing.T) {
 	if _, ok := s.MountErrorFor("never-seen"); ok {
 		t.Fatal("unknown volume must not report a mount error")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Teardown: concurrency + credential freshness (issues #185, #186)
+// ---------------------------------------------------------------------------
+
+// slowDriver blocks in Detach so a sequential drain is distinguishable
+// from a concurrent one, and records the parameters each call was given.
+type slowDriver struct {
+	fakeDriver
+	detachDelay time.Duration
+
+	pmu         sync.Mutex
+	detachParam []map[string]string
+}
+
+func (s *slowDriver) Detach(ctx context.Context, opctx driver.OpContext, h driver.VolumeHandle, node driver.NodeID) error {
+	s.pmu.Lock()
+	copied := map[string]string{}
+	for k, v := range opctx.Parameters {
+		copied[k] = v
+	}
+	s.detachParam = append(s.detachParam, copied)
+	s.pmu.Unlock()
+	if s.detachDelay > 0 {
+		select {
+		case <-time.After(s.detachDelay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.fakeDriver.Detach(ctx, opctx, h, node)
+}
+
+func (s *slowDriver) detachParams() []map[string]string {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	out := make([]map[string]string, len(s.detachParam))
+	copy(out, s.detachParam)
+	return out
+}
+
+// newSlowSubsystem is newSubsystem with a driver whose Detach blocks, and
+// an optional secret resolver.
+func newSlowSubsystem(t *testing.T, nodeID string, delay time.Duration, lookupSecret driverparams.SecretLookup) (*Subsystem, *store.TestStore, *slowDriver) {
+	t.Helper()
+	ts := store.NewTestStore()
+	drv := &slowDriver{fakeDriver: fakeDriver{name: "fake"}, detachDelay: delay}
+	sub, err := New(Config{
+		Store:  ts,
+		NodeID: nodeID,
+		Lookup: func(_ context.Context, vol *types.Volume) (driver.Driver, error) {
+			if vol.StorageClassName != "fake" {
+				return nil, errors.New("unknown driver")
+			}
+			return drv, nil
+		},
+		SecretLookup: lookupSecret,
+		MountRoot:    t.TempDir(),
+		Logger:       log.NewLogger(),
+	})
+	require.NoError(t, err)
+	return sub, ts, drv
+}
+
+// mountN creates n bound volumes and waits for all of them to be mounted.
+func mountN(t *testing.T, sub *Subsystem, ts *store.TestStore, ctx context.Context, nodeID string, n int) []*types.Volume {
+	t.Helper()
+	var vols []*types.Volume
+	for i := 0; i < n; i++ {
+		v := boundVolume(fmt.Sprintf("v-%d", i), "default", fmt.Sprintf("data-%d", i), nodeID)
+		require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, v.Namespace, v.Name, v))
+		vols = append(vols, v)
+	}
+	for _, v := range vols {
+		id := v.ID
+		waitFor(t, 3*time.Second, func() error {
+			if _, ok := sub.MountTargetFor(id); ok {
+				return nil
+			}
+			return errors.New("not yet mounted: " + id)
+		})
+	}
+	return vols
+}
+
+// TestSubsystem_StopDrainsConcurrently is the regression for issue #185.
+// Teardown used to run sequentially against the single agent-shutdown
+// budget, so the first slow detach could consume all of it: on a
+// three-volume node exactly one volume was released and the rest failed
+// with "context deadline exceeded". Draining in parallel means the wall
+// clock is one detach, not three.
+func TestSubsystem_StopDrainsConcurrently(t *testing.T) {
+	const nodeID = "node-A"
+	const detachDelay = 300 * time.Millisecond
+	sub, ts, drv := newSlowSubsystem(t, nodeID, detachDelay, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+	vols := mountN(t, sub, ts, ctx, nodeID, 3)
+
+	start := time.Now()
+	require.NoError(t, sub.Stop(context.Background()))
+	elapsed := time.Since(start)
+
+	_, d, _, _ := drv.snapshot()
+	assert.Equal(t, len(vols), d, "every tracked volume must be detached")
+
+	// Sequential would be >= 3x the delay. Allow generous headroom for
+	// slow CI while still failing on a sequential drain.
+	if elapsed >= 2*detachDelay {
+		t.Errorf("drain took %s for %d volumes at %s each — looks sequential, not concurrent",
+			elapsed, len(vols), detachDelay)
+	}
+}
+
+// TestSubsystem_StopPerVolumeDeadline: with a shutdown budget smaller
+// than the total sequential cost but larger than a single detach, every
+// volume must still be released. This is the production shape from #185
+// (3 volumes, 10s budget, one slow provider call).
+func TestSubsystem_StopPerVolumeDeadline(t *testing.T) {
+	const nodeID = "node-A"
+	sub, ts, drv := newSlowSubsystem(t, nodeID, 200*time.Millisecond, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+	vols := mountN(t, sub, ts, ctx, nodeID, 3)
+
+	// 500ms: too small for 3x200ms sequentially, ample concurrently.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer stopCancel()
+	require.NoError(t, sub.Stop(stopCtx))
+
+	_, d, _, _ := drv.snapshot()
+	assert.Equal(t, len(vols), d,
+		"all volumes must detach within a budget that only fits one sequentially")
+}
+
+// TestSubsystem_StopSkipsTeardownWhenBudgetSpent: an already-expired
+// shutdown context means every driver call would fail instantly. Say so
+// once rather than emitting a failure per volume.
+func TestSubsystem_StopSkipsTeardownWhenBudgetSpent(t *testing.T) {
+	const nodeID = "node-A"
+	sub, ts, drv := newSlowSubsystem(t, nodeID, 0, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+	mountN(t, sub, ts, ctx, nodeID, 2)
+
+	expired, expCancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer expCancel()
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, sub.Stop(expired))
+
+	_, d, _, _ := drv.snapshot()
+	assert.Zero(t, d, "no detach should be attempted once the budget is spent")
+}
+
+// TestSubsystem_TeardownReresolvesSecrets is the regression for issue
+// #186. Detach used to reuse the OpContext captured at bring-up, whose
+// secret refs were already resolved to plaintext — so a rotated
+// credential never reached Detach and the provider rejected the stale
+// value. Rotating again could not fix it.
+func TestSubsystem_TeardownReresolvesSecrets(t *testing.T) {
+	const nodeID = "node-A"
+
+	// A resolver whose answer changes, standing in for `rune secret set`.
+	var mu sync.Mutex
+	token := "old-token"
+	lookup := func(_ context.Context, ns, name, key string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return token, nil
+	}
+
+	sub, ts, drv := newSlowSubsystem(t, nodeID, 0, lookup)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+
+	// The class carries the secret ref, exactly as do-lon1 does.
+	class := &types.StorageClass{
+		Name:       "fake",
+		Driver:     "fake",
+		Parameters: map[string]string{"apiToken": "secret:tok.default.rune/token"},
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeStorageClass, "", class.Name, class))
+
+	vol := boundVolume("v-1", "default", "data", nodeID)
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+	waitFor(t, 3*time.Second, func() error {
+		if _, ok := sub.MountTargetFor(vol.ID); ok {
+			return nil
+		}
+		return errors.New("not yet mounted")
+	})
+
+	// Rotate after the mount is established — the situation that made a
+	// correct rotation look like a bad token.
+	mu.Lock()
+	token = "new-token"
+	mu.Unlock()
+
+	require.NoError(t, sub.Stop(context.Background()))
+
+	params := drv.detachParams()
+	require.Len(t, params, 1, "expected exactly one Detach")
+	assert.Equal(t, "new-token", params[0]["apiToken"],
+		"Detach must use the rotated credential, not the one resolved at mount time")
+}
+
+// TestSubsystem_TeardownFallsBackWhenResolveFails: teardown runs while
+// the process is going away, so a failing secret lookup must not turn a
+// stale credential into no credential at all.
+func TestSubsystem_TeardownFallsBackWhenResolveFails(t *testing.T) {
+	const nodeID = "node-A"
+
+	var fail atomic.Bool
+	lookup := func(_ context.Context, ns, name, key string) (string, error) {
+		if fail.Load() {
+			return "", errors.New("secret store unavailable")
+		}
+		return "mount-time-token", nil
+	}
+
+	sub, ts, drv := newSlowSubsystem(t, nodeID, 0, lookup)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+
+	class := &types.StorageClass{
+		Name:       "fake",
+		Driver:     "fake",
+		Parameters: map[string]string{"apiToken": "secret:tok.default.rune/token"},
+	}
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeStorageClass, "", class.Name, class))
+	vol := boundVolume("v-1", "default", "data", nodeID)
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+	waitFor(t, 3*time.Second, func() error {
+		if _, ok := sub.MountTargetFor(vol.ID); ok {
+			return nil
+		}
+		return errors.New("not yet mounted")
+	})
+
+	fail.Store(true) // the lookup breaks only for teardown
+	require.NoError(t, sub.Stop(context.Background()))
+
+	params := drv.detachParams()
+	require.Len(t, params, 1)
+	assert.Equal(t, "mount-time-token", params[0]["apiToken"],
+		"a failed re-resolve must fall back to the credential captured at mount time")
+	_, d, _, _ := drv.snapshot()
+	assert.Equal(t, 1, d, "detach must still be attempted")
 }

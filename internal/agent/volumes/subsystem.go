@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
@@ -165,7 +166,17 @@ type trackedMount struct {
 	// per-class parameters (region, auth refs, …) the driver was given
 	// at Attach/Mount time. Snapshotting here is also defence against
 	// the StorageClass being deleted between bringUp and tearDown.
+	//
+	// Its Parameters hold `secret:...` refs already resolved to
+	// plaintext, so they are exactly as old as the mount. tearDown
+	// prefers a fresh resolution from RawParameters and only falls back
+	// to these.
 	OpCtx driver.OpContext
+	// RawParameters is the same parameter map *before* secret refs were
+	// resolved. Retained so tearDown can resolve credentials afresh: a
+	// mount can be months old, and a rotated secret must reach Detach
+	// without waiting for a remount (issue #186).
+	RawParameters map[string]string
 	// VolumeNS / VolumeName are kept so logs read sensibly.
 	VolumeNS   string
 	VolumeName string
@@ -273,18 +284,85 @@ func (s *Subsystem) Stop(ctx context.Context) error {
 	s.mounts = make(map[string]trackedMount)
 	s.stateMu.Unlock()
 
-	for id, m := range tracked {
-		if err := s.tearDown(ctx, id, m); err != nil {
-			s.log.Warn("Volume teardown failed during Stop",
-				log.Str("volume_id", id),
-				log.Str("namespace", m.VolumeNS),
-				log.Str("name", m.VolumeName),
-				log.Err(err))
-		}
-	}
+	s.drainMounts(ctx, tracked)
 
 	s.log.Info("Volume subsystem stopped")
 	return nil
+}
+
+// teardownFallbackTimeout bounds a single volume's teardown when the
+// caller's context carries no deadline of its own. Provider clients set
+// their own (longer) HTTP timeouts, which must not be what decides how
+// long shutdown takes.
+const teardownFallbackTimeout = 8 * time.Second
+
+// drainMounts tears down every tracked mount, concurrently and with a
+// per-volume deadline.
+//
+// Both properties matter (issue #185). Sequentially, the volumes shared
+// the single agent-shutdown budget, so the first detach could spend all
+// of it — on a three-volume node exactly one volume was released and the
+// rest died with "context deadline exceeded". The volumes are
+// independent and nothing orders them, so they go in parallel; and each
+// gets its own deadline so one unresponsive provider call cannot starve
+// its siblings.
+//
+// A failed teardown is logged, never fatal: the volume stays attached to
+// this node and the adopt-attached path re-mounts it on the next start.
+func (s *Subsystem) drainMounts(ctx context.Context, tracked map[string]trackedMount) {
+	if len(tracked) == 0 {
+		return
+	}
+
+	// Each volume gets the whole remaining budget rather than a slice of
+	// it: they run concurrently, so they are not competing for time.
+	perVolume := teardownFallbackTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 {
+			perVolume = remaining
+		} else {
+			// Already past the deadline. Every driver call would fail
+			// instantly, so say so once instead of once per volume.
+			s.log.Warn("Shutdown budget already spent; skipping volume teardown",
+				log.Int("volumes", len(tracked)))
+			return
+		}
+	}
+
+	var wg sync.WaitGroup
+	var failed atomic.Int64
+	for id, m := range tracked {
+		wg.Add(1)
+		go func(id string, m trackedMount) {
+			defer wg.Done()
+			tdCtx, cancel := context.WithTimeout(ctx, perVolume)
+			defer cancel()
+			if err := s.tearDown(tdCtx, id, m); err != nil {
+				failed.Add(1)
+				s.log.Warn("Volume teardown failed during Stop",
+					log.Str("volume_id", id),
+					log.Str("namespace", m.VolumeNS),
+					log.Str("name", m.VolumeName),
+					log.Err(err))
+			}
+		}(id, m)
+	}
+	wg.Wait()
+
+	// One summary line, so a partial drain is obvious instead of having
+	// to be inferred by counting warnings.
+	n := int(failed.Load())
+	total := len(tracked)
+	if n > 0 {
+		s.log.Warn("Volume teardown incomplete",
+			log.Int("detached", total-n),
+			log.Int("total", total),
+			log.Int("failed", n))
+		return
+	}
+	s.log.Info("All volumes torn down",
+		log.Int("detached", total),
+		log.Int("total", total))
 }
 
 // MountTargetFor returns the host path the named volume is currently
@@ -514,7 +592,14 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	if err != nil {
 		return fmt.Errorf("agent.volumes: lookup driver for %s: %w", vol.String(), err)
 	}
-	opctx, err := s.buildOpContext(ctx, vol)
+	rawctx, err := s.buildOpContextRaw(ctx, vol)
+	if err != nil {
+		return fmt.Errorf("agent.volumes: build OpContext for %s: %w", vol.String(), err)
+	}
+	// Keep the pre-resolution map so tearDown can re-resolve secrets
+	// later; the driver itself only ever sees the resolved copy.
+	rawParams := mergeParameters(rawctx.Parameters, nil)
+	opctx, err := s.resolveSecretsOnOpContext(ctx, vol, rawctx)
 	if err != nil {
 		return fmt.Errorf("agent.volumes: build OpContext for %s: %w", vol.String(), err)
 	}
@@ -543,12 +628,13 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	}
 	s.stateMu.Lock()
 	s.mounts[id] = trackedMount{
-		Driver:     drv,
-		Handle:     handle,
-		Target:     got,
-		OpCtx:      opctx,
-		VolumeNS:   vol.Namespace,
-		VolumeName: vol.Name,
+		Driver:        drv,
+		Handle:        handle,
+		Target:        got,
+		OpCtx:         opctx,
+		RawParameters: rawParams,
+		VolumeNS:      vol.Namespace,
+		VolumeName:    vol.Name,
 	}
 	s.stateMu.Unlock()
 	s.log.Info("Volume mounted",
@@ -569,14 +655,15 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 // for Detach as much as for Attach, and the StorageClass may have been
 // deleted between mount and teardown.
 func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) error {
+	opctx := s.teardownOpContext(ctx, id, m)
 	var firstErr error
-	if err := m.Driver.Unmount(ctx, m.OpCtx, m.Target); err != nil {
+	if err := m.Driver.Unmount(ctx, opctx, m.Target); err != nil {
 		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, err)
 		s.log.Warn("Unmount failed; will still attempt Detach",
 			log.Str("volume_id", id),
 			log.Err(err))
 	}
-	if err := m.Driver.Detach(ctx, m.OpCtx, m.Handle, driver.NodeID(s.cfg.NodeID)); err != nil {
+	if err := m.Driver.Detach(ctx, opctx, m.Handle, driver.NodeID(s.cfg.NodeID)); err != nil {
 		if firstErr == nil {
 			firstErr = fmt.Errorf("agent.volumes: detach %s: %w", id, err)
 		}
@@ -591,8 +678,46 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) err
 	return firstErr
 }
 
-// buildOpContext resolves the Volume's StorageClass + merged
-// Parameters into an OpContext ready for a driver call.
+// teardownOpContext returns the OpContext to use for Unmount/Detach.
+//
+// It prefers credentials resolved *now* over the ones captured when the
+// mount was brought up. Detach mostly runs during shutdown, so the
+// bring-up copy is as old as the mount: after rotating a provider
+// token, the very next teardown would still present the pre-rotation
+// value and fail with the provider's auth error — which reads exactly
+// like "the new token is wrong", and cannot be fixed by rotating again
+// (issue #186).
+//
+// Resolution failures are deliberately non-fatal. Teardown runs while
+// the process is going away and the secret lookup may itself be a
+// casualty of that; falling back to the captured OpContext keeps the
+// previous behaviour rather than turning a stale credential into no
+// credential at all.
+func (s *Subsystem) teardownOpContext(ctx context.Context, id string, m trackedMount) driver.OpContext {
+	if len(m.RawParameters) == 0 || s.cfg.SecretLookup == nil {
+		return m.OpCtx // pre-#186 mount, or nothing to resolve against
+	}
+	ns := m.VolumeNS
+	if m.OpCtx.Volume != nil && m.OpCtx.Volume.Namespace != "" {
+		ns = m.OpCtx.Volume.Namespace
+	}
+	resolved, err := driverparams.Resolve(ctx, m.RawParameters, ns, s.cfg.SecretLookup)
+	if err != nil {
+		s.log.Warn("Could not re-resolve credentials for teardown; using the values from mount time",
+			log.Str("volume_id", id),
+			log.Str("namespace", m.VolumeNS),
+			log.Str("name", m.VolumeName),
+			log.Err(err))
+		return m.OpCtx
+	}
+	opctx := m.OpCtx
+	opctx.Parameters = resolved
+	return opctx
+}
+
+// buildOpContextRaw resolves the Volume's StorageClass + merged
+// Parameters into an OpContext ready for a driver call, leaving any
+// `secret:...` refs intact.
 //
 // Resolution order matches the controller's reclaimParameters helper:
 //
@@ -604,11 +729,13 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) err
 //  3. Neither → volume-local Parameters only; drivers that strictly
 //     require class context fail with their own error.
 //
-// After resolving the parameter chain, any `secret:...` refs in the
-// resulting map are resolved to plaintext via cfg.SecretLookup. The
-// driver therefore never sees a secret reference, only literal values.
-// See RUNE-200 PR 2 + PR 3.
-func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driver.OpContext, error) {
+// Callers pass the result through resolveSecretsOnOpContext before
+// handing it to a driver, so the driver never sees a secret reference,
+// only literal values. Splitting the two steps lets bringUp keep the
+// unresolved map on the trackedMount, so tearDown can resolve a rotated
+// credential afresh instead of replaying the one captured at mount time
+// (issue #186). See RUNE-200 PR 2 + PR 3.
+func (s *Subsystem) buildOpContextRaw(ctx context.Context, vol *types.Volume) (driver.OpContext, error) {
 	opctx := driver.OpContext{
 		Volume:       vol,
 		Parameters:   map[string]string{},
@@ -616,7 +743,7 @@ func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driv
 	}
 	if vol.StorageClassName == "" {
 		opctx.Parameters = mergeParameters(nil, vol.Parameters)
-		return s.resolveSecretsOnOpContext(ctx, vol, opctx)
+		return opctx, nil
 	}
 	var class types.StorageClass
 	if err := s.cfg.Store.Get(ctx, types.ResourceTypeStorageClass, "", vol.StorageClassName, &class); err != nil {
@@ -636,11 +763,11 @@ func (s *Subsystem) buildOpContext(ctx context.Context, vol *types.Volume) (driv
 			log.Str("storageClass", vol.StorageClassName),
 			log.Str("source", source),
 			log.Err(err))
-		return s.resolveSecretsOnOpContext(ctx, vol, opctx)
+		return opctx, nil
 	}
 	opctx.StorageClass = &class
 	opctx.Parameters = mergeParameters(class.Parameters, vol.Parameters)
-	return s.resolveSecretsOnOpContext(ctx, vol, opctx)
+	return opctx, nil
 }
 
 // resolveSecretsOnOpContext walks opctx.Parameters and replaces any
