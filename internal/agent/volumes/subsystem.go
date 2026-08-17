@@ -296,16 +296,20 @@ func (s *Subsystem) Stop(ctx context.Context) error {
 // long shutdown takes.
 const teardownFallbackTimeout = 8 * time.Second
 
-// drainMounts tears down every tracked mount, concurrently and with a
-// per-volume deadline.
+// drainMounts tears down every tracked mount concurrently.
 //
-// Both properties matter (issue #185). Sequentially, the volumes shared
-// the single agent-shutdown budget, so the first detach could spend all
-// of it — on a three-volume node exactly one volume was released and the
-// rest died with "context deadline exceeded". The volumes are
-// independent and nothing orders them, so they go in parallel; and each
-// gets its own deadline so one unresponsive provider call cannot starve
-// its siblings.
+// Concurrency is the whole fix for issue #185. Sequentially, the volumes
+// shared the single agent-shutdown budget, so the first detach could
+// spend all of it — on a three-volume node exactly one volume was
+// released and the rest died with "context deadline exceeded". The
+// volumes are independent and nothing orders them, so they go in
+// parallel and stop competing for the budget.
+//
+// Note that there is deliberately no per-volume slice of the deadline.
+// Dividing a shared budget only helps when the work is serialised; once
+// it is concurrent, handing each volume anything less than the remaining
+// budget would cap teardown for no benefit. teardownFallbackTimeout
+// exists for the other direction — a caller with no deadline at all.
 //
 // A failed teardown is logged, never fatal: the volume stays attached to
 // this node and the adopt-attached path re-mounts it on the next start.
@@ -314,31 +318,37 @@ func (s *Subsystem) drainMounts(ctx context.Context, tracked map[string]trackedM
 		return
 	}
 
-	// Each volume gets the whole remaining budget rather than a slice of
-	// it: they run concurrently, so they are not competing for time.
-	perVolume := teardownFallbackTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining > 0 {
-			perVolume = remaining
-		} else {
-			// Already past the deadline. Every driver call would fail
-			// instantly, so say so once instead of once per volume.
-			s.log.Warn("Shutdown budget already spent; skipping volume teardown",
-				log.Int("volumes", len(tracked)))
-			return
-		}
+	// Nothing to divide up: the volumes run concurrently, so they are not
+	// competing for the budget and each may simply use the caller's
+	// context as-is. A caller that supplies no deadline gets one imposed,
+	// so a driver's own HTTP timeout (30s for dovolume) cannot be what
+	// decides how long shutdown takes.
+	if err := ctx.Err(); err != nil {
+		// Expired or cancelled: every driver call would fail instantly,
+		// so say so once rather than once per volume.
+		s.log.Warn("Shutdown budget already spent; skipping volume teardown",
+			log.Int("volumes", len(tracked)),
+			log.Err(err))
+		return
+	}
+	tdCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		tdCtx, cancel = context.WithTimeout(ctx, teardownFallbackTimeout)
+		defer cancel()
 	}
 
 	var wg sync.WaitGroup
-	var failed atomic.Int64
+	var detached atomic.Int64
 	for id, m := range tracked {
 		wg.Add(1)
 		go func(id string, m trackedMount) {
 			defer wg.Done()
-			tdCtx, cancel := context.WithTimeout(ctx, perVolume)
-			defer cancel()
-			if err := s.tearDown(tdCtx, id, m); err != nil {
-				failed.Add(1)
+			ok, err := s.tearDown(tdCtx, id, m)
+			if ok {
+				detached.Add(1)
+			}
+			if err != nil {
 				s.log.Warn("Volume teardown failed during Stop",
 					log.Str("volume_id", id),
 					log.Str("namespace", m.VolumeNS),
@@ -350,18 +360,20 @@ func (s *Subsystem) drainMounts(ctx context.Context, tracked map[string]trackedM
 	wg.Wait()
 
 	// One summary line, so a partial drain is obvious instead of having
-	// to be inferred by counting warnings.
-	n := int(failed.Load())
-	total := len(tracked)
-	if n > 0 {
+	// to be inferred by counting warnings. This counts volumes actually
+	// released from the node: a volume whose Unmount failed but whose
+	// Detach succeeded is detached, even though tearDown returned an
+	// error, and reporting it as still-attached would answer the one
+	// question this line exists to answer incorrectly.
+	got, total := int(detached.Load()), len(tracked)
+	if got < total {
 		s.log.Warn("Volume teardown incomplete",
-			log.Int("detached", total-n),
-			log.Int("total", total),
-			log.Int("failed", n))
+			log.Int("detached", got),
+			log.Int("total", total))
 		return
 	}
 	s.log.Info("All volumes torn down",
-		log.Int("detached", total),
+		log.Int("detached", got),
 		log.Int("total", total))
 }
 
@@ -481,7 +493,8 @@ func (s *Subsystem) handle(ctx context.Context, ev store.WatchEvent) error {
 		if !tracked {
 			return nil
 		}
-		return s.tearDown(ctx, id, m)
+		_, err := s.tearDown(ctx, id, m)
+		return err
 	default:
 		return nil
 	}
@@ -511,7 +524,8 @@ func (s *Subsystem) reconcile(ctx context.Context, vol *types.Volume) error {
 		s.stateMu.Lock()
 		delete(s.mounts, id)
 		s.stateMu.Unlock()
-		return s.tearDown(ctx, id, tracked)
+		_, err := s.tearDown(ctx, id, tracked)
+		return err
 	case want && isTracked:
 		// Already mounted. If the handle changed under us (the
 		// controller re-provisioned), tear the old mount down and
@@ -520,7 +534,7 @@ func (s *Subsystem) reconcile(ctx context.Context, vol *types.Volume) error {
 			s.stateMu.Lock()
 			delete(s.mounts, id)
 			s.stateMu.Unlock()
-			if err := s.tearDown(ctx, id, tracked); err != nil {
+			if _, err := s.tearDown(ctx, id, tracked); err != nil {
 				s.log.Warn("Tear-down before re-mount failed",
 					log.Str("volume_id", id),
 					log.Err(err))
@@ -650,24 +664,30 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 // be idempotent by the Driver contract so partial failures on one side
 // still let the other side clean up.
 //
-// The OpContext stashed on trackedMount at bringUp time is reused here:
-// drivers like do-volume need their per-class config (auth refs, region)
-// for Detach as much as for Attach, and the StorageClass may have been
-// deleted between mount and teardown.
-func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) error {
+// The per-class config a driver needs for Detach (region, auth refs)
+// comes from teardownOpContext, which starts from the OpContext stashed
+// at bringUp — the StorageClass may have been deleted since — but
+// re-resolves its secret refs so a rotated credential is used rather
+// than the one frozen at mount time (issue #186).
+//
+// detached reports whether the volume is off this node, which is not the
+// same as err == nil: Unmount can fail while Detach succeeds. Callers
+// that report "is this volume still attached" must use detached, not the
+// error.
+func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) (detached bool, err error) {
 	opctx := s.teardownOpContext(ctx, id, m)
 	var firstErr error
-	if err := m.Driver.Unmount(ctx, opctx, m.Target); err != nil {
-		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, err)
+	if uerr := m.Driver.Unmount(ctx, opctx, m.Target); uerr != nil {
+		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, uerr)
 		s.log.Warn("Unmount failed; will still attempt Detach",
 			log.Str("volume_id", id),
-			log.Err(err))
+			log.Err(uerr))
 	}
-	if err := m.Driver.Detach(ctx, opctx, m.Handle, driver.NodeID(s.cfg.NodeID)); err != nil {
+	if derr := m.Driver.Detach(ctx, opctx, m.Handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
 		if firstErr == nil {
-			firstErr = fmt.Errorf("agent.volumes: detach %s: %w", id, err)
+			firstErr = fmt.Errorf("agent.volumes: detach %s: %w", id, derr)
 		}
-		return firstErr
+		return false, firstErr
 	}
 	if firstErr == nil {
 		s.log.Info("Volume unmounted",
@@ -675,7 +695,7 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) err
 			log.Str("namespace", m.VolumeNS),
 			log.Str("name", m.VolumeName))
 	}
-	return firstErr
+	return true, firstErr
 }
 
 // teardownOpContext returns the OpContext to use for Unmount/Detach.

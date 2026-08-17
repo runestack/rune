@@ -507,9 +507,18 @@ func TestSubsystem_NoMountErrorForHealthyVolume(t *testing.T) {
 type slowDriver struct {
 	fakeDriver
 	detachDelay time.Duration
+	unmountErr  error
 
 	pmu         sync.Mutex
 	detachParam []map[string]string
+	detachDL    []deadlineObs
+}
+
+// deadlineObs records whether the ctx a driver call received carried a
+// deadline, and how far out it was.
+type deadlineObs struct {
+	set    bool
+	within time.Duration
 }
 
 func (s *slowDriver) Detach(ctx context.Context, opctx driver.OpContext, h driver.VolumeHandle, node driver.NodeID) error {
@@ -519,6 +528,12 @@ func (s *slowDriver) Detach(ctx context.Context, opctx driver.OpContext, h drive
 		copied[k] = v
 	}
 	s.detachParam = append(s.detachParam, copied)
+	obs := deadlineObs{}
+	if dl, ok := ctx.Deadline(); ok {
+		obs.set = true
+		obs.within = time.Until(dl)
+	}
+	s.detachDL = append(s.detachDL, obs)
 	s.pmu.Unlock()
 	if s.detachDelay > 0 {
 		select {
@@ -528,6 +543,21 @@ func (s *slowDriver) Detach(ctx context.Context, opctx driver.OpContext, h drive
 		}
 	}
 	return s.fakeDriver.Detach(ctx, opctx, h, node)
+}
+
+func (s *slowDriver) Unmount(ctx context.Context, opctx driver.OpContext, target driver.MountTarget) error {
+	if s.unmountErr != nil {
+		return s.unmountErr
+	}
+	return s.fakeDriver.Unmount(ctx, opctx, target)
+}
+
+func (s *slowDriver) detachDeadlines() []deadlineObs {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	out := make([]deadlineObs, len(s.detachDL))
+	copy(out, s.detachDL)
+	return out
 }
 
 func (s *slowDriver) detachParams() []map[string]string {
@@ -613,11 +643,18 @@ func TestSubsystem_StopDrainsConcurrently(t *testing.T) {
 	}
 }
 
-// TestSubsystem_StopPerVolumeDeadline: with a shutdown budget smaller
-// than the total sequential cost but larger than a single detach, every
-// volume must still be released. This is the production shape from #185
-// (3 volumes, 10s budget, one slow provider call).
-func TestSubsystem_StopPerVolumeDeadline(t *testing.T) {
+// TestSubsystem_StopDrainsWithinTightBudget: with a shutdown budget
+// smaller than the total sequential cost but larger than a single
+// detach, every volume must still be released. This is the production
+// shape from #185 (3 volumes, one shared budget, slow provider calls).
+//
+// Named for what it proves. It was originally called
+// ...PerVolumeDeadline, but review showed it passed with the per-volume
+// deadline removed entirely — because `WithTimeout(ctx, timeUntil(ctx
+// deadline))` is just the parent deadline. The deadline split was
+// inert; concurrency is what makes this pass, and the code no longer
+// pretends otherwise.
+func TestSubsystem_StopDrainsWithinTightBudget(t *testing.T) {
 	const nodeID = "node-A"
 	sub, ts, drv := newSlowSubsystem(t, nodeID, 200*time.Millisecond, nil)
 
@@ -755,4 +792,112 @@ func TestSubsystem_TeardownFallsBackWhenResolveFails(t *testing.T) {
 		"a failed re-resolve must fall back to the credential captured at mount time")
 	_, d, _, _ := drv.snapshot()
 	assert.Equal(t, 1, d, "detach must still be attempted")
+}
+
+// TestSubsystem_StopBoundsDeadlinelessCaller covers the one thing the
+// teardown timeout still does after review removed the inert per-volume
+// split: a caller that supplies no deadline of its own must not let a
+// driver's HTTP timeout (30s for dovolume) decide how long shutdown
+// takes. Agent.Stop's Start-rollback path passes context.Background(),
+// so this is reachable, not theoretical.
+func TestSubsystem_StopBoundsDeadlinelessCaller(t *testing.T) {
+	const nodeID = "node-A"
+	sub, ts, drv := newSlowSubsystem(t, nodeID, 0, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+	mountN(t, sub, ts, ctx, nodeID, 1)
+
+	// No deadline on the caller's context.
+	require.NoError(t, sub.Stop(context.Background()))
+
+	deadlines := drv.detachDeadlines()
+	require.Len(t, deadlines, 1)
+	require.True(t, deadlines[0].set,
+		"a deadline-less caller must still get a bounded teardown context")
+	assert.LessOrEqual(t, deadlines[0].within, teardownFallbackTimeout,
+		"the imposed bound must be teardownFallbackTimeout")
+}
+
+// TestSubsystem_StopHonoursCallerDeadline is the complement: when the
+// caller *does* supply a deadline, teardown uses it as-is rather than
+// substituting its own.
+func TestSubsystem_StopHonoursCallerDeadline(t *testing.T) {
+	const nodeID = "node-A"
+	sub, ts, drv := newSlowSubsystem(t, nodeID, 0, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+	mountN(t, sub, ts, ctx, nodeID, 1)
+
+	callerBudget := 2 * time.Second
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), callerBudget)
+	defer stopCancel()
+	require.NoError(t, sub.Stop(stopCtx))
+
+	deadlines := drv.detachDeadlines()
+	require.Len(t, deadlines, 1)
+	require.True(t, deadlines[0].set)
+	assert.LessOrEqual(t, deadlines[0].within, callerBudget,
+		"teardown must not extend past the caller's deadline")
+	assert.Greater(t, deadlines[0].within, callerBudget-time.Second,
+		"teardown must not shrink the caller's budget either")
+}
+
+// TestSubsystem_StopSkipsTeardownWhenCancelled: the guard covers a
+// cancelled context, not only an expired deadline.
+func TestSubsystem_StopSkipsTeardownWhenCancelled(t *testing.T) {
+	const nodeID = "node-A"
+	sub, ts, drv := newSlowSubsystem(t, nodeID, 0, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+	mountN(t, sub, ts, ctx, nodeID, 2)
+
+	cancelled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	require.NoError(t, sub.Stop(cancelled))
+
+	_, d, _, _ := drv.snapshot()
+	assert.Zero(t, d, "a cancelled context must skip teardown, like an expired one")
+}
+
+// TestSubsystem_DetachedCountExcludesUnmountOnlyFailures is the
+// regression for the summary line. It reports how many volumes are off
+// this node, which is not the same as how many teardowns returned nil:
+// Unmount can fail while Detach succeeds. Counting the error would call
+// a detached volume "still attached" — the exact question the line was
+// added to answer.
+func TestSubsystem_DetachedCountExcludesUnmountOnlyFailures(t *testing.T) {
+	const nodeID = "node-A"
+	sub, ts, drv := newSlowSubsystem(t, nodeID, 0, nil)
+	drv.unmountErr = errors.New("target busy")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, sub.Start(ctx))
+	vol := boundVolume("v-1", "default", "data", nodeID)
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+	waitFor(t, 3*time.Second, func() error {
+		if _, ok := sub.MountTargetFor(vol.ID); ok {
+			return nil
+		}
+		return errors.New("not yet mounted")
+	})
+
+	// tearDown returns the unmount error, but the volume IS detached.
+	detached, err := sub.tearDown(context.Background(), vol.ID, func() trackedMount {
+		sub.stateMu.RLock()
+		defer sub.stateMu.RUnlock()
+		return sub.mounts[vol.ID]
+	}())
+	require.Error(t, err, "an unmount failure must still surface as an error")
+	assert.True(t, detached,
+		"a volume whose Detach succeeded is detached, even when Unmount failed")
+
+	_, d, _, _ := drv.snapshot()
+	assert.Equal(t, 1, d, "Detach must be attempted despite the unmount failure")
 }
