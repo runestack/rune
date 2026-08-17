@@ -141,7 +141,19 @@ type DockerRunner struct {
 	logger       log.Logger
 	config       *DockerConfig
 	ecrAuthCache map[string]ecrAuthEntry
-	providers    []registryauth.Provider
+
+	// providers is the registry-auth chain, built once on first use
+	// because AmbientProviders probes the GCE metadata service and the
+	// docker CLI config, which we don't want to pay for at construction.
+	//
+	// providersOnce is load-bearing, not decorative: pulls run on the
+	// reconciler's worker pool (reconcileWorkerCount goroutines, one per
+	// service key), so several goroutines can reach first-use at the same
+	// time. A plain `if providers == nil` check raced, and because the
+	// build is never repeated, a half-built slice would have been the
+	// value every later pull used.
+	providersOnce sync.Once
+	providers     []registryauth.Provider
 
 	// dnsMu guards dnsServers + dnsSearch which are toggled at
 	// runtime by the agent once the data path (RUNE-041) is healthy
@@ -209,8 +221,8 @@ func NewDockerRunnerWithConfig(logger log.Logger, config *DockerConfig) (*Docker
 		logger:       logger,
 		config:       config,
 		ecrAuthCache: make(map[string]ecrAuthEntry),
-		providers:    nil,
-		stats:        newStatsCache(),
+		// providers is built on first pull via registryProviders().
+		stats: newStatsCache(),
 	}, nil
 }
 
@@ -1025,14 +1037,17 @@ func (r *DockerRunner) logOrDefault() log.Logger {
 	return log.GetDefaultLogger().WithComponent("docker-runner")
 }
 
-// resolveRegistryAuth selects an auth entry based on image host and encodes it for Docker ImagePull
-func (r *DockerRunner) resolveRegistryAuth(imageRef string) string {
-	host := parseImageHost(imageRef)
-	if host == "" {
-		return ""
-	}
-	// Provider-based resolution (lazily built)
-	if r.providers == nil {
+// registryProviders returns the registry-auth chain, building it on first
+// call and reusing it thereafter.
+//
+// The build must happen exactly once even when several pulls race into
+// it: the reconciler dispatches one goroutine per service key, so two
+// services starting together both reach this on a cold runner. It is
+// also the only correct place for the "no providers" case to be
+// distinguished from "not built yet" — the previous nil-check idiom
+// conflated them and needed a sentinel to compensate.
+func (r *DockerRunner) registryProviders() []registryauth.Provider {
+	r.providersOnce.Do(func() {
 		var regs []map[string]any
 		for _, rc := range r.config.Registries {
 			regs = append(regs, map[string]any{
@@ -1046,20 +1061,29 @@ func (r *DockerRunner) resolveRegistryAuth(imageRef string) string {
 				},
 			})
 		}
-		r.providers = registryauth.BuildProviders(context.Background(), regs)
+		providers := registryauth.BuildProviders(context.Background(), regs)
 		// Ambient fallbacks (GCE metadata SA for *.pkg.dev/gcr.io,
 		// then the docker CLI config of the runed user) go after all
 		// configured providers so explicit config always wins. See
 		// issue #144 — without these, private pulls on a node whose
 		// SA has artifactregistry.reader still went out anonymous.
 		if !r.config.DisableAmbientRegistryAuth {
-			r.providers = append(r.providers, registryauth.AmbientProviders(context.Background())...)
+			providers = append(providers, registryauth.AmbientProviders(context.Background())...)
 		}
-		if r.providers == nil {
-			// Non-nil sentinel so we don't rebuild on every pull.
-			r.providers = []registryauth.Provider{}
-		}
+		// Published only after it is fully built, so no caller can observe
+		// a partial chain.
+		r.providers = providers
+	})
+	return r.providers
+}
+
+// resolveRegistryAuth selects an auth entry based on image host and encodes it for Docker ImagePull
+func (r *DockerRunner) resolveRegistryAuth(imageRef string) string {
+	host := parseImageHost(imageRef)
+	if host == "" {
+		return ""
 	}
+	providers := r.registryProviders()
 	// Collect every provider that claims this image, then prefer the MOST
 	// SPECIFIC one. Previously this was first-match on the host alone, so a
 	// credential registered for a whole registry was attached to every image
@@ -1074,7 +1098,7 @@ func (r *DockerRunner) resolveRegistryAuth(imageRef string) string {
 		scoped  bool
 	}
 	var candidates []candidate
-	for _, p := range r.providers {
+	for _, p := range providers {
 		if !p.Match(host, imageRef) {
 			continue
 		}
