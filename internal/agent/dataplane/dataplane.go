@@ -148,10 +148,10 @@ type Subsystem struct {
 	// Network policy state (RUNE-064).
 	policyMu sync.RWMutex
 	policies map[string]*policy.Compiled
-	// svcIdents maps serviceID -> namespace/name so egress evaluation
-	// can express the dial target the way egress rules address it (by
-	// service name, not ID).
-	svcIdents map[string]types.NamespacedName
+	// svcMeta maps serviceID -> the destination-side detail egress
+	// evaluation needs: how egress rules address the service, and the
+	// names its spec gives each port.
+	svcMeta map[string]serviceMeta
 	// policyByName indexes compiled policies by namespace/name so the
 	// egress path can find the *source* service's policy from a
 	// LocalInstances identity, which carries name+namespace only.
@@ -215,7 +215,7 @@ func New(cfg Config) (*Subsystem, error) {
 		nfm:            newNFTables(cfg.Mode, cfg.Logger),
 		readyCh:        make(chan struct{}),
 		policies:       make(map[string]*policy.Compiled),
-		svcIdents:      make(map[string]types.NamespacedName),
+		svcMeta:        make(map[string]serviceMeta),
 		policyByName:   make(map[types.NamespacedName]*policy.Compiled),
 		localInstances: policy.NewLocalInstancesTable(nodeID),
 		vipHost:        newLocalVIPHost(),
@@ -266,19 +266,19 @@ func (s *Subsystem) syncPolicy(svc *types.Service) {
 		return
 	}
 	compiled := policy.Compile(svc)
-	ident := identityOf(svc)
+	meta := metaOf(svc)
 	s.policyMu.Lock()
 	// A rename frees the old namespace/name slot.
-	if prev, ok := s.svcIdents[svc.ID]; ok && prev != ident {
-		delete(s.policyByName, prev)
+	if prev, ok := s.svcMeta[svc.ID]; ok && prev.ident != meta.ident {
+		delete(s.policyByName, prev.ident)
 	}
-	s.svcIdents[svc.ID] = ident
+	s.svcMeta[svc.ID] = meta
 	if compiled == nil {
 		delete(s.policies, svc.ID)
-		delete(s.policyByName, ident)
+		delete(s.policyByName, meta.ident)
 	} else {
 		s.policies[svc.ID] = compiled
-		s.policyByName[ident] = compiled
+		s.policyByName[meta.ident] = compiled
 	}
 	s.policyMu.Unlock()
 
@@ -292,30 +292,63 @@ func (s *Subsystem) syncPolicy(svc *types.Service) {
 
 // UnregisterService closes listeners for serviceID. Connections drain
 // for up to DrainTimeout. Idempotent.
+//
+// It deliberately does NOT drop policy state. This is also called
+// mid-reconcile when a service's VIP changes, and dropping the
+// service's egress rules there would leave its *running* instances
+// unpoliced across two netlink round-trips and a socket rebind.
+// Policy is dropped only when the service itself goes away —
+// see dropPolicy.
 func (s *Subsystem) UnregisterService(serviceID string) {
+	s.proxy.Unregister(serviceID)
+}
+
+// dropPolicy removes all policy state for serviceID. Called when the
+// service is deleted, not when its listeners are merely rebuilt.
+func (s *Subsystem) dropPolicy(serviceID string) {
 	s.policyMu.Lock()
-	if ident, ok := s.svcIdents[serviceID]; ok {
-		delete(s.policyByName, ident)
-		delete(s.svcIdents, serviceID)
+	if meta, ok := s.svcMeta[serviceID]; ok {
+		delete(s.policyByName, meta.ident)
+		delete(s.svcMeta, serviceID)
 	}
 	delete(s.policies, serviceID)
 	s.policyMu.Unlock()
-	s.proxy.Unregister(serviceID)
 }
 
 // LocalInstances returns the agent's IP -> identity table for
 // diagnostics and tests.
 func (s *Subsystem) LocalInstances() *policy.LocalInstancesTable { return s.localInstances }
 
-// identityOf returns the namespace/name a service is addressed by in
-// policy rules. Name falls back to the service ID for legacy specs
-// that never set Name.
-func identityOf(svc *types.Service) types.NamespacedName {
+// serviceMeta is the destination-side detail egress evaluation needs
+// about a service.
+type serviceMeta struct {
+	// ident is how policy rules address the service.
+	ident types.NamespacedName
+	// portNames maps a service port to the names its spec gives it,
+	// so an egress rule written `ports: [postgres]` resolves against
+	// the destination's own port list.
+	portNames map[int][]string
+}
+
+// metaOf derives the destination-side detail from a service spec.
+// Name falls back to the service ID for legacy specs that never set
+// Name.
+func metaOf(svc *types.Service) serviceMeta {
 	name := svc.Name
 	if name == "" {
 		name = svc.ID
 	}
-	return types.NamespacedName{Namespace: svc.Namespace, Name: name}
+	m := serviceMeta{ident: types.NamespacedName{Namespace: svc.Namespace, Name: name}}
+	for _, p := range svc.Ports {
+		if p.Name == "" || p.Port <= 0 {
+			continue
+		}
+		if m.portNames == nil {
+			m.portNames = make(map[int][]string, len(svc.Ports))
+		}
+		m.portNames[p.Port] = append(m.portNames[p.Port], p.Name)
+	}
+	return m
 }
 
 // evaluatePolicy is the closure handed to the proxy manager. It
@@ -329,11 +362,11 @@ func identityOf(svc *types.Service) types.NamespacedName {
 // never crosses the proxy (direct container-IP or internet dials) is
 // out of reach here and needs the kernel-side nftables path — see
 // https://github.com/runestack/rune/issues/194.
-func (s *Subsystem) evaluatePolicy(serviceID string, srcIP net.IP, port int, proto string) policy.Result {
+func (s *Subsystem) evaluatePolicy(serviceID string, srcIP, dstIP net.IP, port int, proto string) policy.Result {
 	peer := s.localInstances.PeerInfoFor(srcIP)
 	s.policyMu.RLock()
 	dstPolicy := s.policies[serviceID]
-	dst := s.svcIdents[serviceID]
+	dst := s.svcMeta[serviceID]
 	var srcPolicy *policy.Compiled
 	if peer.SameNode && peer.Identity != nil {
 		srcPolicy = s.policyByName[types.NamespacedName{
@@ -345,11 +378,20 @@ func (s *Subsystem) evaluatePolicy(serviceID string, srcIP net.IP, port int, pro
 
 	if srcPolicy.HasEgressRules() {
 		res := srcPolicy.EvaluateEgress(policy.EgressTarget{
-			Service:   dst.Name,
-			Namespace: dst.Namespace,
+			Service:   dst.ident.Name,
+			Namespace: dst.ident.Namespace,
 			Port:      port,
+			PortNames: dst.portNames[port],
+			IP:        dstIP,
 		}, proto)
 		if res.Decision == policy.DecisionDeny {
+			return res
+		}
+		// Report the egress allow when the destination has no ingress
+		// policy of its own; otherwise EvaluateIngress returns
+		// DecisionNoPolicy and the allow counter never sees an egress
+		// decision at all.
+		if res.Decision == policy.DecisionAllow && !dstPolicy.HasIngressRules() {
 			return res
 		}
 	}

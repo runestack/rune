@@ -325,6 +325,12 @@ func TestPolicyEgress_DenySameNodeSource(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("expected empty (egress denied), got %q", got)
 	}
+	// An empty read alone also happens on no_endpoints/dial_failed, so
+	// pin the actual decision too.
+	res := dp.evaluatePolicy("api-id", net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), proxyPort, "tcp")
+	if res.Decision != policy.DecisionDeny || res.Direction != policy.DirectionEgress {
+		t.Fatalf("want egress deny, got %v/%s (%s)", res.Decision, res.Reason, res.Direction)
+	}
 }
 
 func TestPolicyEgress_AllowMatchingRule(t *testing.T) {
@@ -404,16 +410,31 @@ func TestPolicyEgress_UnregisterClearsSourcePolicy(t *testing.T) {
 	}
 
 	src := net.ParseIP("127.0.0.1")
-	res := dp.evaluatePolicy("api-id3", src, 8080, "tcp")
-	if res.Decision != policy.DecisionDeny || res.Reason != policy.ReasonDeniedEgress {
-		t.Fatalf("want egress deny, got %v/%s", res.Decision, res.Reason)
+	dst := net.ParseIP("127.0.0.1")
+	res := dp.evaluatePolicy("api-id3", src, dst, 8080, "tcp")
+	if res.Decision != policy.DecisionDeny || res.Direction != policy.DirectionEgress {
+		t.Fatalf("want egress deny, got %v/%s (%s)", res.Decision, res.Reason, res.Direction)
+	}
+	// The denial must be attributed to the source, whose rules denied
+	// it — not to the destination, which has no policy at all.
+	if res.PolicyOwner.Name != "web" || res.PolicyOwner.Namespace != "prod" {
+		t.Fatalf("want denial attributed to prod/web, got %q", res.PolicyOwner.String())
 	}
 
-	// Dropping the source service removes its egress policy → open.
+	// Tearing down listeners must NOT drop policy: registerServiceDataplane
+	// calls UnregisterService mid-reconcile on a VIP change, and the
+	// source's instances keep running across that window.
 	dp.UnregisterService("web-id3")
-	res = dp.evaluatePolicy("api-id3", src, 8080, "tcp")
+	res = dp.evaluatePolicy("api-id3", src, dst, 8080, "tcp")
+	if res.Decision != policy.DecisionDeny {
+		t.Fatalf("listener teardown must not open an enforcement hole, got %v/%s", res.Decision, res.Reason)
+	}
+
+	// Deleting the service is the one thing that drops its policy.
+	dp.dropPolicy("web-id3")
+	res = dp.evaluatePolicy("api-id3", src, dst, 8080, "tcp")
 	if res.Decision == policy.DecisionDeny {
-		t.Fatalf("want allow after unregister, got %v/%s", res.Decision, res.Reason)
+		t.Fatalf("want allow after delete, got %v/%s", res.Decision, res.Reason)
 	}
 }
 
@@ -451,9 +472,119 @@ func TestPolicyEgress_PortlessSourceIsStillPolicied(t *testing.T) {
 		t.Fatalf("RegisterService(api): %v", err)
 	}
 
-	res := dp.evaluatePolicy("api-id4", net.ParseIP("127.0.0.1"), 8080, "tcp")
-	if res.Decision != policy.DecisionDeny || res.Reason != policy.ReasonDeniedEgress {
+	res := dp.evaluatePolicy("api-id4", net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1"), 8080, "tcp")
+	if res.Decision != policy.DecisionDeny || res.Direction != policy.DirectionEgress {
 		t.Fatalf("want egress deny for port-less source, got %v/%s", res.Decision, res.Reason)
+	}
+}
+
+// Egress and ingress compose as AND: passing the source's egress rules
+// does not exempt a connection from the destination's ingress rules.
+func TestPolicyEgress_AllowStillSubjectToIngress(t *testing.T) {
+	dp := startDataplane(t)
+	publishLocalIdentity(t, dp, "web", "prod")
+
+	// web may dial api...
+	if err := dp.RegisterService(&types.Service{
+		ID: "web-id5", Name: "web", Namespace: "prod",
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Egress: []types.EgressRule{
+				{To: []types.NetworkPolicyPeer{{Service: "api", Namespace: "prod"}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterService(web): %v", err)
+	}
+	// ...but api only accepts 10.0.0.0/24, and the peer is loopback.
+	if err := dp.RegisterService(&types.Service{
+		ID: "api-id5", Name: "api", Namespace: "prod",
+		Discovery: &types.ServiceDiscovery{VIP: "ignored"},
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Ingress: []types.IngressRule{
+				{From: []types.NetworkPolicyPeer{{CIDR: "10.0.0.0/24"}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterService(api): %v", err)
+	}
+
+	lo := net.ParseIP("127.0.0.1")
+	res := dp.evaluatePolicy("api-id5", lo, lo, 8080, "tcp")
+	if res.Decision != policy.DecisionDeny {
+		t.Fatalf("egress allow must not bypass ingress: got %v/%s", res.Decision, res.Reason)
+	}
+	if res.Direction != policy.DirectionIngress {
+		t.Fatalf("want the ingress rules to be the denier, got %q", res.Direction)
+	}
+	if res.PolicyOwner.Name != "api" {
+		t.Fatalf("want denial attributed to api, got %q", res.PolicyOwner.String())
+	}
+}
+
+// An explicit egress allow is reported as an allow when the
+// destination carries no ingress policy of its own; otherwise egress
+// decisions never reach the allow counter.
+func TestPolicyEgress_AllowIsReportedWhenDestinationIsOpen(t *testing.T) {
+	dp := startDataplane(t)
+	publishLocalIdentity(t, dp, "web", "prod")
+
+	if err := dp.RegisterService(&types.Service{
+		ID: "web-id6", Name: "web", Namespace: "prod",
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Egress: []types.EgressRule{
+				{To: []types.NetworkPolicyPeer{{Service: "api", Namespace: "prod"}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterService(web): %v", err)
+	}
+	if err := dp.RegisterService(&types.Service{
+		ID: "api-id6", Name: "api", Namespace: "prod",
+		Discovery: &types.ServiceDiscovery{VIP: "ignored"},
+	}); err != nil {
+		t.Fatalf("RegisterService(api): %v", err)
+	}
+
+	lo := net.ParseIP("127.0.0.1")
+	res := dp.evaluatePolicy("api-id6", lo, lo, 8080, "tcp")
+	if res.Decision != policy.DecisionAllow || res.Direction != policy.DirectionEgress {
+		t.Fatalf("want reported egress allow, got %v/%s (%s)", res.Decision, res.Reason, res.Direction)
+	}
+}
+
+// A source whose IP is not in the LocalInstances table cannot be
+// identified, so its egress rules are not consulted and the
+// connection proceeds to the destination's ingress check. This is a
+// deliberate choice — the ingress controller and host-originated
+// dials legitimately have no instance identity — and it is the reason
+// egress is containment between known services, not a boundary that
+// holds against an unidentified source.
+func TestPolicyEgress_UnidentifiedSourceIsNotEgressFiltered(t *testing.T) {
+	dp := startDataplane(t)
+	publishLocalIdentity(t, dp, "web", "prod")
+
+	if err := dp.RegisterService(&types.Service{
+		ID: "web-id7", Name: "web", Namespace: "prod",
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Egress: []types.EgressRule{
+				{To: []types.NetworkPolicyPeer{{Service: "db", Namespace: "infra"}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterService(web): %v", err)
+	}
+	if err := dp.RegisterService(&types.Service{
+		ID: "api-id7", Name: "api", Namespace: "prod",
+		Discovery: &types.ServiceDiscovery{VIP: "ignored"},
+	}); err != nil {
+		t.Fatalf("RegisterService(api): %v", err)
+	}
+
+	// 10.1.2.3 is in no LocalInstances entry.
+	unknown := net.ParseIP("10.1.2.3")
+	res := dp.evaluatePolicy("api-id7", unknown, net.ParseIP("127.0.0.1"), 8080, "tcp")
+	if res.Decision == policy.DecisionDeny {
+		t.Fatalf("unidentified source is not egress-filtered; got %v/%s", res.Decision, res.Reason)
 	}
 }
 

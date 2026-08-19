@@ -50,8 +50,8 @@ func newMetrics() *Metrics {
 		}, []string{"service", "protocol"}),
 		PolicyDrops: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "rune_policy_drops_total",
-			Help: "Connections rejected by network policy, labelled by destination service and reason.",
-		}, []string{"service", "namespace", "policy", "reason"}),
+			Help: "Connections rejected by network policy. service/namespace are the destination; policy is the service whose rules denied (the source, for egress).",
+		}, []string{"service", "namespace", "policy", "direction", "reason"}),
 		PolicyAllows: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "rune_policy_allows_total",
 			Help: "Connections explicitly allowed by network policy.",
@@ -108,8 +108,8 @@ func (m *Metrics) setWatchLag(s float64) { m.WatchLag.Set(s) }
 //nolint:unused // wired in RUNE-114 (nftables Phase 2)
 func (m *Metrics) setNftablesRules(n int) { m.NftablesRules.Set(float64(n)) }
 
-func (m *Metrics) incPolicyDrop(svc, ns, pol, reason string) {
-	m.PolicyDrops.WithLabelValues(svc, ns, pol, reason).Inc()
+func (m *Metrics) incPolicyDrop(svc, ns, pol, direction, reason string) {
+	m.PolicyDrops.WithLabelValues(svc, ns, pol, direction, reason).Inc()
 }
 func (m *Metrics) incPolicyAllow(svc, ns, pol string) {
 	m.PolicyAllows.WithLabelValues(svc, ns, pol).Inc()

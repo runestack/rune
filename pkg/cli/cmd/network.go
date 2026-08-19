@@ -30,6 +30,14 @@ func printExplain(svc *types.Service, out policy.ExplainOutput) error {
 		for i, r := range out.Egress {
 			fmt.Printf("  [%d] peers=%v ports=%v\n", i, r.Peers, r.Ports)
 		}
+		// State the boundary where the operator is actually looking.
+		// Egress is enforced in the service proxy, so it constrains
+		// service-to-service traffic only; it is not an exfiltration
+		// boundary until the kernel path lands (#194). Printed only
+		// when egress rules exist, so it reaches exactly the people
+		// who need it.
+		fmt.Println("note: egress is enforced for service-to-service traffic.")
+		fmt.Println("      Traffic to the internet or to raw container IPs is not filtered.")
 	}
 	return nil
 }

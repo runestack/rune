@@ -83,7 +83,17 @@ const (
 	ReasonDeniedNoMatch        Reason = "no_matching_rule"
 	ReasonDeniedPort           Reason = "port_not_allowed"
 	ReasonDeniedCrossNodeIdent Reason = "cross_node_identity_unresolved"
-	ReasonDeniedEgress         Reason = "egress_no_matching_rule"
+)
+
+// Direction says which half of a policy produced a decision. It is a
+// separate field rather than a suffix on Reason so every reason token
+// is queryable per-direction, and so "whose rule was this?" has one
+// answer instead of eight.
+type Direction string
+
+const (
+	DirectionIngress Direction = "ingress"
+	DirectionEgress  Direction = "egress"
 )
 
 // PeerInfo describes the source of an inbound connection. Same-node
@@ -107,6 +117,15 @@ type EgressTarget struct {
 	Service   string
 	Namespace string
 	Port      int
+	// PortNames are the names the destination service gives Port in
+	// its own spec, so a rule written `ports: [postgres]` resolves.
+	// Empty when the destination's spec is unknown.
+	PortNames []string
+	// IP is the address the client is actually dialing — the
+	// destination service's VIP. A CIDR peer matches against it,
+	// because on this path the VIP *is* the packet's destination.
+	// Nil when unknown, in which case CIDR peers cannot match.
+	IP net.IP
 }
 
 // Compiled is the evaluator-friendly form of a ServiceNetworkPolicy.
@@ -119,10 +138,20 @@ type Compiled struct {
 	ServiceID string
 	// Namespace is the destination service's namespace.
 	Namespace string
+	// ServiceName is the destination service's name. Policy rules
+	// address services by name, so this is what denials are
+	// attributed to.
+	ServiceName string
 	// PolicyName is a stable label for log/metric attribution. We
 	// don't have a separate Policy resource yet, so this is just
 	// the service ID.
 	PolicyName string
+
+	// portNames maps this service's own port numbers to the names its
+	// spec gives them, so an ingress rule written `ports: [http]`
+	// resolves. Egress rules name the *destination's* ports, which
+	// arrive via EgressTarget.PortNames instead.
+	portNames map[int][]string
 
 	// hasIngress controls default-deny activation for ingress.
 	hasIngress bool
@@ -176,7 +205,13 @@ type portSet struct {
 type portRule struct {
 	// proto is "" (any), "tcp", or "udp".
 	proto string
-	port  int
+	// port is the numeric port, or 0 when the rule names one instead.
+	port int
+	// name is a service port name ("http", "postgres") when the rule
+	// was written with a name. Service specs name their ports and
+	// users naturally reuse those names here, so names resolve
+	// against the target service's port list at evaluation time.
+	name string
 }
 
 // HasIngressRules reports whether default-deny ingress is in effect.
@@ -197,12 +232,26 @@ func Compile(svc *types.Service) *Compiled {
 	if len(pol.Ingress) == 0 && len(pol.Egress) == 0 {
 		return nil
 	}
+	name := svc.Name
+	if name == "" {
+		name = svc.ID
+	}
 	c := &Compiled{
-		ServiceID:  svc.ID,
-		Namespace:  svc.Namespace,
-		PolicyName: svc.ID,
-		hasIngress: len(pol.Ingress) > 0,
-		hasEgress:  len(pol.Egress) > 0,
+		ServiceID:   svc.ID,
+		ServiceName: name,
+		Namespace:   svc.Namespace,
+		PolicyName:  svc.ID,
+		hasIngress:  len(pol.Ingress) > 0,
+		hasEgress:   len(pol.Egress) > 0,
+	}
+	for _, sp := range svc.Ports {
+		if sp.Name == "" || sp.Port <= 0 {
+			continue
+		}
+		if c.portNames == nil {
+			c.portNames = make(map[int][]string, len(svc.Ports))
+		}
+		c.portNames[sp.Port] = append(c.portNames[sp.Port], sp.Name)
 	}
 	for _, r := range pol.Ingress {
 		c.ingress = append(c.ingress, ingressRule{
@@ -283,21 +332,38 @@ func parsePort(s string) (portRule, bool) {
 		}
 	}
 	p, err := strconv.Atoi(s)
-	if err != nil || p <= 0 || p > 65535 {
+	if err != nil {
+		// Not a number, so it names a port: `ports: [http]` refers to
+		// the `name: http` entry in the target service's port list.
+		// Rejecting these silently turned a rule into a deny-all.
+		return portRule{proto: proto, name: s}, true
+	}
+	if p <= 0 || p > 65535 {
 		return portRule{}, false
 	}
 	return portRule{proto: proto, port: p}, true
 }
 
-func (ps portSet) matches(port int, proto string) bool {
+// matches reports whether (port, proto) is allowed. names are the
+// names the target service gives this port, used to resolve rules
+// written with a port name.
+func (ps portSet) matches(port int, proto string, names []string) bool {
 	if ps.all {
 		return true
 	}
 	for _, p := range ps.ports {
-		if p.port != port {
+		if p.proto != "" && p.proto != proto {
 			continue
 		}
-		if p.proto == "" || p.proto == proto {
+		if p.name != "" {
+			for _, n := range names {
+				if n == p.name {
+					return true
+				}
+			}
+			continue
+		}
+		if p.port == port {
 			return true
 		}
 	}
@@ -312,6 +378,20 @@ type Result struct {
 	// MatchedRule is the index into the ingress/egress slice that
 	// produced an Allow decision. -1 when not applicable.
 	MatchedRule int
+	// Direction says which half of a policy decided this.
+	Direction Direction
+	// PolicyOwner is the service whose policy produced the decision —
+	// the destination for ingress, the *source* for egress. Denials
+	// are attributed to it so an operator opens the right spec.
+	PolicyOwner types.NamespacedName
+}
+
+// owner returns the NamespacedName a decision should be attributed to.
+func (c *Compiled) owner() types.NamespacedName {
+	if c == nil {
+		return types.NamespacedName{}
+	}
+	return types.NamespacedName{Namespace: c.Namespace, Name: c.ServiceName}
 }
 
 // EvaluateIngress decides whether peer is allowed to reach the
@@ -323,20 +403,27 @@ func (c *Compiled) EvaluateIngress(peer PeerInfo, port int, proto string) Result
 	if c == nil || !c.hasIngress {
 		return Result{Decision: DecisionNoPolicy, Reason: ReasonNoPolicy, MatchedRule: -1}
 	}
+	names := c.portNames[port]
 	for i, r := range c.ingress {
-		if !r.ports.matches(port, proto) {
+		if !r.ports.matches(port, proto, names) {
 			continue
 		}
 		for _, m := range r.peers {
 			if reason, ok := matchPeer(m, peer); ok {
-				return Result{Decision: DecisionAllow, Reason: reason, MatchedRule: i}
+				return Result{
+					Decision:    DecisionAllow,
+					Reason:      reason,
+					MatchedRule: i,
+					Direction:   DirectionIngress,
+					PolicyOwner: c.owner(),
+				}
 			}
 		}
 	}
 	// Default-deny: did any rule match the port at all?
 	portReachable := false
 	for _, r := range c.ingress {
-		if r.ports.matches(port, proto) {
+		if r.ports.matches(port, proto, names) {
 			portReachable = true
 			break
 		}
@@ -357,7 +444,13 @@ func (c *Compiled) EvaluateIngress(peer PeerInfo, port int, proto string) Result
 			}
 		}
 	}
-	return Result{Decision: DecisionDeny, Reason: reason, MatchedRule: -1}
+	return Result{
+		Decision:    DecisionDeny,
+		Reason:      reason,
+		MatchedRule: -1,
+		Direction:   DirectionIngress,
+		PolicyOwner: c.owner(),
+	}
 }
 
 // EvaluateEgress decides whether the service this Compiled belongs
@@ -367,16 +460,39 @@ func (c *Compiled) EvaluateEgress(target EgressTarget, proto string) Result {
 		return Result{Decision: DecisionNoPolicy, Reason: ReasonNoPolicy, MatchedRule: -1}
 	}
 	for i, r := range c.egress {
-		if !r.ports.matches(target.Port, proto) {
+		if !r.ports.matches(target.Port, proto, target.PortNames) {
 			continue
 		}
 		for _, m := range r.peers {
 			if reason, ok := matchEgressPeer(m, target); ok {
-				return Result{Decision: DecisionAllow, Reason: reason, MatchedRule: i}
+				return Result{
+					Decision:    DecisionAllow,
+					Reason:      reason,
+					MatchedRule: i,
+					Direction:   DirectionEgress,
+					PolicyOwner: c.owner(),
+				}
 			}
 		}
 	}
-	return Result{Decision: DecisionDeny, Reason: ReasonDeniedEgress, MatchedRule: -1}
+	reason := ReasonDeniedNoMatch
+	portReachable := false
+	for _, r := range c.egress {
+		if r.ports.matches(target.Port, proto, target.PortNames) {
+			portReachable = true
+			break
+		}
+	}
+	if !portReachable {
+		reason = ReasonDeniedPort
+	}
+	return Result{
+		Decision:    DecisionDeny,
+		Reason:      reason,
+		MatchedRule: -1,
+		Direction:   DirectionEgress,
+		PolicyOwner: c.owner(),
+	}
 }
 
 func matchPeer(m peerMatcher, peer PeerInfo) (Reason, bool) {
@@ -417,9 +533,17 @@ func matchPeer(m peerMatcher, peer PeerInfo) (Reason, bool) {
 func matchEgressPeer(m peerMatcher, t EgressTarget) (Reason, bool) {
 	switch m.kind {
 	case matcherCIDR:
-		// CIDR egress matches only when target carries an IP via
-		// the dial target. Since we only know svc/ns at egress
-		// time, CIDR egress is a no-op in v1.
+		// The client dials the destination service's VIP, so on this
+		// path the VIP *is* the packet's destination address and is
+		// what a CIDR peer must match. Without it a CIDR peer cannot
+		// match — and since any egress rule activates default-deny,
+		// a CIDR-only policy would otherwise deny everything.
+		if t.IP == nil {
+			return "", false
+		}
+		if m.cidr.Contains(t.IP) {
+			return ReasonAllowedByCIDR, true
+		}
 		return "", false
 	case matcherService:
 		if t.Service != m.service {
@@ -471,18 +595,25 @@ func (c *Compiled) Explain() ExplainOutput {
 		PolicyName: c.PolicyName,
 	}
 	for _, r := range c.ingress {
-		out.Ingress = append(out.Ingress, explainRule(r.peers, r.ports))
+		out.Ingress = append(out.Ingress, explainRule(r.peers, r.ports, DirectionIngress))
 	}
 	for _, r := range c.egress {
-		out.Egress = append(out.Egress, explainRule(r.peers, r.ports))
+		out.Egress = append(out.Egress, explainRule(r.peers, r.ports, DirectionEgress))
 	}
 	out.DefaultDenyIngress = c.hasIngress
 	out.DefaultDenyEgress = c.hasEgress
 	return out
 }
 
-func explainRule(peers []peerMatcher, ports portSet) ExplainRule {
+func explainRule(peers []peerMatcher, ports portSet, dir Direction) ExplainRule {
 	er := ExplainRule{}
+	// The same-node constraint applies to whoever is being identified:
+	// the peer on ingress, the source instance on egress. Saying
+	// "scope=same-node" about an egress *peer* would be meaningless.
+	scope := "scope=same-node"
+	if dir == DirectionEgress {
+		scope = "scope=any-node"
+	}
 	for _, p := range peers {
 		switch p.kind {
 		case matcherService:
@@ -490,23 +621,39 @@ func explainRule(peers []peerMatcher, ports portSet) ExplainRule {
 			if ns == "" {
 				ns = "*"
 			}
-			er.Peers = append(er.Peers, fmt.Sprintf("service=%s ns=%s scope=same-node", p.service, ns))
+			er.Peers = append(er.Peers, fmt.Sprintf("service=%s ns=%s %s", p.service, ns, scope))
 		case matcherNamespace:
-			er.Peers = append(er.Peers, fmt.Sprintf("namespace=%s scope=same-node", p.namespace))
+			er.Peers = append(er.Peers, fmt.Sprintf("namespace=%s %s", p.namespace, scope))
 		case matcherSelector:
-			er.Peers = append(er.Peers, fmt.Sprintf("serviceSelector=%v scope=same-node (v1: never matches)", p.selector))
+			er.Peers = append(er.Peers, fmt.Sprintf("serviceSelector=%v %s (v1: never matches)", p.selector, scope))
 		case matcherCIDR:
-			er.Peers = append(er.Peers, fmt.Sprintf("cidr=%s scope=any", p.cidr.String()))
+			if dir == DirectionEgress {
+				// Egress CIDR matches the destination service's VIP —
+				// the address actually dialed. Say so, rather than
+				// implying it filters arbitrary destinations.
+				er.Peers = append(er.Peers, fmt.Sprintf("cidr=%s scope=destination-vip", p.cidr.String()))
+			} else {
+				er.Peers = append(er.Peers, fmt.Sprintf("cidr=%s scope=any", p.cidr.String()))
+			}
 		}
 	}
-	if ports.all {
+	switch {
+	case ports.all:
 		er.Ports = []string{"*"}
-	} else {
+	case len(ports.ports) == 0:
+		// A rule that can never match any port. Rendering this as an
+		// empty list reads as "unrestricted", which is the opposite.
+		er.Ports = []string{"none (no valid port)"}
+	default:
 		for _, p := range ports.ports {
+			name := p.name
+			if name == "" {
+				name = strconv.Itoa(p.port)
+			}
 			if p.proto == "" {
-				er.Ports = append(er.Ports, strconv.Itoa(p.port))
+				er.Ports = append(er.Ports, name)
 			} else {
-				er.Ports = append(er.Ports, fmt.Sprintf("%d/%s", p.port, p.proto))
+				er.Ports = append(er.Ports, fmt.Sprintf("%s/%s", name, p.proto))
 			}
 		}
 	}
