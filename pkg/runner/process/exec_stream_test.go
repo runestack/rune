@@ -8,6 +8,7 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewProcessExecStream(t *testing.T) {
@@ -45,6 +46,53 @@ func TestNewProcessExecStream(t *testing.T) {
 	// Close and cleanup
 	err = stream.Close()
 	assert.NoError(t, err)
+}
+
+// TestProcessExecStreamOutputSurvivesProcessExit is the regression
+// test for output being lost when the process exits before the caller
+// reads it.
+//
+// ProcessExecStream calls cmd.Wait in a background goroutine to track
+// the exit code. When stdout came from cmd.StdoutPipe, that Wait
+// closed the pipe the moment the process exited, so a short-lived
+// command raced its own reader: Read returned "file already closed"
+// and the output was gone. TestNewProcessExecStream hit this
+// intermittently (reliably under GOMAXPROCS=1); here we wait for the
+// process to exit *first*, so the read is exercised unconditionally.
+func TestProcessExecStreamOutputSurvivesProcessExit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping test in short mode")
+	}
+
+	logger := log.NewLogger()
+	options := runner.ExecOptions{
+		Command: []string{"sh", "-c", "echo 'Hello, World!'; echo 'Error message' >&2"},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream, err := NewProcessExecStream(ctx, "test-instance", options, logger)
+	assert.NoError(t, err)
+	defer stream.Close()
+
+	// Wait for the process to fully exit — and with it, the background
+	// cmd.Wait — before reading anything.
+	require.Eventually(t, func() bool {
+		_, err := stream.ExitCode()
+		return err == nil
+	}, 5*time.Second, 5*time.Millisecond, "process never reported an exit code")
+
+	// Output written before exit must still be readable afterwards.
+	buf := make([]byte, 100)
+	n, err := stream.Read(buf)
+	assert.NoError(t, err)
+	assert.Contains(t, string(buf[:n]), "Hello, World!")
+
+	errBuf := make([]byte, 100)
+	n, err = stream.Stderr().Read(errBuf)
+	assert.NoError(t, err)
+	assert.Contains(t, string(errBuf[:n]), "Error message")
 }
 
 func TestProcessExecStreamExitCode(t *testing.T) {
