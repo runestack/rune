@@ -274,3 +274,53 @@ func (s *Service) RunsTwoCopiesDuringUpdate() bool {
 	}
 	return s.ResolveUpdateParams().Type == UpdateRolling
 }
+
+// UpdateStatus is the progress of an in-flight update: what `rune status`,
+// `describe`, the dashboard and the CLI spinner narrate, and what stall
+// detection keys off. nil on Service means no update is running.
+//
+// The CLI deliberately renders only two of these fractions — replaced and
+// serving — in operator words; the rest are here for the dashboard and for
+// scripting.
+type UpdateStatus struct {
+	// TemplateGeneration is the generation being updated to.
+	TemplateGeneration int64 `json:"templateGeneration,omitempty" yaml:"templateGeneration,omitempty"`
+
+	// Desired is the service's scale.
+	Desired int `json:"desired" yaml:"desired"`
+
+	// Updated is how many instances are at TemplateGeneration.
+	Updated int `json:"updated" yaml:"updated"`
+
+	// UpdatedReady is how many of those are Running.
+	UpdatedReady int `json:"updatedReady" yaml:"updatedReady"`
+
+	// Available is how many instances are serving right now, any generation.
+	Available int `json:"available" yaml:"available"`
+
+	// Outdated is how many instances are still on an older template.
+	Outdated int `json:"outdated" yaml:"outdated"`
+
+	StartedAt time.Time `json:"startedAt" yaml:"startedAt"`
+
+	// LastProgressAt is when Updated/UpdatedReady/Available last increased.
+	// Persisted so a runed restart mid-update does not reset the stall clock
+	// — the same reasoning that made ObservedGeneration a persisted field.
+	LastProgressAt time.Time `json:"lastProgressAt" yaml:"lastProgressAt"`
+
+	// Message is the planner's one-sentence reason.
+	Message string `json:"message,omitempty" yaml:"message,omitempty"`
+}
+
+// Progressed reports whether next represents forward movement from u. Used
+// for stall detection: an update that stops progressing for longer than the
+// stall deadline is declared stalled, which is what lets `cast --atomic`
+// roll a wedged update back.
+func (u *UpdateStatus) Progressed(next *UpdateStatus) bool {
+	if u == nil || next == nil {
+		return true
+	}
+	return next.UpdatedReady > u.UpdatedReady ||
+		next.Available > u.Available ||
+		next.Updated > u.Updated
+}

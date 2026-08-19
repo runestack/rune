@@ -174,6 +174,11 @@ type Service struct {
 	// MinDrainSeconds. Read it via Service.DrainWindow().
 	DrainSeconds *int `json:"drainSeconds,omitempty" yaml:"drainSeconds,omitempty"`
 
+	// Update is the progress of an in-flight update; nil when none is
+	// running. Reconciler-owned observed state, written inside the same CAS
+	// status write as Status/StatusReason (RUNE-042 §8.2).
+	Update *UpdateStatus `json:"update,omitempty" yaml:"update,omitempty"`
+
 	// Metadata for the service
 	Metadata *ServiceMetadata `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 }
@@ -505,6 +510,12 @@ const (
 	ServiceReasonLaunchFailed     = "LaunchFailed"     // runner refused to start the instance
 	ServiceReasonExited           = "Exited"           // instance ran to completion (non-zero or otherwise)
 	ServiceReasonUnknown          = "Unknown"          // no recognisable signal
+
+	// RUNE-042. "Update" is the user-facing word throughout — the spec field
+	// is updateStrategy, so reasons, events, CLI and docs all say update.
+	// "Rollout" and "surge" stay internal vocabulary.
+	ServiceReasonUpdating      = "Updating"      // a rolling update is in progress
+	ServiceReasonUpdateStalled = "UpdateStalled" // no progress within the stall deadline
 )
 
 // DeriveServiceReason inspects an instance's status and message and

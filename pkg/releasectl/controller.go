@@ -47,13 +47,18 @@ type Controller struct {
 // NewController builds a Controller from the orchestrator and store.
 func NewController(orch orchestrator.Orchestrator, st store.Store, logger log.Logger) *Controller {
 	return &Controller{
-		orch:          orch,
-		secrets:       repos.NewSecretRepo(st),
-		configs:       repos.NewConfigRepo(st),
-		volumes:       repos.NewVolumeRepo(st),
-		releases:      repos.NewReleaseRepo(st),
-		log:           logger.WithComponent("release-controller"),
-		verifyTimeout: 5 * time.Minute,
+		orch:     orch,
+		secrets:  repos.NewSecretRepo(st),
+		configs:  repos.NewConfigRepo(st),
+		volumes:  repos.NewVolumeRepo(st),
+		releases: repos.NewReleaseRepo(st),
+		log:      logger.WithComponent("release-controller"),
+		// Must exceed the update stall deadline (types.UpdateStallSeconds,
+		// 600s): a rolling update is slower than the old take-everything-down
+		// deploy, and at 5 minutes `--atomic` would time out and revert a
+		// merely-slow update before stall detection ever declared one
+		// (RUNE-042 §8.3). 15m leaves margin for a slow image pull on top.
+		verifyTimeout: 15 * time.Minute,
 	}
 }
 
