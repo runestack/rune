@@ -15,6 +15,10 @@ import (
 )
 
 // ProcessExecStream implements the runner.ExecStream interface for processes.
+//
+// Callers must Close the stream when done. Its pipes are owned by the
+// stream rather than by exec.Cmd, so — unlike a cmd.StdoutPipe stream —
+// the descriptors are not released implicitly when the process exits.
 type ProcessExecStream struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -116,8 +120,11 @@ func NewProcessExecStream(
 	startErr := cmd.Start()
 
 	// The child has inherited its ends of the pipes, so drop the
-	// parent's copies. Holding them open would keep stdout/stderr from
-	// ever reaching EOF, since the parent would still count as a writer.
+	// parent's copies: that leaves the child (and anything that
+	// inherits these descriptors from it) as the only writers. Keeping
+	// them open here would make the parent a writer too, and stdout and
+	// stderr would never reach EOF at all — EOF arrives once the last
+	// writer closes, so a backgrounded grandchild still holds it off.
 	closeFiles(stdinR, stdoutW, stderrW)
 
 	if startErr != nil {
@@ -133,6 +140,14 @@ func NewProcessExecStream(
 		defer close(stream.doneCh)
 
 		err := cmd.Wait()
+
+		// Mirror what exec.Cmd does with its own pipes: release the
+		// parent's stdin write end as soon as the child is gone.
+		// Without this, a Write parked on a full stdin pipe would stay
+		// parked forever holding s.mutex, and Close — which needs that
+		// mutex before it can cancel and clean up — would wedge behind
+		// it for the life of the process.
+		closeFiles(stream.stdin)
 
 		stream.exitCodeMutex.Lock()
 		defer stream.exitCodeMutex.Unlock()

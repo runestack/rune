@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -93,6 +94,66 @@ func TestProcessExecStreamOutputSurvivesProcessExit(t *testing.T) {
 	n, err = stream.Stderr().Read(errBuf)
 	assert.NoError(t, err)
 	assert.Contains(t, string(errBuf[:n]), "Error message")
+
+	// ...and once drained, the stream must still end. Nothing inherited
+	// these descriptors from the command, so the child was the last
+	// writer and its exit is a real EOF.
+	_, err = stream.Read(buf)
+	assert.ErrorIs(t, err, io.EOF)
+}
+
+// TestProcessExecStreamCloseUnblocksParkedWrite pins the other half of
+// pipe ownership: releasing the parent's stdin write end when the child
+// exits.
+//
+// exec.Cmd used to do this for us — cmd.Wait closes the pipes it owns,
+// which unparked any Write blocked on a full stdin pipe. Owning the
+// pipes ourselves means we have to do it, and the first cut of that
+// change did not: a parked Write held s.mutex forever, and Close, which
+// needs the mutex before it can cancel and clean up, wedged behind it.
+// In the daemon that is a StreamExec handler goroutine stuck for good.
+func TestProcessExecStreamCloseUnblocksParkedWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping test in short mode")
+	}
+
+	logger := log.NewLogger()
+	// The child exits immediately but hands stdin to a grandchild, so
+	// the pipe stays open and the parked write cannot drain.
+	options := runner.ExecOptions{
+		Command: []string{"sh", "-c", "exec 3<&0; sleep 10 0<&3 & exit 0"},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream, err := NewProcessExecStream(ctx, "test-instance", options, logger)
+	require.NoError(t, err)
+
+	// Park a write larger than the pipe buffer, so it blocks holding
+	// the stream mutex.
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		_, _ = stream.Write(make([]byte, 1<<20))
+	}()
+
+	require.Eventually(t, func() bool {
+		_, err := stream.ExitCode()
+		return err == nil
+	}, 5*time.Second, 5*time.Millisecond, "child never exited")
+
+	closeDone := make(chan struct{})
+	go func() {
+		defer close(closeDone)
+		_ = stream.Close()
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close wedged behind a write parked on a full stdin pipe")
+	}
 }
 
 func TestProcessExecStreamExitCode(t *testing.T) {
