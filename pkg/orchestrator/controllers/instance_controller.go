@@ -126,6 +126,12 @@ type InstanceController interface {
 	// isInstanceCompatibleWithService checks if an instance is compatible with a service
 	isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string)
 
+	// classifyInstance is the richer view isInstanceCompatibleWithService
+	// wraps: it distinguishes a BROKEN instance (repair now, unbudgeted)
+	// from an OUTDATED one (serving, replacement governed by the update
+	// budget). See CompatClass.
+	classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict
+
 	// RepublishServiceByInstance recomputes the data-plane endpoint set
 	// for the service owning the given instance. Exposed for callers
 	// outside instanceController that change instance reachability
@@ -861,17 +867,36 @@ func (c *instanceController) UpdateInstance(ctx context.Context, service *types.
 		return fmt.Errorf("failed to get runner for instance: %w", err)
 	}
 
-	// Check if the instance is compatible with the current service definition
-	isCompatible, reason := c.isInstanceCompatibleWithService(ctx, instance, service)
-	if !isCompatible {
-		c.logger.Info("Instance is not compatible with current service definition, recreation required",
+	// Classify the instance against the current service definition.
+	//
+	// Only BROKEN instances get the recreation error here. An OUTDATED
+	// instance is serving fine and its replacement is the update budget's
+	// decision, not this function's (RUNE-042 §6.3): UpdateInstance is
+	// called on every reconcile for every surviving instance, so returning
+	// the recreation error for outdated ones would destroy them through this
+	// path regardless of any budget — the budget would govern nothing.
+	//
+	// This is behaviour-preserving today: the reconciler's ensure* loops
+	// still delete outdated instances themselves (they act on the boolean
+	// view before ever calling here), so the leave-alone branch only absorbs
+	// the mid-reconcile race this used to recreate on. Phase 4 moves that
+	// decision into the planner and this branch becomes load-bearing.
+	verdict := c.classifyInstance(ctx, instance, service)
+	switch verdict.Class {
+	case CompatBroken:
+		c.logger.Info("Instance is broken, recreation required",
 			log.Str("instance", instance.ID),
 			log.Str("service", service.Name),
-			log.Str("reason", reason))
-
-		// For now, we'll stop and return an error indicating that recreation is needed
-		// The caller should handle the recreation
-		return fmt.Errorf("instance %s requires recreation to update: %s", instance.ID, reason)
+			log.Str("reason", verdict.Reason))
+		// Stop and return an error indicating that recreation is needed;
+		// the caller handles the recreation.
+		return fmt.Errorf("instance %s requires recreation to update: %s", instance.ID, verdict.Reason)
+	case CompatOutdated:
+		c.logger.Debug("Instance is outdated; leaving replacement to the update planner",
+			log.Str("instance", instance.ID),
+			log.Str("service", service.Name),
+			log.Str("reason", verdict.Reason))
+		return nil
 	}
 
 	// For compatible instances, we can apply in-place updates
@@ -2028,69 +2053,90 @@ func (c *instanceController) collectRunningInstances(ctx context.Context) (map[s
 	return instances, nil
 }
 
-// isInstanceCompatibleWithService checks if an instance is compatible with a service
-func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string) {
-	// Check if the instance belongs to the correct service
+// CompatClass is the outcome of comparing an instance against its service's
+// current spec. The distinction is the heart of RUNE-042: the old single
+// boolean conflated two categories with opposite urgency, so a template
+// change and a crashed container took the same code path — delete everything,
+// recreate everything. A rate limit on that boolean would also have throttled
+// crash recovery, which is why the split has to come first.
+type CompatClass int
+
+const (
+	// CompatOK — the instance matches the spec; leave it alone.
+	CompatOK CompatClass = iota
+
+	// CompatBroken — the instance is not serving anyone (crashed, terminal
+	// in the runner, unreachable, or owned by a different service). Repair
+	// immediately and unbudgeted: waiting cannot help, and no traffic is
+	// lost by replacing it now.
+	CompatBroken
+
+	// CompatOutdated — the instance is serving fine, it is just running an
+	// older template. Replacement is voluntary, so it is what the update
+	// budget governs (Phase 4). Until then, callers treat it exactly as they
+	// treated `false`.
+	CompatOutdated
+)
+
+// CompatVerdict carries the class plus the human-facing reason that has
+// always been logged and surfaced in events.
+type CompatVerdict struct {
+	Class  CompatClass
+	Reason string
+}
+
+// Compatible reports whether the instance needs no action — the predicate the
+// pre-RUNE-042 boolean expressed.
+func (v CompatVerdict) Compatible() bool { return v.Class == CompatOK }
+
+// classifyInstance compares an instance against its service's current spec.
+//
+// Check order matters and differs from the pre-RUNE-042 function in one
+// deliberate way: the runner-liveness checks now run BEFORE the template
+// generation check. In the old order an instance that was dead in the runner
+// but also on an old template reported "template changed" and would, once the
+// budget exists, be treated as a serving instance awaiting a voluntary
+// replacement — counted as available, retired under budget. Classification
+// has to ask "is it alive?" before "is it current?".
+func (c *instanceController) classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict {
+	// Belongs to a different service: not this service's instance at all.
 	if instance.ServiceID != service.ID {
-		return false, "instance belongs to different service"
+		return CompatVerdict{CompatBroken, "instance belongs to different service"}
 	}
 
 	// Stuck-in-create record: Status=Failed (or Stalled) but a
 	// container was never successfully created for this UUID
 	// (precondition failure such as StorageClassMissing, missing
 	// secret, image-pull error). The slot is legitimately held by
-	// this record — returning false would trigger
+	// this record — classifying it as anything but OK would trigger
 	// tombstone+recreate-with-new-UUID every reconcile tick, the
 	// exact churn that RUNE-BUG-RECONCILER-CHURN-ON-STABLE-PRECONDITION-FAILURE
-	// describes. Return true so the reconciler leaves the record in
+	// describes. Report OK so the reconciler leaves the record in
 	// place; the reconciler's retry-in-place branch handles backoff
 	// (Failed) or holds-without-retry (Stalled — operator must run
 	// `rune restart instance` or `rune cast` to re-arm).
+	//
+	// This guard stays FIRST and stays OK. Everything below assumes a
+	// container existed at some point.
 	if instance.ContainerEverCreatedAt == nil &&
 		(instance.Status == types.InstanceStatusFailed || instance.Status == types.InstanceStatusStalled) {
-		return true, ""
+		return CompatVerdict{CompatOK, ""}
 	}
 
-	// Check if the instance is in a failed state
+	// --- liveness first: is this instance serving anyone? ---
+
+	// Recorded terminal state.
 	if instance.Status == types.InstanceStatusFailed ||
 		instance.Status == types.InstanceStatusExited ||
 		instance.Status == types.InstanceStatusUnknown {
-		return false, fmt.Sprintf("instance is in failed state: %s", string(instance.Status))
+		return CompatVerdict{CompatBroken,
+			fmt.Sprintf("instance is in failed state: %s", string(instance.Status))}
 	}
 
-	// Check the service TEMPLATE generation — not Generation, which also
-	// advances on scale changes (RFC #129 Phase 2). Comparing Generation here
-	// made every scale op recreate its surviving containers (issue #142); the
-	// template counter only moves on cast/force, where recreation is correct.
-	// Pre-migration state is safe by construction: services from before this
-	// change have TemplateGeneration 0, which is never "newer" than any
-	// recorded instance generation, so nothing bounces until the next real
-	// cast stamps it.
-	if instance.Metadata != nil {
-		if instanceGen := instance.Metadata.ServiceGeneration; instanceGen != 0 {
-			if instanceGen < service.Metadata.TemplateGeneration {
-				c.logger.Debug("Service template changed, instance needs recreation",
-					log.Str("instance", instance.ID),
-					log.Int64("instance_generation", instanceGen),
-					log.Int64("template_generation", service.Metadata.TemplateGeneration))
-				return false, fmt.Sprintf("service template changed: %d -> %d", instanceGen, service.Metadata.TemplateGeneration)
-			}
-		} else {
-			// If the instance has no recorded generation but the service's
-			// template has been stamped, recreate to adopt the template.
-			if service.Metadata.TemplateGeneration > 0 {
-				c.logger.Debug("Instance missing template generation, needs recreation",
-					log.Str("instance", instance.ID),
-					log.Int64("template_generation", service.Metadata.TemplateGeneration))
-				return false, "instance missing service template generation"
-			}
-		}
-	}
-
-	// Get the current runner for the instance
+	// Get the current runner for the instance.
 	runner, err := c.runnerManager.GetInstanceRunner(instance)
 	if err != nil {
-		return false, fmt.Sprintf("failed to get runner: %v", err)
+		return CompatVerdict{CompatBroken, fmt.Sprintf("failed to get runner: %v", err)}
 	}
 
 	// Check if the instance still exists in the runner. The Docker
@@ -2103,59 +2149,89 @@ func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context
 	prevContainerID := instance.ContainerID
 	status, err := runner.Status(ctx, instance)
 	if err != nil {
-		return false, fmt.Sprintf("instance not found in runner: %v", err)
+		return CompatVerdict{CompatBroken, fmt.Sprintf("instance not found in runner: %v", err)}
 	}
 	if instance.ContainerID != prevContainerID {
 		c.persistHealedContainerMapping(ctx, instance)
 	}
 
-	// If instance exists but is in a terminal state, it's incompatible
+	// Alive in the store but terminal in the runner.
 	if status == types.InstanceStatusExited || status == types.InstanceStatusFailed {
-		return false, "instance is in terminal state in the runner"
+		return CompatVerdict{CompatBroken, "instance is in terminal state in the runner"}
 	}
 
-	// For Docker-based instances, perform additional checks
+	// --- then currency: is this instance running the current template? ---
+
+	// Check the service TEMPLATE generation — not Generation, which also
+	// advances on scale changes (RFC #129 Phase 2). Comparing Generation here
+	// made every scale op recreate its surviving containers (issue #142); the
+	// template counter only moves on a real template change, where
+	// replacement is correct. Pre-migration state is safe by construction:
+	// services from before that change have TemplateGeneration 0, which is
+	// never "newer" than any recorded instance generation, so nothing bounces
+	// until the next cast stamps it.
+	if instance.Metadata != nil {
+		if instanceGen := instance.Metadata.ServiceGeneration; instanceGen != 0 {
+			if instanceGen < service.Metadata.TemplateGeneration {
+				c.logger.Debug("Service template changed, instance is outdated",
+					log.Str("instance", instance.ID),
+					log.Int64("instance_generation", instanceGen),
+					log.Int64("template_generation", service.Metadata.TemplateGeneration))
+				return CompatVerdict{CompatOutdated,
+					fmt.Sprintf("service template changed: %d -> %d", instanceGen, service.Metadata.TemplateGeneration)}
+			}
+		} else if service.Metadata.TemplateGeneration > 0 {
+			// No recorded generation but the service's template has been
+			// stamped: adopt the template by replacement.
+			c.logger.Debug("Instance missing template generation, is outdated",
+				log.Str("instance", instance.ID),
+				log.Int64("template_generation", service.Metadata.TemplateGeneration))
+			return CompatVerdict{CompatOutdated, "instance missing service template generation"}
+		}
+	}
+
+	// For Docker-based instances, perform additional template checks. These
+	// predate TemplateGeneration and are largely redundant with it now, but
+	// they still catch drift on a service whose template counter has not been
+	// stamped yet (pre-migration records).
 	if instance.ContainerID != "" && service.Runtime == "docker" {
-		// Check if image has changed
-		// This would require the Instance to store the image it was created with
 		if instance.Metadata != nil {
-			// Look for stored image information in the metadata
 			if instance.Metadata.Image != "" {
 				if instance.Metadata.Image != service.Image {
-					return false, fmt.Sprintf("image changed: %s -> %s", instance.Metadata.Image, service.Image)
+					return CompatVerdict{CompatOutdated,
+						fmt.Sprintf("image changed: %s -> %s", instance.Metadata.Image, service.Image)}
 				}
 			} else {
-				// If we can't determine the original image, be cautious and recreate
-				c.logger.Debug("Cannot determine original image for instance, assuming incompatible")
-				return false, "cannot determine original image"
+				// If we can't determine the original image, be cautious and replace.
+				c.logger.Debug("Cannot determine original image for instance, assuming outdated")
+				return CompatVerdict{CompatOutdated, "cannot determine original image"}
 			}
 		}
 
 		// Check for significant resource changes
 		if service.Resources.CPU.Limit != "" || service.Resources.Memory.Limit != "" {
-			// If instance doesn't have resources configured but service does
 			if instance.Resources == nil ||
 				(instance.Resources.CPU.Limit != service.Resources.CPU.Limit) ||
 				(instance.Resources.Memory.Limit != service.Resources.Memory.Limit) {
-				return false, "resource requirements changed"
+				return CompatVerdict{CompatOutdated, "resource requirements changed"}
 			}
 		}
 
-		// Check for port mapping changes
-		// This is more complex and would need to compare port configurations
-
-		// Check for significant environment changes
-		// Partial environment changes might be fine, but essential vars should match
+		// Check for significant environment changes. Note this is
+		// one-directional — it only checks that every SERVICE env var is
+		// present and equal on the instance, so a REMOVED var does not show
+		// up here. TemplateGeneration does move on removal, so the case is
+		// covered; this loop is the pre-migration fallback.
 		if len(service.Env) > 0 {
 			for key, value := range service.Env {
 				// Skip RUNE internal environment variables
 				if len(key) > 5 && key[:5] == "RUNE_" {
 					continue
 				}
-
 				instanceValue, exists := instance.Environment[key]
 				if !exists || instanceValue != value {
-					return false, fmt.Sprintf("environment variable %s changed or missing", key)
+					return CompatVerdict{CompatOutdated,
+						fmt.Sprintf("environment variable %s changed or missing", key)}
 				}
 			}
 		}
@@ -2163,22 +2239,27 @@ func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context
 
 	// For process-based instances, perform process-specific checks
 	if instance.PID != 0 && service.Runtime == "process" {
-		// Check command consistency
 		if instance.Process != nil && service.Process != nil {
 			if instance.Process.Command != service.Process.Command ||
 				!areStringSlicesEqual(instance.Process.Args, service.Process.Args) {
-				return false, "process command or arguments changed"
+				return CompatVerdict{CompatOutdated, "process command or arguments changed"}
 			}
-
-			// Check for working directory changes
 			if instance.Process.WorkingDir != service.Process.WorkingDir {
-				return false, "process working directory changed"
+				return CompatVerdict{CompatOutdated, "process working directory changed"}
 			}
 		}
 	}
 
-	// If we get here, the instance is compatible
-	return true, ""
+	return CompatVerdict{CompatOK, ""}
+}
+
+// isInstanceCompatibleWithService is the boolean view of classifyInstance,
+// kept for callers that only need "does this need action" — the reconciler's
+// ensure* loops, which still delete outdated instances themselves until the
+// update budget lands in Phase 4.
+func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string) {
+	v := c.classifyInstance(ctx, instance, service)
+	return v.Compatible(), v.Reason
 }
 
 // prepareEnvVars prepares environment variables for an instance

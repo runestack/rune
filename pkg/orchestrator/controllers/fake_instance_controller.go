@@ -521,6 +521,18 @@ func (c *FakeInstanceController) WithdrawServiceInstances(ctx context.Context, s
 	}
 }
 
+// classifyInstance mirrors the real controller's classifier for the fake:
+// it defers to whatever isInstanceCompatibleWithService is configured to
+// return, mapping incompatible to CompatBroken (the pre-RUNE-042 meaning of
+// `false`, and the class that still triggers immediate replacement).
+func (c *FakeInstanceController) classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict {
+	ok, reason := c.isInstanceCompatibleWithService(ctx, instance, service)
+	if ok {
+		return CompatVerdict{Class: CompatOK}
+	}
+	return CompatVerdict{Class: CompatBroken, Reason: reason}
+}
+
 // StopInstance records a call to stop an instance
 func (c *FakeInstanceController) StopInstance(ctx context.Context, instance *types.Instance) error {
 	c.mu.Lock()
