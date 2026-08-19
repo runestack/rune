@@ -15,7 +15,8 @@ type Metrics struct {
 	WatchLag          prometheus.Gauge       // seconds since last watch event
 	NftablesRules     prometheus.Gauge       // current rule count (linux only)
 	ListenersOpen     *prometheus.GaugeVec   // {service,protocol}
-	PolicyDrops       *prometheus.CounterVec // {service,namespace,policy,reason}
+	PolicyDrops       *prometheus.CounterVec // {service,namespace,policy,direction,reason}
+	PolicySrcUnknown  *prometheus.CounterVec // {service,namespace}
 	PolicyAllows      *prometheus.CounterVec // {service,namespace,policy}
 	PolicyRules       *prometheus.GaugeVec   // {service,namespace} -> ingress+egress rule count
 	PolicyLastSeq     *prometheus.GaugeVec   // {service,namespace} -> last refresh timestamp (unix seconds)
@@ -50,8 +51,12 @@ func newMetrics() *Metrics {
 		}, []string{"service", "protocol"}),
 		PolicyDrops: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "rune_policy_drops_total",
-			Help: "Connections rejected by network policy, labelled by destination service and reason.",
-		}, []string{"service", "namespace", "policy", "reason"}),
+			Help: "Connections rejected by network policy. service/namespace are the destination; policy is the service whose rules denied (the source, for egress).",
+		}, []string{"service", "namespace", "policy", "direction", "reason"}),
+		PolicySrcUnknown: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "rune_policy_source_unidentified_total",
+			Help: "Connections whose source IP resolved to no service identity, so egress rules were not applied. A non-zero baseline is normal (ingress controller and host-originated dials have no instance identity); a rise means instance identity has stopped resolving and egress is silently unenforced.",
+		}, []string{"service", "namespace"}),
 		PolicyAllows: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "rune_policy_allows_total",
 			Help: "Connections explicitly allowed by network policy.",
@@ -78,7 +83,7 @@ func (m *Metrics) Register(reg prometheus.Registerer) error {
 	for _, c := range []prometheus.Collector{
 		m.ConnectionsActive, m.ConnectionsTotal, m.EndpointHealth,
 		m.WatchLag, m.NftablesRules, m.ListenersOpen,
-		m.PolicyDrops, m.PolicyAllows, m.PolicyRules, m.PolicyLastSeq, m.LocalInstances,
+		m.PolicyDrops, m.PolicySrcUnknown, m.PolicyAllows, m.PolicyRules, m.PolicyLastSeq, m.LocalInstances,
 	} {
 		if err := reg.Register(c); err != nil {
 			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
@@ -108,8 +113,11 @@ func (m *Metrics) setWatchLag(s float64) { m.WatchLag.Set(s) }
 //nolint:unused // wired in RUNE-114 (nftables Phase 2)
 func (m *Metrics) setNftablesRules(n int) { m.NftablesRules.Set(float64(n)) }
 
-func (m *Metrics) incPolicyDrop(svc, ns, pol, reason string) {
-	m.PolicyDrops.WithLabelValues(svc, ns, pol, reason).Inc()
+func (m *Metrics) incPolicyDrop(svc, ns, pol, direction, reason string) {
+	m.PolicyDrops.WithLabelValues(svc, ns, pol, direction, reason).Inc()
+}
+func (m *Metrics) incPolicySrcUnknown(svc, ns string) {
+	m.PolicySrcUnknown.WithLabelValues(svc, ns).Inc()
 }
 func (m *Metrics) incPolicyAllow(svc, ns, pol string) {
 	m.PolicyAllows.WithLabelValues(svc, ns, pol).Inc()

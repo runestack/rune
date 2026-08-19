@@ -117,7 +117,17 @@ func (s *Subsystem) reconcileOneService(ctx context.Context, svc *types.Service,
 	if svc == nil || svc.ID == "" {
 		return nil
 	}
+	// Sync policy FIRST. It depends on neither VIP allocation nor
+	// listeners, and everything below here can fail: a VIP that won't
+	// resolve or won't bind must degrade availability, never
+	// enforcement. Skipping this on the error paths left a service's
+	// running instances egressing unpoliced.
+	s.syncPolicy(svc)
 	if len(svc.Ports) == 0 {
+		// No ports means no VIP listener, but the service can still be
+		// the *source* of egress-policied traffic — a worker with no
+		// inbound ports is exactly the shape that carries egress rules
+		// and no ingress.
 		return nil
 	}
 	hadVIP := svc.Discovery != nil && svc.Discovery.VIP != ""
@@ -213,6 +223,9 @@ func (s *Subsystem) unregisterServiceDataplane(svc *types.Service) {
 	s.svcRegMu.Unlock()
 
 	s.UnregisterService(svc.ID)
+	// The service is actually going away (not just being rebuilt), so
+	// this is the one place policy state should be dropped.
+	s.dropPolicy(svc.ID)
 	if wasRegistered && vip != "" && s.cfg.Mode == ModeProduction {
 		s.vipHost.remove(net.ParseIP(vip))
 	}

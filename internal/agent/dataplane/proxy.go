@@ -23,12 +23,16 @@ import (
 // returns false (fail-closed behavior on prolonged watch disconnect).
 type freshFn func() bool
 
-// policyEvalFn evaluates ingress policy for a connection landing on
-// serviceID from srcIP on (port, proto). Nil means "no policy
-// enforcement wired in" (treated as allow). The Subsystem owns the
-// real implementation and resolves srcIP -> identity through the
-// LocalInstances table internally.
-type policyEvalFn func(serviceID string, srcIP net.IP, port int, proto string) policy.Result
+// policyEvalFn evaluates network policy for a connection landing on
+// serviceID from srcIP, addressed to dstIP, on (port, proto). Nil
+// means "no policy enforcement wired in" (treated as allow). The
+// Subsystem owns the real implementation and resolves srcIP ->
+// identity through the LocalInstances table internally.
+//
+// dstIP is the address the client actually dialled (the service VIP).
+// It is what a CIDR egress peer matches against — on this path the
+// VIP is the packet's real destination.
+type policyEvalFn func(serviceID string, srcIP, dstIP net.IP, port int, proto string) policy.Result
 
 // listenerKey identifies a single VIP+port+protocol listener.
 type listenerKey struct {
@@ -408,13 +412,16 @@ func (l *listener) handleTCP(client net.Conn) {
 	}
 	if l.eval != nil {
 		src := remoteIP(client.RemoteAddr())
-		res := l.eval(l.serviceID, src, l.servicePort, "tcp")
+		res := l.eval(l.serviceID, src, remoteIP(client.LocalAddr()), l.servicePort, "tcp")
 		if res.Decision == policy.DecisionDeny {
+			deniedBy := l.deniedBy(res)
 			l.metrics.incTotal(l.serviceID, "tcp", "policy_denied")
-			l.metrics.incPolicyDrop(l.serviceID, l.namespace, l.serviceID, string(res.Reason))
+			l.metrics.incPolicyDrop(l.serviceID, l.namespace, deniedBy, string(res.Direction), string(res.Reason))
 			l.log.Warn("connection dropped by network policy",
 				log.Str("service_id", l.serviceID),
 				log.Str("namespace", l.namespace),
+				log.Str("direction", string(res.Direction)),
+				log.Str("denied_by", deniedBy),
 				log.Str("src", src.String()),
 				log.Int("port", l.servicePort),
 				log.Str("protocol", "tcp"),
@@ -423,7 +430,7 @@ func (l *listener) handleTCP(client net.Conn) {
 			return
 		}
 		if res.Decision == policy.DecisionAllow {
-			l.metrics.incPolicyAllow(l.serviceID, l.namespace, l.serviceID)
+			l.metrics.incPolicyAllow(l.serviceID, l.namespace, l.deniedBy(res))
 		}
 	}
 	healthy, ok := l.cache.Healthy(l.serviceID)
@@ -453,6 +460,18 @@ func (l *listener) handleTCP(client net.Conn) {
 
 	l.metrics.incTotal(l.serviceID, "tcp", "ok")
 	pipe(client, upstream)
+}
+
+// deniedBy names the service whose policy produced res — the source
+// service for an egress decision, the destination for ingress. The
+// listener's own service is the fallback. Without this an egress
+// denial is recorded against its victim, sending the operator to the
+// wrong spec.
+func (l *listener) deniedBy(res policy.Result) string {
+	if res.PolicyOwner.Name != "" {
+		return res.PolicyOwner.Name
+	}
+	return l.serviceID
 }
 
 // endpointPort returns the port to dial on the upstream. We prefer
@@ -535,13 +554,23 @@ func (l *listener) handleUDP(payload []byte, from net.Addr) {
 	}
 	if l.eval != nil {
 		src := remoteIP(from)
-		res := l.eval(l.serviceID, src, l.servicePort, "udp")
+		var dst net.IP
+		if l.udp != nil {
+			dst = remoteIP(l.udp.LocalAddr())
+		}
+		res := l.eval(l.serviceID, src, dst, l.servicePort, "udp")
 		if res.Decision == policy.DecisionDeny {
+			deniedBy := l.deniedBy(res)
 			l.metrics.incTotal(l.serviceID, "udp", "policy_denied")
-			l.metrics.incPolicyDrop(l.serviceID, l.namespace, l.serviceID, string(res.Reason))
-			l.log.Warn("datagram dropped by network policy",
+			l.metrics.incPolicyDrop(l.serviceID, l.namespace, deniedBy, string(res.Direction), string(res.Reason))
+			// Debug, not Warn: a denied UDP flow re-sends, and one
+			// warn per datagram lets a workload fill the disk.
+			// rune_policy_drops_total is the durable signal.
+			l.log.Debug("datagram dropped by network policy",
 				log.Str("service_id", l.serviceID),
 				log.Str("namespace", l.namespace),
+				log.Str("direction", string(res.Direction)),
+				log.Str("denied_by", deniedBy),
 				log.Str("src", src.String()),
 				log.Int("port", l.servicePort),
 				log.Str("protocol", "udp"),
@@ -550,7 +579,7 @@ func (l *listener) handleUDP(payload []byte, from net.Addr) {
 			return
 		}
 		if res.Decision == policy.DecisionAllow {
-			l.metrics.incPolicyAllow(l.serviceID, l.namespace, l.serviceID)
+			l.metrics.incPolicyAllow(l.serviceID, l.namespace, l.deniedBy(res))
 		}
 	}
 	healthy, ok := l.cache.Healthy(l.serviceID)

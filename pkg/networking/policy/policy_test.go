@@ -175,20 +175,107 @@ func TestParsePort(t *testing.T) {
 		ok    bool
 		port  int
 		proto string
+		name  string
 	}{
-		"80":     {true, 80, ""},
-		"80/tcp": {true, 80, "tcp"},
-		"53/udp": {true, 53, "udp"},
-		"99999":  {false, 0, ""},
-		"foo":    {false, 0, ""},
-		"80/x":   {false, 0, ""},
-		"":       {false, 0, ""},
+		"80":     {ok: true, port: 80},
+		"80/tcp": {ok: true, port: 80, proto: "tcp"},
+		"53/udp": {ok: true, port: 53, proto: "udp"},
+		"99999":  {ok: false},
+		"80/x":   {ok: false},
+		"":       {ok: false},
+		// Non-numeric entries are port *names*, resolved against the
+		// target service's port list at evaluation time. Rejecting
+		// them turned `ports: [http]` into a silent deny-all.
+		"foo":          {ok: true, name: "foo"},
+		"http":         {ok: true, name: "http"},
+		"postgres/tcp": {ok: true, name: "postgres", proto: "tcp"},
 	}
 	for in, want := range cases {
 		got, ok := parsePort(in)
-		if ok != want.ok || (ok && (got.port != want.port || got.proto != want.proto)) {
+		if ok != want.ok || (ok && (got.port != want.port || got.proto != want.proto || got.name != want.name)) {
 			t.Errorf("parsePort(%q) = %+v ok=%v, want %+v ok=%v", in, got, ok, want, want.ok)
 		}
+	}
+}
+
+// A rule written with a port name must match the port the destination
+// service gives that name — the shape every shipped example uses.
+func TestPortNames_ResolveAgainstServicePorts(t *testing.T) {
+	svc := mkSvc("api", "prod", &types.ServiceNetworkPolicy{
+		Ingress: []types.IngressRule{
+			{From: []types.NetworkPolicyPeer{{CIDR: "0.0.0.0/0"}}, Ports: []string{"http"}},
+		},
+	})
+	svc.Ports = []types.ServicePort{{Name: "http", Port: 8080, Protocol: "tcp"}}
+	c := Compile(svc)
+
+	if r := c.EvaluateIngress(PeerInfo{IP: net.ParseIP("1.2.3.4")}, 8080, "tcp"); r.Decision != DecisionAllow {
+		t.Fatalf("named port should match its service port: got %v/%s", r.Decision, r.Reason)
+	}
+	if r := c.EvaluateIngress(PeerInfo{IP: net.ParseIP("1.2.3.4")}, 9999, "tcp"); r.Decision != DecisionDeny {
+		t.Fatalf("named port must not match an unrelated port: got %v", r.Decision)
+	}
+
+	// Egress names the *destination's* port, supplied via EgressTarget.
+	src := Compile(mkSvc("web", "prod", &types.ServiceNetworkPolicy{
+		Egress: []types.EgressRule{
+			{To: []types.NetworkPolicyPeer{{Service: "db", Namespace: "infra"}}, Ports: []string{"postgres"}},
+		},
+	}))
+	tgt := EgressTarget{Service: "db", Namespace: "infra", Port: 5432, PortNames: []string{"postgres"}}
+	if r := src.EvaluateEgress(tgt, "tcp"); r.Decision != DecisionAllow {
+		t.Fatalf("egress named port should resolve: got %v/%s", r.Decision, r.Reason)
+	}
+	tgt.PortNames = nil
+	if r := src.EvaluateEgress(tgt, "tcp"); r.Decision != DecisionDeny {
+		t.Fatalf("unknown port names must not match: got %v", r.Decision)
+	}
+}
+
+// A CIDR egress peer matches the address actually dialled (the VIP).
+// Before this, any CIDR-only egress policy denied everything while
+// still leaving real internet traffic untouched.
+func TestEgressCIDR_MatchesDialledAddress(t *testing.T) {
+	c := Compile(mkSvc("web", "prod", &types.ServiceNetworkPolicy{
+		Egress: []types.EgressRule{{To: []types.NetworkPolicyPeer{{CIDR: "0.0.0.0/0"}}}},
+	}))
+	tgt := EgressTarget{Service: "api", Namespace: "prod", Port: 80, IP: net.ParseIP("10.96.0.7")}
+	if r := c.EvaluateEgress(tgt, "tcp"); r.Decision != DecisionAllow || r.Reason != ReasonAllowedByCIDR {
+		t.Fatalf("0.0.0.0/0 egress must allow: got %v/%s", r.Decision, r.Reason)
+	}
+
+	narrow := Compile(mkSvc("web", "prod", &types.ServiceNetworkPolicy{
+		Egress: []types.EgressRule{{To: []types.NetworkPolicyPeer{{CIDR: "10.96.0.0/24"}}}},
+	}))
+	if r := narrow.EvaluateEgress(tgt, "tcp"); r.Decision != DecisionAllow {
+		t.Fatalf("in-range VIP must allow: got %v", r.Decision)
+	}
+	tgt.IP = net.ParseIP("10.99.0.7")
+	if r := narrow.EvaluateEgress(tgt, "tcp"); r.Decision != DecisionDeny {
+		t.Fatalf("out-of-range VIP must deny: got %v", r.Decision)
+	}
+	// Unknown destination address: a CIDR peer cannot match.
+	tgt.IP = nil
+	if r := narrow.EvaluateEgress(tgt, "tcp"); r.Decision != DecisionDeny {
+		t.Fatalf("nil dest must deny: got %v", r.Decision)
+	}
+}
+
+// Denials must name the service whose rules denied, so the operator
+// opens the right spec.
+func TestResult_AttributesToPolicyOwner(t *testing.T) {
+	src := Compile(mkSvc("web", "prod", &types.ServiceNetworkPolicy{
+		Egress: []types.EgressRule{{To: []types.NetworkPolicyPeer{{Service: "db", Namespace: "infra"}}}},
+	}))
+	r := src.EvaluateEgress(EgressTarget{Service: "api", Namespace: "prod", Port: 80}, "tcp")
+	if r.Decision != DecisionDeny {
+		t.Fatalf("want deny, got %v", r.Decision)
+	}
+	if r.Direction != DirectionEgress {
+		t.Fatalf("want egress direction, got %q", r.Direction)
+	}
+	if r.PolicyOwner.Name != "web" || r.PolicyOwner.Namespace != "prod" {
+		t.Fatalf("want prod/web, got %q", r.PolicyOwner.String())
 	}
 }
 
