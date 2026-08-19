@@ -376,6 +376,16 @@ func (s *Subsystem) evaluatePolicy(serviceID string, srcIP, dstIP net.IP, port i
 	}
 	s.policyMu.RUnlock()
 
+	if peer.Identity == nil || !peer.SameNode {
+		// No identity means no egress rules are applied at all — this
+		// path fails open by design (the ingress controller and
+		// host-originated dials legitimately have no instance
+		// identity). Count it, so "identity resolution broke and
+		// egress silently stopped enforcing" is a visible rise rather
+		// than an absence of denials. See #197.
+		s.metrics.incPolicySrcUnknown(dst.ident.Name, dst.ident.Namespace)
+	}
+
 	if srcPolicy.HasEgressRules() {
 		res := srcPolicy.EvaluateEgress(policy.EgressTarget{
 			Service:   dst.ident.Name,

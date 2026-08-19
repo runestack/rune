@@ -312,6 +312,7 @@ func handleNetpolicyGet(_ *cobra.Command, opts *getOptions, resourceName string)
 		}
 		compiled := policy.Compile(svc)
 		out := compiled.Explain()
+		out.EgressUnenforced = egressUnenforcedReason(svc, out)
 		switch opts.outputFormat {
 		case "json":
 			enc := json.NewEncoder(os.Stdout)

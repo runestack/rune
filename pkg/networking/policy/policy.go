@@ -662,14 +662,19 @@ func explainRule(peers []peerMatcher, ports portSet, dir Direction) ExplainRule 
 
 // ExplainOutput is the JSON-friendly form rendered by the CLI.
 type ExplainOutput struct {
-	ServiceID          string        `json:"serviceId,omitempty"`
-	Namespace          string        `json:"namespace,omitempty"`
-	PolicyName         string        `json:"policy,omitempty"`
-	Open               bool          `json:"open,omitempty"`
-	DefaultDenyIngress bool          `json:"defaultDenyIngress,omitempty"`
-	DefaultDenyEgress  bool          `json:"defaultDenyEgress,omitempty"`
-	Ingress            []ExplainRule `json:"ingress,omitempty"`
-	Egress             []ExplainRule `json:"egress,omitempty"`
+	ServiceID          string `json:"serviceId,omitempty"`
+	Namespace          string `json:"namespace,omitempty"`
+	PolicyName         string `json:"policy,omitempty"`
+	Open               bool   `json:"open,omitempty"`
+	DefaultDenyIngress bool   `json:"defaultDenyIngress,omitempty"`
+	DefaultDenyEgress  bool   `json:"defaultDenyEgress,omitempty"`
+	// EgressUnenforced, when non-empty, says why this service's egress
+	// rules are accepted but not applied. Callers that know the
+	// service's runtime set it; a default-deny claim we do not honour
+	// is worse than no claim.
+	EgressUnenforced string        `json:"egressUnenforced,omitempty"`
+	Ingress          []ExplainRule `json:"ingress,omitempty"`
+	Egress           []ExplainRule `json:"egress,omitempty"`
 }
 
 // ExplainRule is a single human-readable rule entry.
