@@ -597,7 +597,22 @@ func TestUpdateInstance(t *testing.T) {
 	TestUpdateInstanceIncompatible(t)
 }
 
-// TestUpdateInstanceIncompatible tests instance update with incompatible changes
+// TestUpdateInstanceIncompatible pins UpdateInstance's contract for the two
+// incompatibility classes (RUNE-042 §6.3).
+//
+// This test used to assert that ANY incompatibility — including a plain image
+// change — made UpdateInstance return the "requires recreation" error. That is
+// no longer right: an image change makes an instance OUTDATED, and an outdated
+// instance is serving fine, so whether and when it gets replaced is the update
+// budget's decision. UpdateInstance is called on every reconcile for every
+// surviving instance, so erroring here would destroy outdated instances
+// through this path regardless of any budget.
+//
+// System behaviour is unchanged in this phase: the reconciler's ensure* loops
+// check compatibility themselves and delete outdated instances before ever
+// reaching UpdateInstance (see ensureStatelessInstances), so the leave-alone
+// branch below only absorbs the mid-reconcile race this used to recreate on.
+// A BROKEN instance still errors, because repair is unbudgeted.
 func TestUpdateInstanceIncompatible(t *testing.T) {
 	ctx, testStore, testRunner, controller := setupTestController(t)
 
@@ -652,9 +667,35 @@ func TestUpdateInstanceIncompatible(t *testing.T) {
 		},
 	}
 
-	// Update should fail due to incompatibility
+	// An image change is a TEMPLATE change: the instance is OUTDATED, not
+	// broken. UpdateInstance must leave it alone and let the update planner
+	// decide when to replace it.
 	err = controller.UpdateInstance(ctx, modifiedService, instance)
-	assert.Error(t, err, "UpdateInstance should return an error for incompatible changes")
+	assert.NoError(t, err,
+		"an outdated instance is the update planner's business; UpdateInstance must not force its recreation")
+
+	// A BROKEN instance is the case that still demands immediate recreation:
+	// it is serving nobody, so there is nothing to budget.
+	// ContainerEverCreatedAt matters: without it the record is "stuck in
+	// create", which the classifier deliberately reports as OK so the
+	// reconciler holds the slot instead of churning new UUIDs. A crashed
+	// instance is one whose container DID exist.
+	created := time.Now()
+	broken := &types.Instance{
+		ID:                     "instance-broken",
+		Name:                   "instance-broken",
+		Namespace:              "default",
+		ServiceID:              service.ID,
+		Status:                 types.InstanceStatusFailed,
+		ContainerID:            "container456",
+		ContainerEverCreatedAt: &created,
+		Metadata:               &types.InstanceMetadata{Image: "original-image:latest"},
+	}
+	require.NoError(t, testStore.CreateInstance(ctx, broken))
+	testRunner.StatusResults[broken.ID] = types.InstanceStatusFailed
+
+	err = controller.UpdateInstance(ctx, modifiedService, broken)
+	require.Error(t, err, "UpdateInstance must still surface the recreation signal for a broken instance")
 	assert.Contains(t, err.Error(), "requires recreation", "Error should indicate recreation is needed")
 }
 

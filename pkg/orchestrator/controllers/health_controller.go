@@ -690,9 +690,19 @@ func (c *healthController) promoteToRunningOnReady(namespace, instanceID string)
 		if current.Status != types.InstanceStatusStarting {
 			return store.ErrSkipUpdate
 		}
+		now := time.Now()
 		current.Status = types.InstanceStatusRunning
 		current.StatusMessage = "Ready"
-		current.UpdatedAt = time.Now()
+		current.UpdatedAt = now
+		// Stamp the transition time too. This path does not go through
+		// applyInstanceStatus (the only other writer of LastTransitionAt),
+		// so without this the field still marks the *Starting* transition —
+		// and the update planner's minimum-ready window, which measures
+		// "how long has this held Running", would be measured from container
+		// start instead of from readiness. That silently defeats the gate
+		// for exactly the probe-gated services it matters most for
+		// (RUNE-042 §8.5).
+		current.LastTransitionAt = &now
 		promoted = true
 		return nil
 	}, store.WithHealthController())
