@@ -446,6 +446,19 @@ func ServiceToProto(service *types.Service) *generated.Service {
 	if service.DrainSeconds != nil {
 		protoService.DrainSeconds = utils.ToInt32NonNegative(*service.DrainSeconds)
 	}
+	if service.Update != nil {
+		protoService.Update = &generated.UpdateStatus{
+			TemplateGeneration: service.Update.TemplateGeneration,
+			Desired:            utils.ToInt32NonNegative(service.Update.Desired),
+			Updated:            utils.ToInt32NonNegative(service.Update.Updated),
+			UpdatedReady:       utils.ToInt32NonNegative(service.Update.UpdatedReady),
+			Available:          utils.ToInt32NonNegative(service.Update.Available),
+			Outdated:           utils.ToInt32NonNegative(service.Update.Outdated),
+			StartedAt:          service.Update.StartedAt.Format(time.RFC3339),
+			LastProgressAt:     service.Update.LastProgressAt.Format(time.RFC3339),
+			Message:            service.Update.Message,
+		}
+	}
 
 	// Convert args
 	if len(service.Args) > 0 {
@@ -839,6 +852,24 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 	if proto.DrainSeconds > 0 {
 		drain := int(proto.DrainSeconds)
 		service.DrainSeconds = &drain
+	}
+	if proto.Update != nil {
+		upd := &types.UpdateStatus{
+			TemplateGeneration: proto.Update.TemplateGeneration,
+			Desired:            int(proto.Update.Desired),
+			Updated:            int(proto.Update.Updated),
+			UpdatedReady:       int(proto.Update.UpdatedReady),
+			Available:          int(proto.Update.Available),
+			Outdated:           int(proto.Update.Outdated),
+			Message:            proto.Update.Message,
+		}
+		if t, err := utils.ParseTimestamp(proto.Update.StartedAt); err == nil {
+			upd.StartedAt = *t
+		}
+		if t, err := utils.ParseTimestamp(proto.Update.LastProgressAt); err == nil {
+			upd.LastProgressAt = *t
+		}
+		service.Update = upd
 	}
 
 	// Convert args

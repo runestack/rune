@@ -173,6 +173,30 @@ func TestPlanUpdate_RepairProceedsDuringUpdate(t *testing.T) {
 	assert.Equal(t, "broken", p.Repair[0].Name)
 }
 
+// A plan that both repairs and creates must not over-provision: a repair
+// recreates at the current template, so it fills one of the slots the create
+// step would otherwise ask for.
+func TestPlanUpdate_RepairAndCreateDoNotOverProvision(t *testing.T) {
+	insts := []instanceView{
+		view("broken", CompatBroken, false, 40),
+		view("ok", CompatOK, true, 30),
+	}
+	p := planUpdate(updateInput{Scale: 2, Params: surgeable(), Instances: insts, Now: planBase})
+
+	require.Len(t, p.Repair, 1)
+	assert.Equal(t, 0, p.Create,
+		"the repair already produces the second current-template instance")
+
+	// After the repair lands, the service is at scale and quiet.
+	settled := []instanceView{
+		view("ok", CompatOK, true, 30),
+		view("repaired", CompatOK, true, 0),
+	}
+	p = planUpdate(updateInput{Scale: 2, Params: surgeable(), Instances: settled, Now: planBase})
+	assert.Equal(t, 0, p.Create)
+	assert.Empty(t, p.Retire)
+}
+
 // --- recreate -------------------------------------------------------------
 
 func TestPlanUpdate_RecreateTakesEverythingDownFirst(t *testing.T) {

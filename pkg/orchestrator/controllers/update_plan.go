@@ -237,18 +237,31 @@ func planUpdate(in updateInput) updatePlan {
 
 	// --- 5. Create ---
 	//
-	// Capped by how many replacements could possibly be useful: one per
-	// outstanding outdated instance, plus any shortfall against the desired
-	// scale. Without that cap the surge allowance would have a converged
-	// service create a permanent spare.
-	deficit := in.Scale - live
-	if deficit < 0 {
-		deficit = 0
+	// Two limits, and the plan takes the smaller.
+	//
+	// The BUDGET is how many more instances may exist at all: scale plus the
+	// surge allowance, less what is already here.
+	//
+	// The USEFUL count is how many more current-template instances the
+	// service will actually end up wanting: Scale, less the ones that already
+	// exist, less the ones this same plan is about to produce by repairing
+	// broken instances (a repair recreates at the current template, so it
+	// fills one of those slots). Without this second limit the surge
+	// allowance would have a converged service carry a permanent spare, and
+	// a plan that both repairs and creates would over-provision.
+	currentTemplate := 0
+	for i := range in.Instances {
+		v := &in.Instances[i]
+		if !retired[v.Instance.ID] && v.Class == CompatOK {
+			currentTemplate++
+		}
 	}
+
 	createBudget := (in.Scale + allowance) - live
-	wanted := len(liveOutdated) + deficit
-	if createBudget < wanted {
-		wanted = createBudget
+	useful := in.Scale - currentTemplate - len(plan.Repair)
+	wanted := createBudget
+	if useful < wanted {
+		wanted = useful
 	}
 	if wanted > 0 {
 		plan.Create = wanted
