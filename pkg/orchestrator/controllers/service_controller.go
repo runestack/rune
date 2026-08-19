@@ -676,6 +676,12 @@ func (sc *serviceController) StopService(ctx context.Context, namespace, service
 		log.Str("namespace", namespace),
 		log.Int("instance_count", len(instances)))
 
+	// Withdraw the whole service from the dataplane first and take one
+	// shared drain window (RUNE-042 §4): in-flight requests finish against
+	// containers that are no longer receiving new connections, and the
+	// per-instance StopInstance calls below skip their own drains.
+	sc.instanceController.WithdrawServiceInstances(ctx, &service, instances)
+
 	// Stop all instances
 	for _, instance := range instances {
 		if err := sc.instanceController.StopInstance(ctx, instance); err != nil {
