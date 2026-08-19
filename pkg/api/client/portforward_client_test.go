@@ -106,13 +106,21 @@ func TestSession_CloseRaceWithInFlightEnqueue(t *testing.T) {
 		}
 		startWG.Done()
 
-		// Race Close into the workload.
+		// Race Close into the workload. closeWG lets us wait for the
+		// Close goroutine itself: the staggered sleep means it may
+		// still be parked when the workers drain (likely under CPU
+		// contention), and the post-condition below is only
+		// meaningful once Close has actually run.
+		var closeWG sync.WaitGroup
+		closeWG.Add(1)
 		go func() {
+			defer closeWG.Done()
 			time.Sleep(time.Duration(trial%5) * time.Millisecond)
 			_ = sess.Close()
 		}()
 
 		endWG.Wait()
+		closeWG.Wait()
 		// If we get here without panicking, the regression is fixed.
 
 		// After Close, every enqueue must return ErrClosedPipe.
