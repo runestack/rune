@@ -426,11 +426,25 @@ func ServiceToProto(service *types.Service) *generated.Service {
 
 	if service.Metadata != nil {
 		protoService.Metadata = &generated.ServiceMetadata{
-			Generation:       utils.ToInt32NonNegative64(service.Metadata.Generation),
-			CreatedAt:        service.Metadata.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:        service.Metadata.UpdatedAt.Format(time.RFC3339),
-			LastNonZeroScale: utils.ToInt32NonNegative(service.Metadata.LastNonZeroScale),
+			Generation:         service.Metadata.Generation,
+			CreatedAt:          service.Metadata.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:          service.Metadata.UpdatedAt.Format(time.RFC3339),
+			LastNonZeroScale:   utils.ToInt32NonNegative(service.Metadata.LastNonZeroScale),
+			TemplateGeneration: service.Metadata.TemplateGeneration,
+			ObservedGeneration: service.Metadata.ObservedGeneration,
 		}
+	}
+
+	// Update strategy + drain grace (RUNE-042). Both are optional on the
+	// wire: an unset strategy means rolling, and drain_seconds 0 means "not
+	// specified" so the server applies the default.
+	if service.UpdateStrategy != nil {
+		protoService.UpdateStrategy = &generated.UpdateStrategy{
+			Type: string(service.UpdateStrategy.Type),
+		}
+	}
+	if service.DrainSeconds != nil {
+		protoService.DrainSeconds = utils.ToInt32NonNegative(*service.DrainSeconds)
 	}
 
 	// Convert args
@@ -798,8 +812,10 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		if service.Metadata == nil {
 			service.Metadata = &types.ServiceMetadata{}
 		}
-		service.Metadata.Generation = int64(proto.Metadata.Generation)
+		service.Metadata.Generation = proto.Metadata.Generation
 		service.Metadata.LastNonZeroScale = int(proto.Metadata.LastNonZeroScale)
+		service.Metadata.TemplateGeneration = proto.Metadata.TemplateGeneration
+		service.Metadata.ObservedGeneration = proto.Metadata.ObservedGeneration
 
 		createdAt, err := utils.ParseTimestamp(proto.Metadata.CreatedAt)
 		if err != nil {
@@ -812,6 +828,17 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 			return nil, fmt.Errorf("failed to parse updated_at timestamp: %w", err)
 		}
 		service.Metadata.UpdatedAt = *updatedAt
+	}
+
+	// Update strategy + drain grace (RUNE-042).
+	if proto.UpdateStrategy != nil {
+		service.UpdateStrategy = &types.UpdateStrategy{
+			Type: types.UpdateStrategyType(proto.UpdateStrategy.Type),
+		}
+	}
+	if proto.DrainSeconds > 0 {
+		drain := int(proto.DrainSeconds)
+		service.DrainSeconds = &drain
 	}
 
 	// Convert args

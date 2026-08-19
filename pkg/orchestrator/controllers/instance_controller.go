@@ -163,14 +163,11 @@ type instanceController struct {
 	endpointPublisher EndpointPublisher
 	nodeID            string
 
-	// drainWindow is how long a withdrawn instance keeps serving in-flight
-	// work after it leaves the dataplane endpoint set, before SIGTERM
-	// (RUNE-042 §4, Phase 0). Endpoint withdrawal propagates asynchronously
-	// (publish → OrderedLog → agent watch → proxy cache), so this window
-	// also absorbs that propagation. Constant defaultDrainWindow for now;
-	// becomes the default of the service-level `drainSeconds` field when
-	// the RUNE-042 spec surface lands (floored at 1s there, never 0).
-	drainWindow time.Duration
+	// drainWindowOverride, when non-zero, replaces the per-service drain
+	// window. Test-only seam so ordering assertions don't have to wait out a
+	// whole second — real deployments derive the window from the service's
+	// drainSeconds (RUNE-042 §4/§5.1) so operators can tune it per service.
+	drainWindowOverride time.Duration
 
 	// publishedMu guards lastPublished, a service-ID -> last-published
 	// endpoint-set signature map. republishService is now called every
@@ -237,19 +234,11 @@ func NewInstanceController(store store.Store, runnerManager manager.IRunnerManag
 		secretRepo:    repos.NewSecretRepo(store),
 		configRepo:    repos.NewConfigRepo(store),
 		lastPublished: map[string]string{},
-		drainWindow:   defaultDrainWindow,
 	}
 }
 
-// defaultDrainWindow is the Phase 0 drain constant (RUNE-042 §4): the pause
-// between withdrawing an instance from the dataplane and stopping its
-// container, covering both withdrawal propagation and typical keep-alive
-// turnover. The proxy pipes established connections until either side
-// closes, so an app must still close idle connections on SIGTERM — the
-// drain covers new-connection routing, not request-level draining.
-const defaultDrainWindow = 5 * time.Second
-
-// drainAfterWithdraw blocks while just-withdrawn instances finish their
+// drainAfterWithdraw blocks for the owning service's drain window while
+// just-withdrawn instances finish their
 // in-flight work. Call it AFTER the instances have been persisted in a
 // non-Running state and the endpoint set republished — the pause is what
 // gives the async withdrawal time to propagate and existing requests time
@@ -263,11 +252,18 @@ func (c *instanceController) drainAfterWithdraw(ctx context.Context, service *ty
 	if !wasServing || c.endpointPublisher == nil || service == nil || len(service.Ports) == 0 {
 		return
 	}
+	// Per-service grace (types.Service.DrainWindow): defaults to
+	// DefaultDrainSeconds and is floored at MinDrainSeconds, so a spec of 0
+	// still leaves time for the withdrawal to propagate.
+	window := service.DrainWindow()
+	if c.drainWindowOverride > 0 {
+		window = c.drainWindowOverride
+	}
 	c.logger.Info("Draining withdrawn instance(s) before stop",
 		log.Str("target", target),
-		log.Duration("window", c.drainWindow))
+		log.Duration("window", window))
 	select {
-	case <-time.After(c.drainWindow):
+	case <-time.After(window):
 	case <-ctx.Done():
 	}
 }
