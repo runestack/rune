@@ -66,9 +66,10 @@ func (p *seqPublisher) PublishLocalInstances(context.Context, string, map[string
 	return nil
 }
 
-// setupDrainFixture builds a controller with a recording publisher, a short
-// drain window, a service WITH ports (so the drain gate is armed), and n
-// Running instances present in both store and runner.
+// setupDrainFixture builds a controller with a recording publisher, a service
+// WITH ports (so the drain gate is armed), and n Running instances present in
+// both store and runner. `drain` sets the test-only window override; pass 0 to
+// exercise the real per-service drainSeconds path.
 func setupDrainFixture(t *testing.T, n int, drain time.Duration) (context.Context, *store.TestStore, *runner.TestRunner, *instanceController, *seqLog, []*types.Instance) {
 	t.Helper()
 	ctx := context.Background()
@@ -79,7 +80,7 @@ func setupDrainFixture(t *testing.T, n int, drain time.Duration) (context.Contex
 	rm.SetProcessRunner(tr)
 
 	c := NewInstanceController(st, rm, log.NewLogger()).(*instanceController)
-	c.drainWindow = drain
+	c.drainWindowOverride = drain
 	lg := &seqLog{}
 	c.SetEndpointPublisher(&seqPublisher{log: lg}, "node-test")
 
@@ -235,4 +236,48 @@ func TestRestartInstance_WithdrawsBeforeStop(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, types.InstanceStatusFailed, stored.Status, "old record becomes the tombstone")
 	assert.NotEmpty(t, tr.CreatedInstances, "a replacement instance must be created")
+}
+
+// TestDrainWindow_ComesFromServiceSpec: once the RUNE-042 spec surface landed
+// (Phase 1), `drainSeconds` must actually govern the teardown pause. A field
+// cast accepts but silently ignores is worse than no field at all. No
+// override here — this drives the real types.Service.DrainWindow() path.
+func TestDrainWindow_ComesFromServiceSpec(t *testing.T) {
+	ctx, st, _, c, _, insts := setupDrainFixture(t, 1, 0 /* no override */)
+	inst := insts[0]
+
+	// Two seconds is distinguishable from both the 5s default and the 1s floor.
+	drain := 2
+	var svc types.Service
+	require.NoError(t, st.Get(ctx, types.ResourceTypeService, "default", "drain-svc", &svc))
+	svc.DrainSeconds = &drain
+	require.NoError(t, st.Update(ctx, types.ResourceTypeService, "default", svc.Name, &svc))
+
+	start := time.Now()
+	require.NoError(t, c.DeleteInstance(ctx, inst))
+	elapsed := time.Since(start)
+
+	assert.GreaterOrEqual(t, elapsed, 1900*time.Millisecond, "drainSeconds must be honoured")
+	assert.Less(t, elapsed, 4*time.Second, "and must not fall back to the 5s default")
+}
+
+// A spec of 0 is floored, not honoured: withdrawal propagates asynchronously,
+// so a true zero would reopen the race the drain exists to close.
+func TestDrainWindow_ZeroIsFlooredNotHonoured(t *testing.T) {
+	ctx, st, _, c, _, insts := setupDrainFixture(t, 1, 0 /* no override */)
+	inst := insts[0]
+
+	zero := 0
+	var svc types.Service
+	require.NoError(t, st.Get(ctx, types.ResourceTypeService, "default", "drain-svc", &svc))
+	svc.DrainSeconds = &zero
+	require.NoError(t, st.Update(ctx, types.ResourceTypeService, "default", svc.Name, &svc))
+
+	start := time.Now()
+	require.NoError(t, c.DeleteInstance(ctx, inst))
+	elapsed := time.Since(start)
+
+	assert.GreaterOrEqual(t, elapsed, 900*time.Millisecond,
+		"0 must be floored at MinDrainSeconds, not skipped")
+	assert.Less(t, elapsed, 3*time.Second, "but must not use the default either")
 }

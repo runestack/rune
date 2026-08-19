@@ -1,0 +1,276 @@
+package types
+
+// RUNE-042 Phase 1: the update strategy spec surface and its derived
+// parameters. See _docs/designs/RUNE-042-Rolling-Updates.md §5.
+//
+// The surface is deliberately two knobs — `updateStrategy` (one field) and a
+// service-level `drainSeconds`. Everything else a rolling update needs (how
+// many extra copies may exist, how far below scale it may dip, how long a
+// replacement must hold Running, when a stuck update is declared stalled) is
+// DERIVED per service rather than configured. An earlier draft exposed all of
+// them as fields, K8s-style; each one had a defaults rule that computed the
+// right answer from information Rune already has, which is the proof they
+// never needed to be fields. Fields can be added later if real demand
+// appears; they can never be removed.
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// UpdateStrategyType selects how outdated instances are replaced.
+type UpdateStrategyType string
+
+const (
+	// UpdateRolling replaces outdated instances incrementally: create a
+	// replacement, wait until it serves, retire the old one. The default.
+	UpdateRolling UpdateStrategyType = "rolling"
+
+	// UpdateRecreate tears every outdated instance down before creating any
+	// replacement — the pre-RUNE-042 behaviour, kept as an explicit opt-in
+	// for services that genuinely cannot run two copies: an exclusive
+	// external lock, a single-writer migration, licence-seat limits, or a
+	// scale-1 queue consumer that must never overlap with its replacement.
+	UpdateRecreate UpdateStrategyType = "recreate"
+)
+
+// Update timing constants. These are the derived values that were once spec
+// fields; they live here so the derivation is readable in one place.
+const (
+	// DefaultDrainSeconds is how long an instance keeps serving in-flight
+	// work after leaving the dataplane endpoint set, before SIGTERM.
+	DefaultDrainSeconds = 5
+
+	// MinDrainSeconds is the floor applied even when drainSeconds is 0.
+	// Endpoint withdrawal propagates asynchronously (publish → OrderedLog →
+	// agent watch → proxy cache); dropping to a true zero would put SIGTERM
+	// immediately after the publish and reopen the race the drain exists to
+	// close.
+	MinDrainSeconds = 1
+
+	// MaxDrainSeconds bounds the field so a typo cannot wedge a teardown.
+	MaxDrainSeconds = 3600
+
+	// MinReadySecondsWithoutProbe is the minimum-ready window for a service
+	// with no readiness probe. Without a probe, Running only means "the
+	// runner accepted the container", so an update would otherwise advance
+	// on a container that has not bound its port yet. With a probe the
+	// window is 0 — the probe IS the gate. `rune lint` pushes operators
+	// toward the probe rather than toward tuning this.
+	MinReadySecondsWithoutProbe = 5
+
+	// UpdateStallSeconds is how long an update may make no progress before
+	// it is declared stalled. Long enough for a slow image pull on a small
+	// box. A constant rather than a field: per-service tuning of this mostly
+	// existed to be mis-set against the release verify timeout.
+	UpdateStallSeconds = 600
+)
+
+// UpdateStrategy is how a service replaces its instances when the template
+// changes. One field, on purpose — the YAML map form exists so a future knob
+// has somewhere to live without breaking anyone, while the string shorthand
+// (`updateStrategy: recreate`) covers the only override most services will
+// ever need.
+type UpdateStrategy struct {
+	Type UpdateStrategyType `json:"type,omitempty" yaml:"type,omitempty"`
+}
+
+// updateStrategyAlias avoids infinite recursion in the custom (un)marshallers.
+type updateStrategyAlias struct {
+	Type UpdateStrategyType `json:"type,omitempty" yaml:"type,omitempty"`
+}
+
+// UnmarshalYAML accepts either the string shorthand (`updateStrategy: recreate`)
+// or the map form (`updateStrategy: {type: recreate}`).
+func (u *UpdateStrategy) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		u.Type = UpdateStrategyType(strings.TrimSpace(s))
+		return nil
+	}
+	var alias updateStrategyAlias
+	if err := value.Decode(&alias); err != nil {
+		return err
+	}
+	u.Type = alias.Type
+	return nil
+}
+
+// MarshalYAML emits the string shorthand, since Type is the only field. Keeps
+// `rune get -o yaml` round-trippable and easy to read.
+func (u UpdateStrategy) MarshalYAML() (interface{}, error) {
+	return string(u.Type), nil
+}
+
+// UnmarshalJSON mirrors UnmarshalYAML: a bare string or an object.
+func (u *UpdateStrategy) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if strings.HasPrefix(trimmed, "\"") {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		u.Type = UpdateStrategyType(strings.TrimSpace(s))
+		return nil
+	}
+	var alias updateStrategyAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	u.Type = alias.Type
+	return nil
+}
+
+// MarshalJSON emits the string shorthand, matching MarshalYAML.
+func (u UpdateStrategy) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(u.Type))
+}
+
+// Validate checks the strategy type. An empty type means "rolling".
+func (u *UpdateStrategy) Validate() error {
+	if u == nil {
+		return nil
+	}
+	switch u.Type {
+	case "", UpdateRolling, UpdateRecreate:
+		return nil
+	default:
+		return NewValidationError(fmt.Sprintf(
+			"invalid updateStrategy %q (allowed: rolling, recreate)", u.Type))
+	}
+}
+
+// UpdateParams are the resolved, per-service values the update planner runs
+// on. Derived at read time and never persisted, so changing a derivation rule
+// does not require rewriting every stored service record.
+type UpdateParams struct {
+	// Type is the effective strategy ("rolling" when unset).
+	Type UpdateStrategyType
+
+	// Extra is how many instances may exist ABOVE the desired scale during
+	// an update — 1 when the service can run two copies of a replica, else 0.
+	Extra int
+
+	// Dip is how many instances may be BELOW the desired scale — 0 when
+	// Extra is 1 (never dip if a spare copy is possible), else 1 (going down
+	// by one is the only way to make progress). Extra and Dip are one
+	// coupled decision, which is why they are derived together: exposing
+	// them as separate fields is what creates the "both zero, so the update
+	// can never take a step" misconfiguration.
+	Dip int
+
+	// MinReady is how long an instance must hold Running before it counts as
+	// serving.
+	MinReady time.Duration
+
+	// StallDeadline is how long the update may make no progress before it is
+	// declared stalled.
+	StallDeadline time.Duration
+
+	// Drain is the shutdown grace applied to every teardown of this
+	// service's instances.
+	Drain time.Duration
+}
+
+// IsSurgeCapable reports whether a second copy of a replica can run
+// concurrently with the one it replaces. False means the update must retire
+// before it creates, one replica at a time.
+func (s *Service) IsSurgeCapable() bool {
+	if s == nil {
+		return false
+	}
+	// Per-replica claimTemplate volumes: the replacement would have to mount
+	// the volume the outgoing instance still holds.
+	for i := range s.Volumes {
+		if s.Volumes[i].ClaimTemplate != nil {
+			return false
+		}
+	}
+	// Process-runner instances are dialed at 127.0.0.1:<port> on the host and
+	// the runner exposes no per-instance IP, so two copies of a process
+	// replica collide on the same port.
+	if s.Runtime == RuntimeTypeProcess {
+		return false
+	}
+	// hostPort binds a fixed port on the host; two instances cannot share it.
+	for i := range s.Ports {
+		if s.Ports[i].HostPort != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// HasReadinessProbe reports whether the service defines a readiness probe —
+// the signal that makes Status=Running mean "actually serving".
+func (s *Service) HasReadinessProbe() bool {
+	return s != nil && s.Health != nil && s.Health.Readiness != nil
+}
+
+// DrainWindow is the shutdown grace for this service's instances: the pause
+// between withdrawing an instance from the dataplane and stopping its
+// container. Defaults to DefaultDrainSeconds and is floored at
+// MinDrainSeconds — a true zero would reopen the withdrawal-propagation race.
+func (s *Service) DrainWindow() time.Duration {
+	secs := DefaultDrainSeconds
+	if s != nil && s.DrainSeconds != nil {
+		secs = *s.DrainSeconds
+	}
+	if secs < MinDrainSeconds {
+		secs = MinDrainSeconds
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// ResolveUpdateParams derives the update parameters for this service. Pure
+// and cheap: call it wherever the values are needed rather than caching.
+func (s *Service) ResolveUpdateParams() UpdateParams {
+	p := UpdateParams{
+		Type:          UpdateRolling,
+		StallDeadline: UpdateStallSeconds * time.Second,
+		Drain:         s.DrainWindow(),
+	}
+	if s != nil && s.UpdateStrategy != nil && s.UpdateStrategy.Type != "" {
+		p.Type = s.UpdateStrategy.Type
+	}
+
+	// Surge capability decides the extra/dip pair together.
+	if s.IsSurgeCapable() {
+		p.Extra, p.Dip = 1, 0
+	} else {
+		p.Extra, p.Dip = 0, 1
+	}
+
+	// Recreate takes everything down before creating: no spare copy, and the
+	// dip is the whole service.
+	if p.Type == UpdateRecreate {
+		p.Extra = 0
+		p.Dip = s.Scale
+		if p.Dip < 1 {
+			p.Dip = 1
+		}
+	}
+
+	if !s.HasReadinessProbe() {
+		p.MinReady = MinReadySecondsWithoutProbe * time.Second
+	}
+	return p
+}
+
+// RunsTwoCopiesDuringUpdate reports the case `rune lint` warns about: a
+// surge-capable single-replica service silently loses the never-two-copies
+// guarantee that recreate-everything used to give it for free. Queue
+// consumers and cron-style workers may depend on that exclusivity.
+func (s *Service) RunsTwoCopiesDuringUpdate() bool {
+	if s == nil || s.Scale != 1 || !s.IsSurgeCapable() {
+		return false
+	}
+	return s.ResolveUpdateParams().Type == UpdateRolling
+}

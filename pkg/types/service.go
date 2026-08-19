@@ -161,6 +161,19 @@ type Service struct {
 	// Restart policy for the service
 	RestartPolicy RestartPolicy `json:"restart_policy,omitempty" yaml:"restart_policy,omitempty"`
 
+	// UpdateStrategy is how instances are replaced when the template changes
+	// (RUNE-042). nil means rolling. See pkg/types/update_strategy.go.
+	UpdateStrategy *UpdateStrategy `json:"updateStrategy,omitempty" yaml:"updateStrategy,omitempty"`
+
+	// DrainSeconds is the shutdown grace for this service's instances: how
+	// long an instance keeps serving in-flight work after being withdrawn
+	// from the dataplane endpoint set, before SIGTERM. Governs EVERY
+	// teardown — scale-down, stop, deletion, liveness restart — not just
+	// updates, which is why it is a service-level field rather than a member
+	// of UpdateStrategy. nil means DefaultDrainSeconds; floored at
+	// MinDrainSeconds. Read it via Service.DrainWindow().
+	DrainSeconds *int `json:"drainSeconds,omitempty" yaml:"drainSeconds,omitempty"`
+
 	// Metadata for the service
 	Metadata *ServiceMetadata `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 }
@@ -748,6 +761,31 @@ func (s *Service) Validate() error {
 
 // CalculateHash generates a hash of service properties that should trigger reconciliation when changed
 func (s *Service) CalculateHash() string {
+	return s.hash(true)
+}
+
+// CalculateTemplateHash hashes only the INSTANCE TEMPLATE — what a container
+// looks like — deliberately excluding scale, updateStrategy and drainSeconds.
+// It drives TemplateGeneration, which is what makes existing instances
+// incompatible and therefore replaced.
+//
+// The distinction matters as of RUNE-042: cast previously stamped
+// TemplateGeneration on ANY spec-hash change, and the hash includes scale, so
+// a cast that changed only the replica count marked every surviving instance
+// stale. Under recreate-everything semantics that was invisible (a scale cast
+// tore things down anyway); with rolling updates it would roll the whole
+// service for a scale edit. The scaling controller already had this right —
+// it bumps Generation without touching TemplateGeneration (#142) — and this
+// closes the same hole on the cast path.
+func (s *Service) CalculateTemplateHash() string {
+	return s.hash(false)
+}
+
+// hash computes the service digest. includeDesiredState adds the fields that
+// describe DESIRED STATE rather than the instance template (scale, and the
+// update knobs that govern how a change is rolled out): they belong in the
+// full hash that drives Generation, but never in the template hash.
+func (s *Service) hash(includeDesiredState bool) string {
 	h := sha256.New()
 
 	// Include only fields that should trigger a reconciliation when changed
@@ -765,7 +803,23 @@ func (s *Service) CalculateHash() string {
 		}
 	}
 	fmt.Fprintf(h, "command:%s\n", s.Command)
-	fmt.Fprintf(h, "scale:%d\n", s.Scale)
+	if includeDesiredState {
+		fmt.Fprintf(h, "scale:%d\n", s.Scale)
+		// The update knobs change HOW we roll, not WHAT we roll to, so they
+		// must move Generation (the reconciler should notice) without moving
+		// TemplateGeneration (no instance needs replacing because the
+		// strategy changed).
+		strategy := ""
+		if s.UpdateStrategy != nil {
+			strategy = string(s.UpdateStrategy.Type)
+		}
+		fmt.Fprintf(h, "updateStrategy:%s\n", strategy)
+		if s.DrainSeconds != nil {
+			fmt.Fprintf(h, "drainSeconds:%d\n", *s.DrainSeconds)
+		} else {
+			fmt.Fprintf(h, "drainSeconds:nil\n")
+		}
+	}
 	fmt.Fprintf(h, "runtime:%s\n", string(s.Runtime))
 
 	// Args
