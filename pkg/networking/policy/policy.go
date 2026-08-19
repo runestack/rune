@@ -83,6 +83,7 @@ const (
 	ReasonDeniedNoMatch        Reason = "no_matching_rule"
 	ReasonDeniedPort           Reason = "port_not_allowed"
 	ReasonDeniedCrossNodeIdent Reason = "cross_node_identity_unresolved"
+	ReasonDeniedEgress         Reason = "egress_no_matching_rule"
 )
 
 // PeerInfo describes the source of an inbound connection. Same-node
@@ -375,7 +376,7 @@ func (c *Compiled) EvaluateEgress(target EgressTarget, proto string) Result {
 			}
 		}
 	}
-	return Result{Decision: DecisionDeny, Reason: ReasonDeniedNoMatch, MatchedRule: -1}
+	return Result{Decision: DecisionDeny, Reason: ReasonDeniedEgress, MatchedRule: -1}
 }
 
 func matchPeer(m peerMatcher, peer PeerInfo) (Reason, bool) {

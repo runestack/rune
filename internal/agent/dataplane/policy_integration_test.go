@@ -252,6 +252,211 @@ func TestPolicyIngress_NoPolicyServiceIsOpen(t *testing.T) {
 	}
 }
 
+// publishLocalIdentity maps 127.0.0.1 -> (service, namespace) on
+// nodeA and waits for the table to apply, simulating a same-node
+// container peer.
+func publishLocalIdentity(t *testing.T, dp *Subsystem, service, namespace string) {
+	t.Helper()
+	pub := localinstances.NewPublisher(dp.cfg.OrderedLog)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := pub.Update(ctx, "nodeA", map[string]types.InstanceIdentity{
+		"127.0.0.1": {InstanceID: "i1", Service: service, Namespace: namespace},
+	}); err != nil {
+		t.Fatalf("publish local_instances: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if dp.LocalInstances().Size() == 1 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("local_instances table not hydrated, size=%d", dp.LocalInstances().Size())
+}
+
+func TestPolicyEgress_DenySameNodeSource(t *testing.T) {
+	echo := startEcho(t)
+	dp := startDataplane(t)
+	publishLocalIdentity(t, dp, "web", "prod")
+
+	// The source service "web" may only dial db/infra. The open
+	// destination service "api" must therefore be unreachable even
+	// though it has no ingress policy of its own.
+	if err := dp.RegisterService(&types.Service{
+		ID:        "web-id",
+		Name:      "web",
+		Namespace: "prod",
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Egress: []types.EgressRule{
+				{To: []types.NetworkPolicyPeer{{Service: "db", Namespace: "infra"}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterService(web): %v", err)
+	}
+
+	proxyPort := mustFreePort(t)
+	dst := &types.Service{
+		ID:        "api-id",
+		Name:      "api",
+		Namespace: "prod",
+		Ports: []types.ServicePort{
+			{Name: "tcp", Port: proxyPort, TargetPort: echo.Port, Protocol: "tcp"},
+		},
+		Discovery: &types.ServiceDiscovery{VIP: "ignored"},
+	}
+	if err := dp.RegisterService(dst); err != nil {
+		t.Fatalf("RegisterService(api): %v", err)
+	}
+	publishEndpoint(t, dp, "api-id", "127.0.0.1", echo.Port)
+	if !waitForCache(dp, "api-id", 1, 2*time.Second) {
+		t.Fatal("cache did not learn endpoints")
+	}
+
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoa(proxyPort)), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte("ping"))
+	conn.(*net.TCPConn).CloseWrite()
+	got, _ := io.ReadAll(conn)
+	if len(got) != 0 {
+		t.Fatalf("expected empty (egress denied), got %q", got)
+	}
+}
+
+func TestPolicyEgress_AllowMatchingRule(t *testing.T) {
+	echo := startEcho(t)
+	dp := startDataplane(t)
+	publishLocalIdentity(t, dp, "web", "prod")
+
+	// "web" explicitly allows dialing api/prod → the connection must
+	// pass egress and then the destination's (absent) ingress policy.
+	if err := dp.RegisterService(&types.Service{
+		ID:        "web-id2",
+		Name:      "web",
+		Namespace: "prod",
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Egress: []types.EgressRule{
+				{To: []types.NetworkPolicyPeer{{Service: "api", Namespace: "prod"}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterService(web): %v", err)
+	}
+
+	proxyPort := mustFreePort(t)
+	dst := &types.Service{
+		ID:        "api-id2",
+		Name:      "api",
+		Namespace: "prod",
+		Ports: []types.ServicePort{
+			{Name: "tcp", Port: proxyPort, TargetPort: echo.Port, Protocol: "tcp"},
+		},
+		Discovery: &types.ServiceDiscovery{VIP: "ignored"},
+	}
+	if err := dp.RegisterService(dst); err != nil {
+		t.Fatalf("RegisterService(api): %v", err)
+	}
+	publishEndpoint(t, dp, "api-id2", "127.0.0.1", echo.Port)
+	if !waitForCache(dp, "api-id2", 1, 2*time.Second) {
+		t.Fatal("cache did not learn endpoints")
+	}
+
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", itoa(proxyPort)), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte("hello"))
+	conn.(*net.TCPConn).CloseWrite()
+	got, _ := io.ReadAll(conn)
+	if string(got) != "hello" {
+		t.Fatalf("expected echo 'hello', got %q", got)
+	}
+}
+
+func TestPolicyEgress_UnregisterClearsSourcePolicy(t *testing.T) {
+	dp := startDataplane(t)
+	publishLocalIdentity(t, dp, "web", "prod")
+
+	if err := dp.RegisterService(&types.Service{
+		ID:        "web-id3",
+		Name:      "web",
+		Namespace: "prod",
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Egress: []types.EgressRule{
+				{To: []types.NetworkPolicyPeer{{Service: "db", Namespace: "infra"}}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterService(web): %v", err)
+	}
+	if err := dp.RegisterService(&types.Service{
+		ID:        "api-id3",
+		Name:      "api",
+		Namespace: "prod",
+		Discovery: &types.ServiceDiscovery{VIP: "ignored"},
+	}); err != nil {
+		t.Fatalf("RegisterService(api): %v", err)
+	}
+
+	src := net.ParseIP("127.0.0.1")
+	res := dp.evaluatePolicy("api-id3", src, 8080, "tcp")
+	if res.Decision != policy.DecisionDeny || res.Reason != policy.ReasonDeniedEgress {
+		t.Fatalf("want egress deny, got %v/%s", res.Decision, res.Reason)
+	}
+
+	// Dropping the source service removes its egress policy → open.
+	dp.UnregisterService("web-id3")
+	res = dp.evaluatePolicy("api-id3", src, 8080, "tcp")
+	if res.Decision == policy.DecisionDeny {
+		t.Fatalf("want allow after unregister, got %v/%s", res.Decision, res.Reason)
+	}
+}
+
+// A port-less source service never gets a VIP listener, so it never
+// reaches RegisterService — but it can still dial other services and
+// must have its egress policy enforced. Exercises the reconciler path
+// rather than RegisterService directly.
+func TestPolicyEgress_PortlessSourceIsStillPolicied(t *testing.T) {
+	dp := startDataplane(t)
+	publishLocalIdentity(t, dp, "worker", "prod")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// A worker with no inbound ports, only egress rules.
+	worker := &types.Service{
+		ID:        "worker-id",
+		Name:      "worker",
+		Namespace: "prod",
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Egress: []types.EgressRule{
+				{To: []types.NetworkPolicyPeer{{Service: "db", Namespace: "infra"}}},
+			},
+		},
+	}
+	if err := dp.reconcileOneService(ctx, worker, false); err != nil {
+		t.Fatalf("reconcileOneService(worker): %v", err)
+	}
+	if err := dp.RegisterService(&types.Service{
+		ID:        "api-id4",
+		Name:      "api",
+		Namespace: "prod",
+		Discovery: &types.ServiceDiscovery{VIP: "ignored"},
+	}); err != nil {
+		t.Fatalf("RegisterService(api): %v", err)
+	}
+
+	res := dp.evaluatePolicy("api-id4", net.ParseIP("127.0.0.1"), 8080, "tcp")
+	if res.Decision != policy.DecisionDeny || res.Reason != policy.ReasonDeniedEgress {
+		t.Fatalf("want egress deny for port-less source, got %v/%s", res.Decision, res.Reason)
+	}
+}
+
 func TestPolicyEvaluate_DirectAccess(t *testing.T) {
 	// Sanity: PolicyFor returns the compiled instance.
 	dp := startDataplane(t)

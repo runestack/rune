@@ -118,6 +118,12 @@ func (s *Subsystem) reconcileOneService(ctx context.Context, svc *types.Service,
 		return nil
 	}
 	if len(svc.Ports) == 0 {
+		// No ports means no VIP listener, but the service can still be
+		// the *source* of egress-policied traffic — a worker with no
+		// inbound ports is exactly the shape that carries egress rules
+		// and no ingress. Track its policy so evaluatePolicy can find
+		// it when one of its instances dials another service's VIP.
+		s.syncPolicy(svc)
 		return nil
 	}
 	hadVIP := svc.Discovery != nil && svc.Discovery.VIP != ""

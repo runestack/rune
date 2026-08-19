@@ -146,8 +146,16 @@ type Subsystem struct {
 	metrics *Metrics
 
 	// Network policy state (RUNE-064).
-	policyMu       sync.RWMutex
-	policies       map[string]*policy.Compiled
+	policyMu sync.RWMutex
+	policies map[string]*policy.Compiled
+	// svcIdents maps serviceID -> namespace/name so egress evaluation
+	// can express the dial target the way egress rules address it (by
+	// service name, not ID).
+	svcIdents map[string]types.NamespacedName
+	// policyByName indexes compiled policies by namespace/name so the
+	// egress path can find the *source* service's policy from a
+	// LocalInstances identity, which carries name+namespace only.
+	policyByName   map[types.NamespacedName]*policy.Compiled
 	localInstances *policy.LocalInstancesTable
 
 	mu      sync.Mutex
@@ -207,6 +215,8 @@ func New(cfg Config) (*Subsystem, error) {
 		nfm:            newNFTables(cfg.Mode, cfg.Logger),
 		readyCh:        make(chan struct{}),
 		policies:       make(map[string]*policy.Compiled),
+		svcIdents:      make(map[string]types.NamespacedName),
+		policyByName:   make(map[types.NamespacedName]*policy.Compiled),
 		localInstances: policy.NewLocalInstancesTable(nodeID),
 		vipHost:        newLocalVIPHost(),
 		svcRegistered:  make(map[string]string),
@@ -239,27 +249,55 @@ func (s *Subsystem) RegisterService(svc *types.Service) error {
 	}
 	// Compile and store policy before opening listeners so the very
 	// first connection sees the active rule set.
+	s.syncPolicy(svc)
+	return s.proxy.Register(svc)
+}
+
+// syncPolicy compiles svc's network policy and refreshes the policy
+// indexes without touching listeners.
+//
+// It is split out of RegisterService because policy must be tracked
+// for every service this node knows about, not just the ones that get
+// a VIP listener: a port-less service (a worker with no inbound ports)
+// never reaches RegisterService, but can still be the *source* of
+// egress-policied traffic that evaluatePolicy has to resolve.
+func (s *Subsystem) syncPolicy(svc *types.Service) {
+	if svc == nil || svc.ID == "" {
+		return
+	}
 	compiled := policy.Compile(svc)
+	ident := identityOf(svc)
 	s.policyMu.Lock()
+	// A rename frees the old namespace/name slot.
+	if prev, ok := s.svcIdents[svc.ID]; ok && prev != ident {
+		delete(s.policyByName, prev)
+	}
+	s.svcIdents[svc.ID] = ident
 	if compiled == nil {
 		delete(s.policies, svc.ID)
+		delete(s.policyByName, ident)
 	} else {
 		s.policies[svc.ID] = compiled
+		s.policyByName[ident] = compiled
 	}
 	s.policyMu.Unlock()
+
+	rules := 0
 	if compiled != nil {
-		s.metrics.setPolicyRules(svc.ID, svc.Namespace, compiled.IngressRuleCount()+compiled.EgressRuleCount())
-	} else {
-		s.metrics.setPolicyRules(svc.ID, svc.Namespace, 0)
+		rules = compiled.IngressRuleCount() + compiled.EgressRuleCount()
 	}
+	s.metrics.setPolicyRules(svc.ID, svc.Namespace, rules)
 	s.metrics.setPolicyLastSeq(svc.ID, svc.Namespace, time.Now().Unix())
-	return s.proxy.Register(svc)
 }
 
 // UnregisterService closes listeners for serviceID. Connections drain
 // for up to DrainTimeout. Idempotent.
 func (s *Subsystem) UnregisterService(serviceID string) {
 	s.policyMu.Lock()
+	if ident, ok := s.svcIdents[serviceID]; ok {
+		delete(s.policyByName, ident)
+		delete(s.svcIdents, serviceID)
+	}
 	delete(s.policies, serviceID)
 	s.policyMu.Unlock()
 	s.proxy.Unregister(serviceID)
@@ -269,15 +307,53 @@ func (s *Subsystem) UnregisterService(serviceID string) {
 // diagnostics and tests.
 func (s *Subsystem) LocalInstances() *policy.LocalInstancesTable { return s.localInstances }
 
+// identityOf returns the namespace/name a service is addressed by in
+// policy rules. Name falls back to the service ID for legacy specs
+// that never set Name.
+func identityOf(svc *types.Service) types.NamespacedName {
+	name := svc.Name
+	if name == "" {
+		name = svc.ID
+	}
+	return types.NamespacedName{Namespace: svc.Namespace, Name: name}
+}
+
 // evaluatePolicy is the closure handed to the proxy manager. It
-// resolves the source IP to identity via the LocalInstances table
-// then evaluates against the destination service's compiled policy.
+// resolves the source IP to identity via the LocalInstances table,
+// checks the *source* service's egress policy against the dial target
+// (RUNE-064: egress is evaluated when a local instance dials a service
+// VIP), then evaluates the destination service's ingress policy.
+//
+// Egress coverage is deliberately scoped to what the VIP proxy can
+// see: dials from same-node instances to service VIPs. Traffic that
+// never crosses the proxy (direct container-IP or internet dials) is
+// out of reach here and needs the kernel-side nftables path — see
+// https://github.com/runestack/rune/issues/194.
 func (s *Subsystem) evaluatePolicy(serviceID string, srcIP net.IP, port int, proto string) policy.Result {
-	s.policyMu.RLock()
-	c := s.policies[serviceID]
-	s.policyMu.RUnlock()
 	peer := s.localInstances.PeerInfoFor(srcIP)
-	return c.EvaluateIngress(peer, port, proto)
+	s.policyMu.RLock()
+	dstPolicy := s.policies[serviceID]
+	dst := s.svcIdents[serviceID]
+	var srcPolicy *policy.Compiled
+	if peer.SameNode && peer.Identity != nil {
+		srcPolicy = s.policyByName[types.NamespacedName{
+			Namespace: peer.Identity.Namespace,
+			Name:      peer.Identity.Service,
+		}]
+	}
+	s.policyMu.RUnlock()
+
+	if srcPolicy.HasEgressRules() {
+		res := srcPolicy.EvaluateEgress(policy.EgressTarget{
+			Service:   dst.Name,
+			Namespace: dst.Namespace,
+			Port:      port,
+		}, proto)
+		if res.Decision == policy.DecisionDeny {
+			return res
+		}
+	}
+	return dstPolicy.EvaluateIngress(peer, port, proto)
 }
 
 // PolicyFor returns the compiled policy for serviceID for diagnostics.
