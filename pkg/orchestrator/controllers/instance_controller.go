@@ -67,6 +67,17 @@ type InstanceController interface {
 	// StopInstance stops an instance temporarily but keeps it in the store
 	StopInstance(ctx context.Context, instance *types.Instance) error
 
+	// WithdrawServiceInstances removes a set of instances from the dataplane
+	// endpoint set in one publish and takes ONE shared drain window for all
+	// of them (RUNE-042 §4: whole-service teardowns drain in batch, not in
+	// series — a per-instance drain would add len(instances) × drainWindow
+	// to a teardown whose instances are all being withdrawn anyway). Each
+	// Running instance is flipped to Terminating first, so the per-instance
+	// teardown that follows (StopInstance/DeleteInstance) sees a
+	// non-Running status and skips its own drain. Best-effort; never fails
+	// the teardown.
+	WithdrawServiceInstances(ctx context.Context, service *types.Service, instances []*types.Instance)
+
 	// DeleteInstance marks an instance for deletion and cleans up runner resources
 	// The instance will remain in the store with Deleted status until garbage collection
 	DeleteInstance(ctx context.Context, instance *types.Instance) error
@@ -152,6 +163,15 @@ type instanceController struct {
 	endpointPublisher EndpointPublisher
 	nodeID            string
 
+	// drainWindow is how long a withdrawn instance keeps serving in-flight
+	// work after it leaves the dataplane endpoint set, before SIGTERM
+	// (RUNE-042 §4, Phase 0). Endpoint withdrawal propagates asynchronously
+	// (publish → OrderedLog → agent watch → proxy cache), so this window
+	// also absorbs that propagation. Constant defaultDrainWindow for now;
+	// becomes the default of the service-level `drainSeconds` field when
+	// the RUNE-042 spec surface lands (floored at 1s there, never 0).
+	drainWindow time.Duration
+
 	// publishedMu guards lastPublished, a service-ID -> last-published
 	// endpoint-set signature map. republishService is now called every
 	// reconcile tick; without this dedup every service would append a
@@ -217,6 +237,38 @@ func NewInstanceController(store store.Store, runnerManager manager.IRunnerManag
 		secretRepo:    repos.NewSecretRepo(store),
 		configRepo:    repos.NewConfigRepo(store),
 		lastPublished: map[string]string{},
+		drainWindow:   defaultDrainWindow,
+	}
+}
+
+// defaultDrainWindow is the Phase 0 drain constant (RUNE-042 §4): the pause
+// between withdrawing an instance from the dataplane and stopping its
+// container, covering both withdrawal propagation and typical keep-alive
+// turnover. The proxy pipes established connections until either side
+// closes, so an app must still close idle connections on SIGTERM — the
+// drain covers new-connection routing, not request-level draining.
+const defaultDrainWindow = 5 * time.Second
+
+// drainAfterWithdraw blocks while just-withdrawn instances finish their
+// in-flight work. Call it AFTER the instances have been persisted in a
+// non-Running state and the endpoint set republished — the pause is what
+// gives the async withdrawal time to propagate and existing requests time
+// to complete before the container receives SIGTERM.
+//
+// No-ops when nothing could have been routed there: no dataplane publisher
+// (dev/standalone), a service with no ports, or wasServing false (the
+// instance was not Running when its teardown began — only Running
+// instances are ever published, see republishService).
+func (c *instanceController) drainAfterWithdraw(ctx context.Context, service *types.Service, wasServing bool, target string) {
+	if !wasServing || c.endpointPublisher == nil || service == nil || len(service.Ports) == 0 {
+		return
+	}
+	c.logger.Info("Draining withdrawn instance(s) before stop",
+		log.Str("target", target),
+		log.Duration("window", c.drainWindow))
+	select {
+	case <-time.After(c.drainWindow):
+	case <-ctx.Done():
 	}
 }
 
@@ -947,11 +999,67 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 		return fmt.Errorf("failed to get runner for instance: %w", err)
 	}
 
+	// Withdraw from the dataplane BEFORE stopping (RUNE-042 §4, Phase 0):
+	// flip to Terminating so republishService excludes this instance,
+	// publish the shrunken endpoint set, drain, and only then SIGTERM. On
+	// runner failure the flip is reverted below so the record keeps telling
+	// the truth (the container is still running). Batch teardowns
+	// (WithdrawServiceInstances) pre-flip and take one shared drain, which
+	// makes wasServing false here and skips the per-instance wait.
+	wasServing := instance.Status == types.InstanceStatusRunning
+	var owningService *types.Service
+	if wasServing {
+		var fresh types.Instance
+		if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh, func() error {
+			if fresh.Status != types.InstanceStatusRunning {
+				return store.ErrSkipUpdate
+			}
+			fresh.Status = types.InstanceStatusTerminating
+			fresh.StatusMessage = "Stopping"
+			fresh.UpdatedAt = time.Now()
+			return nil
+		}); err != nil {
+			c.logger.Warn("Failed to mark instance Terminating before stop",
+				log.Str("instance", instance.ID),
+				log.Err(err))
+		} else {
+			instance.Status = types.InstanceStatusTerminating
+		}
+		if instance.ServiceName != "" {
+			var svc types.Service
+			if err := c.store.Get(ctx, types.ResourceTypeService, instance.Namespace, instance.ServiceName, &svc); err == nil {
+				owningService = &svc
+				c.republishService(ctx, owningService)
+				c.republishLocalInstances(ctx)
+			}
+		}
+	}
+	c.drainAfterWithdraw(ctx, owningService, wasServing, instance.ID)
+
 	// Stop the instance with the runner
 	if err := runner.Stop(ctx, instance, 10*time.Second); err != nil {
 		c.logger.Error("Failed to stop instance with runner",
 			log.Str("instance", instance.ID),
 			log.Err(err))
+		// Revert the withdrawal flip: the container is still running and
+		// the record must say so. Best-effort — the next reconcile
+		// converges either way — and the republish restores the endpoint.
+		if wasServing {
+			var fresh types.Instance
+			if rerr := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh, func() error {
+				if fresh.Status != types.InstanceStatusTerminating {
+					return store.ErrSkipUpdate
+				}
+				fresh.Status = types.InstanceStatusRunning
+				fresh.StatusMessage = "Stop failed; still running"
+				fresh.UpdatedAt = time.Now()
+				return nil
+			}); rerr == nil {
+				instance.Status = types.InstanceStatusRunning
+				c.republishServiceByInstance(ctx, instance)
+				c.republishLocalInstances(ctx)
+			}
+		}
 		return fmt.Errorf("failed to stop instance: %w", err)
 	}
 
@@ -984,6 +1092,47 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 	c.republishServiceByInstance(ctx, instance)
 	c.republishLocalInstances(ctx)
 	return nil
+}
+
+// WithdrawServiceInstances implements the batch withdrawal described on the
+// InstanceController interface: flip every Running instance to Terminating,
+// republish the endpoint set once, and take one shared drain window.
+func (c *instanceController) WithdrawServiceInstances(ctx context.Context, service *types.Service, instances []*types.Instance) {
+	anyServing := false
+	for _, inst := range instances {
+		if inst == nil || inst.Status != types.InstanceStatusRunning {
+			continue
+		}
+		var fresh types.Instance
+		if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
+			if fresh.Status != types.InstanceStatusRunning {
+				return store.ErrSkipUpdate
+			}
+			fresh.Status = types.InstanceStatusTerminating
+			fresh.StatusMessage = "Withdrawn from routing; draining"
+			fresh.UpdatedAt = time.Now()
+			return nil
+		}); err != nil {
+			c.logger.Warn("Failed to mark instance Terminating during batch withdrawal",
+				log.Str("instance", inst.ID),
+				log.Err(err))
+			continue
+		}
+		anyServing = true
+		inst.Status = types.InstanceStatusTerminating
+	}
+	if !anyServing {
+		return
+	}
+	if service != nil {
+		c.republishService(ctx, service)
+	}
+	c.republishLocalInstances(ctx)
+	target := "batch"
+	if service != nil {
+		target = service.Namespace + "/" + service.Name + " (batch)"
+	}
+	c.drainAfterWithdraw(ctx, service, true, target)
 }
 
 // markInstanceFailedInPlace transitions a failing instance to its terminal
@@ -1295,6 +1444,15 @@ func (c *instanceController) DeleteInstance(ctx context.Context, instance *types
 		log.Str("namespace", instance.Namespace),
 		log.Str("service", instance.ServiceName))
 
+	// Whether traffic could have been routed here: only Running instances
+	// are ever published to the dataplane (republishService filters on
+	// Status), so anything else was already absent from the endpoint set.
+	// Captured before the Terminating flip below overwrites it. Batch
+	// teardowns (WithdrawServiceInstances) pre-flip to Terminating and take
+	// one shared drain, which makes this false and skips the per-instance
+	// wait here.
+	wasServing := instance.Status == types.InstanceStatusRunning
+
 	// Flip to Terminating immediately so `rune get instances` shows
 	// the truth ("this is being torn down") instead of Running during
 	// the runner.Stop graceful-shutdown window (up to 10s here).
@@ -1314,6 +1472,26 @@ func (c *instanceController) DeleteInstance(ctx context.Context, instance *types
 				log.Err(err))
 		}
 	}
+
+	// Withdraw from the dataplane BEFORE stopping the container (RUNE-042
+	// §4, Phase 0). The Terminating flip above already makes this instance
+	// ineligible for the endpoint set — publish that fact while the
+	// container can still serve, then give in-flight requests the drain
+	// window. The old order (stop first, withdraw at the end) handed new
+	// connections to a dying container on every teardown; the republish at
+	// the end of this function stays as an idempotent backstop.
+	var owningService *types.Service
+	if instance.ServiceName != "" {
+		var svc types.Service
+		if err := c.store.Get(ctx, types.ResourceTypeService, instance.Namespace, instance.ServiceName, &svc); err == nil {
+			owningService = &svc
+		}
+	}
+	if wasServing && owningService != nil {
+		c.republishService(ctx, owningService)
+		c.republishLocalInstances(ctx)
+	}
+	c.drainAfterWithdraw(ctx, owningService, wasServing, instance.ID)
 
 	// Snapshot the container's stdout/stderr before we tear it down,
 	// so `rune logs <id>` and the service-level tombstone fallback
@@ -1722,6 +1900,33 @@ func (c *instanceController) RestartInstance(ctx context.Context, instance *type
 	if err != nil {
 		return fmt.Errorf("failed to get runner for restart: %w", err)
 	}
+
+	// Withdraw from the dataplane BEFORE stopping (RUNE-042 §4/§6.3): the
+	// liveness-restart path had the same stop-before-withdraw defect as
+	// DeleteInstance — new connections kept landing on the container being
+	// restarted. Flip to Terminating (the tombstone write below moves it on
+	// to Failed), publish the shrunken endpoint set, and give in-flight
+	// requests the drain window.
+	wasServing := currentInstance.Status == types.InstanceStatusRunning
+	if wasServing {
+		var fresh types.Instance
+		if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh, func() error {
+			if fresh.Status != types.InstanceStatusRunning {
+				return store.ErrSkipUpdate
+			}
+			fresh.Status = types.InstanceStatusTerminating
+			fresh.StatusMessage = "Restarting; draining connections"
+			fresh.UpdatedAt = time.Now()
+			return nil
+		}, store.WithHealthController()); err != nil {
+			c.logger.Warn("Failed to mark instance Terminating before restart",
+				log.Str("instance", instance.ID),
+				log.Err(err))
+		}
+		c.republishService(ctx, &service)
+		c.republishLocalInstances(ctx)
+	}
+	c.drainAfterWithdraw(ctx, &service, wasServing, instance.ID)
 
 	// Stop the failing container — but preserve it. The new container
 	// naming scheme (<namespace>-<service>-<ordinal>-<id_prefix>) means
