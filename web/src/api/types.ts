@@ -11,6 +11,19 @@ export interface Node {
   instances: number;
   addr: string;
 }
+/** Progress of an in-flight rolling update. Mirrors the server's
+ *  UpdateStatus, reduced to what the dashboard renders. */
+export interface ServiceUpdate {
+  /** Replicas already carrying the new template AND serving. */
+  replaced: number;
+  /** Replicas serving right now, any template. */
+  serving: number;
+  /** Desired replica count. */
+  desired: number;
+  /** One-sentence explanation of what the update is waiting on. */
+  message?: string;
+}
+
 export interface Service {
   name: string;
   ns: string;
@@ -27,6 +40,10 @@ export interface Service {
   runeset: string;
   policy: string;
   note?: string;
+  /** Reason slug behind a non-Running status, e.g. "UpdateStalled". */
+  reason?: string;
+  /** In-flight rolling update; undefined when none is running (RUNE-042). */
+  update?: ServiceUpdate;
   stateful?: boolean;
   volume?: string;
   schedule?: string;
