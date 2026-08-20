@@ -3,6 +3,9 @@ package process
 import (
 	"context"
 	"io"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -102,26 +105,32 @@ func TestProcessExecStreamOutputSurvivesProcessExit(t *testing.T) {
 	assert.ErrorIs(t, err, io.EOF)
 }
 
-// TestProcessExecStreamCloseUnblocksParkedWrite pins the other half of
-// pipe ownership: releasing the parent's stdin write end when the child
-// exits.
+// TestChildExitReleasesParkedStdinWrite pins the other half of pipe
+// ownership: releasing the parent's stdin write end when the child exits.
 //
 // exec.Cmd used to do this for us — cmd.Wait closes the pipes it owns,
-// which unparked any Write blocked on a full stdin pipe. Owning the
-// pipes ourselves means we have to do it, and the first cut of that
-// change did not: a parked Write held s.mutex forever, and Close, which
-// needs the mutex before it can cancel and clean up, wedged behind it.
-// In the daemon that is a StreamExec handler goroutine stuck for good.
-func TestProcessExecStreamCloseUnblocksParkedWrite(t *testing.T) {
+// which unparked any Write blocked on a full stdin pipe. Owning the pipes
+// ourselves means we have to do it, and the first cut of that change did
+// not: a parked Write held s.mutex forever, and Close, which needs the
+// mutex before it can cancel and clean up, wedged behind it.
+//
+// Note what this does and does not pin. Child *exit* is what releases the
+// write; Close does not, and cannot — it is stuck behind the same mutex.
+// A live child that simply never drains stdin still wedges Close, on this
+// code and on the code before it. That is a separate defect.
+func TestChildExitReleasesParkedStdinWrite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping test in short mode")
 	}
 
 	logger := log.NewLogger()
-	// The child exits immediately but hands stdin to a grandchild, so
-	// the pipe stays open and the parked write cannot drain.
+	// The child hands stdin to a grandchild and exits, so the pipe stays
+	// open and the parked write cannot drain. It reports the grandchild's
+	// pid on stdout so we can reap it — CommandContext kills only the
+	// direct child, which by then is already gone. The sleep before exit
+	// gives the writer below room to park first.
 	options := runner.ExecOptions{
-		Command: []string{"sh", "-c", "exec 3<&0; sleep 10 0<&3 & exit 0"},
+		Command: []string{"sh", "-c", "exec 3<&0; sleep 10 0<&3 & echo $!; sleep 1; exit 0"},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -129,20 +138,43 @@ func TestProcessExecStreamCloseUnblocksParkedWrite(t *testing.T) {
 
 	stream, err := NewProcessExecStream(ctx, "test-instance", options, logger)
 	require.NoError(t, err)
+	defer stream.Close()
 
-	// Park a write larger than the pipe buffer, so it blocks holding
-	// the stream mutex.
+	pidBuf := make([]byte, 32)
+	n, err := stream.Read(pidBuf)
+	require.NoError(t, err)
+	grandchild, err := strconv.Atoi(strings.TrimSpace(string(pidBuf[:n])))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = syscall.Kill(grandchild, syscall.SIGKILL) })
+
+	// Park a write larger than the pipe buffer, so it blocks holding the
+	// stream mutex.
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
 		_, _ = stream.Write(make([]byte, 1<<20))
 	}()
 
+	// Wait until the write genuinely holds the mutex. Without this the
+	// assertions below could pass merely because the writer had not
+	// started yet — which they do, even with the fix reverted.
 	require.Eventually(t, func() bool {
-		_, err := stream.ExitCode()
-		return err == nil
-	}, 5*time.Second, 5*time.Millisecond, "child never exited")
+		if stream.mutex.TryLock() {
+			stream.mutex.Unlock()
+			return false
+		}
+		return true
+	}, 5*time.Second, time.Millisecond, "write never parked holding the stream mutex")
 
+	// The child's exit must release the parked write. This is the
+	// assertion that actually pins the fix.
+	select {
+	case <-writeDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("parked stdin write was never released after the child exited")
+	}
+
+	// And Close must not wedge behind it.
 	closeDone := make(chan struct{})
 	go func() {
 		defer close(closeDone)

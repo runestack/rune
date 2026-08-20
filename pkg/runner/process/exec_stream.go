@@ -18,7 +18,9 @@ import (
 //
 // Callers must Close the stream when done. Its pipes are owned by the
 // stream rather than by exec.Cmd, so — unlike a cmd.StdoutPipe stream —
-// the descriptors are not released implicitly when the process exits.
+// the stdout and stderr read ends are not released implicitly when the
+// process exits. The stdin write end is: the wait goroutine closes it on
+// exit, so a writer parked on a full pipe cannot wedge Close.
 type ProcessExecStream struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
