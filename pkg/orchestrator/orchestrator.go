@@ -242,6 +242,10 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	if options.EventLog != nil {
 		instanceController.SetEventLog(options.EventLog)
 		volumeController.SetEventLog(options.EventLog)
+		// The reconciler records the update lifecycle (RUNE-042). Without
+		// this there is no after-the-fact record of what a rolling update
+		// did: Service.Update is cleared the moment it converges.
+		serviceController.SetEventLog(options.EventLog)
 	}
 
 	// SnapshotController owns the Snapshot CRUD reconciliation loop.

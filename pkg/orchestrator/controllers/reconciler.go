@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/queue"
 	"github.com/runestack/rune/pkg/store"
@@ -49,14 +50,21 @@ type reconciler struct {
 	instanceController InstanceController
 	healthController   HealthController
 	logger             log.Logger
-	reconcileInterval  time.Duration
-	queue              *queue.Queue
-	mu                 sync.Mutex
-	isRunning          bool
-	ctx                context.Context
-	cancel             context.CancelFunc
-	ticker             *time.Ticker
-	wg                 sync.WaitGroup
+
+	// events is the optional persisted event log. Set after construction via
+	// SetEventLog; nil-safe, so unit tests need not wire one. Update
+	// lifecycle events go here — they are the only after-the-fact record of
+	// what a rolling update did, since Service.Update is cleared on
+	// completion (RUNE-042 §8.2).
+	events            events.EventLog
+	reconcileInterval time.Duration
+	queue             *queue.Queue
+	mu                sync.Mutex
+	isRunning         bool
+	ctx               context.Context
+	cancel            context.CancelFunc
+	ticker            *time.Ticker
+	wg                sync.WaitGroup
 }
 
 // newReconciler creates a new reconciler.
@@ -664,6 +672,8 @@ func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *type
 			log.Str("service", service.Name),
 			log.Str("instance", inst.Name),
 			log.Str("reason", plan.Reason))
+		r.emitService(ctx, service, types.EventLevelInfo, eventInstanceRetired,
+			fmt.Sprintf("retired %s: %s", inst.Name, plan.Reason))
 		r.healthController.RemoveInstance(inst.ID)
 		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
 			r.logger.Error("Failed to retire instance",
@@ -1095,7 +1105,7 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 			newStatus = types.ServiceStatusFailed
 			if stalled {
 				newReason = types.ServiceReasonUpdateStalled
-				newMessage = "update made no progress within the stall deadline"
+				newMessage = stalledMessage(upd)
 			} else if worstFailed != nil {
 				newReason = types.DeriveServiceReason(worstFailed.Status, worstFailed.StatusMessage)
 				newMessage = worstFailed.StatusMessage
@@ -1103,7 +1113,7 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		case stalled:
 			newStatus = types.ServiceStatusFailed
 			newReason = types.ServiceReasonUpdateStalled
-			newMessage = "update made no progress within the stall deadline"
+			newMessage = stalledMessage(upd)
 		case updating:
 			newStatus = types.ServiceStatusDeploying
 			newReason = types.ServiceReasonUpdating
@@ -1147,7 +1157,11 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 				log.Str("service", service.Name),
 				log.Str("from", string(service.Status)),
 				log.Str("to", string(newStatus)),
-				log.Str("reason", newReason))
+				log.Str("reason", newReason),
+				// Without this the planner's actual sentence ("waiting for
+				// replacements to become ready") never reached the log, and a
+				// held update was undiagnosable from logs alone.
+				log.Str("message", newMessage))
 		}
 
 		// Apply ONLY the status fields (+ ObservedGeneration), atomically, on the
@@ -1190,6 +1204,8 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		if err != nil {
 			return fmt.Errorf("failed to update service status: %w", err)
 		}
+		r.emitUpdateTransitions(ctx, service, service.Update, upd, stalled)
+
 		// Reflect the persisted fields on the caller's copy for consistency.
 		// Clone Metadata rather than writing through it: the pointer may be
 		// shared with watch-event consumers and other store readers
@@ -1351,6 +1367,16 @@ func (r *reconciler) computeUpdateStatus(ctx context.Context, service *types.Ser
 	return next, stalled
 }
 
+// stalledMessage explains a stall without throwing away the planner's own
+// sentence, which is the part that says WHY nothing is moving.
+func stalledMessage(upd *types.UpdateStatus) string {
+	base := "update made no progress within the stall deadline"
+	if upd == nil || upd.Message == "" {
+		return base
+	}
+	return base + ": " + upd.Message
+}
+
 // updateStatusChanged reports whether the update block needs persisting.
 // Timestamps are deliberately excluded from the comparison except when they
 // carry news: LastProgressAt moves only on real progress, so comparing the
@@ -1373,7 +1399,84 @@ func updateStatusChanged(a, b *types.UpdateStatus) bool {
 		!a.LastProgressAt.Equal(b.LastProgressAt)
 }
 
-// ServiceInstanceData contains instances and orphaned instance information
+// SetEventLog wires the persisted event log. Nil-safe.
+func (r *reconciler) SetEventLog(eventLog events.EventLog) { r.events = eventLog }
+
+// Well-known event reasons for the update lifecycle. Kept in the "update"
+// vocabulary the spec field uses — operators read `updateStrategy`, so they
+// should not have to learn a second word for the same thing.
+const (
+	eventUpdateStarted   = "UpdateStarted"
+	eventInstanceRetired = "InstanceRetired"
+	eventUpdateHolding   = "UpdateHolding"
+	eventUpdateStalled   = "UpdateStalled"
+	eventUpdateComplete  = "UpdateComplete"
+)
+
+// emitService records a service-scoped event. Best-effort and nil-safe.
+func (r *reconciler) emitService(ctx context.Context, service *types.Service, level types.EventLevel, reason, message string) {
+	if r.events == nil || service == nil {
+		return
+	}
+	if err := r.events.Emit(ctx, types.Event{
+		Namespace: service.Namespace,
+		Kind:      "Service",
+		Name:      service.Name,
+		UID:       service.ID,
+		Level:     level,
+		Reason:    reason,
+		Message:   message,
+	}); err != nil {
+		r.logger.Warn("Failed to emit service event",
+			log.Str("service", service.Name), log.Err(err))
+	}
+}
+
+// emitUpdateTransitions records the update lifecycle by comparing the block we
+// are about to persist against the one already stored. Only transitions are
+// emitted — a held update ticks every 30s and must not produce an event each
+// time, which is the difference between a readable timeline and log spam.
+func (r *reconciler) emitUpdateTransitions(ctx context.Context, service *types.Service, prev, next *types.UpdateStatus, stalled bool) {
+	if r.events == nil {
+		return
+	}
+
+	switch {
+	case prev == nil && next != nil:
+		r.emitService(ctx, service, types.EventLevelInfo, eventUpdateStarted,
+			fmt.Sprintf("updating %d instance(s) to template generation %d",
+				next.Outdated, next.TemplateGeneration))
+
+	case prev != nil && next == nil:
+		r.emitService(ctx, service, types.EventLevelInfo, eventUpdateComplete,
+			fmt.Sprintf("update to template generation %d complete; %d instance(s) serving",
+				prev.TemplateGeneration, prev.Available))
+
+	case prev != nil && next != nil:
+		// A new template landed mid-update: report the old one finishing and
+		// the new one starting rather than silently switching targets.
+		if prev.TemplateGeneration != next.TemplateGeneration {
+			r.emitService(ctx, service, types.EventLevelInfo, eventUpdateStarted,
+				fmt.Sprintf("superseded by template generation %d; %d instance(s) outdated",
+					next.TemplateGeneration, next.Outdated))
+			return
+		}
+		if stalled && service.StatusReason != types.ServiceReasonUpdateStalled {
+			// Edge-triggered: only when the service is crossing INTO stalled.
+			r.emitService(ctx, service, types.EventLevelWarn, eventUpdateStalled,
+				fmt.Sprintf("no progress for %s: %s",
+					time.Since(next.LastProgressAt).Round(time.Second), next.Message))
+			return
+		}
+		// Holding is edge-triggered on the message changing, so a steady hold
+		// is recorded once rather than on every resync tick.
+		if !stalled && next.Message != "" && next.Message != prev.Message {
+			r.emitService(ctx, service, types.EventLevelInfo, eventUpdateHolding, next.Message)
+		}
+	}
+}
+
+// ServiceInstanceData contains instances and orphaned instance information// ServiceInstanceData contains instances and orphaned instance information
 type ServiceInstanceData struct {
 	Instances         []types.Instance
 	OrphanedInstances []*types.Instance // Actual orphaned instance objects

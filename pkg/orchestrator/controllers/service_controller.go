@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
@@ -19,6 +20,10 @@ import (
 type ServiceController interface {
 	Start(ctx context.Context) error
 	Stop() error
+
+	// SetEventLog wires the persisted event log so the reconciler can record
+	// the update lifecycle. Nil-safe; call once at startup.
+	SetEventLog(eventLog events.EventLog)
 	GetServiceStatus(ctx context.Context, namespace, name string) (*types.ServiceStatusInfo, error)
 	UpdateServiceStatus(ctx context.Context, service *types.Service, status types.ServiceStatus) error
 	GetServiceLogs(ctx context.Context, namespace, name string, opts types.LogOptions) (io.ReadCloser, error)
@@ -80,6 +85,14 @@ func NewServiceController(
 		reconciler:         reconciler,
 		logger:             logger.WithComponent("service-controller"),
 	}, nil
+}
+
+// SetEventLog wires the persisted event log into the reconciler, which emits
+// the update lifecycle (RUNE-042). Nil-safe; call once at startup.
+func (sc *serviceController) SetEventLog(eventLog events.EventLog) {
+	if sc.reconciler != nil {
+		sc.reconciler.SetEventLog(eventLog)
+	}
 }
 
 // Start starts the service controller
