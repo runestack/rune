@@ -73,7 +73,7 @@ We use GitHub to host code, to track issues and feature requests, as well as acc
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the project's MIT License.
+By contributing, you agree that your contributions will be licensed under the project's [Apache License, Version 2.0](LICENSE). Per Section 5 of that licence, contributions you submit are licensed under those terms by default — no separate CLA is required.
 
 ## Code of Conduct
 

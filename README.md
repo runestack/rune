@@ -596,4 +596,25 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for deta
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 
+Rune is licensed under the **Apache License, Version 2.0** — see [LICENSE](LICENSE)
+for the full text and [NOTICE](NOTICE) for attribution and trademark terms.
+
+Apache-2.0 was chosen over a shorter permissive licence for three reasons that
+matter to anyone running this in production:
+
+- **An explicit patent grant** (§3), with termination for anyone who sues over
+  patents in the software. A permissive licence that is silent on patents leaves
+  that exposure open for you and for us.
+- **Clear contributor terms** (§5) — contributions are licensed under the same
+  terms by default, so the provenance of the code you depend on is unambiguous.
+- **Explicit trademark reservation** (§6). The code is yours to use, modify, fork
+  and redistribute. The *name* is not: "Rune" and the Rune marks are reserved, so
+  a fork is always distinguishable from the project.
+
+It is also the licence the infrastructure Rune sits beside uses — Kubernetes,
+containerd, Envoy, Prometheus, etcd — which keeps Rune inside the set of licences
+enterprise procurement already accepts.
+
+*Relicensed from MIT in 2026 while copyright was held solely by the author.
+Prior releases remain available under the MIT terms they shipped with; the
+change is not retroactive.* 
