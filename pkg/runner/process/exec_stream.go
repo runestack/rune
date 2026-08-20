@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/runestack/rune/pkg/log"
@@ -14,17 +15,23 @@ import (
 )
 
 // ProcessExecStream implements the runner.ExecStream interface for processes.
+//
+// Callers must Close the stream when done. Its pipes are owned by the
+// stream rather than by exec.Cmd, so — unlike a cmd.StdoutPipe stream —
+// the stdout and stderr read ends are not released implicitly when the
+// process exits. The stdin write end is: the wait goroutine closes it on
+// exit, so a writer parked on a full pipe cannot wedge Close.
 type ProcessExecStream struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	cmd           *exec.Cmd
 	instanceID    string
 	logger        log.Logger
-	stdin         io.WriteCloser
-	stdout        io.ReadCloser
-	stderr        io.ReadCloser
+	stdin         *os.File
+	stdout        *os.File
+	stderr        *os.File
 	mutex         sync.Mutex
-	closed        bool
+	closed        atomic.Bool
 	exitCodeMutex sync.Mutex
 	exitCode      int
 	exitErr       error
@@ -59,24 +66,40 @@ func NewProcessExecStream(
 		cmd.Dir = options.WorkingDir
 	}
 
-	// Set up I/O streams
-	stdin, err := cmd.StdinPipe()
+	// Set up I/O streams.
+	//
+	// We deliberately do NOT use cmd.StdinPipe/StdoutPipe/StderrPipe.
+	// Those pipes belong to exec.Cmd, and cmd.Wait closes them as soon
+	// as the process exits. We call cmd.Wait from a background
+	// goroutine (to track the exit code), so with cmd-owned pipes a
+	// short-lived command could have its output closed out from under
+	// the caller before they ever got to Read it — the reader would
+	// see "file already closed" instead of the output. Pipes we make
+	// ourselves are not owned by exec.Cmd: the data stays buffered and
+	// readable until the caller drains it or calls Close.
+	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
 
-	stdout, err := cmd.StdoutPipe()
+	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
 		cancel()
+		closeFiles(stdinR, stdinW)
 		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	stderr, err := cmd.StderrPipe()
+	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
 		cancel()
+		closeFiles(stdinR, stdinW, stdoutR, stdoutW)
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
+
+	cmd.Stdin = stdinR
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 
 	// Create the exec stream
 	stream := &ProcessExecStream{
@@ -85,9 +108,9 @@ func NewProcessExecStream(
 		cmd:        cmd,
 		instanceID: instanceID,
 		logger:     logger.WithComponent("process-exec-stream"),
-		stdin:      stdin,
-		stdout:     stdout,
-		stderr:     stderr,
+		stdin:      stdinW,
+		stdout:     stdoutR,
+		stderr:     stderrR,
 		doneCh:     make(chan struct{}),
 	}
 
@@ -96,9 +119,20 @@ func NewProcessExecStream(
 		log.Str("instanceId", instanceID),
 		log.Str("cmd", fmt.Sprintf("%v", options.Command)))
 
-	if err := cmd.Start(); err != nil {
+	startErr := cmd.Start()
+
+	// The child has inherited its ends of the pipes, so drop the
+	// parent's copies: that leaves the child (and anything that
+	// inherits these descriptors from it) as the only writers. Keeping
+	// them open here would make the parent a writer too, and stdout and
+	// stderr would never reach EOF at all — EOF arrives once the last
+	// writer closes, so a backgrounded grandchild still holds it off.
+	closeFiles(stdinR, stdoutW, stderrW)
+
+	if startErr != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to start command: %w", err)
+		closeFiles(stdinW, stdoutR, stderrR)
+		return nil, fmt.Errorf("failed to start command: %w", startErr)
 	}
 
 	// Start a goroutine to wait for command completion
@@ -108,6 +142,14 @@ func NewProcessExecStream(
 		defer close(stream.doneCh)
 
 		err := cmd.Wait()
+
+		// Mirror what exec.Cmd does with its own pipes: release the
+		// parent's stdin write end as soon as the child is gone.
+		// Without this, a Write parked on a full stdin pipe would stay
+		// parked forever holding s.mutex, and Close — which needs that
+		// mutex before it can cancel and clean up — would wedge behind
+		// it for the life of the process.
+		closeFiles(stream.stdin)
 
 		stream.exitCodeMutex.Lock()
 		defer stream.exitCodeMutex.Unlock()
@@ -134,7 +176,7 @@ func (s *ProcessExecStream) Write(p []byte) (n int, err error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.closed {
+	if s.closed.Load() {
 		return 0, fmt.Errorf("exec stream is closed")
 	}
 
@@ -143,7 +185,7 @@ func (s *ProcessExecStream) Write(p []byte) (n int, err error) {
 
 // Read reads data from the standard output of the process.
 func (s *ProcessExecStream) Read(p []byte) (n int, err error) {
-	if s.closed {
+	if s.closed.Load() {
 		return 0, fmt.Errorf("exec stream is closed")
 	}
 
@@ -161,7 +203,7 @@ func (s *ProcessExecStream) ResizeTerminal(width, height uint32) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.closed {
+	if s.closed.Load() {
 		return fmt.Errorf("exec stream is closed")
 	}
 
@@ -175,7 +217,7 @@ func (s *ProcessExecStream) Signal(sigName string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.closed {
+	if s.closed.Load() {
 		return fmt.Errorf("exec stream is closed")
 	}
 
@@ -227,12 +269,12 @@ func (s *ProcessExecStream) Close() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.closed {
+	if s.closed.Load() {
 		return nil
 	}
 
 	// Mark as closed
-	s.closed = true
+	s.closed.Store(true)
 
 	// Cancel context to stop the command
 	s.cancel()
@@ -242,10 +284,22 @@ func (s *ProcessExecStream) Close() error {
 		s.stdin.Close()
 	}
 
-	// We don't close stdout/stderr here as they're automatically closed when the process terminates
-
 	// Wait for all goroutines to finish
 	s.wg.Wait()
 
+	// The read ends are ours, not exec.Cmd's, so we release them here.
+	// Any reader still blocked in Read is unblocked by this.
+	closeFiles(s.stdout, s.stderr)
+
 	return nil
+}
+
+// closeFiles closes every non-nil file, ignoring errors. Used for
+// cleaning up pipe ends on setup failures and on Close.
+func closeFiles(files ...*os.File) {
+	for _, f := range files {
+		if f != nil {
+			f.Close()
+		}
+	}
 }
