@@ -746,6 +746,11 @@ func livenessFailureThreshold(service *types.Service) int {
 }
 
 // restartInstanceWithBackoff restarts an instance with exponential backoff
+// Note on timing: the restart DECISION (backoff eligibility, counters, removal
+// from the monitor map) is synchronous and happens under the caller's lock; the
+// teardown itself is dispatched to a goroutine. Callers and tests must
+// therefore wait for the effect rather than assume it landed before this
+// returns. See the goroutine below for why.
 func (c *healthController) restartInstanceWithBackoff(instanceID string, ih *instanceHealth) error {
 	// Get the current time
 	now := time.Now()
@@ -800,18 +805,38 @@ func (c *healthController) restartInstanceWithBackoff(instanceID string, ih *ins
 		return fmt.Errorf("health controller is stopping, cannot restart instance")
 	}
 
-	// Use the instance controller to handle the restart
-	if err := c.instanceController.RestartInstance(ctx, instance, InstanceRestartReasonHealthCheckFailure); err != nil {
-		return fmt.Errorf("failed to restart instance: %w", err)
-	}
-
-	// The failing record is now a Failed tombstone (or restart was
-	// skipped because it was already terminal). Drop it from the
-	// monitor map inline — caller (updateHealthStatus) holds c.mu,
-	// so we must not call RemoveInstance (would deadlock).
+	// Drop the failing record from the monitor map BEFORE handing the
+	// restart off. The caller (updateHealthStatus) holds c.mu, so this must
+	// be an inline delete rather than RemoveInstance (which would deadlock).
+	// Doing it first also means the restart goroutine below cannot race a
+	// probe against a slot we are about to replace.
 	delete(c.instances, instanceID)
 	c.logger.Info("Removing instance from health monitoring",
 		log.Str("instance", instanceID))
+
+	// Run the restart OFF the lock.
+	//
+	// c.mu is the single lock for every instance's health state, and
+	// RestartInstance is no longer cheap: since RUNE-042 Phase 0 it withdraws
+	// the instance from the dataplane and then DRAINS — a blocking sleep of
+	// drainSeconds (5s by default, up to an hour if configured) — before
+	// stopping the container. Holding c.mu across that freezes every other
+	// instance's health update, AddInstance and RemoveInstance node-wide;
+	// and because the reconciler calls RemoveInstance before each retire,
+	// it stalls all four reconcile workers too. One flapping container
+	// would halt health monitoring and reconciliation for the whole node.
+	//
+	// This is the same reasoning that already made promoteToRunningOnReady
+	// fire-and-forget (see updateHealthStatus): slow work does not belong
+	// under this lock. Fire-and-forget is safe here because every mutation
+	// of ih and c.instances is already done above.
+	go func(inst *types.Instance) {
+		if err := c.instanceController.RestartInstance(ctx, inst, InstanceRestartReasonHealthCheckFailure); err != nil {
+			c.logger.Error("Failed to restart unhealthy instance",
+				log.Str("instance", instanceID),
+				log.Err(err))
+		}
+	}(instance)
 
 	// Update health restart metrics
 	ih.healthRestartCount++

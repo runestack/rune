@@ -45,6 +45,19 @@ type instanceView struct {
 	Terminating bool
 }
 
+// routed reports whether the DATAPLANE is currently sending this instance new
+// connections. republishService publishes an endpoint for any instance whose
+// stored Status is Running, and nothing else, so this must mirror exactly
+// that condition — no minimum-ready window, no class check.
+//
+// This is deliberately weaker than serving(): an instance inside its
+// minimum-ready window IS taking traffic even though the budget does not yet
+// count it as available. Retiring such an instance costs real requests, so
+// the unbudgeted retire path must gate on routed(), not on serving().
+func (v *instanceView) routed() bool {
+	return v.Ready && !v.Terminating
+}
+
 // serving reports whether this instance is actually carrying traffic right
 // now — the only notion the availability budget may count.
 //
@@ -109,11 +122,28 @@ type updatePlan struct {
 // planUpdate decides what may happen this tick.
 func planUpdate(in updateInput) updatePlan {
 	plan := updatePlan{}
-	total := len(in.Instances)
 
+	// Instances already tearing down are treated as GONE for every count.
+	//
+	// They cannot be retired (that would be a double teardown) and they are
+	// leaving anyway, so counting them as occupying a slot only creates
+	// pressure to retire somebody else. That is not hypothetical: with the
+	// count including them, a scale-down computed excess against instances
+	// step 1 then skipped, and retired a serving instance in place of one
+	// that was already on its way out.
+	//
+	// Treating them as gone can transiently allow one extra container while
+	// the old one finishes stopping. That is the safe direction of the two:
+	// a brief overshoot costs memory, an unnecessary retirement costs
+	// requests.
+	total := 0
 	var broken, outdated, current []*instanceView
 	for i := range in.Instances {
 		v := &in.Instances[i]
+		if v.Terminating {
+			continue
+		}
+		total++
 		switch v.Class {
 		case CompatBroken:
 			broken = append(broken, v)
@@ -152,9 +182,6 @@ func planUpdate(in updateInput) updatePlan {
 			if excess == 0 {
 				break
 			}
-			if v.Terminating {
-				continue // already going away
-			}
 			retire(v)
 			excess--
 		}
@@ -177,14 +204,14 @@ func planUpdate(in updateInput) updatePlan {
 	var liveOutdated []*instanceView
 	for i := range in.Instances {
 		v := &in.Instances[i]
-		if retired[v.Instance.ID] {
-			continue
+		if retired[v.Instance.ID] || v.Terminating {
+			continue // retired this tick, or already on its way out
 		}
 		live++
 		if v.serving() {
 			available++
 		}
-		if v.Class == CompatOutdated && !v.Terminating {
+		if v.Class == CompatOutdated {
 			liveOutdated = append(liveOutdated, v)
 		}
 	}
@@ -201,33 +228,50 @@ func planUpdate(in updateInput) updatePlan {
 		return plan
 	}
 
-	// --- 3. Retire outdated instances that are NOT available ---
+	// --- 3. Retire outdated instances the dataplane is NOT routing to ---
 	//
-	// Outside the budget, deliberately. Such an instance is serving nobody,
-	// so retiring it cannot reduce availability — and gating it on the budget
-	// is what wedges the update: with dip=0 the retire budget is 0 whenever
-	// availability is already at scale, so a stuck replacement would be held
-	// forever with the fix one delete away.
+	// Outside the budget, deliberately. Such an instance receives no new
+	// connections, so retiring it cannot reduce availability — and gating it
+	// on the budget is what wedges the update: with dip=0 the retire budget
+	// is 0 whenever availability is already at scale, so a stuck replacement
+	// would be held forever with the fix one delete away.
+	//
+	// The gate is routed(), NOT serving(). Those differ by the minimum-ready
+	// window, and instances inside that window are already in the endpoint
+	// set. Gating on serving() here meant that when several instances
+	// reached Running together — a host reboot, a runed restart, a completed
+	// restart — a template change landing within the next few seconds would
+	// find none of them "serving" and retire ALL of them at once, outside
+	// any budget: exactly the whole-service outage this feature exists to
+	// prevent. Instances that are routed but not yet available go through
+	// the budgeted step 4 instead.
 	for _, v := range liveOutdated {
-		if !v.serving() && !retired[v.Instance.ID] {
+		if !v.routed() && !retired[v.Instance.ID] {
 			retire(v)
 		}
 	}
 
-	// --- 4. Retire available outdated instances, up to the budget ---
-	var availableOutdated []*instanceView
+	// --- 4. Retire the remaining outdated instances, up to the budget ---
+	//
+	// Everything still standing here is routed. Those not yet counted as
+	// available (inside the minimum-ready window) go first: retiring one
+	// costs the least, since the budget was never counting it.
+	var budgetedOutdated []*instanceView
 	for _, v := range liveOutdated {
 		if !retired[v.Instance.ID] {
-			availableOutdated = append(availableOutdated, v)
+			budgetedOutdated = append(budgetedOutdated, v)
 		}
 	}
-	sortOldestFirst(availableOutdated)
+	notYetAvailable, alreadyServing := splitByAvailability(budgetedOutdated)
+	sortOldestFirst(notYetAvailable)
+	sortOldestFirst(alreadyServing)
+	budgetedOutdated = append(notYetAvailable, alreadyServing...)
 
 	// The floor: never drop below Scale-dip serving instances. Retirements
 	// already queued above were all non-available, so they have not moved
 	// this number.
 	retireBudget := available - (in.Scale - in.Params.Dip)
-	for _, v := range availableOutdated {
+	for _, v := range budgetedOutdated {
 		if retireBudget <= 0 {
 			break
 		}
@@ -252,7 +296,7 @@ func planUpdate(in updateInput) updatePlan {
 	currentTemplate := 0
 	for i := range in.Instances {
 		v := &in.Instances[i]
-		if !retired[v.Instance.ID] && v.Class == CompatOK {
+		if !retired[v.Instance.ID] && !v.Terminating && v.Class == CompatOK {
 			currentTemplate++
 		}
 	}

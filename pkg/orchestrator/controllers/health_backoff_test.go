@@ -82,8 +82,23 @@ func TestLivenessFailureThresholdHonored(t *testing.T) {
 		"restarted before the configured failureThreshold was reached")
 
 	// Failure 5 crosses the threshold → restart fires.
+	//
+	// The restart is dispatched asynchronously: RestartInstance now drains
+	// the instance from the dataplane before stopping it, and that sleep must
+	// not be held under the health controller's global mutex (it would freeze
+	// health monitoring and the reconcile workers node-wide). The decision and
+	// its backoff bookkeeping are still synchronous — only the teardown is
+	// handed off — so this waits for the effect rather than assuming it landed
+	// before the call returned.
 	c.updateHealthStatus(instance.ID, livenessFailure(), "liveness")
-	require.Contains(t, testRunner.GetStoppedInstances(), instance.ID,
+	require.Eventually(t, func() bool {
+		for _, id := range testRunner.GetStoppedInstances() {
+			if id == instance.ID {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 10*time.Millisecond,
 		"restart did not fire at the configured failureThreshold")
 }
 
@@ -188,7 +203,16 @@ func TestBackoffDecaysAfterStableWindow(t *testing.T) {
 	// …but the last restart was outside the reset window: history is
 	// forgiven and the restart proceeds instead of waiting out 5 minutes.
 	require.NoError(t, c.restartInstanceWithBackoff(instance.ID, ih))
-	require.Contains(t, testRunner.GetStoppedInstances(), instance.ID)
+	// Asynchronous teardown — see the note in
+	// TestLivenessFailureThresholdHonored.
+	require.Eventually(t, func() bool {
+		for _, id := range testRunner.GetStoppedInstances() {
+			if id == instance.ID {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 10*time.Millisecond)
 }
 
 // TestBackoffShiftCapped: the count is seeded from a persisted counter
