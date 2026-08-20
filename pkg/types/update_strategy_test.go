@@ -242,3 +242,52 @@ func TestTemplateHash_ExcludesScaleAndUpdateKnobs(t *testing.T) {
 		assert.Equal(t, a.CalculateTemplateHash(), b.CalculateTemplateHash())
 	})
 }
+
+// C2 regression: a crash-looping replacement must NOT masquerade as progress.
+//
+// The instance is created (Updated 0->1), its container exits, it classifies
+// broken, the planner repairs it (Updated 0->1 again). Comparing each tick
+// against the previous tick's raw counts made every up-swing look like
+// forward movement, so the stall clock was refreshed forever and a bad image
+// never surfaced as Failed — defeating stall detection for the single most
+// common bad deploy. Progress is measured against high-water marks instead.
+func TestUpdateStatus_CrashLoopDoesNotCountAsProgress(t *testing.T) {
+	gen := int64(7)
+	// Tick 1: the replacement exists and is ready. Genuine progress.
+	prev := &UpdateStatus{TemplateGeneration: gen, Desired: 2, Updated: 0, Outdated: 2}
+	next := &UpdateStatus{TemplateGeneration: gen, Desired: 2, Updated: 1, UpdatedReady: 1, Outdated: 1}
+	require.True(t, prev.Progressed(next), "the first replacement becoming ready is real progress")
+	next.CarryPeaksFrom(prev)
+	assert.Equal(t, 1, next.PeakUpdated)
+	assert.Equal(t, 1, next.PeakUpdatedReady)
+
+	// Tick 2: the container exits; it is now broken, so the counters fall.
+	crashed := &UpdateStatus{TemplateGeneration: gen, Desired: 2, Updated: 0, UpdatedReady: 0, Outdated: 1}
+	assert.False(t, next.Progressed(crashed), "losing the replacement is not progress")
+	crashed.CarryPeaksFrom(next)
+	assert.Equal(t, 1, crashed.PeakUpdated, "the high-water mark must not fall back")
+
+	// Tick 3: the planner repairs it and the counters climb again — the
+	// oscillation that used to reset the stall clock forever.
+	repaired := &UpdateStatus{TemplateGeneration: gen, Desired: 2, Updated: 1, UpdatedReady: 1, Outdated: 1}
+	assert.False(t, crashed.Progressed(repaired),
+		"re-reaching a level already achieved is churn, not progress — the stall clock must keep running")
+
+	// Genuinely getting further still counts.
+	better := &UpdateStatus{TemplateGeneration: gen, Desired: 2, Updated: 2, UpdatedReady: 2, Outdated: 0}
+	assert.True(t, crashed.Progressed(better), "exceeding the high-water mark is real progress")
+}
+
+// A new template generation starts a fresh update: peaks must not leak across
+// generations, or the second deploy would look stalled from its first tick.
+func TestUpdateStatus_PeaksAreCarriedOnlyWithinAGeneration(t *testing.T) {
+	prev := &UpdateStatus{TemplateGeneration: 1, Updated: 3, PeakUpdated: 3, PeakUpdatedReady: 3, PeakAvailable: 3}
+	fresh := &UpdateStatus{TemplateGeneration: 2, Updated: 1, UpdatedReady: 1, Available: 3}
+
+	// computeUpdateStatus only carries peaks when the generation matches; a
+	// nil/mismatched prev means everything is progress.
+	fresh.CarryPeaksFrom(nil)
+	assert.Equal(t, 1, fresh.PeakUpdated, "a new generation starts its own high-water marks")
+	assert.True(t, (*UpdateStatus)(nil).Progressed(fresh))
+	_ = prev
+}

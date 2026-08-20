@@ -310,17 +310,57 @@ type UpdateStatus struct {
 
 	// Message is the planner's one-sentence reason.
 	Message string `json:"message,omitempty" yaml:"message,omitempty"`
+
+	// Peak* are high-water marks for this template generation: the best
+	// each counter has EVER reached, never decreasing while the generation
+	// stands. Progress is measured against these rather than against the
+	// previous tick's raw counts.
+	//
+	// Comparing against the previous tick is what a crash-looping
+	// replacement defeats: the instance is created (Updated 0->1), its
+	// container exits, it classifies broken, the planner repairs it
+	// (Updated 0->1 again). Every up-swing of that cycle looks like
+	// progress, so LastProgressAt is refreshed forever and the update never
+	// stalls — precisely for the most common bad deploy there is. Against a
+	// high-water mark the oscillation never exceeds its own peak, so the
+	// stall deadline fires as intended.
+	PeakUpdated      int `json:"peakUpdated,omitempty" yaml:"peakUpdated,omitempty"`
+	PeakUpdatedReady int `json:"peakUpdatedReady,omitempty" yaml:"peakUpdatedReady,omitempty"`
+	PeakAvailable    int `json:"peakAvailable,omitempty" yaml:"peakAvailable,omitempty"`
 }
 
-// Progressed reports whether next represents forward movement from u. Used
-// for stall detection: an update that stops progressing for longer than the
-// stall deadline is declared stalled, which is what lets `cast --atomic`
-// roll a wedged update back.
+// Progressed reports whether next represents forward movement past everything
+// this update has previously achieved. Used for stall detection: an update
+// that stops progressing for longer than the stall deadline is declared
+// stalled, which is what lets `cast --atomic` roll a wedged update back.
+//
+// The comparison is against u's HIGH-WATER MARKS, not its current counts, so
+// an oscillating counter (the crash-loop-and-repair cycle) cannot masquerade
+// as progress. See the Peak* fields.
 func (u *UpdateStatus) Progressed(next *UpdateStatus) bool {
 	if u == nil || next == nil {
 		return true
 	}
-	return next.UpdatedReady > u.UpdatedReady ||
-		next.Available > u.Available ||
-		next.Updated > u.Updated
+	return next.UpdatedReady > u.PeakUpdatedReady ||
+		next.Available > u.PeakAvailable ||
+		next.Updated > u.PeakUpdated
+}
+
+// CarryPeaksFrom seeds next's high-water marks from prev and raises them to
+// cover next's own counts. Call once per tick, before Progressed.
+func (next *UpdateStatus) CarryPeaksFrom(prev *UpdateStatus) {
+	if prev != nil {
+		next.PeakUpdated = prev.PeakUpdated
+		next.PeakUpdatedReady = prev.PeakUpdatedReady
+		next.PeakAvailable = prev.PeakAvailable
+	}
+	if next.Updated > next.PeakUpdated {
+		next.PeakUpdated = next.Updated
+	}
+	if next.UpdatedReady > next.PeakUpdatedReady {
+		next.PeakUpdatedReady = next.UpdatedReady
+	}
+	if next.Available > next.PeakAvailable {
+		next.PeakAvailable = next.Available
+	}
 }

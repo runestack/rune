@@ -136,7 +136,19 @@ func TestReconcile_UpdateConvergesWithoutDroppingBelowScale(t *testing.T) {
 		// them so the next tick sees a serving replacement, as the health
 		// controller would.
 		live := liveInstances(t, ctx, st)
+
+		// Count what was serving DURING the reconcile just executed — before
+		// standing in for the health controller below. Counting afterwards
+		// would credit instances that were not yet serving when the plan
+		// retired their predecessors, which is exactly the dip this test
+		// exists to catch.
 		servingNow := 0
+		for i := range live {
+			if live[i].Status == types.InstanceStatusRunning {
+				servingNow++
+			}
+		}
+
 		for i := range live {
 			inst := live[i]
 
@@ -153,7 +165,6 @@ func TestReconcile_UpdateConvergesWithoutDroppingBelowScale(t *testing.T) {
 			// replacement ever becomes available — the gate working
 			// correctly, but not what this test is about.
 			if inst.Status == types.InstanceStatusRunning {
-				servingNow++
 				settled := time.Now().Add(-time.Minute)
 				if inst.LastTransitionAt == nil || inst.LastTransitionAt.After(settled) {
 					inst.LastTransitionAt = &settled
@@ -161,8 +172,10 @@ func TestReconcile_UpdateConvergesWithoutDroppingBelowScale(t *testing.T) {
 			}
 			require.NoError(t, st.Update(ctx, types.ResourceTypeInstance, "default", inst.ID, &inst))
 		}
-		assert.GreaterOrEqualf(t, servingNow, scale-1,
-			"tick %d: availability fell to %d, below the floor", tick, servingNow)
+		assert.GreaterOrEqualf(t, servingNow, scale,
+			"tick %d: availability fell to %d, below the floor of %d — this service is "+
+				"surge-capable, so dip is 0 and the floor is the full scale",
+			tick, servingNow, scale)
 	}
 
 	// Converged: exactly `scale` instances, all on the new template.
@@ -242,11 +255,96 @@ func TestReconcile_RecreateTakesAllDownAtOnce(t *testing.T) {
 
 	require.NoError(t, r.reconcileService(ctx, svc))
 
-	for _, i := range liveInstances(t, ctx, st) {
+	// Assert the count explicitly. Iterating the survivors alone made this
+	// vacuous: recreate leaves the set empty, so the loop body never ran and
+	// the test would have passed even if recreate did nothing.
+	live := liveInstances(t, ctx, st)
+	assert.Empty(t, live, "recreate must retire every outdated instance in one pass before creating any")
+	for _, i := range live {
 		require.NotNil(t, i.Metadata)
-		assert.NotEqual(t, int64(1), i.Metadata.ServiceGeneration,
-			"recreate must retire every outdated instance in one pass")
+		assert.NotEqual(t, int64(1), i.Metadata.ServiceGeneration)
 	}
+}
+
+// M1 regression: instances that are Running (and therefore in the dataplane
+// endpoint set) but still inside the minimum-ready window must NOT be
+// retired unbudgeted. Several instances reaching Running together is routine
+// — a host reboot, a runed restart, a completed `rune restart` — and a
+// template change landing seconds later used to find none of them "serving"
+// and retire ALL of them at once.
+func TestReconcile_TemplateChangeJustAfterRestartKeepsServing(t *testing.T) {
+	ctx, st, tr, r := updateFixture(t)
+	svc := updateSvc(t, ctx, st, 3, 1)
+
+	// All three came up a moment ago: Running, in the endpoint set, but
+	// within the 5s minReady window (no readiness probe on this service).
+	justNow := time.Now()
+	for i := 0; i < 3; i++ {
+		inst := seedInstance(t, ctx, st, tr, svc, fmt.Sprintf("api-%d", i), 1, time.Second)
+		inst.LastTransitionAt = &justNow
+		require.NoError(t, st.Update(ctx, types.ResourceTypeInstance, "default", inst.ID, inst))
+	}
+
+	svc.Metadata.Generation = 2
+	svc.Metadata.TemplateGeneration = 2
+	require.NoError(t, st.Update(ctx, types.ResourceTypeService, "default", svc.Name, svc))
+
+	require.NoError(t, r.reconcileService(ctx, svc))
+
+	serving := 0
+	for _, i := range liveInstances(t, ctx, st) {
+		if i.Status == types.InstanceStatusRunning && i.Metadata != nil && i.Metadata.ServiceGeneration == 1 {
+			serving++
+		}
+	}
+	assert.Equal(t, 3, serving,
+		"instances inside the minimum-ready window are still taking traffic and must not be retired unbudgeted")
+}
+
+// H1 regression: a service whose dependency goes unready must still honour a
+// scale-down. The dependency gate blocks CREATION, not the whole pass.
+func TestReconcile_ScaleDownWorksWhileDependencyUnready(t *testing.T) {
+	ctx, st, tr, r := updateFixture(t)
+
+	// A dependency that exists but has no running instances.
+	dep := &types.Service{
+		ID: "db", Name: "db", Namespace: "default", Image: "db:v1",
+		Runtime: types.RuntimeTypeContainer, Scale: 1,
+		Metadata: &types.ServiceMetadata{Generation: 1, TemplateGeneration: 1},
+	}
+	require.NoError(t, st.CreateService(ctx, dep))
+
+	svc := updateSvc(t, ctx, st, 1, 1)
+	svc.Dependencies = []types.DependencyRef{{Service: "db", Namespace: "default"}}
+	require.NoError(t, st.Update(ctx, types.ResourceTypeService, "default", svc.Name, svc))
+	for i := 0; i < 3; i++ {
+		seedInstance(t, ctx, st, tr, svc, fmt.Sprintf("api-%d", i), 1, time.Duration(30-i*10)*time.Second)
+	}
+
+	require.NoError(t, r.reconcileService(ctx, svc))
+
+	assert.Len(t, liveInstances(t, ctx, st), 1,
+		"an unready dependency must not stop `rune scale` from shedding instances")
+}
+
+// H2 regression: a record stranded in Terminating (runed killed mid-teardown)
+// must be re-driven, not left holding a slot forever.
+func TestReconcile_ReapsInstanceStrandedInTerminating(t *testing.T) {
+	ctx, st, tr, r := updateFixture(t)
+	svc := updateSvc(t, ctx, st, 2, 1)
+	seedInstance(t, ctx, st, tr, svc, "api-ok", 1, 30*time.Second)
+
+	stranded := seedInstance(t, ctx, st, tr, svc, "api-stranded", 1, 30*time.Second)
+	stranded.Status = types.InstanceStatusTerminating
+	stranded.UpdatedAt = time.Now().Add(-10 * time.Minute) // long abandoned
+	require.NoError(t, st.Update(ctx, types.ResourceTypeInstance, "default", stranded.ID, stranded))
+
+	require.NoError(t, r.reconcileService(ctx, svc))
+
+	got, err := st.GetInstanceByID(ctx, "default", "api-stranded")
+	require.NoError(t, err)
+	assert.Equal(t, types.InstanceStatusDeleted, got.Status,
+		"an abandoned teardown must be finished, or the slot is held forever")
 }
 
 // Stall detection: an update whose replacements never become ready must
@@ -278,6 +376,13 @@ func TestReconcile_StalledUpdateSurfacesAsFailed(t *testing.T) {
 		Outdated:           1,
 		StartedAt:          long,
 		LastProgressAt:     long,
+		// A real persisted block always carries its high-water marks, which
+		// is what makes the oscillation of a crash-loop stop counting as
+		// progress. Without them this fixture would look like a brand-new
+		// update on its first tick.
+		PeakUpdated:      2,
+		PeakUpdatedReady: 0,
+		PeakAvailable:    1,
 	}
 	require.NoError(t, st.Update(ctx, types.ResourceTypeService, "default", svc.Name, svc))
 

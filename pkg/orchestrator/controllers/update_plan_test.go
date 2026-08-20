@@ -355,12 +355,21 @@ func TestPlanUpdate_Property_NeverBreachesFloorOrCap(t *testing.T) {
 		n := rng.Intn(8)
 		insts := make([]instanceView, 0, n)
 		for i := 0; i < n; i++ {
-			insts = append(insts, view(
+			v := view(
 				fmt.Sprintf("i%d", i),
 				classes[rng.Intn(len(classes))],
 				rng.Intn(2) == 0,
 				rng.Intn(100),
-			))
+			)
+			// Terminating instances occupy capacity but serve nobody and must
+			// never be selected for retirement twice. Previously ungenerated,
+			// which left serving()'s guard, step 1's skip, and liveOutdated's
+			// filter with no coverage at all.
+			if rng.Intn(8) == 0 {
+				v.Terminating = true
+				v.Instance.Status = types.InstanceStatusTerminating
+			}
+			insts = append(insts, v)
 		}
 
 		in := updateInput{Scale: scale, Params: params, Instances: insts, Now: planBase}
@@ -401,20 +410,62 @@ func TestPlanUpdate_Property_NeverBreachesFloorOrCap(t *testing.T) {
 		if before.outdated > 0 {
 			allowance = params.Extra
 		}
-		total := len(insts) - len(p.Retire) + p.Create
+		// Same frame as the planner: instances already tearing down are gone.
+		nonTerminating := 0
+		for i := range insts {
+			if !insts[i].Terminating {
+				nonTerminating++
+			}
+		}
+		total := nonTerminating - len(p.Retire) + p.Create
 		assert.LessOrEqualf(t, total, scale+allowance,
 			"trial %d: plan drove the instance count to %d, above the cap %d (scale=%d extra=%d)",
 			trial, total, scale+allowance, scale, params.Extra)
 
-		// LIVENESS: an update in flight must always be making progress or
-		// explicitly holding — never silently stuck with budget to spare.
-		if before.outdated > 0 && p.Create == 0 && len(p.Retire) == 0 {
-			assert.Truef(t, p.Holding, "trial %d: an idle tick during an update must report Holding", trial)
+		// ROUTED FLOOR: the floor above is expressed in terms of serving(),
+		// which is the planner's own definition — a self-referential
+		// invariant that cannot catch a bug in that definition. Check the
+		// same claim against what the DATAPLANE actually routes (Status ==
+		// Running, no minimum-ready window), which is the thing users
+		// experience as availability.
+		// "Working routed capacity": in the endpoint set AND able to answer.
+		// Deliberately not v.routed() alone — a broken instance is published
+		// (the store still says Running) but its container is dead, so
+		// retiring it costs no real requests and is exactly what repair is
+		// for. Deliberately not serving() either, which is the planner's own
+		// definition and so cannot catch a bug in it: this counts instances
+		// inside the minimum-ready window, which ARE taking traffic.
+		working := func(v *instanceView) bool {
+			return v.Ready && !v.Terminating && v.Class != CompatBroken
+		}
+		routedBefore, retiredRouted := 0, 0
+		for i := range insts {
+			v := &insts[i]
+			if working(v) {
+				routedBefore++
+				if retiredIDs[v.Instance.ID] {
+					retiredRouted++
+				}
+			}
+		}
+		if routedBefore >= floor {
+			assert.GreaterOrEqualf(t, routedBefore-retiredRouted, floor,
+				"trial %d: plan removed %d of %d routed instances, dropping traffic-carrying capacity below %d\n  in:  %s\n  plan: create=%d retire=%v",
+				trial, retiredRouted, routedBefore, floor, dumpViews(insts), p.Create, retireNames(p))
 		}
 
 		// No instance may be both retired and repaired.
 		for _, r := range p.Repair {
 			assert.Falsef(t, retiredIDs[r.ID], "trial %d: %s is both retired and repaired", trial, r.ID)
+		}
+
+		// An instance already tearing down must never be retired again.
+		for i := range insts {
+			v := &insts[i]
+			if v.Terminating {
+				assert.Falsef(t, retiredIDs[v.Instance.ID],
+					"trial %d: %s is already Terminating and must not be torn down twice", trial, v.Instance.Name)
+			}
 		}
 	}
 }
@@ -428,7 +479,7 @@ func snapshotCounts(vs []instanceView) planCounts {
 		if v.serving() {
 			c.available++
 		}
-		if v.Class == CompatOutdated {
+		if v.Class == CompatOutdated && !v.Terminating {
 			c.outdated++
 		}
 	}
@@ -455,4 +506,84 @@ func dumpViews(vs []instanceView) string {
 		out += fmt.Sprintf("[%s %s avail=%t] ", v.Instance.Name, cls, v.Available)
 	}
 	return out
+}
+
+// CONVERGENCE — the property that matters most and was missing.
+//
+// Everything above is single-tick: a planner that returns Holding forever
+// satisfies every one of those assertions. Livelock is this feature's headline
+// risk (an update that never finishes is worse than one that fails loudly), so
+// drive the plan in a loop against a simple simulator and assert it actually
+// terminates.
+func TestPlanUpdate_Property_AlwaysConverges(t *testing.T) {
+	rng := rand.New(rand.NewSource(20260820))
+
+	for trial := 0; trial < 500; trial++ {
+		scale := 1 + rng.Intn(5)
+		params := surgeable()
+		switch rng.Intn(3) {
+		case 1:
+			params = exclusive()
+		case 2:
+			params = types.UpdateParams{Type: types.UpdateRecreate, Extra: 0, Dip: scale}
+		}
+
+		// Start with a full complement of outdated instances, as a template
+		// change produces.
+		insts := make([]instanceView, 0, scale)
+		for i := 0; i < scale; i++ {
+			insts = append(insts, view(fmt.Sprintf("old%d", i), CompatOutdated, true, 100-i))
+		}
+
+		const maxTicks = 200
+		converged, next := false, 0
+		for tick := 0; tick < maxTicks; tick++ {
+			p := planUpdate(updateInput{Scale: scale, Params: params, Instances: insts, Now: planBase})
+
+			// Apply the plan: drop retired and repaired, add replacements.
+			gone := map[string]bool{}
+			for _, r := range p.Retire {
+				gone[r.ID] = true
+			}
+			for _, r := range p.Repair {
+				gone[r.ID] = true
+			}
+			remaining := make([]instanceView, 0, len(insts))
+			for i := range insts {
+				if !gone[insts[i].Instance.ID] {
+					remaining = append(remaining, insts[i])
+				}
+			}
+			// A replacement becomes available on the following tick, which is
+			// the readiness gate the real reconciler waits on.
+			for i := range remaining {
+				if remaining[i].Class == CompatOK {
+					remaining[i].Available = true
+					remaining[i].Ready = true
+				}
+			}
+			for i := 0; i < p.Create+len(p.Repair); i++ {
+				v := view(fmt.Sprintf("new%d", next), CompatOK, false, 0)
+				v.Ready = true // Running immediately; not yet past minReady
+				next++
+				remaining = append(remaining, v)
+			}
+			insts = remaining
+
+			outdated := 0
+			for i := range insts {
+				if insts[i].Class == CompatOutdated {
+					outdated++
+				}
+			}
+			if outdated == 0 && len(insts) == scale {
+				converged = true
+				break
+			}
+		}
+
+		assert.Truef(t, converged,
+			"trial %d: update never converged in %d ticks (scale=%d extra=%d dip=%d type=%s); final: %s",
+			trial, maxTicks, scale, params.Extra, params.Dip, params.Type, dumpViews(insts))
+	}
 }

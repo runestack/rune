@@ -241,7 +241,9 @@ the runeset source instead.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := &castOptions{yes: yes}
 			opts.namespace = ns
-			opts.timeoutStr = "5m"
+			// Matches the cast default; must outlast the update stall
+			// deadline or a rollback's own rolling update is cut short.
+			opts.timeoutStr = "15m"
 			return runReleaseRollback(ns, args[0], revision, opts)
 		},
 	}

@@ -444,7 +444,15 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		}
 	}
 	if service.DrainSeconds != nil {
-		protoService.DrainSeconds = utils.ToInt32NonNegative(*service.DrainSeconds)
+		// Sentinel: proto 0 means "unset", so an explicit 0 travels as -1.
+		// Without this an operator's `drainSeconds: 0` arrives as absent and
+		// silently becomes the 5s default rather than the 1s floor the
+		// validation message promises.
+		if *service.DrainSeconds == 0 {
+			protoService.DrainSeconds = -1
+		} else {
+			protoService.DrainSeconds = utils.ToInt32NonNegative(*service.DrainSeconds)
+		}
 	}
 	if service.Update != nil {
 		protoService.Update = &generated.UpdateStatus{
@@ -849,8 +857,11 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 			Type: types.UpdateStrategyType(proto.UpdateStrategy.Type),
 		}
 	}
-	if proto.DrainSeconds > 0 {
+	if proto.DrainSeconds != 0 {
 		drain := int(proto.DrainSeconds)
+		if drain < 0 {
+			drain = 0 // the explicit-zero sentinel; DrainWindow floors it
+		}
 		service.DrainSeconds = &drain
 	}
 	if proto.Update != nil {

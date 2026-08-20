@@ -512,21 +512,30 @@ func (r *reconciler) scaleDownService(ctx context.Context, service *types.Servic
 
 // ensureServiceInstances makes sure we have the right number of instances and they're up to date
 func (r *reconciler) ensureServiceInstances(ctx context.Context, service *types.Service) error {
-	// If the service declares dependencies, gate instance creation until deps are ready
+	// If the service declares dependencies, gate instance CREATION until they
+	// are ready — creation only, not the whole pass.
+	//
+	// This used to return early, which was harmless while scale-down ran
+	// ahead of it in reconcileService. Now that stateless excess removal
+	// lives in the plan, an early return also suppresses retirement: a
+	// service whose dependency went unready would ignore `rune scale`
+	// entirely, keeping every instance up while the operator watched the
+	// command time out. Blocking creates while still honouring the desired
+	// scale downward is both what the log line claims and the safer half.
+	createsBlocked := false
 	if len(service.Dependencies) > 0 {
 		ready, err := r.dependenciesReady(ctx, service)
 		if err != nil {
 			r.logger.Error("Dependency readiness check failed",
 				log.Str("service", service.Name),
 				log.Err(err))
-			// Be safe: do not proceed with instance creation on error
-			return nil
-		}
-		if !ready {
+			// Be safe: do not create against an unknown dependency state.
+			createsBlocked = true
+		} else if !ready {
 			r.logger.Info("Delaying instance creation; dependencies not ready",
 				log.Str("service", service.Name),
 				log.Str("namespace", service.Namespace))
-			return nil
+			createsBlocked = true
 		}
 	}
 
@@ -546,9 +555,14 @@ func (r *reconciler) ensureServiceInstances(ctx context.Context, service *types.
 	// lifetime (#84). The two need different reconcile identity models — slot
 	// matching vs. count-based — so dispatch here.
 	if serviceHasStableIdentity(service) {
+		// The stateful path only ever creates or replaces in-slot, so the
+		// old all-or-nothing gate is still the right shape for it.
+		if createsBlocked {
+			return nil
+		}
 		return r.ensureStatefulInstances(ctx, service, instanceData)
 	}
-	return r.ensureStatelessInstances(ctx, service, instanceData)
+	return r.ensureStatelessInstances(ctx, service, instanceData, createsBlocked)
 }
 
 // ensureStatefulInstances reconciles a service whose replicas have stable
@@ -625,10 +639,26 @@ func (r *reconciler) ensureStatefulInstances(ctx context.Context, service *types
 //
 // Scale-down is part of the same decision (the planner returns excess
 // retirements), so there is no separate scale-down pass to fight the surge.
-func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) error {
+func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData, createsBlocked bool) error {
+	// Finish any teardown that was abandoned mid-flight before planning, or
+	// the stranded record occupies a slot no plan can free.
+	r.reapStuckTerminating(ctx, service, instanceData)
+
 	plan, views := r.planServiceUpdate(ctx, service, instanceData)
 
 	// 1. Retire, oldest/least-valuable first as the planner ordered them.
+	//
+	// Withdraw the whole set from the dataplane in one publish first, and
+	// take ONE shared drain window for all of them (RUNE-042 §4). Retiring
+	// serially would pay a full drain per instance — 8 × (5s drain + up to
+	// 10s stop) ≈ two minutes of one of only four reconcile workers for a
+	// `recreate` deploy or a wide scale-down, during which this service
+	// creates nothing and other services wait. The per-instance
+	// DeleteInstance calls below then see Terminating and skip their own
+	// drains.
+	if len(plan.Retire) > 1 {
+		r.instanceController.WithdrawServiceInstances(ctx, service, plan.Retire)
+	}
 	for _, inst := range plan.Retire {
 		r.logger.Info("Retiring instance",
 			log.Str("service", service.Name),
@@ -682,6 +712,12 @@ func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *type
 	//    binding); pass the running index so the field is populated
 	//    deterministically.
 	total := len(plan.Repair) + plan.Create
+	if createsBlocked && total > 0 {
+		r.logger.Info("Holding instance creation; dependencies not ready",
+			log.Str("service", service.Name),
+			log.Int("would_create", total))
+		total = 0
+	}
 	for i := 0; i < total; i++ {
 		instanceName := generateHashInstanceName(service, taken)
 		taken[instanceName] = true
@@ -1175,6 +1211,45 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 	return nil
 }
 
+// reapStuckTerminating re-drives instances stranded in Terminating.
+//
+// Teardown flips an instance to Terminating, publishes the withdrawal, drains,
+// then stops and marks it Deleted. If runed is killed — or a cancellable
+// request context is cut, e.g. Ctrl-C on a command that triggered the
+// teardown — inside that window, the record is left Terminating with a live
+// container and nothing ever revisits it: the planner excludes Terminating
+// from every candidate list, so it can be neither retired nor replaced, and
+// the service runs permanently below scale.
+//
+// Re-entering DeleteInstance is idempotent (it tolerates an already-stopped or
+// already-absent container), so the repair is simply to finish the teardown.
+func (r *reconciler) reapStuckTerminating(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) {
+	// Generous: the drain plus the runner stop timeout plus slack. Anything
+	// older than this is not a teardown in flight, it is an abandoned one.
+	deadline := service.DrainWindow() + 30*time.Second
+	now := time.Now()
+
+	for i := range instanceData.Instances {
+		inst := &instanceData.Instances[i]
+		if inst.Status != types.InstanceStatusTerminating {
+			continue
+		}
+		stuckFor := now.Sub(inst.UpdatedAt)
+		if stuckFor < deadline {
+			continue // a teardown genuinely in progress
+		}
+		r.logger.Warn("Re-driving instance stranded in Terminating",
+			log.Str("service", service.Name),
+			log.Str("instance", inst.Name),
+			log.Duration("stuck_for", stuckFor))
+		r.healthController.RemoveInstance(inst.ID)
+		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
+			r.logger.Error("Failed to re-drive stranded instance",
+				log.Str("instance", inst.ID), log.Err(err))
+		}
+	}
+}
+
 // computeUpdateStatus derives the in-flight update block for a service, and
 // reports whether the update has stalled (RUNE-042 §7.3/§8.2).
 //
@@ -1203,7 +1278,15 @@ func (r *reconciler) computeUpdateStatus(ctx context.Context, service *types.Ser
 		verdict := r.instanceController.classifyInstance(ctx, inst, service)
 		v := newInstanceView(inst, verdict.Class, params.MinReady, now)
 
-		if verdict.Class == CompatOutdated {
+		if verdict.Class == CompatOutdated && !v.Terminating {
+			// Mirror the planner, which excludes Terminating instances from
+			// liveOutdated. Counting one here without the planner being able
+			// to retire it means Outdated can never reach zero: the update
+			// reads as permanently in flight, never progresses, and lands on
+			// UpdateStalled forever — with every later `release --atomic` on
+			// the service failing verify. A record stranded in Terminating
+			// (runed killed mid-teardown) is reaped by reapStuckTerminating
+			// instead.
 			next.Outdated++
 		} else if verdict.Class == CompatOK {
 			// "Updated" counts instances at the current template. A repaired
@@ -1232,10 +1315,13 @@ func (r *reconciler) computeUpdateStatus(ctx context.Context, service *types.Ser
 	if prev != nil && prev.TemplateGeneration == templateGen {
 		next.StartedAt = prev.StartedAt
 		next.LastProgressAt = prev.LastProgressAt
+		// Ask BEFORE raising the marks, or every tick would trivially match
+		// its own peak.
 		if prev.Progressed(next) {
 			next.LastProgressAt = now
 		}
 	}
+	next.CarryPeaksFrom(prev)
 
 	// A dependency gate freezes instance creation entirely, so the stall
 	// clock would expire on a service that is behaving correctly.
