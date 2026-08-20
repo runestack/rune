@@ -132,7 +132,7 @@ func (u UpdateStrategy) MarshalYAML() (interface{}, error) {
 	if u.MinServing == nil {
 		return string(u.Type), nil
 	}
-	return updateStrategyAlias{Type: u.Type, MinServing: u.MinServing}, nil
+	return updateStrategyAlias(u), nil
 }
 
 // UnmarshalJSON mirrors UnmarshalYAML: a bare string or an object.
@@ -161,7 +161,7 @@ func (u UpdateStrategy) MarshalJSON() ([]byte, error) {
 	if u.MinServing == nil {
 		return json.Marshal(string(u.Type))
 	}
-	return json.Marshal(updateStrategyAlias{Type: u.Type, MinServing: u.MinServing})
+	return json.Marshal(updateStrategyAlias(u))
 }
 
 // Validate checks the strategy type. An empty type means "rolling".
