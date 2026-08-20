@@ -226,7 +226,27 @@ func (s *DescribeService) describeService(ctx context.Context, ns, name string) 
 	if svc.Metadata != nil {
 		res.Identity = append(res.Identity,
 			kv("Generation", fmt.Sprintf("%d", svc.Metadata.Generation)))
+		// Template vs observed generation is how an operator tells "the spec
+		// changed" from "the reconciler has caught up" — surfaced only when
+		// they disagree with Generation, to keep the common case quiet.
+		if svc.Metadata.TemplateGeneration != 0 && svc.Metadata.TemplateGeneration != svc.Metadata.Generation {
+			res.Identity = append(res.Identity,
+				kv("Template generation", fmt.Sprintf("%d", svc.Metadata.TemplateGeneration)))
+		}
+		if svc.Metadata.ObservedGeneration != svc.Metadata.Generation {
+			res.Identity = append(res.Identity,
+				kv("Observed generation", fmt.Sprintf("%d (reconciling)", svc.Metadata.ObservedGeneration)))
+		}
 		res.Timestamps = timestampKVs(svc.Metadata.CreatedAt, nil, svc.Metadata.UpdatedAt)
+	}
+
+	// In-flight update (RUNE-042). Two fractions in operator words, plus the
+	// planner's sentence — not the four-counter block, which is proto/dashboard
+	// detail. Absent entirely when no update is running, so a steady service
+	// reads exactly as it did before.
+	if u := svc.Update; u != nil {
+		res.Identity = append(res.Identity,
+			kv("Update", describeUpdate(u)))
 	}
 
 	// Child instances: replica rollup + per-instance lines + references.
@@ -556,4 +576,23 @@ func resourceLine(label string, rl types.ResourceLimit) string {
 		parts = append(parts, "limit "+rl.Limit)
 	}
 	return strings.Join(parts, " ")
+}
+
+// describeUpdate renders an in-flight update the way an operator thinks about
+// it: how many replicas carry the new template, how many are serving right
+// now, how long it has been going, and what it is waiting on.
+//
+// "replaced" and "serving" rather than "updated"/"available": the latter pair
+// is accountant vocabulary that means nothing until you have read the design.
+func describeUpdate(u *types.UpdateStatus) string {
+	elapsed := ""
+	if !u.StartedAt.IsZero() {
+		elapsed = fmt.Sprintf(", %s elapsed", time.Since(u.StartedAt).Round(time.Second))
+	}
+	out := fmt.Sprintf("%d/%d replaced · %d/%d serving%s",
+		u.UpdatedReady, u.Desired, u.Available, u.Desired, elapsed)
+	if u.Message != "" {
+		out += " — " + u.Message
+	}
+	return out
 }
