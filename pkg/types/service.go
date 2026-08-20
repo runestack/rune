@@ -670,6 +670,16 @@ func (s *Service) Validate() error {
 		return NewValidationError("service name is required")
 	}
 
+	// Update strategy, now that the runtime is known — the spec-level check
+	// cannot see it, and a process service is one of the cases that can
+	// deadlock an update.
+	if err := s.UpdateStrategy.Validate(); err != nil {
+		return err
+	}
+	if err := s.UpdateStrategy.ValidateForService(s); err != nil {
+		return err
+	}
+
 	// Check runtime specific requirements
 	switch s.Runtime {
 	case "container", "":

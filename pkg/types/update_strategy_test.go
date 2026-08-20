@@ -291,3 +291,119 @@ func TestUpdateStatus_PeaksAreCarriedOnlyWithinAGeneration(t *testing.T) {
 	assert.True(t, (*UpdateStatus)(nil).Progressed(fresh))
 	_ = prev
 }
+
+// --- minServing (RUNE-042 follow-up) ---------------------------------------
+//
+// Surge capability is a fact about the service, so Rune derives it. An
+// availability tolerance is not: whether 3 of 7 is acceptable depends on
+// traffic and an SLO the spec says nothing about, so it is the one value here
+// an operator has to state.
+
+func TestMinServing_TradesAvailabilityForSpeed(t *testing.T) {
+	three := 3
+	svc := &Service{
+		Name: "api", Runtime: RuntimeTypeContainer, Scale: 7,
+		UpdateStrategy: &UpdateStrategy{MinServing: &three},
+	}
+	p := svc.ResolveUpdateParams()
+	assert.Equal(t, 4, p.Dip, "scale 7 keeping 3 serving may retire 4 at a time")
+	assert.Equal(t, 1, p.Extra, "surge stays derived at 1 — it is not settable")
+}
+
+func TestMinServing_DefaultsAreUnchanged(t *testing.T) {
+	surgeable := &Service{Name: "api", Runtime: RuntimeTypeContainer, Scale: 7}
+	assert.Equal(t, 0, surgeable.ResolveUpdateParams().Dip, "unset means never dip")
+
+	exclusive := &Service{Name: "agent", Runtime: RuntimeTypeProcess, Scale: 7}
+	assert.Equal(t, 1, exclusive.ResolveUpdateParams().Dip, "unset means one at a time")
+}
+
+// A floor stricter than the derived one must not silently loosen it: asking to
+// keep all 7 serving on a service that already never dips changes nothing.
+func TestMinServing_NeverLoosensTheDerivedFloor(t *testing.T) {
+	seven := 7
+	svc := &Service{
+		Name: "api", Runtime: RuntimeTypeContainer, Scale: 7,
+		UpdateStrategy: &UpdateStrategy{MinServing: &seven},
+	}
+	assert.Equal(t, 0, svc.ResolveUpdateParams().Dip)
+
+	// And on a service that must go one at a time, asking for a bigger dip
+	// than the derived one is honoured...
+	four := 4
+	proc := &Service{
+		Name: "agent", Runtime: RuntimeTypeProcess, Scale: 7,
+		UpdateStrategy: &UpdateStrategy{MinServing: &four},
+	}
+	assert.Equal(t, 3, proc.ResolveUpdateParams().Dip)
+}
+
+// The one deadlock this surface can produce — and the reason it is validated
+// at cast time rather than discovered during a wedged deploy.
+func TestMinServing_RejectsTheDeadlockCombination(t *testing.T) {
+	seven := 7
+	for _, tc := range []struct {
+		name   string
+		svc    *Service
+		wantIn string
+	}{
+		{"process runtime", &Service{
+			ID: "x", Name: "agent", Runtime: RuntimeTypeProcess, Scale: 7,
+			UpdateStrategy: &UpdateStrategy{MinServing: &seven},
+		}, "process runtime"},
+		{"claimTemplate volume", &Service{
+			ID: "x", Name: "db", Runtime: RuntimeTypeContainer, Scale: 7,
+			Volumes:        []VolumeMount{{Name: "d", MountPath: "/d", ClaimTemplate: &VolumeClaimTemplate{}}},
+			UpdateStrategy: &UpdateStrategy{MinServing: &seven},
+		}, "claimTemplate volume"},
+		{"hostPort", &Service{
+			ID: "x", Name: "edge", Runtime: RuntimeTypeContainer, Scale: 7,
+			Ports:          []ServicePort{{Name: "h", Port: 80, HostPort: 8080}},
+			UpdateStrategy: &UpdateStrategy{MinServing: &seven},
+		}, "hostPort"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.svc.UpdateStrategy.ValidateForService(tc.svc)
+			require.Error(t, err, "no room to create and no allowance to retire is an update that can never start")
+			assert.Contains(t, err.Error(), tc.wantIn, "the error must name the actual blocker")
+			assert.Contains(t, err.Error(), "minServing 6 or lower", "and offer a concrete fix")
+		})
+	}
+
+	// The same value is fine when the service CAN run a spare copy.
+	ok := &Service{ID: "x", Name: "api", Runtime: RuntimeTypeContainer, Scale: 7,
+		UpdateStrategy: &UpdateStrategy{MinServing: &seven}}
+	assert.NoError(t, ok.UpdateStrategy.ValidateForService(ok))
+}
+
+func TestMinServing_RejectsAboveScale(t *testing.T) {
+	ten := 10
+	svc := &Service{ID: "x", Name: "api", Runtime: RuntimeTypeContainer, Scale: 7,
+		UpdateStrategy: &UpdateStrategy{MinServing: &ten}}
+	err := svc.UpdateStrategy.ValidateForService(svc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds scale")
+}
+
+// The map form must carry it, and a strategy with minServing must not
+// round-trip through the string shorthand — that would silently drop it.
+func TestMinServing_RoundTrips(t *testing.T) {
+	var u UpdateStrategy
+	require.NoError(t, yaml.Unmarshal([]byte("type: rolling\nminServing: 3\n"), &u))
+	require.NotNil(t, u.MinServing)
+	assert.Equal(t, 3, *u.MinServing)
+
+	out, err := yaml.Marshal(u)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "minServing: 3", "the map form must survive marshalling")
+
+	var back UpdateStrategy
+	require.NoError(t, yaml.Unmarshal(out, &back))
+	require.NotNil(t, back.MinServing)
+	assert.Equal(t, 3, *back.MinServing)
+
+	// Without it, the readable shorthand is still used.
+	plain, err := yaml.Marshal(UpdateStrategy{Type: UpdateRecreate})
+	require.NoError(t, err)
+	assert.Equal(t, "recreate\n", string(plain))
+}

@@ -77,11 +77,32 @@ const (
 // ever need.
 type UpdateStrategy struct {
 	Type UpdateStrategyType `json:"type,omitempty" yaml:"type,omitempty"`
+
+	// MinServing is the fewest replicas that must keep serving while an
+	// update runs. Set it to trade availability for speed: a scale-7 service
+	// with MinServing 3 may retire four replicas at once instead of one, so
+	// the update takes about two steps instead of seven.
+	//
+	// It states the operator's availability tolerance, which is the one thing
+	// here Rune genuinely cannot derive — surge capability follows from the
+	// spec (volumes, ports, runtime), but whether 3 of 7 is acceptable
+	// depends on traffic and an SLO that the spec says nothing about.
+	//
+	// Lives inside UpdateStrategy rather than on the service because it means
+	// nothing outside an update: a scale-down still converges to the desired
+	// scale, and a liveness restart still replaces a dead container.
+	// (DrainSeconds is on the service for the mirror-image reason — it
+	// governs every teardown.)
+	//
+	// nil means the default: the full scale for a service that can run a
+	// spare copy (never dip), one less for a service that cannot.
+	MinServing *int `json:"minServing,omitempty" yaml:"minServing,omitempty"`
 }
 
 // updateStrategyAlias avoids infinite recursion in the custom (un)marshallers.
 type updateStrategyAlias struct {
-	Type UpdateStrategyType `json:"type,omitempty" yaml:"type,omitempty"`
+	Type       UpdateStrategyType `json:"type,omitempty" yaml:"type,omitempty"`
+	MinServing *int               `json:"minServing,omitempty" yaml:"minServing,omitempty"`
 }
 
 // UnmarshalYAML accepts either the string shorthand (`updateStrategy: recreate`)
@@ -100,13 +121,18 @@ func (u *UpdateStrategy) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	u.Type = alias.Type
+	u.MinServing = alias.MinServing
 	return nil
 }
 
-// MarshalYAML emits the string shorthand, since Type is the only field. Keeps
-// `rune get -o yaml` round-trippable and easy to read.
+// MarshalYAML emits the string shorthand when Type is all that is set, and the
+// map form otherwise — emitting the shorthand with a MinServing present would
+// silently drop it on round-trip.
 func (u UpdateStrategy) MarshalYAML() (interface{}, error) {
-	return string(u.Type), nil
+	if u.MinServing == nil {
+		return string(u.Type), nil
+	}
+	return updateStrategyAlias{Type: u.Type, MinServing: u.MinServing}, nil
 }
 
 // UnmarshalJSON mirrors UnmarshalYAML: a bare string or an object.
@@ -125,12 +151,17 @@ func (u *UpdateStrategy) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	u.Type = alias.Type
+	u.MinServing = alias.MinServing
 	return nil
 }
 
-// MarshalJSON emits the string shorthand, matching MarshalYAML.
+// MarshalJSON emits the string shorthand, matching MarshalYAML — and, for the
+// same round-trip reason, the object form once MinServing is set.
 func (u UpdateStrategy) MarshalJSON() ([]byte, error) {
-	return json.Marshal(string(u.Type))
+	if u.MinServing == nil {
+		return json.Marshal(string(u.Type))
+	}
+	return json.Marshal(updateStrategyAlias{Type: u.Type, MinServing: u.MinServing})
 }
 
 // Validate checks the strategy type. An empty type means "rolling".
@@ -140,11 +171,62 @@ func (u *UpdateStrategy) Validate() error {
 	}
 	switch u.Type {
 	case "", UpdateRolling, UpdateRecreate:
-		return nil
 	default:
 		return NewValidationError(fmt.Sprintf(
 			"invalid updateStrategy %q (allowed: rolling, recreate)", u.Type))
 	}
+	if u.MinServing != nil && *u.MinServing < 0 {
+		return NewValidationError("updateStrategy.minServing cannot be negative")
+	}
+	return nil
+}
+
+// ValidateForService checks the strategy against the service it belongs to.
+// Separate from Validate because these rules need the scale and the service's
+// surge capability, neither of which the strategy knows on its own.
+func (u *UpdateStrategy) ValidateForService(svc *Service) error {
+	if u == nil || u.MinServing == nil || svc == nil {
+		return nil
+	}
+	minServing := *u.MinServing
+
+	if minServing > svc.Scale {
+		return NewValidationError(fmt.Sprintf(
+			"updateStrategy.minServing (%d) exceeds scale (%d): an update could never satisfy it",
+			minServing, svc.Scale))
+	}
+
+	// The one deadlock this surface can produce, and the reason it is worth
+	// validating rather than discovering during a wedged deploy: a service
+	// that cannot run a spare copy has no room to create a replacement, so if
+	// it also may not drop a replica, no update can ever take a step.
+	if minServing == svc.Scale && !svc.IsSurgeCapable() {
+		return NewValidationError(fmt.Sprintf(
+			"updateStrategy.minServing (%d) equals scale, but this service cannot run two copies of a "+
+				"replica (%s), so an update could never start: it has no room to create a replacement "+
+				"and no allowance to retire one. Use minServing %d or lower, or updateStrategy: recreate",
+			minServing, surgeBlocker(svc), svc.Scale-1))
+	}
+	return nil
+}
+
+// surgeBlocker names the exclusive resource that stops a service running two
+// copies of a replica, so the error points at the actual cause.
+func surgeBlocker(svc *Service) string {
+	for i := range svc.Volumes {
+		if svc.Volumes[i].ClaimTemplate != nil {
+			return "a per-replica claimTemplate volume"
+		}
+	}
+	if svc.Runtime == RuntimeTypeProcess {
+		return "the process runtime"
+	}
+	for i := range svc.Ports {
+		if svc.Ports[i].HostPort != 0 {
+			return "a hostPort"
+		}
+	}
+	return "an exclusive resource"
 }
 
 // UpdateParams are the resolved, per-service values the update planner runs
@@ -242,10 +324,26 @@ func (s *Service) ResolveUpdateParams() UpdateParams {
 	}
 
 	// Surge capability decides the extra/dip pair together.
+	//
+	// Surge stays at 1 by design and is not settable. On 1-3 boxes spare
+	// capacity is the scarce resource — a box is typically sized for about
+	// sum(scale) — so the speed knob Rune offers is dipping, which is free,
+	// rather than surging, which costs exactly what is short. (K8s exposes
+	// maxSurge because a cluster can usually find another node's worth of
+	// room.)
 	if s.IsSurgeCapable() {
 		p.Extra, p.Dip = 1, 0
 	} else {
 		p.Extra, p.Dip = 0, 1
+	}
+
+	// An explicit availability floor overrides the derived dip. This is the
+	// one value here that is genuinely operator knowledge rather than a fact
+	// about the service.
+	if s != nil && s.UpdateStrategy != nil && s.UpdateStrategy.MinServing != nil {
+		if dip := s.Scale - *s.UpdateStrategy.MinServing; dip > p.Dip {
+			p.Dip = dip
+		}
 	}
 
 	// Recreate takes everything down before creating: no spare copy, and the

@@ -1463,7 +1463,12 @@ func (x *ServiceMetadata) GetObservedGeneration() int64 {
 type UpdateStrategy struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// "rolling" (default) or "recreate".
-	Type          string `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Type string `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	// Fewest replicas that must keep serving during an update. Trades
+	// availability for speed. 0 means unset — the server derives the default
+	// (the full scale for a service that can run a spare copy, one less
+	// otherwise). Absolute count, not a percentage.
+	MinServing    int32 `protobuf:"varint,2,opt,name=min_serving,json=minServing,proto3" json:"min_serving,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1503,6 +1508,13 @@ func (x *UpdateStrategy) GetType() string {
 		return x.Type
 	}
 	return ""
+}
+
+func (x *UpdateStrategy) GetMinServing() int32 {
+	if x != nil {
+		return x.MinServing
+	}
+	return 0
 }
 
 // UpdateStatus is the progress of an in-flight update, for `rune status`,
@@ -3975,9 +3987,11 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"updated_at\x18\x03 \x01(\tR\tupdatedAt\x12-\n" +
 	"\x13last_non_zero_scale\x18\x04 \x01(\x05R\x10lastNonZeroScale\x12/\n" +
 	"\x13template_generation\x18\x05 \x01(\x03R\x12templateGeneration\x12/\n" +
-	"\x13observed_generation\x18\x06 \x01(\x03R\x12observedGeneration\"$\n" +
+	"\x13observed_generation\x18\x06 \x01(\x03R\x12observedGeneration\"E\n" +
 	"\x0eUpdateStrategy\x12\x12\n" +
-	"\x04type\x18\x01 \x01(\tR\x04type\"\xb5\x02\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1f\n" +
+	"\vmin_serving\x18\x02 \x01(\x05R\n" +
+	"minServing\"\xb5\x02\n" +
 	"\fUpdateStatus\x12/\n" +
 	"\x13template_generation\x18\x01 \x01(\x03R\x12templateGeneration\x12\x18\n" +
 	"\adesired\x18\x02 \x01(\x05R\adesired\x12\x18\n" +

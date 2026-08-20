@@ -442,6 +442,16 @@ func ServiceToProto(service *types.Service) *generated.Service {
 		protoService.UpdateStrategy = &generated.UpdateStrategy{
 			Type: string(service.UpdateStrategy.Type),
 		}
+		if service.UpdateStrategy.MinServing != nil {
+			// Sentinel: proto 0 means unset, so an explicit 0 travels as -1.
+			// minServing 0 is meaningful — "no availability requirement" — and
+			// must not silently become the derived default.
+			if *service.UpdateStrategy.MinServing == 0 {
+				protoService.UpdateStrategy.MinServing = -1
+			} else {
+				protoService.UpdateStrategy.MinServing = utils.ToInt32NonNegative(*service.UpdateStrategy.MinServing)
+			}
+		}
 	}
 	if service.DrainSeconds != nil {
 		// Sentinel: proto 0 means "unset", so an explicit 0 travels as -1.
@@ -855,6 +865,13 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 	if proto.UpdateStrategy != nil {
 		service.UpdateStrategy = &types.UpdateStrategy{
 			Type: types.UpdateStrategyType(proto.UpdateStrategy.Type),
+		}
+		if proto.UpdateStrategy.MinServing != 0 {
+			ms := int(proto.UpdateStrategy.MinServing)
+			if ms < 0 {
+				ms = 0 // the explicit-zero sentinel
+			}
+			service.UpdateStrategy.MinServing = &ms
 		}
 	}
 	if proto.DrainSeconds != 0 {

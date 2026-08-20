@@ -344,6 +344,16 @@ func (s *ServiceSpec) Validate() error {
 	if err := s.UpdateStrategy.Validate(); err != nil {
 		return err
 	}
+	// Rules that need the service's scale and surge capability. The spec has
+	// no runtime field — it is resolved later — so the process-runtime case is
+	// caught by Service.Validate instead; volumes and hostPorts are knowable
+	// here and are the common ones.
+	if s.UpdateStrategy != nil && s.UpdateStrategy.MinServing != nil {
+		probe := &Service{Scale: s.Scale, Ports: s.Ports, Volumes: s.Volumes}
+		if err := s.UpdateStrategy.ValidateForService(probe); err != nil {
+			return err
+		}
+	}
 
 	if s.DrainSeconds != nil && (*s.DrainSeconds < 0 || *s.DrainSeconds > MaxDrainSeconds) {
 		return NewValidationError(fmt.Sprintf(
@@ -564,7 +574,8 @@ var validServiceFields = map[string]bool{
 // `updateStrategy: {typ: recreate}` is a cast error rather than a silently
 // ignored typo that leaves the service on the default strategy.
 var validUpdateStrategyFields = map[string]bool{
-	"type": true,
+	"type":       true,
+	"minServing": true,
 }
 
 // validateStructureFromNode validates unknown fields using the captured raw YAML node.

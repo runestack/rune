@@ -339,6 +339,12 @@ message ServiceMetadata {
 message UpdateStrategy {
   // "rolling" (default) or "recreate".
   string type = 1;
+
+  // Fewest replicas that must keep serving during an update. Trades
+  // availability for speed. 0 means unset — the server derives the default
+  // (the full scale for a service that can run a spare copy, one less
+  // otherwise). Absolute count, not a percentage.
+  int32 min_serving = 2;
 }
 
 // UpdateStatus is the progress of an in-flight update, for `rune status`,
