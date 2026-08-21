@@ -193,6 +193,12 @@ func lintFile(filePath string, data []byte) (*format.ErrorFormatter, int) {
 
 		// Try parsing as cast file directly (AST-based, tolerant of duplicate keys)
 		if cf, err := types.ParseCastFile(filePath, ""); err == nil {
+			// Advisory findings print but do not fail the file — they are
+			// things that are likely to disappoint, not things that are
+			// wrong, and a warning that breaks CI is a warning nobody keeps.
+			for _, w := range cf.LintWarnings() {
+				fmt.Printf("  %s %s\n", format.Dim("⚠"), w)
+			}
 			if errs := cf.Lint(); len(errs) > 0 {
 				for _, e := range errs {
 					ln := formatter.ExtractLineNumber(e.Error())

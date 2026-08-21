@@ -95,6 +95,18 @@ message Service {
   // pull and an expired token fails an image that needs no auth at all.
   bool image_pull_anonymous = 33;
 
+  // How instances are replaced when the template changes (RUNE-042).
+  UpdateStrategy update_strategy = 34;
+
+  // Progress of an in-flight update; unset when none is running. Populated
+  // by the reconciler in RUNE-042 Phase 4.
+  UpdateStatus update = 35;
+
+  // Shutdown grace in seconds applied to every teardown of this service's
+  // instances (scale-down, stop, deletion, liveness restart), not just
+  // updates. 0 means unset — the server applies the default.
+  int32 drain_seconds = 36;
+
   // StatusReason is a short, machine-friendly slug describing why
   // the service is in its current Status. Examples:
   // "ImagePullBackOff", "ProbeFailed", "OOMKilled", "ScheduleFailed".
@@ -294,8 +306,10 @@ message EnvFromSource {
 
 // ServiceMetadata represents metadata for a service.
 message ServiceMetadata {
-  // Generation number for the service
-  int32 generation = 1;
+  // Generation number for the service. int64 to match the Go type and the
+  // two sibling counters below — widening a varint is wire-compatible, and
+  // the old int32 forced a lossy clamp on every conversion.
+  int64 generation = 1;
 
   // Creation timestamp (in RFC 3339 format)
   string created_at = 2;
@@ -305,6 +319,54 @@ message ServiceMetadata {
 
   // Last non-zero scale recorded (for restart semantics)
   int32 last_non_zero_scale = 4;
+
+  // Generation of the instance TEMPLATE — the parts of the spec that define
+  // what a container looks like. Advances on a template change but NOT on a
+  // scale change, which is what lets a scale-up leave surviving instances
+  // alone (#142).
+  int64 template_generation = 5;
+
+  // The Generation the reconciler last acted on. Equal to generation means
+  // the desired state is fully reconciled. Exposed so clients and the
+  // dashboard can see reconcile progress rather than guessing from status.
+  int64 observed_generation = 6;
+}
+
+// UpdateStrategy is how a service replaces its instances when the template
+// changes (RUNE-042). One field on purpose: surge count, dip allowance,
+// minimum-ready window and stall deadline are DERIVED per service rather
+// than configured. See _docs/designs/RUNE-042-Rolling-Updates.md §5.
+message UpdateStrategy {
+  // "rolling" (default) or "recreate".
+  string type = 1;
+
+  // Fewest replicas that must keep serving during an update. Trades
+  // availability for speed. 0 means unset — the server derives the default
+  // (the full scale for a service that can run a spare copy, one less
+  // otherwise). Absolute count, not a percentage.
+  int32 min_serving = 2;
+}
+
+// UpdateStatus is the progress of an in-flight update, for `rune status`,
+// `describe`, the dashboard and the CLI spinner.
+message UpdateStatus {
+  // The template generation being updated to.
+  int64 template_generation = 1;
+  // Desired instance count (service scale).
+  int32 desired = 2;
+  // Instances already at template_generation.
+  int32 updated = 3;
+  // ...of which are Running.
+  int32 updated_ready = 4;
+  // Instances serving right now, any generation.
+  int32 available = 5;
+  // Instances still on an older template.
+  int32 outdated = 6;
+  // RFC 3339.
+  string started_at = 7;
+  string last_progress_at = 8;
+  // One sentence for humans, e.g. "waiting for api-3f2a to become ready".
+  string message = 9;
 }
 
 // DependencyRef represents a dependency on another service

@@ -108,6 +108,16 @@ type ServiceSpec struct {
 	// seccomp=unconfined are admin-gated by the server.
 	SecurityContext *SecurityContext `json:"securityContext,omitempty" yaml:"securityContext,omitempty"`
 
+	// UpdateStrategy is how instances are replaced when the template changes
+	// (RUNE-042). Accepts the string shorthand (`updateStrategy: recreate`)
+	// or the map form. Omitted means rolling.
+	UpdateStrategy *UpdateStrategy `json:"updateStrategy,omitempty" yaml:"updateStrategy,omitempty"`
+
+	// DrainSeconds is the shutdown grace for this service's instances,
+	// applied to every teardown (not just updates). Omitted means
+	// DefaultDrainSeconds; floored at MinDrainSeconds.
+	DrainSeconds *int `json:"drainSeconds,omitempty" yaml:"drainSeconds,omitempty"`
+
 	// rawNode holds the original YAML mapping node for structural validation
 	rawNode *yaml.Node `json:"-" yaml:"-"`
 }
@@ -331,6 +341,26 @@ func (s *ServiceSpec) Validate() error {
 		return NewValidationError("service scale cannot be negative")
 	}
 
+	if err := s.UpdateStrategy.Validate(); err != nil {
+		return err
+	}
+	// Rules that need the service's scale and surge capability. The spec has
+	// no runtime field — it is resolved later — so the process-runtime case is
+	// caught by Service.Validate instead; volumes and hostPorts are knowable
+	// here and are the common ones.
+	if s.UpdateStrategy != nil && s.UpdateStrategy.MinServing != nil {
+		probe := &Service{Scale: s.Scale, Ports: s.Ports, Volumes: s.Volumes}
+		if err := s.UpdateStrategy.ValidateForService(probe); err != nil {
+			return err
+		}
+	}
+
+	if s.DrainSeconds != nil && (*s.DrainSeconds < 0 || *s.DrainSeconds > MaxDrainSeconds) {
+		return NewValidationError(fmt.Sprintf(
+			"drainSeconds must be between 0 and %d (0 is still floored at %ds so in-flight requests are not cut off)",
+			MaxDrainSeconds, MinDrainSeconds))
+	}
+
 	// Validate ports if present
 	for i, port := range s.Ports {
 		if port.Name == "" {
@@ -536,6 +566,16 @@ var validServiceFields = map[string]bool{
 	"dependencies":       true,
 	"initSteps":          true,
 	"securityContext":    true,
+	"updateStrategy":     true,
+	"drainSeconds":       true,
+}
+
+// validUpdateStrategyFields is the map-form allowlist for updateStrategy, so
+// `updateStrategy: {typ: recreate}` is a cast error rather than a silently
+// ignored typo that leaves the service on the default strategy.
+var validUpdateStrategyFields = map[string]bool{
+	"type":       true,
+	"minServing": true,
 }
 
 // validateStructureFromNode validates unknown fields using the captured raw YAML node.
@@ -590,6 +630,15 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 			}
 			if fieldKey.Value == "initSteps" && fieldVal.Kind == yaml.SequenceNode {
 				collectInitStepsErrors(fieldVal, &errors)
+			}
+			if fieldKey.Value == "updateStrategy" && fieldVal.Kind == yaml.MappingNode {
+				for j := 0; j+1 < len(fieldVal.Content); j += 2 {
+					k := fieldVal.Content[j]
+					if !validUpdateStrategyFields[k.Value] {
+						errors = append(errors, fmt.Sprintf(
+							"unknown field '%s' in service.updateStrategy at line %d", k.Value, k.Line))
+					}
+				}
 			}
 			if fieldKey.Value == "discovery" && fieldVal.Kind == yaml.MappingNode {
 				validDiscoveryFields := map[string]bool{
@@ -693,6 +742,8 @@ func (s *ServiceSpec) ToService() (*Service, error) {
 		Dependencies:       deps,
 		InitSteps:          s.InitSteps,
 		SecurityContext:    s.SecurityContext,
+		UpdateStrategy:     s.UpdateStrategy,
+		DrainSeconds:       s.DrainSeconds,
 		Status:             ServiceStatusPending,
 		Metadata:           &ServiceMetadata{CreatedAt: now, UpdatedAt: now},
 	}, nil

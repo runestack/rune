@@ -17,6 +17,9 @@ import (
 
 // FakeInstanceController implements the InstanceController interface for testing purposes
 type FakeInstanceController struct {
+	// WithdrawServiceInstancesCalls counts batch withdrawals (RUNE-042).
+	WithdrawServiceInstancesCalls int
+
 	mu                       sync.Mutex
 	logger                   log.Logger
 	instances                map[string]*types.Instance // Keyed by ID
@@ -502,6 +505,32 @@ func (c *FakeInstanceController) RestartInstance(ctx context.Context, instance *
 	}
 
 	return nil
+}
+
+// WithdrawServiceInstances records a batch withdrawal (RUNE-042 Phase 0).
+// The fake mirrors the real controller's contract: Running instances are
+// flipped to Terminating in place; no drain is taken.
+func (c *FakeInstanceController) WithdrawServiceInstances(ctx context.Context, service *types.Service, instances []*types.Instance) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.WithdrawServiceInstancesCalls++
+	for _, inst := range instances {
+		if inst != nil && inst.Status == types.InstanceStatusRunning {
+			inst.Status = types.InstanceStatusTerminating
+		}
+	}
+}
+
+// classifyInstance mirrors the real controller's classifier for the fake:
+// it defers to whatever isInstanceCompatibleWithService is configured to
+// return, mapping incompatible to CompatBroken (the pre-RUNE-042 meaning of
+// `false`, and the class that still triggers immediate replacement).
+func (c *FakeInstanceController) classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict {
+	ok, reason := c.isInstanceCompatibleWithService(ctx, instance, service)
+	if ok {
+		return CompatVerdict{Class: CompatOK}
+	}
+	return CompatVerdict{Class: CompatBroken, Reason: reason}
 }
 
 // StopInstance records a call to stop an instance

@@ -231,6 +231,10 @@ type serviceReport struct {
 	Age            string `json:"age" yaml:"age"`
 	StatusReason   string `json:"statusReason,omitempty" yaml:"statusReason,omitempty"`
 	StatusMessage  string `json:"statusMessage,omitempty" yaml:"statusMessage,omitempty"`
+	// Update is the in-flight rolling update, nil when none is running
+	// (RUNE-042). Machine output carries the whole block; the human table
+	// renders a single UPDATE cell from it.
+	Update *types.UpdateStatus `json:"update,omitempty" yaml:"update,omitempty"`
 	// updatedAt is kept for stable sorting and machine output; the human
 	// table shows the derived Age string instead.
 	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt"`
@@ -549,6 +553,7 @@ func collectNamespace(sc *client.ServiceClient, ic *client.InstanceClient, sec *
 			Age:            formatAge(updatedAt),
 			StatusReason:   s.StatusReason,
 			StatusMessage:  s.StatusMessage,
+			Update:         s.Update,
 			UpdatedAt:      updatedAt,
 		})
 		nr.Summary.Total++
@@ -852,7 +857,18 @@ func renderHeader(w *os.File, nr namespaceReport, hideRollUp bool) {
 // is healthy. Uses pterm so colored cells line up correctly (tabwriter
 // counts ANSI escape bytes as visible width and misaligns).
 func renderServiceTable(_ *os.File, services []serviceReport) {
-	rows := [][]string{{"NAME", "STATUS", "SCALE", "IMAGE", "AGE", "REASON / MESSAGE"}}
+	// The UPDATE column appears only when something in this list is actually
+	// updating. A steady cluster reads exactly as it did before RUNE-042 —
+	// a permanently-empty column is a permanent question ("should something
+	// be there?") for a feature most services are not using at any moment.
+	updating := anyUpdating(services)
+
+	header := []string{"NAME", "STATUS", "SCALE", "IMAGE", "AGE", "REASON / MESSAGE"}
+	if updating {
+		header = []string{"NAME", "STATUS", "SCALE", "UPDATE", "IMAGE", "AGE", "REASON / MESSAGE"}
+	}
+	rows := [][]string{header}
+
 	for _, s := range services {
 		reason := ""
 		if s.Status != string(types.ServiceStatusRunning) {
@@ -865,17 +881,39 @@ func renderServiceTable(_ *os.File, services []serviceReport) {
 				reason = s.StatusMessage
 			}
 		}
-		rows = append(rows, []string{
+		row := []string{
 			s.Name,
 			colorStatus(s.Status),
 			// ready/desired (k8s convention) — 2/3 = 2 ready of 3 desired.
 			fmt.Sprintf("%d/%d", s.ReadyInstances, s.DesiredScale),
-			shortImage(s.Image),
-			s.Age,
-			reason,
-		})
+		}
+		if updating {
+			row = append(row, updateCell(s.Update))
+		}
+		row = append(row, shortImage(s.Image), s.Age, reason)
+		rows = append(rows, row)
 	}
 	_ = statusTable().WithData(rows).Render()
+}
+
+// anyUpdating reports whether any service in the list has an update in flight.
+func anyUpdating(services []serviceReport) bool {
+	for _, s := range services {
+		if s.Update != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// updateCell renders the compact per-row form: how many replicas carry the new
+// template, out of the desired count. The full sentence lives in
+// `rune describe`; the table only has room for the fraction.
+func updateCell(u *types.UpdateStatus) string {
+	if u == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%d/%d replaced", u.UpdatedReady, u.Desired)
 }
 
 // shortImage trims a registry/repo prefix to keep the service table narrow,

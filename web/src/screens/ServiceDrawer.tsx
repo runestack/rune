@@ -112,8 +112,28 @@ export function ServiceDrawer({ svc, onClose, go, openInst }: { svc: Service; on
         </div>
         {busy && <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--text-3)", display: "flex", gap: 8, alignItems: "center" }}><Dot s="deploy" pulse />{busy}…</div>}
         {actionErr && <Alert tone="error" style={{ marginTop: 12 }}>{actionErr}</Alert>}
+        {/* An in-flight rolling update, in operator words: how many replicas
+            carry the new template and how many are serving right now. Shown
+            above the status note because while an update is running it is the
+            thing the operator came here to see. */}
+        {svc.update && !actionErr && (
+          <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <Dot s="deploy" pulse />
+              <strong style={{ fontWeight: 600 }}>Updating</strong>
+              <span style={{ color: "var(--text-2)" }}>
+                {svc.update.replaced}/{svc.update.desired} replaced · {svc.update.serving}/{svc.update.desired} serving
+              </span>
+            </div>
+            {svc.update.message && (
+              <div style={{ marginTop: 6, fontSize: 12.5, color: "var(--text-3)" }}>{svc.update.message}</div>
+            )}
+          </div>
+        )}
         {svc.note && !actionErr && (
-          <Alert tone={svc.status === "warn" ? "error" : "warn"} icon="health" style={{ marginTop: 14 }}>{svc.note}</Alert>
+          <Alert tone={svc.status === "warn" ? "error" : "warn"} icon="health" style={{ marginTop: 14 }}>
+            {svc.reason ? `${svc.reason} — ${svc.note}` : svc.note}
+          </Alert>
         )}
       </div>
       <div className="drawer-body">

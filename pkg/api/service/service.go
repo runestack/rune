@@ -382,13 +382,28 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 		return nil, status.Errorf(codes.Internal, "failed to ensure service VIP: %v", err)
 	}
 
-	// Determine if we need to increment the generation
+	// Determine if we need to increment the generation.
+	//
+	// Two hashes, two counters (RUNE-042 §5.6):
+	//   - the FULL hash drives Generation — "the desired state changed, go
+	//     reconcile", which includes scale and the update knobs;
+	//   - the TEMPLATE hash drives TemplateGeneration — "what a container
+	//     looks like changed, so existing instances must be replaced".
+	// Before this split, cast stamped TemplateGeneration on any full-hash
+	// change, and the full hash includes scale — so a cast that changed only
+	// the replica count marked every surviving instance stale. That was
+	// invisible under recreate-everything semantics; with rolling updates it
+	// would roll the whole service for a scale edit.
 	needsGenUpdate := req.Force // Force flag forces generation update
+	// A forced cast is an explicit "replace everything", so it is a template
+	// change by definition.
+	needsTemplateUpdate := req.Force
 
 	if !needsGenUpdate {
 		// Calculate service hash to determine if anything meaningful changed
 		oldHash := existingService.CalculateHash()
 		newHash := updatedService.CalculateHash()
+		needsTemplateUpdate = existingService.CalculateTemplateHash() != updatedService.CalculateTemplateHash()
 
 		if oldHash != newHash {
 			// Service has changed, increment generation
@@ -427,13 +442,17 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 			updatedService.Metadata = &types.ServiceMetadata{}
 		}
 		updatedService.Metadata.Generation = existingService.Metadata.Generation + 1
-		// A cast/force change is a TEMPLATE change: stamp TemplateGeneration
-		// with the new Generation so existing instances (which recorded an
-		// older value) are recreated. Scale-only changes never come through
-		// here — the scaling controller bumps Generation without touching
-		// TemplateGeneration — so survivors of a scale op are left alone
-		// (issue #142).
-		updatedService.Metadata.TemplateGeneration = updatedService.Metadata.Generation
+		// Stamp TemplateGeneration only when the TEMPLATE actually changed,
+		// so existing instances (which recorded an older value) are
+		// recreated. A scale-only or updateStrategy-only cast bumps
+		// Generation alone and leaves survivors untouched — the same
+		// property the scaling controller already had (issue #142), now
+		// extended to the cast path (RUNE-042).
+		if needsTemplateUpdate {
+			updatedService.Metadata.TemplateGeneration = updatedService.Metadata.Generation
+		} else {
+			updatedService.Metadata.TemplateGeneration = existingService.Metadata.TemplateGeneration
+		}
 		updatedService.Status = types.ServiceStatusDeploying
 	} else {
 		// Keep existing generation and status

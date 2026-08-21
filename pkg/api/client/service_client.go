@@ -426,10 +426,55 @@ func ServiceToProto(service *types.Service) *generated.Service {
 
 	if service.Metadata != nil {
 		protoService.Metadata = &generated.ServiceMetadata{
-			Generation:       utils.ToInt32NonNegative64(service.Metadata.Generation),
-			CreatedAt:        service.Metadata.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:        service.Metadata.UpdatedAt.Format(time.RFC3339),
-			LastNonZeroScale: utils.ToInt32NonNegative(service.Metadata.LastNonZeroScale),
+			Generation:         service.Metadata.Generation,
+			CreatedAt:          service.Metadata.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:          service.Metadata.UpdatedAt.Format(time.RFC3339),
+			LastNonZeroScale:   utils.ToInt32NonNegative(service.Metadata.LastNonZeroScale),
+			TemplateGeneration: service.Metadata.TemplateGeneration,
+			ObservedGeneration: service.Metadata.ObservedGeneration,
+		}
+	}
+
+	// Update strategy + drain grace (RUNE-042). Both are optional on the
+	// wire: an unset strategy means rolling, and drain_seconds 0 means "not
+	// specified" so the server applies the default.
+	if service.UpdateStrategy != nil {
+		protoService.UpdateStrategy = &generated.UpdateStrategy{
+			Type: string(service.UpdateStrategy.Type),
+		}
+		if service.UpdateStrategy.MinServing != nil {
+			// Sentinel: proto 0 means unset, so an explicit 0 travels as -1.
+			// minServing 0 is meaningful — "no availability requirement" — and
+			// must not silently become the derived default.
+			if *service.UpdateStrategy.MinServing == 0 {
+				protoService.UpdateStrategy.MinServing = -1
+			} else {
+				protoService.UpdateStrategy.MinServing = utils.ToInt32NonNegative(*service.UpdateStrategy.MinServing)
+			}
+		}
+	}
+	if service.DrainSeconds != nil {
+		// Sentinel: proto 0 means "unset", so an explicit 0 travels as -1.
+		// Without this an operator's `drainSeconds: 0` arrives as absent and
+		// silently becomes the 5s default rather than the 1s floor the
+		// validation message promises.
+		if *service.DrainSeconds == 0 {
+			protoService.DrainSeconds = -1
+		} else {
+			protoService.DrainSeconds = utils.ToInt32NonNegative(*service.DrainSeconds)
+		}
+	}
+	if service.Update != nil {
+		protoService.Update = &generated.UpdateStatus{
+			TemplateGeneration: service.Update.TemplateGeneration,
+			Desired:            utils.ToInt32NonNegative(service.Update.Desired),
+			Updated:            utils.ToInt32NonNegative(service.Update.Updated),
+			UpdatedReady:       utils.ToInt32NonNegative(service.Update.UpdatedReady),
+			Available:          utils.ToInt32NonNegative(service.Update.Available),
+			Outdated:           utils.ToInt32NonNegative(service.Update.Outdated),
+			StartedAt:          service.Update.StartedAt.Format(time.RFC3339),
+			LastProgressAt:     service.Update.LastProgressAt.Format(time.RFC3339),
+			Message:            service.Update.Message,
 		}
 	}
 
@@ -798,8 +843,10 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 		if service.Metadata == nil {
 			service.Metadata = &types.ServiceMetadata{}
 		}
-		service.Metadata.Generation = int64(proto.Metadata.Generation)
+		service.Metadata.Generation = proto.Metadata.Generation
 		service.Metadata.LastNonZeroScale = int(proto.Metadata.LastNonZeroScale)
+		service.Metadata.TemplateGeneration = proto.Metadata.TemplateGeneration
+		service.Metadata.ObservedGeneration = proto.Metadata.ObservedGeneration
 
 		createdAt, err := utils.ParseTimestamp(proto.Metadata.CreatedAt)
 		if err != nil {
@@ -812,6 +859,45 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 			return nil, fmt.Errorf("failed to parse updated_at timestamp: %w", err)
 		}
 		service.Metadata.UpdatedAt = *updatedAt
+	}
+
+	// Update strategy + drain grace (RUNE-042).
+	if proto.UpdateStrategy != nil {
+		service.UpdateStrategy = &types.UpdateStrategy{
+			Type: types.UpdateStrategyType(proto.UpdateStrategy.Type),
+		}
+		if proto.UpdateStrategy.MinServing != 0 {
+			ms := int(proto.UpdateStrategy.MinServing)
+			if ms < 0 {
+				ms = 0 // the explicit-zero sentinel
+			}
+			service.UpdateStrategy.MinServing = &ms
+		}
+	}
+	if proto.DrainSeconds != 0 {
+		drain := int(proto.DrainSeconds)
+		if drain < 0 {
+			drain = 0 // the explicit-zero sentinel; DrainWindow floors it
+		}
+		service.DrainSeconds = &drain
+	}
+	if proto.Update != nil {
+		upd := &types.UpdateStatus{
+			TemplateGeneration: proto.Update.TemplateGeneration,
+			Desired:            int(proto.Update.Desired),
+			Updated:            int(proto.Update.Updated),
+			UpdatedReady:       int(proto.Update.UpdatedReady),
+			Available:          int(proto.Update.Available),
+			Outdated:           int(proto.Update.Outdated),
+			Message:            proto.Update.Message,
+		}
+		if t, err := utils.ParseTimestamp(proto.Update.StartedAt); err == nil {
+			upd.StartedAt = *t
+		}
+		if t, err := utils.ParseTimestamp(proto.Update.LastProgressAt); err == nil {
+			upd.LastProgressAt = *t
+		}
+		service.Update = upd
 	}
 
 	// Convert args

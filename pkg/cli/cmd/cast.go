@@ -93,7 +93,11 @@ func newCastCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.tag, "tag", "", "Tag for this deployment (e.g., 'stable', 'canary')")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Validate the service definition without deploying it")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Detach from the deployment and return immediately")
-	cmd.Flags().StringVar(&opts.timeoutStr, "timeout", "5m", "Timeout for the wait operation")
+	// Must exceed the update stall deadline (600s): this bounds the whole
+	// Cast RPC, including the server's rollout verify, so a shorter value
+	// silently overrides it — and with --atomic it reverts a healthy,
+	// still-progressing deploy (RUNE-042 §8.3).
+	cmd.Flags().StringVar(&opts.timeoutStr, "timeout", "15m", "Timeout for the wait operation")
 	cmd.Flags().BoolVarP(&opts.recursiveDir, "recursive", "r", false, "Recursively process directories")
 	cmd.Flags().BoolVar(&opts.forceGeneration, "force", false, "Force generation increment even if no changes are detected")
 	cmd.Flags().BoolVar(&opts.createNamespace, "create-namespace", false, "Create the namespace if it doesn't exist")

@@ -93,6 +93,7 @@ func runRestart(cmd *cobra.Command, args []string) error {
 // smoothly without polling the server any harder.
 func waitForRestartComplete(apiClient *client.Client, serviceName, namespace string, templateGen int64, scale int, timeout time.Duration, renderer *phaseRenderer) error {
 	instanceClient := client.NewInstanceClient(apiClient)
+	serviceClient := client.NewServiceClient(apiClient)
 
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(1 * time.Second)
@@ -116,6 +117,29 @@ func waitForRestartComplete(apiClient *client.Client, serviceName, namespace str
 			// Transient list failures shouldn't abort the wait.
 			<-ticker.C
 			continue
+		}
+
+		// Surface WHY the update is where it is, and give up promptly on a
+		// stall instead of waiting out the full timeout. Without this an
+		// operator watched a spinner for ten minutes and then got a generic
+		// "timed out" — the reason was in the service record the whole time.
+		// Best-effort: a failed lookup just means no narration this tick.
+		if svc, serr := serviceClient.GetService(namespace, serviceName); serr == nil && svc != nil {
+			if svc.StatusReason == types.ServiceReasonUpdateStalled {
+				renderer.finish(false, "stalled")
+				msg := svc.StatusMessage
+				if msg == "" {
+					msg = "the update stopped making progress"
+				}
+				return fmt.Errorf("restart stalled: %s — run `rune describe service %s -n %s` "+
+					"and `rune get events -n %s` to see which replacement is failing",
+					msg, serviceName, namespace, namespace)
+			}
+			// note() dedups, so a steady hold prints its reason once rather
+			// than on every poll.
+			if svc.Update != nil && svc.Update.Message != "" {
+				renderer.note(svc.Update.Message)
+			}
 		}
 
 		var freshRunning, freshOther, stale int

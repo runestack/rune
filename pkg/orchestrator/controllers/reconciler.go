@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/queue"
 	"github.com/runestack/rune/pkg/store"
@@ -49,14 +50,21 @@ type reconciler struct {
 	instanceController InstanceController
 	healthController   HealthController
 	logger             log.Logger
-	reconcileInterval  time.Duration
-	queue              *queue.Queue
-	mu                 sync.Mutex
-	isRunning          bool
-	ctx                context.Context
-	cancel             context.CancelFunc
-	ticker             *time.Ticker
-	wg                 sync.WaitGroup
+
+	// events is the optional persisted event log. Set after construction via
+	// SetEventLog; nil-safe, so unit tests need not wire one. Update
+	// lifecycle events go here — they are the only after-the-fact record of
+	// what a rolling update did, since Service.Update is cleared on
+	// completion (RUNE-042 §8.2).
+	events            events.EventLog
+	reconcileInterval time.Duration
+	queue             *queue.Queue
+	mu                sync.Mutex
+	isRunning         bool
+	ctx               context.Context
+	cancel            context.CancelFunc
+	ticker            *time.Ticker
+	wg                sync.WaitGroup
 }
 
 // newReconciler creates a new reconciler.
@@ -334,12 +342,25 @@ func (r *reconciler) reconcileService(ctx context.Context, service *types.Servic
 		return r.reconcileDeletion(ctx, service)
 	}
 
-	// Scale down if needed
-	if err := r.scaleDownService(ctx, service); err != nil {
-		r.logger.Error("Error scaling down service",
-			log.Str("service", service.Name),
-			log.Err(err))
-		// Continue with the rest of reconciliation
+	// Scale down if needed.
+	//
+	// Stateless services no longer come through here: their excess is part of
+	// the update plan, decided in one place alongside retirement and creation
+	// (RUNE-042 §8.1). Two functions independently deciding "which instances
+	// die" is exactly how the surged replacement gets torn down out from under
+	// an in-flight update — this pass would see Scale+1 instances, call one of
+	// them excess, and retire it with no regard for readiness.
+	//
+	// Stateful services still use it: their slot-based path does not run the
+	// planner yet (Phase 5), so nothing else would remove instances above the
+	// desired scale.
+	if serviceHasStableIdentity(service) {
+		if err := r.scaleDownService(ctx, service); err != nil {
+			r.logger.Error("Error scaling down service",
+				log.Str("service", service.Name),
+				log.Err(err))
+			// Continue with the rest of reconciliation
+		}
 	}
 
 	// Ensure we have the right number of instances and they're up to date
@@ -499,21 +520,30 @@ func (r *reconciler) scaleDownService(ctx context.Context, service *types.Servic
 
 // ensureServiceInstances makes sure we have the right number of instances and they're up to date
 func (r *reconciler) ensureServiceInstances(ctx context.Context, service *types.Service) error {
-	// If the service declares dependencies, gate instance creation until deps are ready
+	// If the service declares dependencies, gate instance CREATION until they
+	// are ready — creation only, not the whole pass.
+	//
+	// This used to return early, which was harmless while scale-down ran
+	// ahead of it in reconcileService. Now that stateless excess removal
+	// lives in the plan, an early return also suppresses retirement: a
+	// service whose dependency went unready would ignore `rune scale`
+	// entirely, keeping every instance up while the operator watched the
+	// command time out. Blocking creates while still honouring the desired
+	// scale downward is both what the log line claims and the safer half.
+	createsBlocked := false
 	if len(service.Dependencies) > 0 {
 		ready, err := r.dependenciesReady(ctx, service)
 		if err != nil {
 			r.logger.Error("Dependency readiness check failed",
 				log.Str("service", service.Name),
 				log.Err(err))
-			// Be safe: do not proceed with instance creation on error
-			return nil
-		}
-		if !ready {
+			// Be safe: do not create against an unknown dependency state.
+			createsBlocked = true
+		} else if !ready {
 			r.logger.Info("Delaying instance creation; dependencies not ready",
 				log.Str("service", service.Name),
 				log.Str("namespace", service.Namespace))
-			return nil
+			createsBlocked = true
 		}
 	}
 
@@ -533,9 +563,14 @@ func (r *reconciler) ensureServiceInstances(ctx context.Context, service *types.
 	// lifetime (#84). The two need different reconcile identity models — slot
 	// matching vs. count-based — so dispatch here.
 	if serviceHasStableIdentity(service) {
+		// The stateful path only ever creates or replaces in-slot, so the
+		// old all-or-nothing gate is still the right shape for it.
+		if createsBlocked {
+			return nil
+		}
 		return r.ensureStatefulInstances(ctx, service, instanceData)
 	}
-	return r.ensureStatelessInstances(ctx, service, instanceData)
+	return r.ensureStatelessInstances(ctx, service, instanceData, createsBlocked)
 }
 
 // ensureStatefulInstances reconciles a service whose replicas have stable
@@ -602,29 +637,73 @@ func (r *reconciler) ensureStatefulInstances(ctx context.Context, service *types
 }
 
 // ensureStatelessInstances reconciles a service whose replicas have no stable
-// identity. Instance names are unique per lifetime, so they can't be regenerated
-// from a slot index; identity is by count instead. Compatible instances are
-// reconciled in place and kept; incompatible ones are deleted; then enough
-// fresh {service}-{shorthash} instances are created to reach the desired scale.
-// Removing *excess* instances is handled separately by scaleDownService (which
-// runs before this in reconcileService), so this only ever creates.
-func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) error {
-	taken := make(map[string]bool, len(instanceData.Instances))
-	have := 0
-	for j := range instanceData.Instances {
-		inst := &instanceData.Instances[j]
-		isCompatible, reason := r.instanceController.isInstanceCompatibleWithService(ctx, inst, service)
-		if !isCompatible {
-			r.logger.Info("Instance incompatible, will recreate",
-				log.Str("service", service.Name),
-				log.Str("instance", inst.Name),
-				log.Str("reason", reason))
-			r.healthController.RemoveInstance(inst.ID)
-			if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
-				r.logger.Error("Failed to delete old instance during recreation",
-					log.Str("instance", inst.ID),
-					log.Err(err))
-			}
+// identity, through the update planner (RUNE-042 Phase 4).
+//
+// Before this, the loop deleted EVERY incompatible instance and then created
+// replacements — which is why a template change took the whole service down
+// at once. Now each instance is classified, the planner decides what may
+// happen this tick within the availability budget, and this function only
+// executes that decision.
+//
+// Scale-down is part of the same decision (the planner returns excess
+// retirements), so there is no separate scale-down pass to fight the surge.
+func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData, createsBlocked bool) error {
+	// Finish any teardown that was abandoned mid-flight before planning, or
+	// the stranded record occupies a slot no plan can free.
+	r.reapStuckTerminating(ctx, service, instanceData)
+
+	plan, views := r.planServiceUpdate(ctx, service, instanceData)
+
+	// 1. Retire, oldest/least-valuable first as the planner ordered them.
+	//
+	// Withdraw the whole set from the dataplane in one publish first, and
+	// take ONE shared drain window for all of them (RUNE-042 §4). Retiring
+	// serially would pay a full drain per instance — 8 × (5s drain + up to
+	// 10s stop) ≈ two minutes of one of only four reconcile workers for a
+	// `recreate` deploy or a wide scale-down, during which this service
+	// creates nothing and other services wait. The per-instance
+	// DeleteInstance calls below then see Terminating and skip their own
+	// drains.
+	if len(plan.Retire) > 1 {
+		r.instanceController.WithdrawServiceInstances(ctx, service, plan.Retire)
+	}
+	for _, inst := range plan.Retire {
+		r.logger.Info("Retiring instance",
+			log.Str("service", service.Name),
+			log.Str("instance", inst.Name),
+			log.Str("reason", plan.Reason))
+		r.emitService(ctx, service, types.EventLevelInfo, eventInstanceRetired,
+			fmt.Sprintf("retired %s: %s", inst.Name, plan.Reason))
+		r.healthController.RemoveInstance(inst.ID)
+		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
+			r.logger.Error("Failed to retire instance",
+				log.Str("instance", inst.ID), log.Err(err))
+		}
+	}
+
+	// 2. Repair broken instances — unbudgeted, because they serve nobody.
+	retired := make(map[string]bool, len(plan.Retire))
+	for _, inst := range plan.Retire {
+		retired[inst.ID] = true
+	}
+	for _, inst := range plan.Repair {
+		r.logger.Info("Replacing broken instance",
+			log.Str("service", service.Name),
+			log.Str("instance", inst.Name))
+		r.healthController.RemoveInstance(inst.ID)
+		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
+			r.logger.Error("Failed to remove broken instance",
+				log.Str("instance", inst.ID), log.Err(err))
+		}
+	}
+
+	// 3. Reconcile the survivors in place (health monitoring, env drift,
+	//    generation stamp). UpdateInstance leaves outdated instances alone —
+	//    their replacement is the planner's call, made above.
+	taken := make(map[string]bool, len(views))
+	for i := range views {
+		inst := views[i].Instance
+		if retired[inst.ID] || views[i].Class == CompatBroken {
 			continue
 		}
 		if err := r.reconcileExistingInstance(ctx, service, inst); err != nil {
@@ -635,17 +714,25 @@ func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *type
 			// Continue with other instances
 		}
 		taken[inst.Name] = true
-		have++
 	}
 
-	// Create fresh instances up to the desired scale. Ordinal is not meaningful
-	// for a stateless service (no per-replica volume binding); pass the running
-	// index purely so the field is populated deterministically.
-	for ordinal := have; ordinal < service.Scale; ordinal++ {
+	// 4. Create what the plan allows: replacements for retired/broken
+	//    instances plus any shortfall against the desired scale. Ordinal is
+	//    not meaningful for a stateless service (no per-replica volume
+	//    binding); pass the running index so the field is populated
+	//    deterministically.
+	total := len(plan.Repair) + plan.Create
+	if createsBlocked && total > 0 {
+		r.logger.Info("Holding instance creation; dependencies not ready",
+			log.Str("service", service.Name),
+			log.Int("would_create", total))
+		total = 0
+	}
+	for i := 0; i < total; i++ {
 		instanceName := generateHashInstanceName(service, taken)
 		taken[instanceName] = true
 		r.logger.Info("creating new instance", log.Json("instanceName", instanceName))
-		if err := r.createNewInstance(ctx, service, instanceName, ordinal); err != nil {
+		if err := r.createNewInstance(ctx, service, instanceName, len(taken)-1); err != nil {
 			r.logger.Error("Failed to create new instance",
 				log.Str("service", service.Name),
 				log.Str("instance", instanceName),
@@ -655,6 +742,44 @@ func (r *reconciler) ensureStatelessInstances(ctx context.Context, service *type
 	}
 
 	return nil
+}
+
+// planServiceUpdate classifies the service's instances and asks the planner
+// what may happen this tick. Returns the plan and the classified views, which
+// the caller reuses so nothing is classified twice (each classification hits
+// the runner).
+func (r *reconciler) planServiceUpdate(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) (updatePlan, []instanceView) {
+	params := service.ResolveUpdateParams()
+	now := time.Now()
+
+	views := make([]instanceView, 0, len(instanceData.Instances))
+	for i := range instanceData.Instances {
+		inst := &instanceData.Instances[i]
+		verdict := r.instanceController.classifyInstance(ctx, inst, service)
+		v := newInstanceView(inst, verdict.Class, params.MinReady, now)
+		if verdict.Class != CompatOK {
+			r.logger.Debug("Instance classified",
+				log.Str("service", service.Name),
+				log.Str("instance", inst.Name),
+				log.Str("class", classNames[verdict.Class]),
+				log.Str("reason", verdict.Reason))
+		}
+		views = append(views, v)
+	}
+
+	return planUpdate(updateInput{
+		Scale:     service.Scale,
+		Params:    params,
+		Instances: views,
+		Now:       now,
+	}), views
+}
+
+// classNames renders a CompatClass for logs.
+var classNames = map[CompatClass]string{
+	CompatOK:       "ok",
+	CompatBroken:   "broken",
+	CompatOutdated: "outdated",
 }
 
 // dependenciesReady evaluates whether all declared dependencies for a service are ready.
@@ -897,6 +1022,8 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 
 	var newStatus types.ServiceStatus
 	var newReason, newMessage string
+	var upd *types.UpdateStatus
+	var stalled bool
 
 	if len(instanceData.Instances) == 0 {
 		// No instances yet
@@ -943,6 +1070,10 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 			log.Int("failed", failed),
 			log.Int("total", len(instanceData.Instances)))
 
+		// Update progress + stall detection (RUNE-042 §8.2/§7.3). nil means
+		// no update is in flight.
+		upd, stalled = r.computeUpdateStatus(ctx, service, instanceData)
+
 		// Determine overall service status.
 		//
 		// Stopping wins over Running/Deploying/Pending whenever the desired
@@ -955,13 +1086,38 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		// Failed still wins over Stopping: an instance that's failing to
 		// terminate cleanly is more important to surface than the fact that
 		// we're trying to terminate it.
+		//
+		// Two of these rules break under an update and are guarded (RUNE-042
+		// §8.2):
+		//
+		//   - An update legitimately runs at Scale+extra instances, so the
+		//     count-exceeds-scale test would report the whole update as
+		//     "Stopping" — wrong, and alarming next to a healthy deploy.
+		//   - One replacement failing to start must not flip a service whose
+		//     old instances are all serving. While an update is in flight a
+		//     failed instance keeps the service Deploying/Updating until the
+		//     stall deadline, and only then becomes Failed/UpdateStalled.
+		//     A failed instance with NO update in flight keeps the old
+		//     behaviour exactly.
+		updating := upd != nil
 		switch {
-		case failed > 0:
+		case failed > 0 && (!updating || stalled):
 			newStatus = types.ServiceStatusFailed
-			if worstFailed != nil {
+			if stalled {
+				newReason = types.ServiceReasonUpdateStalled
+				newMessage = stalledMessage(upd)
+			} else if worstFailed != nil {
 				newReason = types.DeriveServiceReason(worstFailed.Status, worstFailed.StatusMessage)
 				newMessage = worstFailed.StatusMessage
 			}
+		case stalled:
+			newStatus = types.ServiceStatusFailed
+			newReason = types.ServiceReasonUpdateStalled
+			newMessage = stalledMessage(upd)
+		case updating:
+			newStatus = types.ServiceStatusDeploying
+			newReason = types.ServiceReasonUpdating
+			newMessage = upd.Message
 		case service.Scale < len(instanceData.Instances):
 			newStatus = types.ServiceStatusStopping
 		case pending > 0:
@@ -988,7 +1144,8 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 
 	statusChanged := service.Status != newStatus ||
 		service.StatusReason != newReason ||
-		service.StatusMessage != newMessage
+		service.StatusMessage != newMessage ||
+		updateStatusChanged(service.Update, upd)
 	// Even when the status text is unchanged, we must advance ObservedGeneration
 	// so a scale-up that leaves the service "Running" (e.g. `rune restart`'s
 	// scale-back-up) doesn't look unreconciled forever and reconcile-loop.
@@ -1000,7 +1157,11 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 				log.Str("service", service.Name),
 				log.Str("from", string(service.Status)),
 				log.Str("to", string(newStatus)),
-				log.Str("reason", newReason))
+				log.Str("reason", newReason),
+				// Without this the planner's actual sentence ("waiting for
+				// replacements to become ready") never reached the log, and a
+				// held update was undiagnosable from logs alone.
+				log.Str("message", newMessage))
 		}
 
 		// Apply ONLY the status fields (+ ObservedGeneration), atomically, on the
@@ -1023,19 +1184,28 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 			// ObservedGeneration bump (or vice versa).
 			statusMatches := fresh.Status == newStatus &&
 				fresh.StatusReason == newReason &&
-				fresh.StatusMessage == newMessage
+				fresh.StatusMessage == newMessage &&
+				!updateStatusChanged(fresh.Update, upd)
 			if statusMatches && fresh.Metadata.ObservedGeneration == reconciledGen {
 				return store.ErrSkipUpdate
 			}
 			fresh.Status = newStatus
 			fresh.StatusReason = newReason
 			fresh.StatusMessage = newMessage
+			// Update rides this same CAS write. A separate write would
+			// reintroduce exactly the clobber-a-concurrent-scale race RFC #129
+			// closed. nil clears it — an update that has converged leaves no
+			// stale block behind, because Verify and the CLI spinner both key
+			// off the transition back to Running.
+			fresh.Update = upd
 			fresh.Metadata.ObservedGeneration = reconciledGen
 			return nil
 		}, store.WithReconciler())
 		if err != nil {
 			return fmt.Errorf("failed to update service status: %w", err)
 		}
+		r.emitUpdateTransitions(ctx, service, service.Update, upd, stalled)
+
 		// Reflect the persisted fields on the caller's copy for consistency.
 		// Clone Metadata rather than writing through it: the pointer may be
 		// shared with watch-event consumers and other store readers
@@ -1045,6 +1215,7 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 		service.Status = newStatus
 		service.StatusReason = newReason
 		service.StatusMessage = newMessage
+		service.Update = upd
 		md := types.ServiceMetadata{}
 		if service.Metadata != nil {
 			md = *service.Metadata
@@ -1056,7 +1227,256 @@ func (r *reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 	return nil
 }
 
-// ServiceInstanceData contains instances and orphaned instance information
+// reapStuckTerminating re-drives instances stranded in Terminating.
+//
+// Teardown flips an instance to Terminating, publishes the withdrawal, drains,
+// then stops and marks it Deleted. If runed is killed — or a cancellable
+// request context is cut, e.g. Ctrl-C on a command that triggered the
+// teardown — inside that window, the record is left Terminating with a live
+// container and nothing ever revisits it: the planner excludes Terminating
+// from every candidate list, so it can be neither retired nor replaced, and
+// the service runs permanently below scale.
+//
+// Re-entering DeleteInstance is idempotent (it tolerates an already-stopped or
+// already-absent container), so the repair is simply to finish the teardown.
+func (r *reconciler) reapStuckTerminating(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) {
+	// Generous: the drain plus the runner stop timeout plus slack. Anything
+	// older than this is not a teardown in flight, it is an abandoned one.
+	deadline := service.DrainWindow() + 30*time.Second
+	now := time.Now()
+
+	for i := range instanceData.Instances {
+		inst := &instanceData.Instances[i]
+		if inst.Status != types.InstanceStatusTerminating {
+			continue
+		}
+		stuckFor := now.Sub(inst.UpdatedAt)
+		if stuckFor < deadline {
+			continue // a teardown genuinely in progress
+		}
+		r.logger.Warn("Re-driving instance stranded in Terminating",
+			log.Str("service", service.Name),
+			log.Str("instance", inst.Name),
+			log.Duration("stuck_for", stuckFor))
+		r.healthController.RemoveInstance(inst.ID)
+		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
+			r.logger.Error("Failed to re-drive stranded instance",
+				log.Str("instance", inst.ID), log.Err(err))
+		}
+	}
+}
+
+// computeUpdateStatus derives the in-flight update block for a service, and
+// reports whether the update has stalled (RUNE-042 §7.3/§8.2).
+//
+// Returns (nil, false) when no update is running — every live instance is at
+// the current template — which is what clears Service.Update on completion.
+//
+// Progress is measured against the PERSISTED previous block, so LastProgressAt
+// survives a runed restart mid-update and the stall clock is not reset by one.
+// A dependency gate pauses the clock rather than letting it expire: an update
+// frozen because a dependency is unready is a healthy hold, not a stall.
+func (r *reconciler) computeUpdateStatus(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) (*types.UpdateStatus, bool) {
+	params := service.ResolveUpdateParams()
+	now := time.Now()
+
+	var templateGen int64
+	if service.Metadata != nil {
+		templateGen = service.Metadata.TemplateGeneration
+	}
+
+	next := &types.UpdateStatus{
+		TemplateGeneration: templateGen,
+		Desired:            service.Scale,
+	}
+	for i := range instanceData.Instances {
+		inst := &instanceData.Instances[i]
+		verdict := r.instanceController.classifyInstance(ctx, inst, service)
+		v := newInstanceView(inst, verdict.Class, params.MinReady, now)
+
+		if verdict.Class == CompatOutdated && !v.Terminating {
+			// Mirror the planner, which excludes Terminating instances from
+			// liveOutdated. Counting one here without the planner being able
+			// to retire it means Outdated can never reach zero: the update
+			// reads as permanently in flight, never progresses, and lands on
+			// UpdateStalled forever — with every later `release --atomic` on
+			// the service failing verify. A record stranded in Terminating
+			// (runed killed mid-teardown) is reaped by reapStuckTerminating
+			// instead.
+			next.Outdated++
+		} else if verdict.Class == CompatOK {
+			// "Updated" counts instances at the current template. A repaired
+			// instance lands there too — CreateInstance stamps the current
+			// TemplateGeneration — so converging through crash-replacements
+			// registers as progress rather than reading as a permanent stall
+			// (§8.2).
+			next.Updated++
+			if v.Ready {
+				next.UpdatedReady++
+			}
+		}
+		if v.serving() {
+			next.Available++
+		}
+	}
+
+	// No outdated instances left: the update is done (or never started).
+	if next.Outdated == 0 {
+		return nil, false
+	}
+
+	prev := service.Update
+	next.StartedAt = now
+	next.LastProgressAt = now
+	if prev != nil && prev.TemplateGeneration == templateGen {
+		next.StartedAt = prev.StartedAt
+		next.LastProgressAt = prev.LastProgressAt
+		// Ask BEFORE raising the marks, or every tick would trivially match
+		// its own peak.
+		if prev.Progressed(next) {
+			next.LastProgressAt = now
+		}
+	}
+	next.CarryPeaksFrom(prev)
+
+	// A dependency gate freezes instance creation entirely, so the stall
+	// clock would expire on a service that is behaving correctly.
+	if len(service.Dependencies) > 0 {
+		if ready, err := r.dependenciesReady(ctx, service); err == nil && !ready {
+			next.LastProgressAt = now
+			next.Message = "blocked on dependency"
+			return next, false
+		}
+	}
+
+	// The planner's own sentence is the most useful thing to show ("waiting
+	// for replacements to become ready", "retiring 1 instance(s)"), so reuse
+	// it rather than inventing a second vocabulary.
+	if next.Message == "" {
+		views := make([]instanceView, 0, len(instanceData.Instances))
+		for i := range instanceData.Instances {
+			inst := &instanceData.Instances[i]
+			verdict := r.instanceController.classifyInstance(ctx, inst, service)
+			views = append(views, newInstanceView(inst, verdict.Class, params.MinReady, now))
+		}
+		plan := planUpdate(updateInput{Scale: service.Scale, Params: params, Instances: views, Now: now})
+		next.Message = plan.Reason
+	}
+
+	stalled := now.Sub(next.LastProgressAt) > params.StallDeadline
+	return next, stalled
+}
+
+// stalledMessage explains a stall without throwing away the planner's own
+// sentence, which is the part that says WHY nothing is moving.
+func stalledMessage(upd *types.UpdateStatus) string {
+	base := "update made no progress within the stall deadline"
+	if upd == nil || upd.Message == "" {
+		return base
+	}
+	return base + ": " + upd.Message
+}
+
+// updateStatusChanged reports whether the update block needs persisting.
+// Timestamps are deliberately excluded from the comparison except when they
+// carry news: LastProgressAt moves only on real progress, so comparing the
+// counters plus the message avoids a store write on every reconcile tick of a
+// held update.
+func updateStatusChanged(a, b *types.UpdateStatus) bool {
+	switch {
+	case a == nil && b == nil:
+		return false
+	case a == nil || b == nil:
+		return true
+	}
+	return a.TemplateGeneration != b.TemplateGeneration ||
+		a.Desired != b.Desired ||
+		a.Updated != b.Updated ||
+		a.UpdatedReady != b.UpdatedReady ||
+		a.Available != b.Available ||
+		a.Outdated != b.Outdated ||
+		a.Message != b.Message ||
+		!a.LastProgressAt.Equal(b.LastProgressAt)
+}
+
+// SetEventLog wires the persisted event log. Nil-safe.
+func (r *reconciler) SetEventLog(eventLog events.EventLog) { r.events = eventLog }
+
+// Well-known event reasons for the update lifecycle. Kept in the "update"
+// vocabulary the spec field uses — operators read `updateStrategy`, so they
+// should not have to learn a second word for the same thing.
+const (
+	eventUpdateStarted   = "UpdateStarted"
+	eventInstanceRetired = "InstanceRetired"
+	eventUpdateHolding   = "UpdateHolding"
+	eventUpdateStalled   = "UpdateStalled"
+	eventUpdateComplete  = "UpdateComplete"
+)
+
+// emitService records a service-scoped event. Best-effort and nil-safe.
+func (r *reconciler) emitService(ctx context.Context, service *types.Service, level types.EventLevel, reason, message string) {
+	if r.events == nil || service == nil {
+		return
+	}
+	if err := r.events.Emit(ctx, types.Event{
+		Namespace: service.Namespace,
+		Kind:      "Service",
+		Name:      service.Name,
+		UID:       service.ID,
+		Level:     level,
+		Reason:    reason,
+		Message:   message,
+	}); err != nil {
+		r.logger.Warn("Failed to emit service event",
+			log.Str("service", service.Name), log.Err(err))
+	}
+}
+
+// emitUpdateTransitions records the update lifecycle by comparing the block we
+// are about to persist against the one already stored. Only transitions are
+// emitted — a held update ticks every 30s and must not produce an event each
+// time, which is the difference between a readable timeline and log spam.
+func (r *reconciler) emitUpdateTransitions(ctx context.Context, service *types.Service, prev, next *types.UpdateStatus, stalled bool) {
+	if r.events == nil {
+		return
+	}
+
+	switch {
+	case prev == nil && next != nil:
+		r.emitService(ctx, service, types.EventLevelInfo, eventUpdateStarted,
+			fmt.Sprintf("updating %d instance(s) to template generation %d",
+				next.Outdated, next.TemplateGeneration))
+
+	case prev != nil && next == nil:
+		r.emitService(ctx, service, types.EventLevelInfo, eventUpdateComplete,
+			fmt.Sprintf("update to template generation %d complete; %d instance(s) serving",
+				prev.TemplateGeneration, prev.Available))
+
+	case prev != nil && next != nil:
+		// A new template landed mid-update: report the old one finishing and
+		// the new one starting rather than silently switching targets.
+		if prev.TemplateGeneration != next.TemplateGeneration {
+			r.emitService(ctx, service, types.EventLevelInfo, eventUpdateStarted,
+				fmt.Sprintf("superseded by template generation %d; %d instance(s) outdated",
+					next.TemplateGeneration, next.Outdated))
+			return
+		}
+		if stalled && service.StatusReason != types.ServiceReasonUpdateStalled {
+			// Edge-triggered: only when the service is crossing INTO stalled.
+			r.emitService(ctx, service, types.EventLevelWarn, eventUpdateStalled,
+				fmt.Sprintf("no progress for %s: %s",
+					time.Since(next.LastProgressAt).Round(time.Second), next.Message))
+			return
+		}
+		// Holding is edge-triggered on the message changing, so a steady hold
+		// is recorded once rather than on every resync tick.
+		if !stalled && next.Message != "" && next.Message != prev.Message {
+			r.emitService(ctx, service, types.EventLevelInfo, eventUpdateHolding, next.Message)
+		}
+	}
+}
+
+// ServiceInstanceData contains instances and orphaned instance information// ServiceInstanceData contains instances and orphaned instance information
 type ServiceInstanceData struct {
 	Instances         []types.Instance
 	OrphanedInstances []*types.Instance // Actual orphaned instance objects

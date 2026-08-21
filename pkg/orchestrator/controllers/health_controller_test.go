@@ -366,6 +366,23 @@ func TestReadinessPassPromotesInstanceToRunning(t *testing.T) {
 		return err == nil && got.Status == types.InstanceStatusRunning
 	}, 6*time.Second, 100*time.Millisecond,
 		"a passing readiness probe should promote the instance to Running")
+
+	// RUNE-042 §8.5: the promotion must ALSO stamp LastTransitionAt.
+	//
+	// This path does not go through applyInstanceStatus — the only other
+	// writer of that field — so before the fix the timestamp still marked
+	// the Starting transition. The update planner measures its
+	// minimum-ready window as "how long has this instance held Running", so
+	// a stale value measures from container start instead of from readiness,
+	// silently defeating the gate for exactly the probe-gated services it
+	// matters most for. Nothing else observes the field closely enough to
+	// have caught this.
+	got, err := testStore.GetInstanceByID(ctx, namespace, instance.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.LastTransitionAt,
+		"promotion to Running must stamp LastTransitionAt, or minReady is measured from container start")
+	assert.WithinDuration(t, time.Now(), *got.LastTransitionAt, 6*time.Second,
+		"LastTransitionAt must mark the readiness promotion, not an earlier transition")
 }
 
 // TestTCPHealthCheck tests the TCP health check functionality

@@ -451,6 +451,79 @@ func (cf *CastFile) GetSpecs() []Spec {
 
 // Lint validates all specs in the cast file and returns a list of errors.
 // It does not stop on first error; all validation errors are collected.
+// LintWarnings returns advisory findings — things that are not wrong but are
+// likely to disappoint. Deliberately separate from Lint(), whose results fail
+// the file: a warning that breaks CI is a warning nobody keeps.
+//
+// The rules exist because RUNE-042 changes how services are replaced, and two
+// of the three concern behaviour a service gets without opting into anything.
+func (cf *CastFile) LintWarnings() []string {
+	var warns []string
+	for i := range cf.Services {
+		spec := &cf.Services[i]
+		svc, err := spec.ToService()
+		if err != nil || svc == nil {
+			continue // invalid specs are Lint()'s business, not ours
+		}
+		where := fmt.Sprintf("Service %q (ns=%q)", spec.GetName(), NS(spec.GetNamespace()))
+		for _, w := range updateStrategyWarnings(svc) {
+			warns = append(warns, where+": "+w)
+		}
+	}
+	return warns
+}
+
+// updateStrategyWarnings holds the RUNE-042 advisory rules. Split out so they
+// can be tested against a Service directly.
+func updateStrategyWarnings(svc *Service) []string {
+	var warns []string
+	params := svc.ResolveUpdateParams()
+	if params.Type == UpdateRecreate {
+		// An explicit recreate opts out of all of this.
+		return nil
+	}
+
+	// update-needs-readiness: without a probe, an update advances on
+	// "the runner accepted the container", not "the app is serving".
+	if len(svc.Ports) > 0 && !svc.HasReadinessProbe() {
+		warns = append(warns, "update-needs-readiness: updates advance on \"container started\", not "+
+			"\"app serving\" — add health.readiness so replacements are gated on a real signal "+
+			fmt.Sprintf("(until then Rune waits a flat %ds per replacement, which is slower and weaker)",
+				MinReadySecondsWithoutProbe))
+	}
+
+	// update-runs-two-copies: the one regression-shaped surprise in the
+	// default path. Recreate-everything used to guarantee a single-replica
+	// service never overlapped with its replacement; rolling does not.
+	if svc.RunsTwoCopiesDuringUpdate() {
+		warns = append(warns, "update-runs-two-copies: during updates the old and new copy briefly run "+
+			"at the same time — set `updateStrategy: recreate` if this service must never overlap "+
+			"(queue consumers, cron-style workers, single-writer migrations)")
+	}
+
+	// update-one-at-a-time: no surge possible, so expect a gap at scale 1.
+	if !svc.IsSurgeCapable() {
+		reason := "a claimTemplate volume"
+		switch {
+		case svc.Runtime == RuntimeTypeProcess:
+			reason = "the process runtime"
+		default:
+			for i := range svc.Ports {
+				if svc.Ports[i].HostPort != 0 {
+					reason = "a hostPort"
+				}
+			}
+		}
+		msg := fmt.Sprintf("update-one-at-a-time: this service updates one replica at a time (%s), "+
+			"so it cannot run a spare copy during an update", reason)
+		if svc.Scale <= 1 {
+			msg += " — at scale 1 that means a brief gap on every update"
+		}
+		warns = append(warns, msg)
+	}
+	return warns
+}
+
 func (cf *CastFile) Lint() []error {
 	var errs []error
 

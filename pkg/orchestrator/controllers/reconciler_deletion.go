@@ -121,6 +121,12 @@ func (r *reconciler) cleanupServiceInstances(ctx context.Context, service *types
 		log.Str("namespace", service.Namespace),
 		log.Int("count", len(mine)))
 
+	// Withdraw every instance from the dataplane in one publish and take a
+	// single shared drain window (RUNE-042 §4) — the per-instance
+	// StopInstance/DeleteInstance calls below then see Terminating and skip
+	// their own drains, so deleting a scale-N service costs one window, not N.
+	r.instanceController.WithdrawServiceInstances(ctx, service, mine)
+
 	removed := 0
 	for _, inst := range mine {
 		if err := r.instanceController.StopInstance(ctx, inst); err != nil {

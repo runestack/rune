@@ -149,6 +149,15 @@ export function mapService(svc: PbService): Service {
     runeset: svc.labels?.["rune.io/runeset"] || svc.labels?.runeset || "—",
     policy: svc.labels?.["rune.io/policy"] || "default",
     note: svc.statusMessage || undefined,
+    reason: svc.statusReason || undefined,
+    update: svc.update
+      ? {
+          replaced: svc.update.updatedReady,
+          serving: svc.update.available,
+          desired: svc.update.desired,
+          message: svc.update.message || undefined,
+        }
+      : undefined,
     stateful: (svc.volumes?.length ?? 0) > 0,
     volume: svc.volumes?.[0]?.name || undefined,
     ingress: mapIngress(svc),
