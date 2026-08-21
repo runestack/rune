@@ -26,11 +26,11 @@ func newEnvResolver(secretRepo *repos.SecretRepo, configRepo *repos.ConfigmapRep
 
 // Thin delegators: lifecycle code and existing tests call these on the
 // controller; the logic lives on envResolver.
-func (c *instanceController) prepareEnvVars(ctx context.Context, service *types.Service, instance *types.Instance) (map[string]string, error) {
+func (c *InstanceController) prepareEnvVars(ctx context.Context, service *types.Service, instance *types.Instance) (map[string]string, error) {
 	return c.env.prepareEnvVars(ctx, service, instance)
 }
 
-func (c *instanceController) interpolateEnv(ctx context.Context, value, defaultNamespace string) (string, error) {
+func (c *InstanceController) interpolateEnv(ctx context.Context, value, defaultNamespace string) (string, error) {
 	return c.env.interpolateEnv(ctx, value, defaultNamespace)
 }
 

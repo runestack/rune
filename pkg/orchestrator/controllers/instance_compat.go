@@ -107,7 +107,7 @@ func preClassifyInstance(instance *types.Instance, service *types.Service) (v Co
 // verdict — so the health controller's next probe dials the LIVE
 // container's IP. An unpersisted heal leaves probes timing out against
 // the dead container's address, the restart-churn loop PR #155 broke.
-func (c *instanceController) observeInstance(ctx context.Context, instance *types.Instance) instanceObservation {
+func (c *InstanceController) observeInstance(ctx context.Context, instance *types.Instance) instanceObservation {
 	runner, err := c.runnerManager.GetInstanceRunner(instance)
 	if err != nil {
 		return instanceObservation{brokenReason: fmt.Sprintf("failed to get runner: %v", err)}
@@ -242,7 +242,7 @@ func classifyObserved(instance *types.Instance, service *types.Service, obs inst
 // store-only pre-checks, then runner observation (with its heal persisted
 // unconditionally), then the pure classifier. See preClassifyInstance,
 // observeInstance, classifyObserved.
-func (c *instanceController) classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict {
+func (c *InstanceController) classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict {
 	if v, done := preClassifyInstance(instance, service); done {
 		return v
 	}
@@ -254,7 +254,7 @@ func (c *instanceController) classifyInstance(ctx context.Context, instance *typ
 // kept for callers that only need "does this need action" — the reconciler's
 // ensure* loops, which still delete outdated instances themselves until the
 // update budget lands in Phase 4.
-func (c *instanceController) isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string) {
+func (c *InstanceController) isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string) {
 	v := c.classifyInstance(ctx, instance, service)
 	return v.Compatible(), v.Reason
 }

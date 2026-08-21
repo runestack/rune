@@ -74,12 +74,32 @@ type Orchestrator interface {
 	GetActiveScalingOperation(ctx context.Context, namespace, serviceName string) (*types.ScalingOperation, error)
 
 	// SetEndpointPublisher wires the networking data plane (RUNE-063).
-	// Optional; nil-safe. Call once at startup before Start().
+	// Optional; nil-safe. LATE-BOUND: runed calls this on a live
+	// orchestrator after agent identity exists — safe while reconciles
+	// run (the instance controller swaps the pair atomically).
 	SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string)
 
 	// SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
-	// into the instance controller. Optional; nil-safe. Call once at
-	// startup before Start().
+	// into the instance controller. Optional; nil-safe. LATE-BOUND: a
+	// not-ready stub is wired at construction and runed swaps in the
+	// real subsystem on a live orchestrator after start.
+	SetMountResolver(resolver controllers.MountResolver)
+}
+
+// instanceOps is the slice of the instance controller the orchestrator
+// facade delegates to (RUNE-311 Phase 3). The consumer owns the
+// interface; *controllers.InstanceController satisfies it.
+type instanceOps interface {
+	GetInstanceByID(ctx context.Context, namespace, instanceID string) (*types.Instance, error)
+	ListInstances(ctx context.Context, namespace string) ([]*types.Instance, error)
+	ListRunningInstances(ctx context.Context, namespace string) ([]*types.Instance, error)
+	GetInstanceLogs(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error)
+	Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+	ExecDebug(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+	Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error)
+	RestartInstance(ctx context.Context, instance *types.Instance, reason controllers.InstanceRestartReason) error
+	StopInstance(ctx context.Context, instance *types.Instance) error
+	SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string)
 	SetMountResolver(resolver controllers.MountResolver)
 }
 
@@ -91,7 +111,7 @@ type orchestrator struct {
 
 	// Controllers
 	serviceController  controllers.ServiceController
-	instanceController controllers.InstanceController
+	instanceController instanceOps
 	healthController   controllers.HealthController
 	scalingController  controllers.ScalingController
 	volumeController   controllers.VolumeController
@@ -191,11 +211,18 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		options.WorkerCount = 10
 	}
 
-	// Create controllers first (needed for finalizer system)
+	// Create controllers first (needed for finalizer system). The event
+	// log is a construction-time dependency (RUNE-311 Phase 3); the
+	// endpoint publisher and mount resolver stay late-bound setters.
+	var icOpts []controllers.InstanceControllerOption
+	if options.EventLog != nil {
+		icOpts = append(icOpts, controllers.WithEventLog(options.EventLog))
+	}
 	instanceController := controllers.NewInstanceController(
 		options.Store,
 		options.RunnerManager,
 		options.Logger,
+		icOpts...,
 	)
 	if options.InitialMountResolver != nil {
 		instanceController.SetMountResolver(options.InitialMountResolver)
@@ -240,7 +267,6 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	// Wire the persisted event log (RUNE-126 Phase 2) into the
 	// controllers that emit status-transition events. Nil-safe.
 	if options.EventLog != nil {
-		instanceController.SetEventLog(options.EventLog)
 		volumeController.SetEventLog(options.EventLog)
 		// The reconciler records the update lifecycle (RUNE-042). Without
 		// this there is no after-the-fact record of what a rolling update

@@ -45,9 +45,26 @@ const reconcileWorkerCount = 4
 // the periodic resync enqueue "namespace/name" keys, and queue workers run
 // syncService — so reconciles of one service can never interleave, making the
 // reconciler the single orchestrator-side writer of Service status.
+// reconcilerInstanceOps is the slice of the instance controller the
+// reconciler drives — lifecycle plus classification (RUNE-311 Phase 3).
+// The consumer owns the interface; *InstanceController satisfies it.
+type reconcilerInstanceOps interface {
+	CreateInstance(ctx context.Context, service *types.Service, instanceName string, ordinal int) (*types.Instance, error)
+	RetryCreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error
+	RecreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) (*types.Instance, error)
+	UpdateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error
+	StopInstance(ctx context.Context, instance *types.Instance) error
+	DeleteInstance(ctx context.Context, instance *types.Instance) error
+	WithdrawServiceInstances(ctx context.Context, service *types.Service, instances []*types.Instance)
+	RepublishService(ctx context.Context, service *types.Service)
+	classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict
+	collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error)
+	isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string)
+}
+
 type reconciler struct {
 	store              store.Store
-	instanceController InstanceController
+	instanceController reconcilerInstanceOps
 	healthController   HealthController
 	logger             log.Logger
 
@@ -70,7 +87,7 @@ type reconciler struct {
 // newReconciler creates a new reconciler.
 func newReconciler(
 	store store.Store,
-	instanceController InstanceController,
+	instanceController reconcilerInstanceOps,
 	healthController HealthController,
 	logger log.Logger,
 ) *reconciler {

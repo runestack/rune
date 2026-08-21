@@ -33,7 +33,7 @@ import (
 // live instance to occupy the service's name slot, so creating the
 // replacement next reconcile tick (or synchronously from RestartInstance)
 // will just work.
-func (c *instanceController) markInstanceFailedInPlace(ctx context.Context, instance *types.Instance, restartReason InstanceRestartReason) error {
+func (c *InstanceController) markInstanceFailedInPlace(ctx context.Context, instance *types.Instance, restartReason InstanceRestartReason) error {
 	// Capture the tail of the container's stdout/stderr before we
 	// freeze the record. Without this, `rune logs <id>` falls back
 	// to the LastLogs snapshot only to find the field empty —
@@ -79,7 +79,7 @@ func (c *instanceController) markInstanceFailedInPlace(ctx context.Context, inst
 // via the ContainerEverCreatedAt gate: nil means create never
 // succeeded (precondition failure — operator must fix), non-nil means
 // the container existed at some point (transient — recreate).
-func (c *instanceController) recordCreateFailure(ctx context.Context, instance *types.Instance, err error, reason string) {
+func (c *InstanceController) recordCreateFailure(ctx context.Context, instance *types.Instance, err error, reason string) {
 	if instance == nil {
 		return
 	}
@@ -161,7 +161,7 @@ const snapshotLogBytes = 200 * 1024
 // Designed to be called from DeleteInstance and markInstanceFailedInPlace
 // — i.e. exactly the lifecycle moments where we are ABOUT to lose
 // the container and therefore the live log stream.
-func (c *instanceController) snapshotInstanceLogs(ctx context.Context, instance *types.Instance) {
+func (c *InstanceController) snapshotInstanceLogs(ctx context.Context, instance *types.Instance) {
 	if instance == nil {
 		return
 	}

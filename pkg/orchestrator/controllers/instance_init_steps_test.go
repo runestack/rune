@@ -49,7 +49,7 @@ func shrinkInitBackoffs(t *testing.T) {
 
 func TestRunInitSteps_NoSteps_NoOp(t *testing.T) {
 	ctx, _, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 	svc := &types.Service{ID: "s1", Namespace: "default"}
 	inst := &types.Instance{ID: "i1", ServiceID: "s1", Namespace: "default"}
 
@@ -62,7 +62,7 @@ func TestRunInitSteps_NoSteps_NoOp(t *testing.T) {
 func TestRunInitSteps_HappyPath_ThreeSteps(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	svc := makeInitStepService(ctx, t, ts, "happy", []types.InitStep{
 		{Name: "format", Image: "fmt:1", Command: "fmt"},
@@ -93,7 +93,7 @@ func TestRunInitSteps_HappyPath_ThreeSteps(t *testing.T) {
 func TestRunInitSteps_NeverPolicy_FailsFastNoRetry(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	svc := makeInitStepService(ctx, t, ts, "never", []types.InitStep{
 		{Name: "boom", Image: "x:1", Command: "x", RestartPolicy: types.InitStepRestartNever},
@@ -123,7 +123,7 @@ func TestRunInitSteps_NeverPolicy_FailsFastNoRetry(t *testing.T) {
 func TestRunInitSteps_OnFailure_RetriesThenSucceeds(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	svc := makeInitStepService(ctx, t, ts, "retry-ok", []types.InitStep{
 		{Name: "flaky", Image: "x:1", Command: "x", RestartPolicy: types.InitStepRestartOnFailure},
@@ -151,7 +151,7 @@ func TestRunInitSteps_OnFailure_RetriesThenSucceeds(t *testing.T) {
 func TestRunInitSteps_OnFailure_ExhaustsRetries(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	svc := makeInitStepService(ctx, t, ts, "retry-fail", []types.InitStep{
 		{Name: "always-bad", Image: "x:1", Command: "x"}, // default OnFailure
@@ -175,7 +175,7 @@ func TestRunInitSteps_OnFailure_ExhaustsRetries(t *testing.T) {
 func TestRunInitSteps_RunIfAlways_RunsEvenWithInitializedVolume(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	svc := makeInitStepService(ctx, t, ts, "always", []types.InitStep{
 		{Name: "tick", Image: "x:1", Command: "x", RunIf: types.RunIf{Type: types.RunIfAlways}},
@@ -209,7 +209,7 @@ func TestRunInitSteps_RunIfAlways_RunsEvenWithInitializedVolume(t *testing.T) {
 func TestRunInitSteps_FreshVolume_SkipsWhenInitializedForServicePresent(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	svc := makeInitStepService(ctx, t, ts, "fresh", []types.InitStep{
 		{Name: "format", Image: "x:1", Command: "x"}, // default freshVolume
@@ -245,7 +245,7 @@ func TestRunInitSteps_FreshVolume_SkipsWhenInitializedForServicePresent(t *testi
 func TestRunInitSteps_FreshVolume_RunsWhenVolumeNotYetInitialized(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	svc := makeInitStepService(ctx, t, ts, "first-cast", []types.InitStep{
 		{Name: "format", Image: "x:1", Command: "x"},
@@ -284,7 +284,7 @@ func TestRunInitSteps_FreshVolume_RunsWhenVolumeNotYetInitialized(t *testing.T) 
 func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	tmp := t.TempDir()
 	sentinel := "ready"
@@ -317,7 +317,7 @@ func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {
 func TestRunInitSteps_FileMissing_RunsWhenSentinelAbsent(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	tmp := t.TempDir()
 	svc := makeInitStepService(ctx, t, ts, "fm-run", []types.InitStep{
@@ -345,7 +345,7 @@ func TestRunInitSteps_FileMissing_RunsWhenSentinelAbsent(t *testing.T) {
 func TestRunInitSteps_ErrInitNotSupported_FailsImmediately(t *testing.T) {
 	shrinkInitBackoffs(t)
 	ctx, ts, testRunner, controllerIface := setupTestController(t)
-	c := controllerIface.(*instanceController)
+	c := controllerIface
 
 	svc := makeInitStepService(ctx, t, ts, "unsupported", []types.InitStep{
 		{Name: "step", Image: "x:1", Command: "x"},

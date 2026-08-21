@@ -14,7 +14,7 @@ func TestInterpolateEnv_NonInterpolatedValue(t *testing.T) {
 	ctx, _, _, controller := setupTestController(t)
 
 	// Get the concrete instanceController to test interpolation
-	instanceCtrl := controller.(*instanceController)
+	instanceCtrl := controller
 
 	// Test a regular environment variable value (no interpolation)
 	val, err := instanceCtrl.interpolateEnv(ctx, "regular-value", "default")
@@ -27,7 +27,7 @@ func TestInterpolateEnv_TemplateSyntax(t *testing.T) {
 	ctx, testStore, _, controller := setupTestController(t)
 
 	// Get the concrete instanceController to test interpolation
-	instanceCtrl := controller.(*instanceController)
+	instanceCtrl := controller
 
 	// Create test secrets and configmaps
 	secret := &types.Secret{
@@ -116,7 +116,7 @@ func TestInterpolateEnv_Errors(t *testing.T) {
 	ctx, _, _, controller := setupTestController(t)
 
 	// Get the concrete instanceController to test interpolation
-	instanceCtrl := controller.(*instanceController)
+	instanceCtrl := controller
 
 	tests := []struct {
 		name        string
@@ -175,7 +175,7 @@ func TestPrepareEnvVars_WithoutInterpolation(t *testing.T) {
 	ctx, _, _, controller := setupTestController(t)
 
 	// Get the concrete instanceController to test prepareEnvVars
-	instanceCtrl := controller.(*instanceController)
+	instanceCtrl := controller
 
 	// Create a test service with regular environment variables (no interpolation needed)
 	service := &types.Service{
@@ -226,7 +226,7 @@ func TestPrepareEnvVars_Basic(t *testing.T) {
 	ctx, _, _, controller := setupTestController(t)
 
 	// Get the concrete instanceController to test prepareEnvVars
-	instanceCtrl := controller.(*instanceController)
+	instanceCtrl := controller
 
 	// Create a test service with some env vars and ports
 	service := &types.Service{
@@ -283,7 +283,7 @@ func TestPrepareEnvVars_HyphenatedNames(t *testing.T) {
 	ctx, _, _, controller := setupTestController(t)
 
 	// Get the concrete instanceController to test prepareEnvVars
-	instanceCtrl := controller.(*instanceController)
+	instanceCtrl := controller
 
 	// Create a test service with hyphenated names
 	service := &types.Service{
@@ -322,7 +322,7 @@ func TestPrepareEnvVars_WithTemplateInterpolation(t *testing.T) {
 	ctx, testStore, _, controller := setupTestController(t)
 
 	// Get the concrete instanceController to test prepareEnvVars
-	instanceCtrl := controller.(*instanceController)
+	instanceCtrl := controller
 
 	// Create test secrets and configmaps
 	secret := &types.Secret{
@@ -391,7 +391,7 @@ func TestPrepareEnvVars_WithTemplateInterpolation(t *testing.T) {
 // TestPrepareEnvVars_EnvFrom covers import, prefix and precedence rules
 func TestPrepareEnvVars_EnvFrom(t *testing.T) {
 	ctx, testStore, _, controller := setupTestController(t)
-	instanceCtrl := controller.(*instanceController)
+	instanceCtrl := controller
 
 	// Prepare secret and configmap
 	secret := &types.Secret{ID: "env-secrets", Name: "env-secrets", Namespace: "default", Data: map[string]string{

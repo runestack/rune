@@ -239,7 +239,7 @@ func TestPersistHealedContainerMapping(t *testing.T) {
 	ctx := context.Background()
 	testStore := store.NewTestStore()
 	testRunnerMgr := manager.NewTestRunnerManager(nil)
-	ic := NewInstanceController(testStore, testRunnerMgr, log.NewLogger()).(*instanceController)
+	ic := NewInstanceController(testStore, testRunnerMgr, log.NewLogger())
 
 	stored := &types.Instance{
 		ID:          "healed-instance",

@@ -65,7 +65,7 @@ type healthController struct {
 	runnerManager manager.IRunnerManager
 
 	// Instance controller for restarting instances
-	instanceController InstanceController
+	instanceController healthInstanceOps
 }
 
 // Ensure healthController implements RunnerProvider
@@ -93,7 +93,24 @@ type instanceHealth struct {
 }
 
 // NewHealthController creates a new health controller
-func NewHealthController(logger log.Logger, store store.Store, runnerManager manager.IRunnerManager, instanceController InstanceController) HealthController {
+// Republisher lets a caller that changed instance reachability refresh
+// the dataplane endpoint set from current store state (RUNE-311
+// Phase 3). Nil-safe when no endpoint publisher is wired; safe to call
+// repeatedly.
+type Republisher interface {
+	RepublishServiceByInstance(ctx context.Context, instance *types.Instance)
+}
+
+// healthInstanceOps is the slice of the instance controller the health
+// controller drives: restart on probe failure, republish on the
+// Starting→Running promotion. The consumer owns the interface;
+// *InstanceController satisfies it.
+type healthInstanceOps interface {
+	Republisher
+	RestartInstance(ctx context.Context, instance *types.Instance, reason InstanceRestartReason) error
+}
+
+func NewHealthController(logger log.Logger, store store.Store, runnerManager manager.IRunnerManager, instanceController healthInstanceOps) HealthController {
 	return &healthController{
 		logger:             logger.WithComponent("health-controller"),
 		instances:          make(map[string]*instanceHealth),

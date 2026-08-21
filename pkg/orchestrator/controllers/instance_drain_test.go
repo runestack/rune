@@ -70,7 +70,7 @@ func (p *seqPublisher) PublishLocalInstances(context.Context, string, map[string
 // WITH ports (so the drain gate is armed), and n Running instances present in
 // both store and runner. `drain` sets the test-only window override; pass 0 to
 // exercise the real per-service drainSeconds path.
-func setupDrainFixture(t *testing.T, n int, drain time.Duration) (context.Context, *store.TestStore, *runner.TestRunner, *instanceController, *seqLog, []*types.Instance) {
+func setupDrainFixture(t *testing.T, n int, drain time.Duration) (context.Context, *store.TestStore, *runner.TestRunner, *InstanceController, *seqLog, []*types.Instance) {
 	t.Helper()
 	ctx := context.Background()
 	st := store.NewTestStore()
@@ -79,7 +79,7 @@ func setupDrainFixture(t *testing.T, n int, drain time.Duration) (context.Contex
 	rm.SetDockerRunner(tr)
 	rm.SetProcessRunner(tr)
 
-	c := NewInstanceController(st, rm, log.NewLogger()).(*instanceController)
+	c := NewInstanceController(st, rm, log.NewLogger())
 	c.drainWindowOverride = drain
 	lg := &seqLog{}
 	c.SetEndpointPublisher(&seqPublisher{log: lg}, "node-test")

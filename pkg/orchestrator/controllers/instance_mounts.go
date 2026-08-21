@@ -33,11 +33,11 @@ func newMountBinder(st store.Store, secretRepo *repos.SecretRepo, configRepo *re
 
 // Thin delegators: lifecycle code and existing tests call these on the
 // controller; the logic lives on mountBinder.
-func (c *instanceController) resolveMounts(ctx context.Context, service *types.Service, instance *types.Instance) error {
+func (c *InstanceController) resolveMounts(ctx context.Context, service *types.Service, instance *types.Instance) error {
 	return c.mounts.resolveMounts(ctx, service, instance)
 }
 
-func (c *instanceController) resolveVolumeMount(ctx context.Context, service *types.Service, instance *types.Instance, m types.VolumeMount) (types.ResolvedVolumeMount, error) {
+func (c *InstanceController) resolveVolumeMount(ctx context.Context, service *types.Service, instance *types.Instance, m types.VolumeMount) (types.ResolvedVolumeMount, error) {
 	return c.mounts.resolveVolumeMount(ctx, service, instance, m)
 }
 

@@ -45,7 +45,7 @@ var initStepOnFailureBackoff = 1 * time.Second
 //   - freshVolume  → run iff no prior Succeeded state exists for this
 //     step on this instance. (S4 will switch the anchor to
 //     Volume.Status.InitializedFor for proper cross-restart semantics.)
-func (c *instanceController) runInitSteps(ctx context.Context, serviceRunner runner.Runner, service *types.Service, instance *types.Instance) error {
+func (c *InstanceController) runInitSteps(ctx context.Context, serviceRunner runner.Runner, service *types.Service, instance *types.Instance) error {
 	if len(service.InitSteps) == 0 {
 		return nil
 	}
@@ -126,7 +126,7 @@ func initStepServiceKey(svc *types.Service) string {
 // markVolumesInitialized stamps every parent volume permitted by the
 // step's Volumes filter with InitializedFor[serviceKey]=now. Volumes
 // that fail to load or update are logged and skipped.
-func (c *instanceController) markVolumesInitialized(
+func (c *InstanceController) markVolumesInitialized(
 	ctx context.Context,
 	instance *types.Instance,
 	step types.InitStep,
@@ -167,7 +167,7 @@ func (c *instanceController) markVolumesInitialized(
 // timeout. It updates state in place and persists after each attempt.
 // Returns nil on success; non-nil only when the step has exhausted its
 // retries or hit a non-retryable failure (Never policy).
-func (c *instanceController) executeInitStep(
+func (c *InstanceController) executeInitStep(
 	ctx context.Context,
 	r runner.Runner,
 	instance *types.Instance,
@@ -278,7 +278,7 @@ func (c *instanceController) executeInitStep(
 // persistInitStates writes the instance back to the store. Errors are
 // logged but not propagated; loss of a single status update is recoverable
 // and we don't want a transient store hiccup to nuke an in-flight init.
-func (c *instanceController) persistInitStates(ctx context.Context, instance *types.Instance) {
+func (c *InstanceController) persistInitStates(ctx context.Context, instance *types.Instance) {
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
 		c.logger.Warn("Failed to persist init step state",
 			log.Str("instance", instance.ID),
@@ -303,7 +303,7 @@ func (c *instanceController) persistInitStates(ctx context.Context, instance *ty
 //	non-empty one restricts to that single name.
 //
 // always       — always run.
-func (c *instanceController) evaluateRunIf(
+func (c *InstanceController) evaluateRunIf(
 	ctx context.Context,
 	step types.InitStep,
 	instance *types.Instance,

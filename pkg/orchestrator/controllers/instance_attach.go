@@ -21,7 +21,7 @@ type execStreamAdapter struct {
 }
 
 // GetInstanceStatus gets the current status of an instance
-func (c *instanceController) GetInstanceStatus(ctx context.Context, instance *types.Instance) (*types.InstanceStatusInfo, error) {
+func (c *InstanceController) GetInstanceStatus(ctx context.Context, instance *types.Instance) (*types.InstanceStatusInfo, error) {
 	// For now, we'll try to get status from both runners and use the first one that succeeds
 	runner, err := c.runnerManager.GetInstanceRunner(instance)
 	if err != nil {
@@ -56,7 +56,7 @@ func (c *instanceController) GetInstanceStatus(ctx context.Context, instance *ty
 // `rune logs <failed-id>` and the service-level `rune logs <name>`
 // keep working after the container is gone — operators investigating
 // a failure do not have to race the retention GC.
-func (c *instanceController) GetInstanceLogs(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error) {
+func (c *InstanceController) GetInstanceLogs(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error) {
 	_runner, runnerErr := c.runnerManager.GetInstanceRunner(instance)
 	if runnerErr == nil {
 		logs, err := _runner.GetLogs(ctx, instance, runner.LogOptions{
@@ -167,7 +167,7 @@ func synthesizeNoLogsLine(instance *types.Instance) string {
 // Exec executes a command in a running instance
 // Dial opens a TCP connection to the given port on the instance's
 // running container/process (RUNE-122).
-func (c *instanceController) Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error) {
+func (c *InstanceController) Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error) {
 	c.logger.Debug("Dialing instance",
 		log.Str("instance", instance.ID),
 		log.Int("port", int(port)))
@@ -188,7 +188,7 @@ func (c *instanceController) Dial(ctx context.Context, instance *types.Instance,
 	return conn, nil
 }
 
-func (c *instanceController) Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error) {
+func (c *InstanceController) Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error) {
 	c.logger.Debug("Executing command in instance",
 		log.Str("instance", instance.ID),
 		log.Str("command", strings.Join(options.Command, " ")))
@@ -223,7 +223,7 @@ func (c *instanceController) Exec(ctx context.Context, instance *types.Instance,
 // the returned ExecStream is Closed. Used by `rune exec --debug
 // <tombstone-id>` to inspect the failed container's image+env+mounts state
 // without re-running the failing app.
-func (c *instanceController) ExecDebug(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error) {
+func (c *InstanceController) ExecDebug(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error) {
 	c.logger.Info("Spawning debug sidecar",
 		log.Str("instance", instance.ID),
 		log.Str("command", strings.Join(options.Command, " ")))

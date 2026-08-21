@@ -36,10 +36,22 @@ type ServiceController interface {
 	listInstancesForService(ctx context.Context, namespace, serviceName string) ([]*types.Instance, error)
 }
 
+// serviceInstanceOps is the slice of the instance controller the service
+// controller itself calls: attach/read plus batch teardown (RUNE-311
+// Phase 3). The consumer owns the interface; *InstanceController
+// satisfies it.
+type serviceInstanceOps interface {
+	GetInstanceLogs(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error)
+	Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+	Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error)
+	WithdrawServiceInstances(ctx context.Context, service *types.Service, instances []*types.Instance)
+	StopInstance(ctx context.Context, instance *types.Instance) error
+}
+
 // serviceController implements the ServiceController interface
 type serviceController struct {
 	store              store.Store
-	instanceController InstanceController
+	instanceController serviceInstanceOps
 	healthController   HealthController
 	logger             log.Logger
 
@@ -63,7 +75,13 @@ type serviceController struct {
 // NewServiceController creates a new service controller
 func NewServiceController(
 	store store.Store,
-	instanceController InstanceController,
+	// The service controller needs its own five methods and forwards the
+	// reconciler's slice to newReconciler — the embedded pair, not the
+	// old god interface.
+	instanceController interface {
+		serviceInstanceOps
+		reconcilerInstanceOps
+	},
 	healthController HealthController,
 	logger log.Logger,
 ) (ServiceController, error) {

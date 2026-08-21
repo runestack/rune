@@ -21,14 +21,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func classifyFixture(t *testing.T) (context.Context, *store.TestStore, *runner.TestRunner, *instanceController) {
+func classifyFixture(t *testing.T) (context.Context, *store.TestStore, *runner.TestRunner, *InstanceController) {
 	t.Helper()
 	st := store.NewTestStore()
 	tr := runner.NewTestRunner()
 	rm := manager.NewTestRunnerManager(nil)
 	rm.SetDockerRunner(tr)
 	rm.SetProcessRunner(tr)
-	return context.Background(), st, tr, NewInstanceController(st, rm, log.NewLogger()).(*instanceController)
+	return context.Background(), st, tr, NewInstanceController(st, rm, log.NewLogger())
 }
 
 func classifySvc(gen int64) *types.Service {

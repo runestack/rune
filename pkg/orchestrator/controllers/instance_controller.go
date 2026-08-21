@@ -2,9 +2,8 @@ package controllers
 
 import (
 	"context"
-	"io"
-	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/runestack/rune/pkg/events"
@@ -24,119 +23,13 @@ const (
 	InstanceRestartReasonFailure            InstanceRestartReason = "failure"
 )
 
-// InstanceController manages instance lifecycle
-type InstanceController interface {
-	// GetInstanceByID gets an instance by ID
-	GetInstanceByID(ctx context.Context, namespace, instanceID string) (*types.Instance, error)
-
-	// ListInstances lists all instances in a namespace
-	ListInstances(ctx context.Context, namespace string) ([]*types.Instance, error)
-
-	// GetRunningInstances lists all running instances
-	ListRunningInstances(ctx context.Context, namespace string) ([]*types.Instance, error)
-
-	// CreateInstance creates a new instance for a service. ordinal is the
-	// per-replica slot index assigned by the reconciler; it is stored on the
-	// instance and drives per-replica volume claimTemplate binding.
-	CreateInstance(ctx context.Context, service *types.Service, instanceName string, ordinal int) (*types.Instance, error)
-
-	// RetryCreateInstance re-runs the create pipeline against an
-	// existing record that previously failed in a stuck-in-create
-	// state (Status=Failed, ContainerEverCreatedAt==nil). Same UUID,
-	// same Name. Called by the reconciler when the stuck record's
-	// NextCreateAttemptAt backoff has elapsed.
-	RetryCreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error
-
-	// RecreateInstance recreates an instance
-	RecreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) (*types.Instance, error)
-
-	// UpdateInstance updates an existing instance
-	UpdateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error
-
-	// StopInstance stops an instance temporarily but keeps it in the store
-	StopInstance(ctx context.Context, instance *types.Instance) error
-
-	// WithdrawServiceInstances removes a set of instances from the dataplane
-	// endpoint set in one publish and takes ONE shared drain window for all
-	// of them (RUNE-042 §4: whole-service teardowns drain in batch, not in
-	// series — a per-instance drain would add len(instances) × drainWindow
-	// to a teardown whose instances are all being withdrawn anyway). Each
-	// Running instance is flipped to Terminating first, so the per-instance
-	// teardown that follows (StopInstance/DeleteInstance) sees a
-	// non-Running status and skips its own drain. Best-effort; never fails
-	// the teardown.
-	WithdrawServiceInstances(ctx context.Context, service *types.Service, instances []*types.Instance)
-
-	// DeleteInstance marks an instance for deletion and cleans up runner resources
-	// The instance will remain in the store with Deleted status until garbage collection
-	DeleteInstance(ctx context.Context, instance *types.Instance) error
-
-	// GetInstanceStatus gets the current status of an instance
-	GetInstanceStatus(ctx context.Context, instance *types.Instance) (*types.InstanceStatusInfo, error)
-
-	// GetInstanceLogs gets logs for an instance
-	GetInstanceLogs(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error)
-
-	// RestartInstance restarts an instance with respect to the service's restart policy
-	RestartInstance(ctx context.Context, instance *types.Instance, reason InstanceRestartReason) error
-
-	// Exec executes a command in a running instance
-	// Returns an ExecStream for bidirectional communication
-	Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
-
-	// ExecDebug spawns an ephemeral inspection sidecar from a Failed
-	// instance's template (image, env, mounts), with the entrypoint
-	// overridden to `sleep infinity`, and execs options.Command inside
-	// the sidecar. The sidecar is removed when the returned ExecStream
-	// is Closed. The original Failed container is never touched.
-	ExecDebug(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
-
-	// Dial opens a TCP connection to the given port on a running
-	// instance (RUNE-122). Returns a net.Conn owned by the caller.
-	Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error)
-
-	// SetEndpointPublisher wires the networking data plane (RUNE-063).
-	// May be called once at startup; nil-publisher disables publishing.
-	SetEndpointPublisher(publisher EndpointPublisher, nodeID string)
-
-	// SetMountResolver wires the agent-side volumes Subsystem
-	// (RUNE-069). May be called once at startup; nil disables
-	// resolver-first mount-target lookup and falls back to
-	// Volume.Handle.
-	SetMountResolver(resolver MountResolver)
-
-	// SetEventLog wires the persisted event log (RUNE-126 Phase 2)
-	// so status transitions surface in `rune describe`. Nil-safe.
-	SetEventLog(eventLog events.EventLog)
-
-	// collectRunningInstances gathers all running instances from all runners
-	collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error)
-
-	// isInstanceCompatibleWithService checks if an instance is compatible with a service
-	isInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string)
-
-	// classifyInstance is the richer view isInstanceCompatibleWithService
-	// wraps: it distinguishes a BROKEN instance (repair now, unbudgeted)
-	// from an OUTDATED one (serving, replacement governed by the update
-	// budget). See CompatClass.
-	classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict
-
-	// RepublishServiceByInstance recomputes the data-plane endpoint set
-	// for the service owning the given instance. Exposed for callers
-	// outside instanceController that change instance reachability
-	// (e.g. the health controller promoting Starting→Running on the
-	// first readiness pass). Nil-safe when no endpoint publisher is
-	// wired; safe to call repeatedly.
-	RepublishServiceByInstance(ctx context.Context, instance *types.Instance)
-
-	// RepublishService refreshes the dataplane endpoint set from
-	// current store state (including live container IPs). Safe to
-	// call on every reconcile tick.
-	RepublishService(ctx context.Context, service *types.Service)
-}
-
-// instanceController implements the InstanceController interface
-type instanceController struct {
+// InstanceController owns instance lifecycle: create/retry/recreate/
+// update/stop/delete/restart, endpoint publishing, attach/read
+// operations, and classification. Consumers depend on the role
+// interfaces they declare (reconcilerInstanceOps, healthInstanceOps,
+// serviceInstanceOps, the orchestrator facade's instanceOps), all
+// satisfied by this one type — RUNE-311 Phase 3.
+type InstanceController struct {
 	store         store.Store
 	runnerManager manager.IRunnerManager
 	logger        log.Logger
@@ -149,19 +42,19 @@ type instanceController struct {
 	mounts *mountBinder
 
 	// events is the optional persisted event log (RUNE-126 Phase 2).
-	// Set after construction via SetEventLog; nil-safe (emit is a
+	// Wired at construction via WithEventLog; nil-safe (emit is a
 	// no-op) so unit tests don't need to wire one.
 	events events.EventLog
 
-	// endpointPublisher and nodeID power the RUNE-063 networking
-	// data plane. When non-nil, every successful instance lifecycle
-	// transition (Create/Update/Stop/Delete) re-derives the full
-	// endpoint set for the affected service from the store and pushes
-	// it through OrderedLog so the agent's load-balancer + DNS see a
-	// single, ordered view of reality. Nil-safe: in dev/standalone
-	// mode the controller leaves networking to the runner.
-	endpointPublisher EndpointPublisher
-	nodeID            string
+	// epBinding powers the RUNE-063 networking data plane: the
+	// publisher and the node identity it was wired with, behind ONE
+	// atomic pointer because the pair is read together and nodeID is
+	// also read by the mount path. Late-bound BY DESIGN (RUNE-311 D4):
+	// runed calls SetEndpointPublisher on a live controller after
+	// agent identity exists, while reconcile goroutines read — a plain
+	// field write here was a data race. When unset, every lifecycle
+	// transition leaves networking to the runner (dev/standalone).
+	epBinding atomic.Pointer[endpointBinding]
 
 	// drainWindowOverride, when non-zero, replaces the per-service drain
 	// window. Test-only seam so ordering assertions don't have to wait out a
@@ -177,16 +70,50 @@ type instanceController struct {
 	publishedMu   sync.Mutex
 	lastPublished map[string]string
 
-	// mountResolver, when non-nil, lets resolveVolumeMount consult
-	// the agent-side volumes Subsystem (RUNE-069 Slice 4) for the
-	// per-node mount target before falling back to Volume.Handle.
-	// The fallback preserves correctness for the in-tree local /
-	// local-host drivers (their Mount returns the host path verbatim,
-	// so target == handle); the resolver-first path is what makes
-	// future block-device drivers (do-volume, ...) usable, since for
-	// those Volume.Handle is a cloud-side identifier rather than a
-	// host filesystem path. Nil-safe.
-	mountResolver MountResolver
+	// mountRes, when set, lets resolveVolumeMount consult the
+	// agent-side volumes Subsystem (RUNE-069 Slice 4) for the per-node
+	// mount target before falling back to Volume.Handle. The fallback
+	// preserves correctness for the in-tree local / local-host drivers
+	// (their Mount returns the host path verbatim, so target ==
+	// handle); the resolver-first path is what makes future
+	// block-device drivers (do-volume, ...) usable, since for those
+	// Volume.Handle is a cloud-side identifier rather than a host
+	// filesystem path. Same late-bound atomic story as epBinding:
+	// runed seeds a not-ready stub at construction and swaps the real
+	// subsystem in after start. Nil-safe when never set.
+	mountRes atomic.Pointer[mountResolverBox]
+}
+
+// endpointBinding is the atomically-swapped {publisher, nodeID} pair —
+// one allocation so readers always see a consistent pairing.
+type endpointBinding struct {
+	publisher EndpointPublisher
+	nodeID    string
+}
+
+// mountResolverBox boxes the MountResolver interface value so it can sit
+// behind an atomic.Pointer.
+type mountResolverBox struct {
+	r MountResolver
+}
+
+// endpointBinding returns the current publisher and node identity as a
+// consistent pair; (nil, "") when networking is not wired.
+func (c *InstanceController) endpointBinding() (EndpointPublisher, string) {
+	if b := c.epBinding.Load(); b != nil {
+		return b.publisher, b.nodeID
+	}
+	return nil, ""
+}
+
+// resolver returns the current MountResolver, nil when none is wired.
+// Read it at each use — never capture it — so runed's live swap of the
+// not-ready stub for the real subsystem is observed.
+func (c *InstanceController) resolver() MountResolver {
+	if b := c.mountRes.Load(); b != nil {
+		return b.r
+	}
+	return nil
 }
 
 // MountResolver is the orchestrator-side surface of the agent's
@@ -225,11 +152,24 @@ type EndpointPublisher interface {
 	PublishLocalInstances(ctx context.Context, nodeID string, table map[string]types.InstanceIdentity) error
 }
 
-// NewInstanceController creates a new instance controller
-func NewInstanceController(store store.Store, runnerManager manager.IRunnerManager, logger log.Logger) InstanceController {
+// InstanceControllerOption configures NewInstanceController.
+type InstanceControllerOption func(*InstanceController)
+
+// WithEventLog wires the persisted event log (RUNE-126 Phase 2) at
+// construction. Nil is accepted and keeps emit a no-op.
+func WithEventLog(eventLog events.EventLog) InstanceControllerOption {
+	return func(c *InstanceController) { c.events = eventLog }
+}
+
+// NewInstanceController creates a new instance controller. Construction
+// covers every dependency that exists at startup; the endpoint publisher
+// and mount resolver are deliberately NOT options — they depend on agent
+// identity that runed only has after start, and arrive late through
+// SetEndpointPublisher / SetMountResolver.
+func NewInstanceController(store store.Store, runnerManager manager.IRunnerManager, logger log.Logger, opts ...InstanceControllerOption) *InstanceController {
 	secretRepo := repos.NewSecretRepo(store)
 	configRepo := repos.NewConfigRepo(store)
-	c := &instanceController{
+	c := &InstanceController{
 		store:         store,
 		runnerManager: runnerManager,
 		logger:        logger.WithComponent("instance-controller"),
@@ -240,42 +180,39 @@ func NewInstanceController(store store.Store, runnerManager manager.IRunnerManag
 	// each use — never captured — because runed wires both into a live
 	// controller after start (RUNE-311 D4).
 	c.mounts = newMountBinder(store, secretRepo, configRepo,
-		func() MountResolver { return c.mountResolver },
-		func() string { return c.nodeID })
+		c.resolver,
+		func() string { _, nodeID := c.endpointBinding(); return nodeID })
+	for _, opt := range opts {
+		opt(c)
+	}
 	return c
 }
 
-// SetEndpointPublisher wires the networking data plane (RUNE-063)
-// into the controller. Call once at startup from runed before any
-// reconciles are processed. nodeID identifies the host running this
-// controller and is used as the LocalInstances table key. Passing a
-// nil publisher disables endpoint publication (dev/standalone mode).
-func (c *instanceController) SetEndpointPublisher(publisher EndpointPublisher, nodeID string) {
-	c.endpointPublisher = publisher
-	c.nodeID = nodeID
+// SetEndpointPublisher wires the networking data plane (RUNE-063) into
+// the controller. LATE-BOUND: runed calls this on a live controller
+// after agent identity exists, while reconciles are already running —
+// the atomic swap is what makes that safe. nodeID identifies the host
+// running this controller and is used as the LocalInstances table key.
+// Passing a nil publisher disables endpoint publication
+// (dev/standalone mode).
+func (c *InstanceController) SetEndpointPublisher(publisher EndpointPublisher, nodeID string) {
+	c.epBinding.Store(&endpointBinding{publisher: publisher, nodeID: nodeID})
 }
 
 // SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
-// into the controller. Call once at startup from runed before any
-// reconciles are processed. Passing nil disables the resolver-first
-// path; resolveVolumeMount then uses Volume.Handle exclusively
-// (the previous behaviour, correct only for in-tree local /
-// local-host drivers).
-func (c *instanceController) SetMountResolver(resolver MountResolver) {
-	c.mountResolver = resolver
-}
-
-// SetEventLog wires the persisted event log (RUNE-126 Phase 2). Nil
-// is accepted and turns emit into a no-op so unit tests and callers
-// that don't want events keep working unchanged.
-func (c *instanceController) SetEventLog(eventLog events.EventLog) {
-	c.events = eventLog
+// into the controller. LATE-BOUND: runed seeds a not-ready stub at
+// construction and swaps the real subsystem in on a live controller
+// after start. Passing nil disables the resolver-first path;
+// resolveVolumeMount then uses Volume.Handle exclusively (the previous
+// behaviour, correct only for in-tree local / local-host drivers).
+func (c *InstanceController) SetMountResolver(resolver MountResolver) {
+	c.mountRes.Store(&mountResolverBox{r: resolver})
 }
 
 // emit records one event for the instance. Fire-and-forget — emission
 // failures are logged but never surfaced to the caller (events are
 // observability, never on a correctness path).
-func (c *instanceController) emit(level types.EventLevel, instance *types.Instance, reason, message string) {
+func (c *InstanceController) emit(level types.EventLevel, instance *types.Instance, reason, message string) {
 	if c.events == nil || instance == nil {
 		return
 	}
@@ -309,3 +246,11 @@ func applyInstanceStatus(instance *types.Instance, status types.InstanceStatus, 
 	instance.StatusMessage = message
 	instance.UpdatedAt = now
 }
+
+// Compile-time proof the controller satisfies every consumer's role
+// interface.
+var (
+	_ reconcilerInstanceOps = (*InstanceController)(nil)
+	_ serviceInstanceOps    = (*InstanceController)(nil)
+	_ healthInstanceOps     = (*InstanceController)(nil)
+)

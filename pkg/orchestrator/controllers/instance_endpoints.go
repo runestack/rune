@@ -26,8 +26,9 @@ import (
 // (dev/standalone), a service with no ports, or wasServing false (the
 // instance was not Running when its teardown began — only Running
 // instances are ever published, see republishService).
-func (c *instanceController) drainAfterWithdraw(ctx context.Context, service *types.Service, wasServing bool, target string) {
-	if !wasServing || c.endpointPublisher == nil || service == nil || len(service.Ports) == 0 {
+func (c *InstanceController) drainAfterWithdraw(ctx context.Context, service *types.Service, wasServing bool, target string) {
+	publisher, _ := c.endpointBinding()
+	if !wasServing || publisher == nil || service == nil || len(service.Ports) == 0 {
 		return
 	}
 	// Per-service grace (types.Service.DrainWindow): defaults to
@@ -50,7 +51,7 @@ func (c *instanceController) drainAfterWithdraw(ctx context.Context, service *ty
 // It prefers persisted metadata, then asks the runner (Docker inspect),
 // and in both cases ensures the discovered IP is persisted to the
 // instance's top-level IP field as well as Metadata.ContainerIP.
-func (c *instanceController) instanceEndpointIP(ctx context.Context, inst *types.Instance) string {
+func (c *InstanceController) instanceEndpointIP(ctx context.Context, inst *types.Instance) string {
 	if inst == nil {
 		return ""
 	}
@@ -82,7 +83,7 @@ func (c *instanceController) instanceEndpointIP(ctx context.Context, inst *types
 // status update (the store has no CAS); same load-modify-write discipline
 // promoteToRunningOnReady uses. The in-hand copy is kept in sync so the
 // rest of this pass sees the IP even if the store write is skipped/fails.
-func (c *instanceController) persistInstanceIP(ctx context.Context, inst *types.Instance, ip string) {
+func (c *InstanceController) persistInstanceIP(ctx context.Context, inst *types.Instance, ip string) {
 	var fresh types.Instance
 	if err := c.store.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh); err == nil {
 		if fresh.Metadata == nil {
@@ -112,7 +113,7 @@ func (c *instanceController) persistInstanceIP(ctx context.Context, inst *types.
 // would keep dialing the dead container's IP — probe timeout → restart →
 // churn. CAS via UpdateFunc so a concurrent status write is never clobbered;
 // best-effort because the next compat check heals again if the write loses.
-func (c *instanceController) persistHealedContainerMapping(ctx context.Context, inst *types.Instance) {
+func (c *InstanceController) persistHealedContainerMapping(ctx context.Context, inst *types.Instance) {
 	var fresh types.Instance
 	if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
 		if fresh.ContainerID == inst.ContainerID {
@@ -144,8 +145,9 @@ func (c *instanceController) persistHealedContainerMapping(ctx context.Context, 
 // are logged but never surfaced because a failure to publish must
 // not roll back the runner-side lifecycle transition that already
 // succeeded.
-func (c *instanceController) republishService(ctx context.Context, service *types.Service) {
-	if c.endpointPublisher == nil || service == nil {
+func (c *InstanceController) republishService(ctx context.Context, service *types.Service) {
+	publisher, nodeID := c.endpointBinding()
+	if publisher == nil || service == nil {
 		return
 	}
 	var instances []*types.Instance
@@ -185,8 +187,8 @@ func (c *instanceController) republishService(ctx context.Context, service *type
 			continue
 		}
 		md := map[string]string{}
-		if c.nodeID != "" {
-			md["node_id"] = c.nodeID
+		if nodeID != "" {
+			md["node_id"] = nodeID
 		}
 		eps = append(eps, types.Endpoint{
 			InstanceID: inst.ID,
@@ -210,7 +212,7 @@ func (c *instanceController) republishService(ctx context.Context, service *type
 	if seen && prev == sig {
 		return
 	}
-	if err := c.endpointPublisher.PublishService(ctx, service, eps); err != nil {
+	if err := publisher.PublishService(ctx, service, eps); err != nil {
 		c.logger.Warn("republishService: publish failed",
 			log.Str("service", service.Name),
 			log.Err(err))
@@ -240,12 +242,12 @@ func endpointsSignature(eps []types.Endpoint) string {
 // full semantics. Used by external callers (e.g. the health controller)
 // that need to refresh the data-plane endpoint set after an instance
 // reachability change.
-func (c *instanceController) RepublishServiceByInstance(ctx context.Context, instance *types.Instance) {
+func (c *InstanceController) RepublishServiceByInstance(ctx context.Context, instance *types.Instance) {
 	c.republishServiceByInstance(ctx, instance)
 }
 
 // RepublishService implements InstanceController.
-func (c *instanceController) RepublishService(ctx context.Context, service *types.Service) {
+func (c *InstanceController) RepublishService(ctx context.Context, service *types.Service) {
 	c.republishService(ctx, service)
 }
 
@@ -253,8 +255,8 @@ func (c *instanceController) RepublishService(ctx context.Context, service *type
 // owning service from the store before delegating to republishService.
 // Used by lifecycle methods (Stop/Delete) that hold an Instance but
 // not its Service.
-func (c *instanceController) republishServiceByInstance(ctx context.Context, instance *types.Instance) {
-	if c.endpointPublisher == nil || instance == nil || instance.ServiceName == "" {
+func (c *InstanceController) republishServiceByInstance(ctx context.Context, instance *types.Instance) {
+	if publisher, _ := c.endpointBinding(); publisher == nil || instance == nil || instance.ServiceName == "" {
 		return
 	}
 	var svc types.Service
@@ -270,8 +272,9 @@ func (c *instanceController) republishServiceByInstance(ctx context.Context, ins
 // republishLocalInstances rebuilds the per-node InstanceIdentity
 // table from current store state across all namespaces and pushes
 // it. Best-effort.
-func (c *instanceController) republishLocalInstances(ctx context.Context) {
-	if c.endpointPublisher == nil || c.nodeID == "" {
+func (c *InstanceController) republishLocalInstances(ctx context.Context) {
+	publisher, nodeID := c.endpointBinding()
+	if publisher == nil || nodeID == "" {
 		return
 	}
 	running, err := c.collectRunningInstances(ctx)
@@ -294,15 +297,20 @@ func (c *instanceController) republishLocalInstances(ctx context.Context) {
 			Namespace:  ri.Instance.Namespace,
 		}
 	}
-	if err := c.endpointPublisher.PublishLocalInstances(ctx, c.nodeID, table); err != nil {
+	if err := publisher.PublishLocalInstances(ctx, nodeID, table); err != nil {
 		c.logger.Warn("republishLocalInstances: publish failed", log.Err(err))
 	}
 }
 
-// WithdrawServiceInstances implements the batch withdrawal described on the
-// InstanceController interface: flip every Running instance to Terminating,
-// republish the endpoint set once, and take one shared drain window.
-func (c *instanceController) WithdrawServiceInstances(ctx context.Context, service *types.Service, instances []*types.Instance) {
+// WithdrawServiceInstances removes a set of instances from the dataplane
+// endpoint set in one publish and takes ONE shared drain window for all of
+// them (RUNE-042 §4: whole-service teardowns drain in batch, not in series —
+// a per-instance drain would add len(instances) × drainWindow to a teardown
+// whose instances are all being withdrawn anyway). Each Running instance is
+// flipped to Terminating first, so the per-instance teardown that follows
+// (StopInstance/DeleteInstance) sees a non-Running status and skips its own
+// drain. Best-effort; never fails the teardown.
+func (c *InstanceController) WithdrawServiceInstances(ctx context.Context, service *types.Service, instances []*types.Instance) {
 	anyServing := false
 	for _, inst := range instances {
 		if inst == nil || inst.Status != types.InstanceStatusRunning {

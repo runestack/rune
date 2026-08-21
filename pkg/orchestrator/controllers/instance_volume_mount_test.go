@@ -16,15 +16,12 @@ import (
 )
 
 // resolveVolumeMount unit tests (RUNE-070). Exercises only the volume
-// branch of resolveMounts; the helper is package-private so we cast
-// the InstanceController back to its concrete type to invoke it.
-func newInstanceControllerForVolumeTests(t *testing.T) (*store.TestStore, *instanceController) {
+// branch of resolveMounts via the controller's package-private helper.
+func newInstanceControllerForVolumeTests(t *testing.T) (*store.TestStore, *InstanceController) {
 	t.Helper()
 	ts := store.NewTestStore()
 	ic := NewInstanceController(ts, manager.NewTestRunnerManager(nil), log.NewLogger())
-	concrete, ok := ic.(*instanceController)
-	require.True(t, ok, "InstanceController must be the in-package concrete type")
-	return ts, concrete
+	return ts, ic
 }
 
 func putVolume(t *testing.T, ts *store.TestStore, ns, name, handle string, status types.VolumeStatus) {
@@ -307,7 +304,7 @@ func TestResolveVolumeMount_ResolverPreferredOverHandle(t *testing.T) {
 func TestResolveVolumeMount_StampsBoundNode(t *testing.T) {
 	ts, ic := newInstanceControllerForVolumeTests(t)
 	putVolume(t, ts, "default", "data", "do-vol-abc123", types.VolumeStatusAvailable)
-	ic.nodeID = "node-a"
+	ic.SetEndpointPublisher(nil, "node-a")
 	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{
 		"vol-data": "/var/lib/rune/mounts/vol-data",
 	}})
@@ -345,7 +342,7 @@ func TestResolveVolumeMount_RefreshesBoundClaimOnRestart(t *testing.T) {
 	v.BoundClaim = "default/api-0" // stale: that instance was Deleted
 	require.NoError(t, ts.Update(context.Background(), types.ResourceTypeVolume, "default", "data", &v))
 
-	ic.nodeID = "node-a"
+	ic.SetEndpointPublisher(nil, "node-a")
 	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{
 		"vol-data": "/var/lib/rune/mounts/vol-data",
 	}})

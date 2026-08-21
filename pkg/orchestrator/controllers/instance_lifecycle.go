@@ -13,11 +13,11 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
-func (c *instanceController) GetInstanceByID(ctx context.Context, namespace, instanceID string) (*types.Instance, error) {
+func (c *InstanceController) GetInstanceByID(ctx context.Context, namespace, instanceID string) (*types.Instance, error) {
 	return c.store.GetInstanceByID(ctx, namespace, instanceID)
 }
 
-func (c *instanceController) ListInstances(ctx context.Context, namespace string) ([]*types.Instance, error) {
+func (c *InstanceController) ListInstances(ctx context.Context, namespace string) ([]*types.Instance, error) {
 	var instances []*types.Instance
 	err := c.store.List(ctx, types.ResourceTypeInstance, namespace, &instances)
 	if err != nil {
@@ -27,7 +27,7 @@ func (c *instanceController) ListInstances(ctx context.Context, namespace string
 	return instances, nil
 }
 
-func (c *instanceController) ListRunningInstances(ctx context.Context, namespace string) ([]*types.Instance, error) {
+func (c *InstanceController) ListRunningInstances(ctx context.Context, namespace string) ([]*types.Instance, error) {
 	runningInstances, err := c.collectRunningInstances(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list running instances: %w", err)
@@ -58,7 +58,7 @@ func (c *instanceController) ListRunningInstances(ctx context.Context, namespace
 
 // CreateInstance creates a new instance for a service
 // This would be simplified to only handle the pure creation case
-func (c *instanceController) CreateInstance(ctx context.Context, service *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
+func (c *InstanceController) CreateInstance(ctx context.Context, service *types.Service, instanceName string, ordinal int) (*types.Instance, error) {
 	c.logger.Info("Creating new instance",
 		log.Str("service", service.Name),
 		log.Str("namespace", service.Namespace),
@@ -146,7 +146,7 @@ func (c *instanceController) CreateInstance(ctx context.Context, service *types.
 // NextCreateAttemptAt cleared) before re-running the create pipeline.
 // CreateAttempts is preserved so the backoff schedule and Stalled
 // threshold see the cumulative history.
-func (c *instanceController) RetryCreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error {
+func (c *InstanceController) RetryCreateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error {
 	if instance == nil {
 		return fmt.Errorf("retry: nil instance")
 	}
@@ -172,7 +172,7 @@ func (c *instanceController) RetryCreateInstance(ctx context.Context, service *t
 // stamp → runner.Start → Running). Every error path routes through
 // recordCreateFailure so the reason lands on the record and backoff
 // is scheduled.
-func (c *instanceController) runCreateAttempt(ctx context.Context, service *types.Service, instance *types.Instance) error {
+func (c *InstanceController) runCreateAttempt(ctx context.Context, service *types.Service, instance *types.Instance) error {
 	// Create instance based on runtime
 	serviceRunner, err := c.runnerManager.GetServiceRunner(service)
 	if err != nil {
@@ -305,7 +305,7 @@ func (c *instanceController) runCreateAttempt(ctx context.Context, service *type
 }
 
 // RecreateInstance destroys an existing instance and creates a new one with the same name
-func (c *instanceController) RecreateInstance(ctx context.Context, service *types.Service, existingInstance *types.Instance) (*types.Instance, error) {
+func (c *InstanceController) RecreateInstance(ctx context.Context, service *types.Service, existingInstance *types.Instance) (*types.Instance, error) {
 	instanceName := existingInstance.Name
 	c.logger.Info("Recreating instance",
 		log.Str("service", service.Name),
@@ -322,7 +322,7 @@ func (c *instanceController) RecreateInstance(ctx context.Context, service *type
 }
 
 // UpdateInstance updates an existing instance
-func (c *instanceController) UpdateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error {
+func (c *InstanceController) UpdateInstance(ctx context.Context, service *types.Service, instance *types.Instance) error {
 	c.logger.Debug("Checking instance for updates",
 		log.Str("instance", instance.ID),
 		log.Str("service", service.Name))
@@ -476,7 +476,7 @@ func (c *instanceController) UpdateInstance(ctx context.Context, service *types.
 }
 
 // StopInstance stops an instance but keeps it in the store
-func (c *instanceController) StopInstance(ctx context.Context, instance *types.Instance) error {
+func (c *InstanceController) StopInstance(ctx context.Context, instance *types.Instance) error {
 	c.logger.Info("Stopping instance",
 		log.Str("instance", instance.ID))
 
@@ -582,7 +582,7 @@ func (c *instanceController) StopInstance(ctx context.Context, instance *types.I
 }
 
 // DeleteInstance marks an instance for deletion and cleans up runner resources
-func (c *instanceController) DeleteInstance(ctx context.Context, instance *types.Instance) error {
+func (c *InstanceController) DeleteInstance(ctx context.Context, instance *types.Instance) error {
 	c.logger.Info("Marking instance for deletion",
 		log.Str("instance", instance.ID),
 		log.Str("namespace", instance.Namespace),
@@ -716,7 +716,7 @@ func (c *instanceController) DeleteInstance(ctx context.Context, instance *types
 }
 
 // RestartInstance restarts an instance with respect to the service's restart policy
-func (c *instanceController) RestartInstance(ctx context.Context, instance *types.Instance, reason InstanceRestartReason) error {
+func (c *InstanceController) RestartInstance(ctx context.Context, instance *types.Instance, reason InstanceRestartReason) error {
 	c.logger.Info("Restarting instance",
 		log.Str("instance", instance.ID),
 		log.Str("reason", string(reason)))
@@ -903,7 +903,7 @@ func (c *instanceController) RestartInstance(ctx context.Context, instance *type
 }
 
 // collectRunningInstances gathers all running instances from all runners
-func (c *instanceController) collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error) {
+func (c *InstanceController) collectRunningInstances(ctx context.Context) (map[string]*RunningInstance, error) {
 	instances := make(map[string]*RunningInstance)
 
 	// Collect instances from docker runner

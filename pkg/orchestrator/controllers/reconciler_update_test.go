@@ -30,7 +30,7 @@ func updateFixture(t *testing.T) (context.Context, *store.TestStore, *runner.Tes
 	rm.SetProcessRunner(tr)
 	logger := log.NewLogger()
 
-	ic := NewInstanceController(st, rm, logger).(*instanceController)
+	ic := NewInstanceController(st, rm, logger)
 	r := &reconciler{
 		store:              st,
 		instanceController: ic,

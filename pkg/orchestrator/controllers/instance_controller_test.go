@@ -13,7 +13,7 @@ import (
 )
 
 // setupTestController creates a controller with test dependencies
-func setupTestController(t *testing.T) (context.Context, *store.TestStore, *runner.TestRunner, InstanceController) {
+func setupTestController(t *testing.T) (context.Context, *store.TestStore, *runner.TestRunner, *InstanceController) {
 	ctx := context.Background()
 	// Configure test store with reasonable defaults to support secret/config repos
 	opts := store.StoreOptions{
@@ -65,14 +65,12 @@ func instanceControllerCreateTestService(ctx context.Context, t *testing.T, test
 }
 
 // controllerTestStore is a tiny adapter to get the underlying TestStore
-// back from the interface-typed controller in tests that only carry the
-// InstanceController and need the store too. It avoids changing setup
-// helpers used by every other test in this file.
-func controllerTestStore(c InstanceController) *store.TestStore {
-	if cc, ok := c.(*instanceController); ok {
-		if ts, ok := cc.store.(*store.TestStore); ok {
-			return ts
-		}
+// back from a controller in tests that only carry the controller and
+// need the store too. It avoids changing setup helpers used by every
+// other test in this file.
+func controllerTestStore(c *InstanceController) *store.TestStore {
+	if ts, ok := c.store.(*store.TestStore); ok {
+		return ts
 	}
 	return nil
 }

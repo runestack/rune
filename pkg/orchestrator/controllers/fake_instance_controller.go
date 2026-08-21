@@ -15,7 +15,10 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
-// FakeInstanceController implements the InstanceController interface for testing purposes
+// FakeInstanceController is the test double for *InstanceController. One
+// fake satisfies every consumer's role interface structurally (RUNE-311
+// Phase 3) — its stateful core is shared by reconciler and service
+// controller tests, so it is deliberately not split per role.
 type FakeInstanceController struct {
 	// WithdrawServiceInstancesCalls counts batch withdrawals (RUNE-042).
 	WithdrawServiceInstancesCalls int
@@ -601,3 +604,10 @@ func (c *FakeInstanceController) Reset() {
 	c.GetLogsCalls = nil
 	c.ExecCalls = nil
 }
+
+// Compile-time proof the fake satisfies every consumer's role interface.
+var (
+	_ reconcilerInstanceOps = (*FakeInstanceController)(nil)
+	_ serviceInstanceOps    = (*FakeInstanceController)(nil)
+	_ healthInstanceOps     = (*FakeInstanceController)(nil)
+)

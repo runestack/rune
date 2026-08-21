@@ -108,7 +108,7 @@ func TestRecordCreateFailure_StallsAfterMaxAttempts(t *testing.T) {
 	}
 	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
 
-	cc := controller.(*instanceController)
+	cc := controller
 	// Walk attempts up to (max-1) — should still be Failed with backoff scheduled.
 	for i := 0; i < maxCreateAttempts-1; i++ {
 		cc.recordCreateFailure(ctx, rec, assert.AnError, "VolumeNotReady")
@@ -178,7 +178,7 @@ func TestSnapshotInstanceLogs_NoOpForNeverCreated(t *testing.T) {
 	require.NoError(t, testStore.Create(ctx, types.ResourceTypeInstance, "default", rec.ID, rec))
 	testRunner.LogOutput = []byte("should not be read")
 
-	cc := controller.(*instanceController)
+	cc := controller
 	cc.snapshotInstanceLogs(ctx, rec)
 
 	assert.Empty(t, rec.LastLogs, "stuck-in-create records (no container) must not trigger a runner.GetLogs call")
