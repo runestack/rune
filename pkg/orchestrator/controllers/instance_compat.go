@@ -1,5 +1,6 @@
 // Package controllers — Instance-vs-service compatibility classification (drives the update
-// plan). Split from instance_controller.go (RUNE-311).
+// plan). Split from instance_controller.go (RUNE-311); restructured in Phase 2 as
+// pre-checks → observe → pure classify (RUNE-311 D5).
 package controllers
 
 import (
@@ -46,19 +47,24 @@ type CompatVerdict struct {
 // pre-RUNE-042 boolean expressed.
 func (v CompatVerdict) Compatible() bool { return v.Class == CompatOK }
 
-// classifyInstance compares an instance against its service's current spec.
-//
-// Check order matters and differs from the pre-RUNE-042 function in one
-// deliberate way: the runner-liveness checks now run BEFORE the template
-// generation check. In the old order an instance that was dead in the runner
-// but also on an old template reported "template changed" and would, once the
-// budget exists, be treated as a serving instance awaiting a voluntary
-// replacement — counted as available, retired under budget. Classification
-// has to ask "is it alive?" before "is it current?".
-func (c *instanceController) classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict {
+// instanceObservation is what observeInstance learned from the runner.
+// brokenReason, when non-empty, means observation itself failed (no runner,
+// or the instance is unknown to it) — classified CompatBroken as-is.
+type instanceObservation struct {
+	status       types.InstanceStatus
+	brokenReason string
+}
+
+// preClassifyInstance is the store-only prefix of classification: the checks
+// that return a verdict without ever touching the runner. It runs FIRST so
+// records the runner must not be asked about — notably a Stalled
+// stuck-in-create record deliberately held in place by the churn guard —
+// are never probed, healed, or persisted per reconcile tick (RUNE-311 D5).
+// done=false means no verdict yet: observe, then classify.
+func preClassifyInstance(instance *types.Instance, service *types.Service) (v CompatVerdict, done bool) {
 	// Belongs to a different service: not this service's instance at all.
 	if instance.ServiceID != service.ID {
-		return CompatVerdict{CompatBroken, "instance belongs to different service"}
+		return CompatVerdict{CompatBroken, "instance belongs to different service"}, true
 	}
 
 	// Stuck-in-create record: Status=Failed (or Stalled) but a
@@ -77,7 +83,7 @@ func (c *instanceController) classifyInstance(ctx context.Context, instance *typ
 	// container existed at some point.
 	if instance.ContainerEverCreatedAt == nil &&
 		(instance.Status == types.InstanceStatusFailed || instance.Status == types.InstanceStatusStalled) {
-		return CompatVerdict{CompatOK, ""}
+		return CompatVerdict{CompatOK, ""}, true
 	}
 
 	// --- liveness first: is this instance serving anyone? ---
@@ -87,33 +93,55 @@ func (c *instanceController) classifyInstance(ctx context.Context, instance *typ
 		instance.Status == types.InstanceStatusExited ||
 		instance.Status == types.InstanceStatusUnknown {
 		return CompatVerdict{CompatBroken,
-			fmt.Sprintf("instance is in failed state: %s", string(instance.Status))}
+			fmt.Sprintf("instance is in failed state: %s", string(instance.Status))}, true
 	}
 
-	// Get the current runner for the instance.
+	return CompatVerdict{}, false
+}
+
+// observeInstance asks the runner about the instance and owns the heal
+// side effects that used to hide inside classification (RUNE-311 D5): the Docker
+// runner self-heals a stale ContainerID inside Status (re-resolving via
+// the rune.instance.id label and mutating the in-hand instance), and a
+// detected heal is persisted UNCONDITIONALLY — never gated on the later
+// verdict — so the health controller's next probe dials the LIVE
+// container's IP. An unpersisted heal leaves probes timing out against
+// the dead container's address, the restart-churn loop PR #155 broke.
+func (c *instanceController) observeInstance(ctx context.Context, instance *types.Instance) instanceObservation {
 	runner, err := c.runnerManager.GetInstanceRunner(instance)
 	if err != nil {
-		return CompatVerdict{CompatBroken, fmt.Sprintf("failed to get runner: %v", err)}
+		return instanceObservation{brokenReason: fmt.Sprintf("failed to get runner: %v", err)}
 	}
 
-	// Check if the instance still exists in the runner. The Docker
-	// runner self-heals a stale ContainerID here (re-resolving via the
-	// rune.instance.id label and mutating the in-hand instance); if it
-	// did, persist the healed mapping so the health controller's next
-	// probe dials the LIVE container's IP — an unpersisted heal leaves
-	// probes timing out against the dead container's address, which is
-	// the restart-churn loop this exists to break.
 	prevContainerID := instance.ContainerID
 	status, err := runner.Status(ctx, instance)
 	if err != nil {
-		return CompatVerdict{CompatBroken, fmt.Sprintf("instance not found in runner: %v", err)}
+		return instanceObservation{brokenReason: fmt.Sprintf("instance not found in runner: %v", err)}
 	}
 	if instance.ContainerID != prevContainerID {
 		c.persistHealedContainerMapping(ctx, instance)
 	}
+	return instanceObservation{status: status}
+}
+
+// classifyObserved is the pure remainder of classification: given the
+// instance, the service spec, and what the runner reported, produce the
+// verdict. No store, no runner, no side effects — table-testable.
+//
+// Check order matters and differs from the pre-RUNE-042 function in one
+// deliberate way: the runner-liveness checks run BEFORE the template
+// generation check. In the old order an instance that was dead in the runner
+// but also on an old template reported "template changed" and would, once the
+// budget exists, be treated as a serving instance awaiting a voluntary
+// replacement — counted as available, retired under budget. Classification
+// has to ask "is it alive?" before "is it current?".
+func classifyObserved(instance *types.Instance, service *types.Service, obs instanceObservation, logger log.Logger) CompatVerdict {
+	if obs.brokenReason != "" {
+		return CompatVerdict{CompatBroken, obs.brokenReason}
+	}
 
 	// Alive in the store but terminal in the runner.
-	if status == types.InstanceStatusExited || status == types.InstanceStatusFailed {
+	if obs.status == types.InstanceStatusExited || obs.status == types.InstanceStatusFailed {
 		return CompatVerdict{CompatBroken, "instance is in terminal state in the runner"}
 	}
 
@@ -130,7 +158,7 @@ func (c *instanceController) classifyInstance(ctx context.Context, instance *typ
 	if instance.Metadata != nil {
 		if instanceGen := instance.Metadata.ServiceGeneration; instanceGen != 0 {
 			if instanceGen < service.Metadata.TemplateGeneration {
-				c.logger.Debug("Service template changed, instance is outdated",
+				logger.Debug("Service template changed, instance is outdated",
 					log.Str("instance", instance.ID),
 					log.Int64("instance_generation", instanceGen),
 					log.Int64("template_generation", service.Metadata.TemplateGeneration))
@@ -140,7 +168,7 @@ func (c *instanceController) classifyInstance(ctx context.Context, instance *typ
 		} else if service.Metadata.TemplateGeneration > 0 {
 			// No recorded generation but the service's template has been
 			// stamped: adopt the template by replacement.
-			c.logger.Debug("Instance missing template generation, is outdated",
+			logger.Debug("Instance missing template generation, is outdated",
 				log.Str("instance", instance.ID),
 				log.Int64("template_generation", service.Metadata.TemplateGeneration))
 			return CompatVerdict{CompatOutdated, "instance missing service template generation"}
@@ -160,7 +188,7 @@ func (c *instanceController) classifyInstance(ctx context.Context, instance *typ
 				}
 			} else {
 				// If we can't determine the original image, be cautious and replace.
-				c.logger.Debug("Cannot determine original image for instance, assuming outdated")
+				logger.Debug("Cannot determine original image for instance, assuming outdated")
 				return CompatVerdict{CompatOutdated, "cannot determine original image"}
 			}
 		}
@@ -208,6 +236,18 @@ func (c *instanceController) classifyInstance(ctx context.Context, instance *typ
 	}
 
 	return CompatVerdict{CompatOK, ""}
+}
+
+// classifyInstance compares an instance against its service's current spec:
+// store-only pre-checks, then runner observation (with its heal persisted
+// unconditionally), then the pure classifier. See preClassifyInstance,
+// observeInstance, classifyObserved.
+func (c *instanceController) classifyInstance(ctx context.Context, instance *types.Instance, service *types.Service) CompatVerdict {
+	if v, done := preClassifyInstance(instance, service); done {
+		return v
+	}
+	obs := c.observeInstance(ctx, instance)
+	return classifyObserved(instance, service, obs, c.logger)
 }
 
 // isInstanceCompatibleWithService is the boolean view of classifyInstance,

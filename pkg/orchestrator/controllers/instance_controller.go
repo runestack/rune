@@ -140,8 +140,13 @@ type instanceController struct {
 	store         store.Store
 	runnerManager manager.IRunnerManager
 	logger        log.Logger
-	secretRepo    *repos.SecretRepo
-	configRepo    *repos.ConfigmapRepo
+
+	// env and mounts are the RUNE-311 Phase 2 collaborators: env owns
+	// environment preparation + {{...}} interpolation, mounts owns
+	// secret/config/volume mount resolution. The controller keeps thin
+	// same-named methods delegating to them.
+	env    *envResolver
+	mounts *mountBinder
 
 	// events is the optional persisted event log (RUNE-126 Phase 2).
 	// Set after construction via SetEventLog; nil-safe (emit is a
@@ -222,14 +227,22 @@ type EndpointPublisher interface {
 
 // NewInstanceController creates a new instance controller
 func NewInstanceController(store store.Store, runnerManager manager.IRunnerManager, logger log.Logger) InstanceController {
-	return &instanceController{
+	secretRepo := repos.NewSecretRepo(store)
+	configRepo := repos.NewConfigRepo(store)
+	c := &instanceController{
 		store:         store,
 		runnerManager: runnerManager,
 		logger:        logger.WithComponent("instance-controller"),
-		secretRepo:    repos.NewSecretRepo(store),
-		configRepo:    repos.NewConfigRepo(store),
+		env:           newEnvResolver(secretRepo, configRepo),
 		lastPublished: map[string]string{},
 	}
+	// The binder reads mountResolver and nodeID through the controller at
+	// each use — never captured — because runed wires both into a live
+	// controller after start (RUNE-311 D4).
+	c.mounts = newMountBinder(store, secretRepo, configRepo,
+		func() MountResolver { return c.mountResolver },
+		func() string { return c.nodeID })
+	return c
 }
 
 // SetEndpointPublisher wires the networking data plane (RUNE-063)

@@ -7,24 +7,48 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 )
 
-// prepareEnvVars prepares environment variables for an instance
+// envResolver owns environment preparation and {{...}} template
+// interpolation. It depends on the secret/config repos alone (RUNE-311
+// Phase 2), so it is constructible — and unit-testable — without an
+// instanceController.
+type envResolver struct {
+	secretRepo *repos.SecretRepo
+	configRepo *repos.ConfigmapRepo
+}
+
+func newEnvResolver(secretRepo *repos.SecretRepo, configRepo *repos.ConfigmapRepo) *envResolver {
+	return &envResolver{secretRepo: secretRepo, configRepo: configRepo}
+}
+
+// Thin delegators: lifecycle code and existing tests call these on the
+// controller; the logic lives on envResolver.
 func (c *instanceController) prepareEnvVars(ctx context.Context, service *types.Service, instance *types.Instance) (map[string]string, error) {
+	return c.env.prepareEnvVars(ctx, service, instance)
+}
+
+func (c *instanceController) interpolateEnv(ctx context.Context, value, defaultNamespace string) (string, error) {
+	return c.env.interpolateEnv(ctx, value, defaultNamespace)
+}
+
+// prepareEnvVars prepares environment variables for an instance
+func (r *envResolver) prepareEnvVars(ctx context.Context, service *types.Service, instance *types.Instance) (map[string]string, error) {
 	envVars := make(map[string]string)
 
 	// 1) Import from envFrom sources in order
 	for _, src := range service.EnvFrom {
 		var data map[string]string
 		if src.SecretName != "" {
-			sec, err := c.secretRepo.Get(ctx, src.Namespace, src.SecretName)
+			sec, err := r.secretRepo.Get(ctx, src.Namespace, src.SecretName)
 			if err != nil {
 				return nil, fmt.Errorf("envFrom secret %s.%s: %w", src.Namespace, src.SecretName, err)
 			}
 			data = sec.Data
 		} else if src.ConfigmapName != "" {
-			cfg, err := c.configRepo.Get(ctx, src.Namespace, src.ConfigmapName)
+			cfg, err := r.configRepo.Get(ctx, src.Namespace, src.ConfigmapName)
 			if err != nil {
 				return nil, fmt.Errorf("envFrom configmap %s.%s: %w", src.Namespace, src.ConfigmapName, err)
 			}
@@ -47,7 +71,7 @@ func (c *instanceController) prepareEnvVars(ctx context.Context, service *types.
 
 	// 2) Add service-defined environment variables with interpolation (override imported)
 	for key, value := range service.Env {
-		resolved, err := c.interpolateEnv(ctx, value, service.Namespace)
+		resolved, err := r.interpolateEnv(ctx, value, service.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("failed to interpolate env %s: %w", key, err)
 		}
@@ -101,7 +125,7 @@ func isValidEnvKey(key string) bool {
 }
 
 // interpolateEnv resolves template variables in the format {{type:reference}} using the controller's repos
-func (c *instanceController) interpolateEnv(ctx context.Context, value, defaultNamespace string) (string, error) {
+func (r *envResolver) interpolateEnv(ctx context.Context, value, defaultNamespace string) (string, error) {
 	// Check if the value contains template syntax
 	if !strings.Contains(value, "{{") || !strings.Contains(value, "}}") {
 		// No template syntax, return as-is
@@ -128,7 +152,7 @@ func (c *instanceController) interpolateEnv(ctx context.Context, value, defaultN
 		templateVar := trimWhitespaces(result[openIdx+2 : closeIdx])
 
 		// Resolve the template variable
-		resolvedValue, err := c.resolveTemplateVariable(ctx, templateVar, defaultNamespace)
+		resolvedValue, err := r.resolveTemplateVariable(ctx, templateVar, defaultNamespace)
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve template variable %s: %w", templateVar, err)
 		}
@@ -144,7 +168,7 @@ func (c *instanceController) interpolateEnv(ctx context.Context, value, defaultN
 }
 
 // resolveTemplateVariable parses and resolves a single template variable
-func (c *instanceController) resolveTemplateVariable(ctx context.Context, templateVar, defaultNamespace string) (string, error) {
+func (r *envResolver) resolveTemplateVariable(ctx context.Context, templateVar, defaultNamespace string) (string, error) {
 	// Parse the template variable as a resource reference
 	resourceRef, err := types.ParseResourceRefWithDefaultNamespace(templateVar, defaultNamespace)
 	if err != nil {
@@ -159,17 +183,17 @@ func (c *instanceController) resolveTemplateVariable(ctx context.Context, templa
 	// Resolve the resource reference
 	switch resourceRef.Type {
 	case types.ResourceTypeSecret:
-		return c.resolveSecretValue(ctx, resourceRef)
+		return r.resolveSecretValue(ctx, resourceRef)
 	case types.ResourceTypeConfigmap:
-		return c.resolveConfigmapValue(ctx, resourceRef)
+		return r.resolveConfigmapValue(ctx, resourceRef)
 	default:
 		return "", fmt.Errorf("unsupported resource type %s in template variable: %s", resourceRef.Type, templateVar)
 	}
 }
 
 // resolveSecretValue fetches and extracts a value from a secret
-func (c *instanceController) resolveSecretValue(ctx context.Context, resourceRef types.ResourceRef) (string, error) {
-	sec, err := c.secretRepo.Get(ctx, resourceRef.Namespace, resourceRef.Name)
+func (r *envResolver) resolveSecretValue(ctx context.Context, resourceRef types.ResourceRef) (string, error) {
+	sec, err := r.secretRepo.Get(ctx, resourceRef.Namespace, resourceRef.Name)
 	if err != nil {
 		return "", fmt.Errorf("get secret %s.%s: %w", resourceRef.Namespace, resourceRef.Name, err)
 	}
@@ -184,8 +208,8 @@ func (c *instanceController) resolveSecretValue(ctx context.Context, resourceRef
 }
 
 // resolveConfigmapValue fetches and extracts a value from a configmap
-func (c *instanceController) resolveConfigmapValue(ctx context.Context, resourceRef types.ResourceRef) (string, error) {
-	cfg, err := c.configRepo.Get(ctx, resourceRef.Namespace, resourceRef.Name)
+func (r *envResolver) resolveConfigmapValue(ctx context.Context, resourceRef types.ResourceRef) (string, error) {
+	cfg, err := r.configRepo.Get(ctx, resourceRef.Namespace, resourceRef.Name)
 	if err != nil {
 		return "", fmt.Errorf("get configmap %s.%s: %w", resourceRef.Namespace, resourceRef.Name, err)
 	}

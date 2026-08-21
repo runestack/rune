@@ -8,11 +8,41 @@ import (
 	"strings"
 	"time"
 
+	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 )
 
-// resolveMounts resolves secret and config mounts for an instance by fetching the actual data
+// mountBinder owns secret/config/volume mount resolution (RUNE-311
+// Phase 2). resolver and nodeID are read through the controller AT EACH
+// USE, never captured: runed wires the real MountResolver — and, via
+// SetEndpointPublisher, the node identity the mount path binds volumes
+// with — into a LIVE controller after start (cmd/runed), so a value
+// captured at construction would be the not-ready stub forever.
+type mountBinder struct {
+	store      store.Store
+	secretRepo *repos.SecretRepo
+	configRepo *repos.ConfigmapRepo
+	resolver   func() MountResolver
+	nodeID     func() string
+}
+
+func newMountBinder(st store.Store, secretRepo *repos.SecretRepo, configRepo *repos.ConfigmapRepo, resolver func() MountResolver, nodeID func() string) *mountBinder {
+	return &mountBinder{store: st, secretRepo: secretRepo, configRepo: configRepo, resolver: resolver, nodeID: nodeID}
+}
+
+// Thin delegators: lifecycle code and existing tests call these on the
+// controller; the logic lives on mountBinder.
 func (c *instanceController) resolveMounts(ctx context.Context, service *types.Service, instance *types.Instance) error {
+	return c.mounts.resolveMounts(ctx, service, instance)
+}
+
+func (c *instanceController) resolveVolumeMount(ctx context.Context, service *types.Service, instance *types.Instance, m types.VolumeMount) (types.ResolvedVolumeMount, error) {
+	return c.mounts.resolveVolumeMount(ctx, service, instance, m)
+}
+
+// resolveMounts resolves secret and config mounts for an instance by fetching the actual data
+func (b *mountBinder) resolveMounts(ctx context.Context, service *types.Service, instance *types.Instance) error {
 	// Initialize metadata if not present
 	if instance.Metadata == nil {
 		instance.Metadata = &types.InstanceMetadata{}
@@ -29,7 +59,7 @@ func (c *instanceController) resolveMounts(ctx context.Context, service *types.S
 				secretName = mount.Name
 			}
 			// Get the secret from the store
-			secret, err := c.secretRepo.Get(ctx, service.Namespace, secretName)
+			secret, err := b.secretRepo.Get(ctx, service.Namespace, secretName)
 			if err != nil {
 				return fmt.Errorf("failed to get secret %s for mount %s: %w", secretName, mount.Name, err)
 			}
@@ -57,7 +87,7 @@ func (c *instanceController) resolveMounts(ctx context.Context, service *types.S
 				configName = mount.Name
 			}
 			// Get the config from the store
-			config, err := c.configRepo.Get(ctx, service.Namespace, configName)
+			config, err := b.configRepo.Get(ctx, service.Namespace, configName)
 			if err != nil {
 				return fmt.Errorf("failed to get config %s for mount %s: %w", configName, mount.Name, err)
 			}
@@ -88,7 +118,7 @@ func (c *instanceController) resolveMounts(ctx context.Context, service *types.S
 	if len(service.Volumes) > 0 {
 		instance.Metadata.VolumeMounts = make([]types.ResolvedVolumeMount, 0, len(service.Volumes))
 		for _, m := range service.Volumes {
-			resolved, err := c.resolveVolumeMount(ctx, service, instance, m)
+			resolved, err := b.resolveVolumeMount(ctx, service, instance, m)
 			if err != nil {
 				return fmt.Errorf("failed to resolve volume mount %q: %w", m.Name, err)
 			}
@@ -127,11 +157,11 @@ var (
 // exists so an instance create racing ahead of asynchronous volume
 // provisioning waits briefly rather than failing on a still-Pending
 // volume.
-func (c *instanceController) waitForVolumeReady(ctx context.Context, ns, name string) (types.Volume, error) {
+func (b *mountBinder) waitForVolumeReady(ctx context.Context, ns, name string) (types.Volume, error) {
 	deadline := time.Now().Add(volumeReadyTimeout)
 	for {
 		var vol types.Volume
-		if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &vol); err != nil {
+		if err := b.store.Get(ctx, types.ResourceTypeVolume, ns, name, &vol); err != nil {
 			return types.Volume{}, fmt.Errorf("get volume %s/%s: %w", ns, name, err)
 		}
 		switch vol.Status {
@@ -164,11 +194,11 @@ func volumeMountKey(vol types.Volume) string {
 
 // waitForMountTarget polls the agent MountResolver until the volume is
 // mounted on this node or the timeout fires.
-func (c *instanceController) waitForMountTarget(ctx context.Context, vol types.Volume, ns, name string) (string, error) {
+func (b *mountBinder) waitForMountTarget(ctx context.Context, vol types.Volume, ns, name string) (string, error) {
 	key := volumeMountKey(vol)
 	deadline := time.Now().Add(mountTargetTimeout)
 	for {
-		if target, ok := c.mountResolver.MountTargetFor(key); ok && target != "" {
+		if target, ok := b.resolver().MountTargetFor(key); ok && target != "" {
 			return target, nil
 		}
 		if time.Now().After(deadline) {
@@ -177,12 +207,12 @@ func (c *instanceController) waitForMountTarget(ctx context.Context, vol types.V
 			// misleading for a non-transient cause like a rejected cloud
 			// credential: it implies waiting will fix it, and hides the only
 			// detail an operator can act on.
-			if reporter, ok := c.mountResolver.(MountErrorReporter); ok {
+			if reporter, ok := b.resolver().(MountErrorReporter); ok {
 				if cause, has := reporter.MountErrorFor(key); has && cause != "" {
-					return "", fmt.Errorf("volume %s/%s not yet mounted on node %s: %s", ns, name, c.nodeID, cause)
+					return "", fmt.Errorf("volume %s/%s not yet mounted on node %s: %s", ns, name, b.nodeID(), cause)
 				}
 			}
-			return "", fmt.Errorf("volume %s/%s not yet mounted on node %s (will retry)", ns, name, c.nodeID)
+			return "", fmt.Errorf("volume %s/%s not yet mounted on node %s (will retry)", ns, name, b.nodeID())
 		}
 		select {
 		case <-ctx.Done():
@@ -196,7 +226,7 @@ func (c *instanceController) waitForMountTarget(ctx context.Context, vol types.V
 // ResolvedVolumeMount by looking up (or auto-provisioning, for the
 // ClaimTemplate form) the bound Volume and using its Handle as the
 // host-side bind source.
-func (c *instanceController) resolveVolumeMount(ctx context.Context, service *types.Service, instance *types.Instance, m types.VolumeMount) (types.ResolvedVolumeMount, error) {
+func (b *mountBinder) resolveVolumeMount(ctx context.Context, service *types.Service, instance *types.Instance, m types.VolumeMount) (types.ResolvedVolumeMount, error) {
 	switch {
 	case m.Claim != nil && m.ClaimTemplate != nil:
 		return types.ResolvedVolumeMount{}, fmt.Errorf("volume mount %q sets both claim and claimTemplate; pick one", m.Name)
@@ -214,7 +244,7 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 		// parsed back out of the name — so the name format is free to change.
 		ordinal := instance.Ordinal
 		name = fmt.Sprintf("%s-%s-%d", m.Name, service.Name, ordinal)
-		if err := c.ensureClaimTemplateVolume(ctx, service, m, name, ordinal); err != nil {
+		if err := b.ensureClaimTemplateVolume(ctx, service, m, name, ordinal); err != nil {
 			return types.ResolvedVolumeMount{}, fmt.Errorf("ensure claim-template volume %s/%s: %w", ns, name, err)
 		}
 	} else {
@@ -230,7 +260,7 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 	// instance create the instant it is still Pending — otherwise a
 	// fresh `rune cast` of a stateful service always reports
 	// LaunchFailed before provisioning has had a chance to finish.
-	vol, err := c.waitForVolumeReady(ctx, ns, name)
+	vol, err := b.waitForVolumeReady(ctx, ns, name)
 	if err != nil {
 		return types.ResolvedVolumeMount{}, err
 	}
@@ -242,14 +272,14 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 	// currently owns the binding — refreshed on every instance change
 	// (e.g. `rune restart` cycling 1→0→1) so the row doesn't keep
 	// pointing at a Deleted instance after a restart.
-	if c.nodeID != "" {
+	if nodeID := b.nodeID(); nodeID != "" {
 		newClaim := service.Namespace + "/" + instance.Name
-		if vol.BoundNode != c.nodeID || vol.BoundClaim != newClaim {
-			vol.BoundNode = c.nodeID
+		if vol.BoundNode != nodeID || vol.BoundClaim != newClaim {
+			vol.BoundNode = nodeID
 			vol.BoundClaim = newClaim
 			vol.UpdatedAt = time.Now().UTC()
-			if err := c.store.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &vol); err != nil {
-				return types.ResolvedVolumeMount{}, fmt.Errorf("bind volume %s/%s to node %s: %w", ns, name, c.nodeID, err)
+			if err := b.store.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &vol); err != nil {
+				return types.ResolvedVolumeMount{}, fmt.Errorf("bind volume %s/%s to node %s: %w", ns, name, nodeID, err)
 			}
 		}
 	}
@@ -267,8 +297,8 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 	// for the in-tree local / local-host drivers where Handle == host
 	// path.
 	var source string
-	if c.mountResolver != nil {
-		target, err := c.waitForMountTarget(ctx, vol, ns, name)
+	if b.resolver() != nil {
+		target, err := b.waitForMountTarget(ctx, vol, ns, name)
 		if err != nil {
 			return types.ResolvedVolumeMount{}, err
 		}
@@ -304,10 +334,10 @@ func (c *instanceController) resolveVolumeMount(ctx context.Context, service *ty
 // ClaimTemplate the first time it is observed. It is idempotent: a
 // pre-existing volume with the same namespace+name is left alone (the
 // VolumeController owns subsequent mutations).
-func (c *instanceController) ensureClaimTemplateVolume(ctx context.Context, service *types.Service, m types.VolumeMount, name string, ordinal int) error {
+func (b *mountBinder) ensureClaimTemplateVolume(ctx context.Context, service *types.Service, m types.VolumeMount, name string, ordinal int) error {
 	ns := service.Namespace
 	var existing types.Volume
-	if err := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &existing); err == nil {
+	if err := b.store.Get(ctx, types.ResourceTypeVolume, ns, name, &existing); err == nil {
 		return nil
 	}
 
@@ -328,10 +358,10 @@ func (c *instanceController) ensureClaimTemplateVolume(ctx context.Context, serv
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	if err := c.store.Create(ctx, types.ResourceTypeVolume, ns, name, vol); err != nil {
+	if err := b.store.Create(ctx, types.ResourceTypeVolume, ns, name, vol); err != nil {
 		// A racing reconcile may have created it; tolerate that.
 		var exists types.Volume
-		if getErr := c.store.Get(ctx, types.ResourceTypeVolume, ns, name, &exists); getErr == nil {
+		if getErr := b.store.Get(ctx, types.ResourceTypeVolume, ns, name, &exists); getErr == nil {
 			return nil
 		}
 		return err
