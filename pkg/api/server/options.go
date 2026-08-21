@@ -10,7 +10,7 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/observe"
 	"github.com/runestack/rune/pkg/orchestrator"
-	"github.com/runestack/rune/pkg/orchestrator/controllers"
+	"github.com/runestack/rune/pkg/orchestrator/wiring"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/storage/driverparams"
@@ -91,7 +91,7 @@ type Options struct {
 	// between orchestrator start and agent.volumes registering the
 	// real resolver returns transient "not yet mounted" errors instead
 	// of falling back to Volume.Handle.
-	InitialMountResolver controllers.MountResolver
+	InitialMountResolver wiring.MountResolver
 
 	// EventLog is the persisted resource event log (RUNE-126 Phase 2).
 	// When set, the orchestrator wires it into the instance and volume
@@ -298,7 +298,7 @@ func WithStorageSecretLookup(lookup driverparams.SecretLookup) Option {
 // rather than falling back to Volume.Handle as the bind source,
 // which is a UUID for cloud drivers and a fast-path that's correct
 // only for local-driver tests.
-func WithInitialMountResolver(resolver controllers.MountResolver) Option {
+func WithInitialMountResolver(resolver wiring.MountResolver) Option {
 	return func(opts *Options) {
 		opts.InitialMountResolver = resolver
 	}
