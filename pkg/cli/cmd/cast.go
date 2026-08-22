@@ -203,6 +203,7 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 		printCastBanner([]string{rc.source.Location}, opts.detach)
 		renderPlanBlock(os.Stdout, rc.releaseName, rendered.namespace, 0, plan)
 		fmt.Println()
+		printUpdateWarnings(os.Stdout, rendered.updateWarnings())
 		fmt.Println(format.Dim("dry-run: nothing was applied. Re-run without --dry-run to apply."))
 		return nil
 	}
@@ -219,6 +220,9 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 		printCastBanner([]string{rc.source.Location}, opts.detach)
 		renderPlanBlock(os.Stdout, rc.releaseName, rendered.namespace, 0, plan)
 		fmt.Println()
+		// Under the plan and above the confirm prompt: the last place an
+		// operator is still deciding.
+		printUpdateWarnings(os.Stdout, rendered.updateWarnings())
 	}
 	if !plan.Applyable {
 		return fmt.Errorf("plan has unresolved ownership conflicts; pass --adopt to take ownership")

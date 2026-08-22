@@ -13,7 +13,7 @@ import (
 )
 
 func warnsFor(svc *Service) string {
-	return strings.Join(updateStrategyWarnings(svc), "\n")
+	return strings.Join(svc.UpdateWarnings(), "\n")
 }
 
 // THE important one: recreate-everything used to guarantee that a single

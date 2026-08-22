@@ -4,12 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/cli/format"
 	"github.com/runestack/rune/pkg/release"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/utils"
@@ -93,6 +95,32 @@ func (r *renderedRelease) lint() error {
 		return fmt.Errorf("rendered cast has invalid resource(s):\n  - %s", strings.Join(errs, "\n  - "))
 	}
 	return nil
+}
+
+// updateWarnings returns the advisory update findings for the rendered
+// services, sorted so repeated casts print the same order. These never fail a
+// cast — they exist because `rune lint` is opt-in and nobody runs it before a
+// deploy that looks fine.
+func (r *renderedRelease) updateWarnings() []string {
+	keys := make([]string, 0, len(r.payloads.services))
+	for k := range r.payloads.services {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var warns []string
+	for _, k := range keys {
+		s := r.payloads.services[k]
+		if s == nil {
+			continue
+		}
+		// Sort services, not findings: UpdateWarnings orders its rules by how
+		// much they should change your mind, and that order is worth keeping.
+		for _, w := range s.UpdateWarnings() {
+			warns = append(warns, fmt.Sprintf("%s: %s", s.Name, w))
+		}
+	}
+	return warns
 }
 
 // renderResolvedCast renders a resolvedCast into a renderedRelease. It reuses
@@ -389,3 +417,15 @@ func (r *renderedRelease) toReleaseSpec(name string, src types.ReleaseSource, op
 
 // totalResources counts every desired resource (for display).
 func (r *renderedRelease) totalResources() int { return len(r.resources) }
+
+// printUpdateWarnings renders advisory findings under the plan block. Same
+// glyph and shape as `rune lint` so the two read as one thing.
+func printUpdateWarnings(w io.Writer, warns []string) {
+	if len(warns) == 0 {
+		return
+	}
+	for _, warn := range warns {
+		fmt.Fprintf(w, "  %s %s\n", format.Dim("⚠"), warn)
+	}
+	fmt.Fprintln(w)
+}
