@@ -357,3 +357,50 @@ func TestRBACCastPolicyAllowsReleases(t *testing.T) {
 		t.Fatalf("cast policy must NOT allow DeleteRelease (uninstall), got %v", err)
 	}
 }
+
+// TestRBACReadonlyInstancesWeakerThanReveal pins the privilege ordering that
+// makes instance redaction load-bearing: the built-in `readonly` policy grants
+// instances:get/list but not secrets:reveal. Any plaintext an instance read
+// returns is therefore reachable by a strictly weaker grant than the verb that
+// exists to gate it — which is exactly how resolved env vars leaked out of
+// Instance.environment. The redaction itself is guarded by
+// TestInstanceModelToProto_DropsSecretMaterial in pkg/api/service.
+func TestRBACReadonlyInstancesWeakerThanReveal(t *testing.T) {
+	ctx := context.Background()
+
+	st := store.NewTestStore()
+	_ = st.Open("")
+	_ = SeedBuiltinPolicies(ctx, st)
+
+	for _, p := range []string{"readonly", "readwrite"} {
+		u := &types.User{Name: p, ID: p, Policies: []string{p}}
+		_ = st.Create(ctx, types.ResourceTypeUser, "system", p, u)
+	}
+
+	s, err := New(WithAuth(nil), WithStore(st))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	call := func(subjectID, method string, req interface{}) error {
+		c := context.WithValue(ctx, authCtxKey, &AuthInfo{SubjectID: subjectID})
+		info := &grpc.UnaryServerInfo{FullMethod: method}
+		h := func(context.Context, interface{}) (interface{}, error) { return nil, nil }
+		_, e := s.rbacUnaryInterceptor()(c, req, info, h)
+		return e
+	}
+
+	listReq := &generated.ListInstancesRequest{Namespace: "app"}
+	revealReq := &generated.RevealSecretRequest{Namespace: "app", Name: "app-secrets"}
+
+	// readonly reads instances...
+	if err := call("readonly", "/rune.api.InstanceService/ListInstances", listReq); err != nil {
+		t.Fatalf("readonly must be allowed to list instances: %v", err)
+	}
+	// ...but neither readonly nor readwrite may reveal a secret.
+	for _, subject := range []string{"readonly", "readwrite"} {
+		if err := call(subject, "/rune.api.SecretService/RevealSecret", revealReq); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("%s must NOT be allowed to reveal secrets, got %v", subject, err)
+		}
+	}
+}
