@@ -452,7 +452,7 @@ func validateInitRunIf(ctx string, step InitStep, parentVolumes map[string]strin
 		} else {
 			pathMounted := false
 			for name, mountPath := range parentVolumes {
-				if len(step.Volumes) > 0 && !initStepContainsString(step.Volumes, name) {
+				if len(step.Volumes) > 0 && !containsString(step.Volumes, name) {
 					continue
 				}
 				if isPathWithinMount(step.RunIf.Path, mountPath) {
@@ -481,15 +481,6 @@ func isPathWithinMount(filePath, mountPath string) bool {
 	filePath = path.Clean(filePath)
 	mountPath = path.Clean(mountPath)
 	return filePath == mountPath || strings.HasPrefix(filePath, mountPath+"/")
-}
-
-func initStepContainsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 // isDNS1123Label is a minimal DNS-1123 label check (lowercase a–z, 0–9,

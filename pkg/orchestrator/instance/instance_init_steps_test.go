@@ -288,8 +288,7 @@ func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {
 
 	tmp := t.TempDir()
 	sentinel := "/data/ready"
-	require.NoError(t, os.Mkdir(filepath.Join(tmp, "pg"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, "pg", "ready"), []byte("ok"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "ready"), []byte("ok"), 0o600))
 
 	svc := makeInitStepService(ctx, t, ts, "fm-skip", []types.InitStep{
 		{
@@ -305,6 +304,47 @@ func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {
 	require.NoError(t, ts.CreateService(ctx, svc))
 	inst := &types.Instance{
 		ID: "inst-fm-skip", Name: "inst-fm-skip", ServiceID: svc.ID, Namespace: "default",
+		Metadata: &types.InstanceMetadata{
+			VolumeMounts: []types.ResolvedVolumeMount{
+				{Name: "data", MountPath: "/data", Source: tmp},
+			},
+		},
+	}
+	require.NoError(t, ts.CreateInstance(ctx, inst))
+
+	err := c.runInitSteps(ctx, testRunner, svc, inst)
+	require.NoError(t, err)
+	assert.Empty(t, testRunner.InitCalls)
+	require.Len(t, inst.InitStates, 1)
+	assert.Equal(t, types.InitStepStatusSkipped, inst.InitStates[0].Status)
+}
+
+// A subPath mount binds <source>/<subPath> at MountPath, so the sentinel
+// lives one level deeper on the host than the container path suggests.
+func TestRunInitSteps_FileMissing_SkipsWhenSentinelExistsUnderSubPath(t *testing.T) {
+	shrinkInitBackoffs(t)
+	ctx, ts, testRunner, controllerIface := setupTestController(t)
+	c := controllerIface
+
+	tmp := t.TempDir()
+	sentinel := "/data/ready"
+	require.NoError(t, os.Mkdir(filepath.Join(tmp, "pg"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "pg", "ready"), []byte("ok"), 0o600))
+
+	svc := makeInitStepService(ctx, t, ts, "fm-sub", []types.InitStep{
+		{
+			Name: "format", Image: "x:1", Command: "x",
+			RunIf: types.RunIf{Type: types.RunIfFileMissing, Path: sentinel, Volume: "data"},
+		},
+	})
+	svc.Volumes = []types.VolumeMount{{
+		Name: "data", MountPath: "/data", SubPath: "pg",
+		ClaimTemplate: &types.VolumeClaimTemplate{StorageClassName: "local-host", Size: "1Gi", AccessMode: types.AccessModeRWO},
+	}}
+	require.NoError(t, svc.Validate())
+	require.NoError(t, ts.CreateService(ctx, svc))
+	inst := &types.Instance{
+		ID: "inst-fm-sub", Name: "inst-fm-sub", ServiceID: svc.ID, Namespace: "default",
 		Metadata: &types.InstanceMetadata{
 			VolumeMounts: []types.ResolvedVolumeMount{
 				{Name: "data", MountPath: "/data", Source: tmp, SubPath: "pg"},

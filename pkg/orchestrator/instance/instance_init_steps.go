@@ -296,13 +296,15 @@ func (c *Controller) persistInitStates(ctx context.Context, instance *types.Inst
 //	rune cast` correctly re-formats while crash-recovery and `rune
 //	restart` correctly skip.
 //
-// fileMissing  — translate runIf.path from the container mount path and stat
-// it under the host source for every parent volume.
+// fileMissing  — stat runIf.path, an absolute container path, against
 //
-//	volume permitted by step.Volumes filter (or all parents if filter
-//	is nil). Run iff the file is absent in every matching mount.
-//	A nil/empty step.RunIf.Volume considers all permitted mounts; a
-//	non-empty one restricts to that single name.
+//	every parent volume permitted by step.Volumes (or all parents if
+//	the filter is nil). The path is translated through the mount:
+//	<Source>/<SubPath>/<path relative to MountPath>. Mounts that do
+//	not contain the path are skipped; validation rejects a path that
+//	is outside every mount. Run iff the file is absent in every
+//	matching mount. A nil/empty step.RunIf.Volume considers all
+//	permitted mounts; a non-empty one restricts to that single name.
 //
 // always       — always run.
 func (c *Controller) evaluateRunIf(
