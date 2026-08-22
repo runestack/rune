@@ -213,10 +213,8 @@ func (u *UpdateStrategy) ValidateForService(svc *Service) error {
 // surgeBlocker names the exclusive resource that stops a service running two
 // copies of a replica, so the error points at the actual cause.
 func surgeBlocker(svc *Service) string {
-	for i := range svc.Volumes {
-		if svc.Volumes[i].ClaimTemplate != nil {
-			return "a per-replica claimTemplate volume"
-		}
+	if svc.HasClaimTemplateVolume() {
+		return "a per-replica claimTemplate volume"
 	}
 	if svc.Runtime == RuntimeTypeProcess {
 		return "the process runtime"
@@ -261,6 +259,23 @@ type UpdateParams struct {
 	Drain time.Duration
 }
 
+// HasClaimTemplateVolume reports whether the service declares a per-replica
+// volume claimTemplate. One fact, three consequences: stable
+// {service}-{ordinal} replica names, the slot-matching reconcile path instead
+// of the update planner, and no surge capability. Keep them reading the same
+// predicate so they cannot drift.
+func (s *Service) HasClaimTemplateVolume() bool {
+	if s == nil {
+		return false
+	}
+	for i := range s.Volumes {
+		if s.Volumes[i].ClaimTemplate != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // IsSurgeCapable reports whether a second copy of a replica can run
 // concurrently with the one it replaces. False means the update must retire
 // before it creates, one replica at a time.
@@ -270,10 +285,8 @@ func (s *Service) IsSurgeCapable() bool {
 	}
 	// Per-replica claimTemplate volumes: the replacement would have to mount
 	// the volume the outgoing instance still holds.
-	for i := range s.Volumes {
-		if s.Volumes[i].ClaimTemplate != nil {
-			return false
-		}
+	if s.HasClaimTemplateVolume() {
+		return false
 	}
 	// Process-runner instances are dialed at 127.0.0.1:<port> on the host and
 	// the runner exposes no per-instance IP, so two copies of a process
