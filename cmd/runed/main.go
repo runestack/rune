@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,7 +16,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/runestack/rune/internal/agent"
 	"github.com/runestack/rune/internal/agent/dataplane"
 	dnssub "github.com/runestack/rune/internal/agent/dns"
@@ -25,14 +23,12 @@ import (
 	"github.com/runestack/rune/internal/agent/ingressctl"
 	volsub "github.com/runestack/rune/internal/agent/volumes"
 	"github.com/runestack/rune/internal/config"
-	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
 	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	acmesvc "github.com/runestack/rune/pkg/networking/acme"
 	"github.com/runestack/rune/pkg/networking/ingress"
-	"github.com/runestack/rune/pkg/networking/vip"
 	"github.com/runestack/rune/pkg/observe"
 	observebackend "github.com/runestack/rune/pkg/observe/backend"
 	"github.com/runestack/rune/pkg/runner/docker/bridges"
@@ -42,7 +38,6 @@ import (
 	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/version"
-	watchsvc "github.com/runestack/rune/pkg/watch"
 	"github.com/spf13/viper"
 
 	// Storage drivers — each blank-import registers one or more driver
@@ -413,154 +408,24 @@ func main() {
 	}
 
 	// Initialize runtime configuration
-	initRuntimeConfig()
+	// Startup phases (RUNE-313). Order is the contract; see each phase's doc
+	// comment for what pins it. main() reads as the sequence, nothing more.
+	b := mustInitRuntime()
+	logger := b.logger
+	ctx := b.ctx
+	closers := b.closers
 
-	// Build logger using helper
-	logger := buildLogger(*logLevel, *logFormat, *prettyLogs, *debugLogLevel)
+	cp := mustOpenStore(b)
+	cp = mustStartControlPlane(b, cp)
 
-	logger.Info("Starting Rune Server", log.Str("version", version.Version))
-
-	// Context with cancellation
-	ctx, cancel := setupSignalContext(logger)
-
-	// Teardown order, explicit and reversed at the end of main (RUNE-313).
-	// Pushes sit exactly where the matching `defer` used to.
-	var closers closerStack
-	closers.push("signal-context", cancel)
-
-	// Bind the global viper to the same runefile initRuntimeConfig
-	// resolved. Without a runefile we fail fast — production deployments
-	// must ship one (see docs); the dev-loop just needs `runefile.toml`
-	// in the cwd. Tests use the override hook in initRuntimeConfig.
-	resolvedRunefile := resolveRunefilePath()
-	if resolvedRunefile == "" {
-		logger.Error("No runefile found; pass --config or place runefile.{toml,yaml,yml} in cwd or /etc/rune/")
-		os.Exit(1)
-	}
-	viper.SetConfigFile(resolvedRunefile)
-	if err := viper.ReadInConfig(); err != nil {
-		logger.Error("Failed to read runefile", log.Str("path", resolvedRunefile), log.Err(err))
-		os.Exit(1)
-	}
-
-	// Open state store via helper
-	stateStore, appCfg, _, err := openStateStore(logger, resolvedRunefile, *dataDir)
-	if err != nil {
-		logger.Error("Failed to open state store", log.Err(err))
-		os.Exit(1)
-	}
-	closers.push("state-store", func() { stateStore.Close() })
-
-	// Dev-mode storage overlay: when --dev-mode is on, force the
-	// local/local-host drivers into a laptop-friendly layout —
-	// allowCreateMissing=true and a default ~/.rune/volumes root
-	// that's mkdir'able under the developer's home (the production
-	// /var/lib/rune/volumes default usually requires root). Operator
-	// config wins; we never overwrite explicit values.
-	if *devMode && appCfg != nil {
-		applyDevModeStorageOverlay(&appCfg.Storage, logger)
-	}
-
-	// Bootstrap and resolve registry secrets into viper before runner init
-	if err := bootstrapAndResolveRegistryAuth(appCfg, stateStore, logger); err != nil {
-		logger.Error("Failed to bootstrap/resolve registry auth", log.Err(err))
-		os.Exit(1)
-	}
-
-	// Token-based auth is always enabled in MVP
-	logger.Info("Authentication enabled (token-based)")
-
-	// Open the in-process OrderedLog before the API server so we can
-	// register the WatchService alongside the other gRPC services.
-	bs, ok := stateStore.(*store.BadgerStore)
-	if !ok {
-		logger.Error("State store is not a *BadgerStore", log.Str("type", fmt.Sprintf("%T", stateStore)))
-		os.Exit(1)
-	}
-	olog := orderedlog.NewBadgerBackend(bs.DB(), orderedlog.BackendOptions{
-		Logger: logger.WithComponent("orderedlog"),
-	})
-	if err := olog.Open(); err != nil {
-		logger.Error("Failed to open orderedlog", log.Err(err))
-		os.Exit(1)
-	}
-	// Must close BEFORE the state store: same *badger.DB.
-	closers.push("orderedlog", func() { olog.Close() })
-
-	// Construct the cluster VIP allocator (RUNE-040). Bootstrapping the
-	// CIDR through the OrderedLog is idempotent — re-running with the
-	// same CIDR succeeds; a different CIDR after first bootstrap is
-	// rejected to protect the persisted ClusterNetwork state.
-	vipAllocator, err := vip.New(olog, vip.Options{
-		CIDR:   *clusterCIDR,
-		Logger: logger.WithComponent("vip-allocator"),
-	})
-	if err != nil {
-		logger.Error("Failed to create VIP allocator", log.Err(err))
-		os.Exit(1)
-	}
-	if err := vipAllocator.Bootstrap(ctx); err != nil {
-		logger.Error("Failed to bootstrap cluster network", log.Err(err), log.Str("cidr", *clusterCIDR))
-		os.Exit(1)
-	}
-	closers.push("vip-allocator", func() { vipAllocator.Close() })
-
-	watchServer := watchsvc.NewServer(olog, logger)
-	closers.push("watch-server", func() { watchServer.Close() })
-
-	watchRegistrar := func(reg grpc.ServiceRegistrar) {
-		pb.RegisterWatchServiceServer(reg, watchServer)
-	}
-
-	// Construct the persisted event log (RUNE-126 Phase 2). Sits on the
-	// shared Badger handle under its own `events/...` keyspace — no
-	// OrderedLog/Raft coupling; events are observability, not consensus.
-	eventLog, err := events.NewRecorder(bs.DB(), logger, events.Options{})
-	if err != nil {
-		logger.Error("Failed to construct event log", log.Err(err))
-		os.Exit(1)
-	}
-
-	// Create and start API server (with WatchService registered).
-	// Fold reconciled UI flags onto the typed config so buildServerOptions
-	// can map a single struct into server.WithUI (RUNE-200). Handoff knobs
-	// have no flags and ride the runefile/config defaults.
-	appCfg.UI.Enabled = *uiEnabled
-	appCfg.UI.RequireTLS = *uiRequireTLS
-	if *uiPath != "" {
-		appCfg.UI.Path = *uiPath
-	}
-
-	// Native observability (RuneSight). When [observability] is enabled, build
-	// the configured log store once and share it between the ObserveService
-	// (query + ingest) and the agent forwarder (in-process ingest). Disabled
-	// (the default) leaves observeStore nil; the ObserveService then reports
-	// enabled=false and `rune logs` stays on the live ephemeral stream.
-	var observeStore observe.LogStore
-	if appCfg != nil && appCfg.Observability.Enabled {
-		observeStore, err = buildObserveStore(appCfg, *dataDir, logger)
-		if err != nil {
-			logger.Error("Failed to construct observability store", log.Err(err))
-			os.Exit(1)
-		}
-		logger.Info("Native observability enabled",
-			log.Str("backend", observeStore.Capabilities().Backend))
-	}
-
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)...)
-	if err != nil {
-		logger.Error("Failed to create API server", log.Err(err))
-		os.Exit(1)
-	}
-
-	if err := apiServer.Start(); err != nil {
-		logger.Error("Failed to start API server", log.Err(err))
-		os.Exit(1)
-	}
-
-	// (notReadyMountResolver is pre-seeded via WithInitialMountResolver
-	// in buildServerOptions, before apiServer.Start runs the
-	// orchestrator's first reconcile.)
+	stateStore := cp.store
+	appCfg := cp.cfg
+	olog := cp.olog
+	apiServer := cp.api
+	vipAllocator := cp.vip
+	observeStore := cp.observe
+	_ = stateStore
+	_ = appCfg
 
 	// Start the per-node agent. On single-node, the agent runs in-process
 	// and shares the control plane's Badger DB via the in-process
@@ -856,46 +721,9 @@ func main() {
 		}
 	}
 
-	// Optional: serve Prometheus metrics on a private address so
-	// scrapers can collect dataplane + future subsystem metrics.
-	var metricsServer *http.Server
-	if *metricsAddr != "" {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		metricsServer = &http.Server{
-			Addr:              *metricsAddr,
-			Handler:           mux,
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		go func() {
-			logger.Info("Metrics server listening", log.Str("addr", *metricsAddr))
-			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Warn("Metrics server stopped", log.Err(err))
-			}
-		}()
-	}
-
-	// SIGHUP triggers a re-read of upstream DNS resolvers (RUNE-063).
-	// Useful when /etc/resolv.conf changes (DHCP renewal, NetworkManager
-	// reload, etc.) without restarting runed.
-	if dnsSub != nil {
-		hupCh := make(chan os.Signal, 1)
-		signal.Notify(hupCh, syscall.SIGHUP)
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-hupCh:
-					if err := dnsSub.Refresh(); err != nil {
-						logger.Warn("DNS refresh failed", log.Err(err))
-					} else {
-						logger.Info("DNS upstreams refreshed (SIGHUP)")
-					}
-				}
-			}
-		}()
-	}
+	n := &node{agent: agentInst, stop: agentStop, dns: dnsSub, started: true}
+	metricsServer := startAuxiliarySurfaces(b, n)
+	agentStop = n.stop
 
 	// Wait for cancellation
 	<-ctx.Done()
@@ -929,7 +757,6 @@ func main() {
 	// signal-context, the same LIFO the defers produced.
 	closers.closeAll(logger)
 
-	logger.Info("Rune server stopped")
 }
 
 func buildLogger(levelStr, formatStr string, pretty, debug bool) log.Logger {
