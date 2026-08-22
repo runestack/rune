@@ -259,6 +259,66 @@ type UpdateParams struct {
 	Drain time.Duration
 }
 
+// UpdateWarnings returns the RUNE-042 advisory findings for this service:
+// things that are not wrong but are likely to disappoint. Callers decide how
+// to surface them — CastFile.LintWarnings prefixes each with the service it
+// came from, `rune cast` prints them under the plan.
+func (svc *Service) UpdateWarnings() []string {
+	var warns []string
+	params := svc.ResolveUpdateParams()
+	if params.Type == UpdateRecreate {
+		// An explicit recreate opts out of all of this.
+		return nil
+	}
+
+	// Stateful services never reach the update planner: the reconciler matches
+	// instances to ordinal slots and replaces every incompatible one in the
+	// same pass (Reconciler.ensureStatefulInstances), so the whole service
+	// goes down together. Say so whether or not a strategy was set — the
+	// operator who set nothing is the one most likely to expect rolling.
+	stateful := svc.HasClaimTemplateVolume()
+	if stateful {
+		msg := "update-recreates-stateful: stateful services (claimTemplate volumes) skip the rolling " +
+			"planner — every replica is deleted and recreated together, so expect the service to be down " +
+			"for the length of an update"
+		if svc.UpdateStrategy != nil {
+			msg += "; updateStrategy and its rolling parameters have no effect here"
+		}
+		warns = append(warns, msg)
+	}
+
+	// update-needs-readiness: without a probe, an update advances on
+	// "the runner accepted the container", not "the app is serving".
+	if len(svc.Ports) > 0 && !svc.HasReadinessProbe() {
+		warns = append(warns, "update-needs-readiness: updates advance on \"container started\", not "+
+			"\"app serving\" — add health.readiness so replacements are gated on a real signal "+
+			fmt.Sprintf("(until then Rune waits a flat %ds per replacement, which is slower and weaker)",
+				MinReadySecondsWithoutProbe))
+	}
+
+	// update-runs-two-copies: the one regression-shaped surprise in the
+	// default path. Recreate-everything used to guarantee a single-replica
+	// service never overlapped with its replacement; rolling does not.
+	if svc.RunsTwoCopiesDuringUpdate() {
+		warns = append(warns, "update-runs-two-copies: during updates the old and new copy briefly run "+
+			"at the same time — set `updateStrategy: recreate` if this service must never overlap "+
+			"(queue consumers, cron-style workers, single-writer migrations)")
+	}
+
+	// update-one-at-a-time: no surge possible, so expect a gap at scale 1.
+	// Stateful services are excluded: they do not step one replica at a time,
+	// they go all at once — update-recreates-stateful above says that.
+	if !stateful && !svc.IsSurgeCapable() {
+		msg := fmt.Sprintf("update-one-at-a-time: this service updates one replica at a time (%s), "+
+			"so it cannot run a spare copy during an update", surgeBlocker(svc))
+		if svc.Scale <= 1 {
+			msg += " — at scale 1 that means a brief gap on every update"
+		}
+		warns = append(warns, msg)
+	}
+	return warns
+}
+
 // HasClaimTemplateVolume reports whether the service declares a per-replica
 // volume claimTemplate. One fact, three consequences: stable
 // {service}-{ordinal} replica names, the slot-matching reconcile path instead
