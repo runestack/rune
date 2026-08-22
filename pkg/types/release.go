@@ -38,8 +38,15 @@ type Release struct {
 	Manifest RunesetManifest `json:"manifest" yaml:"manifest"`
 
 	// Values is the fully-merged value set used to render this revision, kept
-	// for diff and rollback.
+	// for diff and rollback. Never leaves the server on a normal read — see
+	// HasValues and the RevealReleaseValues RPC.
 	Values map[string]interface{} `json:"values,omitempty" yaml:"values,omitempty"`
+
+	// HasValues reports whether the stored revision recorded a value set. It is
+	// transport-only: the server derives it from Values when answering a read,
+	// and a client uses it to decide whether it needs to reveal them. Not
+	// persisted — the stored record has Values itself.
+	HasValues bool `json:"-" yaml:"-"`
 
 	// RenderedDigest is a checksum of the rendered castfile set, used as the
 	// baseline for drift detection.

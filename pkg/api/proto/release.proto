@@ -50,14 +50,23 @@ message Release {
   int32 revision = 5;
   ReleaseSource source = 6;
   RunesetManifest manifest = 7;
-  // values_json is the fully-merged value set used to render this revision,
-  // JSON-encoded (kept for diff and rollback).
-  string values_json = 8;
+  // 8 was `values_json`: the fully-merged value set for this revision. Values
+  // routinely carry secret material — `--set postgres.password=...` rendered
+  // into a secret — and List/Get/History authorize as releases:list/get, which
+  // `readonly` holds. That is strictly weaker than the reveal that gates the
+  // same plaintext on SecretService. Fetch values with RevealReleaseValues.
+  reserved 8;
+  reserved "values_json";
   string rendered_digest = 9;
   repeated OwnerRef owns = 10;       // authoritative owned set
   repeated OwnerRef references = 11; // shared kinds depended on but not owned (D2)
   string created_at = 12;
   string updated_at = 13;
+  // has_values reports whether this revision recorded a merged value set,
+  // without disclosing it. Rollback uses it to decide whether it needs to call
+  // RevealReleaseValues at all, so rolling back a values-free release does not
+  // require releases:reveal.
+  bool has_values = 14;
 }
 
 // Resource payloads carried by a Cast, keyed by OwnerRef.Key()
@@ -178,6 +187,23 @@ message DeleteReleaseRequest {
   bool purge = 4;
 }
 
+// RevealReleaseValuesRequest fetches the merged value set for one revision.
+// Separate from GetRelease for the same reason RevealSecret is separate from
+// GetSecret: the payload is secret-bearing and needs its own verb.
+message RevealReleaseValuesRequest {
+  string name = 1;
+  string namespace = 2;
+  // revision selects a historical revision. 0 means the current one.
+  int32 revision = 3;
+}
+
+message RevealReleaseValuesResponse {
+  // values_json is the fully-merged value set, JSON-encoded. Empty when the
+  // revision recorded no values.
+  string values_json = 1;
+  Status status = 2;
+}
+
 message RollbackReleaseRequest {
   string name = 1;
   string namespace = 2;
@@ -204,4 +230,9 @@ service ReleaseService {
   // Unimplemented: it requires re-rendering historical source, which lands
   // with the cast PR.
   rpc Rollback(RollbackReleaseRequest) returns (ReleaseResponse);
+
+  // RevealReleaseValues returns a revision's merged value set. Gated on
+  // releases:reveal, which no builtin policy below admin grants — values can
+  // carry the same plaintext secrets:reveal exists to protect.
+  rpc RevealReleaseValues(RevealReleaseValuesRequest) returns (RevealReleaseValuesResponse);
 }
