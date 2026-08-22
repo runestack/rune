@@ -2,8 +2,8 @@
 // driver Attach/Mount/Unmount/Detach lifecycle for Volumes whose
 // BoundNode equals this node's identity.
 //
-// It is the agent-side counterpart to pkg/orchestrator/controllers/
-// volume_controller.go: the controller decides where a volume is bound
+// It is the agent-side counterpart to pkg/orchestrator/volume:
+// the controller decides where a volume is bound
 // (and is the only writer of Volume.BoundNode); this subsystem watches
 // those bindings and turns them into real node-local mounts under
 // `<MountRoot>/<volume.ID>/` (default `/var/lib/rune/mounts`).

@@ -20,7 +20,7 @@ import (
 // pkg/networking/endpoints and pkg/networking/localinstances.
 //
 // It implements the
-// pkg/orchestrator/controllers.EndpointPublisher interface (kept
+// pkg/orchestrator/wiring.EndpointPublisher interface (kept
 // loose-coupled to avoid an import cycle: this package only refers to
 // pkg/types).
 type EndpointPublisher struct {
@@ -45,7 +45,7 @@ func NewEndpointPublisher(olog orderedlog.OrderedLog, logger log.Logger) (*Endpo
 	}, nil
 }
 
-// PublishService implements controllers.EndpointPublisher.
+// PublishService implements wiring.EndpointPublisher.
 //
 // Endpoint sets are keyed by service ID — that is the contract of the
 // endpoints package, of the dataplane Cache, and of the VIP proxy
@@ -61,7 +61,7 @@ func (p *EndpointPublisher) PublishService(ctx context.Context, service *types.S
 	return p.endpoints.Update(ctx, service.ID, eps)
 }
 
-// PublishLocalInstances implements controllers.EndpointPublisher.
+// PublishLocalInstances implements wiring.EndpointPublisher.
 func (p *EndpointPublisher) PublishLocalInstances(ctx context.Context, nodeID string, table map[string]types.InstanceIdentity) error {
 	if nodeID == "" {
 		return nil

@@ -3,7 +3,7 @@
 // endpoint cache.
 //
 // This is the consumer side of the RUNE-066 wiring whose producer
-// half lives in pkg/orchestrator/controllers/instance_controller.go
+// half lives in pkg/orchestrator/instance (instance_endpoints.go)
 // (PublishService -> OrderedLog -> dataplane.Cache). Without this
 // controller, the ingress Subsystem's Router stays empty and every
 // inbound request to an `expose.host` returns 404.

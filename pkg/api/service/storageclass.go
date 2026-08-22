@@ -25,7 +25,7 @@ import (
 // Default=true (writes go through the repo with EventSourceAPI so the
 // VolumeController's watch-side enforcer treats them as external and
 // skips its own re-demote pass). The orchestrator-side enforcer in
-// pkg/orchestrator/controllers/volume_controller.go remains as
+// pkg/orchestrator/volume remains as
 // belt-and-braces for clusters whose StorageClass rows pre-date this
 // API check.
 type StorageClassService struct {

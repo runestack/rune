@@ -10,7 +10,12 @@ import (
 
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
-	"github.com/runestack/rune/pkg/orchestrator/controllers"
+	"github.com/runestack/rune/pkg/orchestrator/health"
+	instancectl "github.com/runestack/rune/pkg/orchestrator/instance"
+	"github.com/runestack/rune/pkg/orchestrator/scaling"
+	"github.com/runestack/rune/pkg/orchestrator/service"
+	"github.com/runestack/rune/pkg/orchestrator/volume"
+	"github.com/runestack/rune/pkg/orchestrator/wiring"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
@@ -74,13 +79,33 @@ type Orchestrator interface {
 	GetActiveScalingOperation(ctx context.Context, namespace, serviceName string) (*types.ScalingOperation, error)
 
 	// SetEndpointPublisher wires the networking data plane (RUNE-063).
-	// Optional; nil-safe. Call once at startup before Start().
-	SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string)
+	// Optional; nil-safe. LATE-BOUND: runed calls this on a live
+	// orchestrator after agent identity exists — safe while reconciles
+	// run (the instance controller swaps the pair atomically).
+	SetEndpointPublisher(publisher wiring.EndpointPublisher, nodeID string)
 
 	// SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
-	// into the instance controller. Optional; nil-safe. Call once at
-	// startup before Start().
-	SetMountResolver(resolver controllers.MountResolver)
+	// into the instance controller. Optional; nil-safe. LATE-BOUND: a
+	// not-ready stub is wired at construction and runed swaps in the
+	// real subsystem on a live orchestrator after start.
+	SetMountResolver(resolver wiring.MountResolver)
+}
+
+// instanceOps is the slice of the instance controller the orchestrator
+// facade delegates to (RUNE-311 Phase 3). The consumer owns the
+// interface; *instancectl.Controller satisfies it.
+type instanceOps interface {
+	GetInstanceByID(ctx context.Context, namespace, instanceID string) (*types.Instance, error)
+	ListInstances(ctx context.Context, namespace string) ([]*types.Instance, error)
+	ListRunningInstances(ctx context.Context, namespace string) ([]*types.Instance, error)
+	GetInstanceLogs(ctx context.Context, instance *types.Instance, opts types.LogOptions) (io.ReadCloser, error)
+	Exec(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+	ExecDebug(ctx context.Context, instance *types.Instance, options types.ExecOptions) (types.ExecStream, error)
+	Dial(ctx context.Context, instance *types.Instance, port uint32) (net.Conn, error)
+	RestartInstance(ctx context.Context, instance *types.Instance, reason instancectl.RestartReason) error
+	StopInstance(ctx context.Context, instance *types.Instance) error
+	SetEndpointPublisher(publisher wiring.EndpointPublisher, nodeID string)
+	SetMountResolver(resolver wiring.MountResolver)
 }
 
 // orchestrator implements the Orchestrator interface
@@ -90,12 +115,12 @@ type orchestrator struct {
 	logger log.Logger
 
 	// Controllers
-	serviceController  controllers.ServiceController
-	instanceController controllers.InstanceController
-	healthController   controllers.HealthController
-	scalingController  controllers.ScalingController
-	volumeController   controllers.VolumeController
-	snapshotController controllers.SnapshotController
+	serviceController  service.Controller
+	instanceController instanceOps
+	healthController   health.Controller
+	scalingController  scaling.Controller
+	volumeController   volume.Controller
+	snapshotController volume.SnapshotController
 
 	// Runner manager for executing commands
 	runnerManager manager.IRunnerManager
@@ -154,7 +179,7 @@ type OrchestratorOptions struct {
 	// resolver and uses the dev/test Handle-fallback path — correct for
 	// in-process tests, wrong for production where the agent is racing
 	// to come up.
-	InitialMountResolver controllers.MountResolver
+	InitialMountResolver wiring.MountResolver
 
 	// EventLog is the persisted event log (RUNE-126 Phase 2). When set,
 	// the instance and volume controllers emit status-transition events
@@ -191,29 +216,36 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		options.WorkerCount = 10
 	}
 
-	// Create controllers first (needed for finalizer system)
-	instanceController := controllers.NewInstanceController(
+	// Create controllers first (needed for finalizer system). The event
+	// log is a construction-time dependency (RUNE-311 Phase 3); the
+	// endpoint publisher and mount resolver stay late-bound setters.
+	var icOpts []instancectl.Option
+	if options.EventLog != nil {
+		icOpts = append(icOpts, instancectl.WithEventLog(options.EventLog))
+	}
+	instanceController := instancectl.NewController(
 		options.Store,
 		options.RunnerManager,
 		options.Logger,
+		icOpts...,
 	)
 	if options.InitialMountResolver != nil {
 		instanceController.SetMountResolver(options.InitialMountResolver)
 	}
 
-	healthController := controllers.NewHealthController(
+	healthController := health.NewController(
 		options.Logger,
 		options.Store,
 		options.RunnerManager,
 		instanceController,
 	)
 
-	scalingController := controllers.NewScalingController(
+	scalingController := scaling.NewController(
 		options.Store,
 		options.Logger,
 	)
 
-	serviceController, err := controllers.NewServiceController(
+	serviceController, err := service.NewController(
 		options.Store,
 		instanceController,
 		healthController,
@@ -225,7 +257,7 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 
 	// VolumeController owns the Volume CRUD reconciliation loop
 	// (provision/reclaim via the storage driver registry).
-	volumeController, err := controllers.NewVolumeController(controllers.VolumeControllerOptions{
+	volumeController, err := volume.NewController(volume.Options{
 		Store:               options.Store,
 		Logger:              options.Logger,
 		DriverConfigs:       options.StorageDriverConfigs,
@@ -240,7 +272,6 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	// Wire the persisted event log (RUNE-126 Phase 2) into the
 	// controllers that emit status-transition events. Nil-safe.
 	if options.EventLog != nil {
-		instanceController.SetEventLog(options.EventLog)
 		volumeController.SetEventLog(options.EventLog)
 		// The reconciler records the update lifecycle (RUNE-042). Without
 		// this there is no after-the-fact record of what a rolling update
@@ -249,7 +280,7 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	}
 
 	// SnapshotController owns the Snapshot CRUD reconciliation loop.
-	snapshotController, err := controllers.NewSnapshotController(controllers.SnapshotControllerOptions{
+	snapshotController, err := volume.NewSnapshotController(volume.SnapshotOptions{
 		Store:         options.Store,
 		Logger:        options.Logger,
 		DriverConfigs: options.StorageDriverConfigs,
@@ -555,7 +586,7 @@ func (o *orchestrator) RestartInstance(ctx context.Context, namespace, instanceI
 	}
 
 	// Delegate to instance controller for restart
-	return o.instanceController.RestartInstance(ctx, instance, controllers.InstanceRestartReasonManual)
+	return o.instanceController.RestartInstance(ctx, instance, instancectl.RestartReasonManual)
 }
 
 func (o *orchestrator) StopService(ctx context.Context, namespace, serviceName string) error {
@@ -619,12 +650,15 @@ func (o *orchestrator) GetActiveScalingOperation(ctx context.Context, namespace,
 
 // SetEndpointPublisher wires the networking data plane (RUNE-063)
 // to the underlying instance controller.
-func (o *orchestrator) SetEndpointPublisher(publisher controllers.EndpointPublisher, nodeID string) {
+func (o *orchestrator) SetEndpointPublisher(publisher wiring.EndpointPublisher, nodeID string) {
 	o.instanceController.SetEndpointPublisher(publisher, nodeID)
 }
 
 // SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
 // to the underlying instance controller.
-func (o *orchestrator) SetMountResolver(resolver controllers.MountResolver) {
+func (o *orchestrator) SetMountResolver(resolver wiring.MountResolver) {
 	o.instanceController.SetMountResolver(resolver)
 }
+
+// Compile-time proof the real controller satisfies the facade's slice.
+var _ instanceOps = (*instancectl.Controller)(nil)
