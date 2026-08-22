@@ -63,6 +63,13 @@ func startServer(t *testing.T, opts Options) *Server {
 		DataDir:  dataDir,
 		LogPath:  dir + "/runed.log",
 	}
+	// The ingress subsystem defaults to :8080/:8443 in dev mode, which
+	// is shared state the rest of the harness carefully avoids: a second
+	// runed (or any unrelated process on 8080) makes the agent fail to
+	// start and every test in the package fails at New(). Pin ingress to
+	// OS-assigned loopback ports so instances stay isolated.
+	ingressHTTP := freeAddr(t)
+	ingressHTTPS := freeAddr(t)
 
 	runefilePath := dir + "/runefile.toml"
 	runefile := renderRunefile(opts, dataDir, s.GRPCAddr, s.HTTPAddr)
@@ -76,7 +83,10 @@ func startServer(t *testing.T, opts Options) *Server {
 	}
 	s.logFile = logFile
 
-	cmd := exec.Command(runed, "--config", runefilePath, "--dev-mode")
+	cmd := exec.Command(runed, "--config", runefilePath, "--dev-mode",
+		"--ingress-http-addr", ingressHTTP,
+		"--ingress-https-addr", ingressHTTPS,
+	)
 	cmd.Dir = dir
 	// Hermetic environment: the user's shell may carry RUNE_*
 	// overrides (RUNE_SERVER_GRPC_ADDRESS, RUNE_LOG_LEVEL, …) that

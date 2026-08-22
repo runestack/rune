@@ -10,8 +10,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/release"
@@ -42,6 +44,40 @@ type Controller struct {
 	// verifyTimeout bounds how long Verify waits for owned services to become
 	// Running (aggregate, per release — fixes today's per-service N×timeout).
 	verifyTimeout time.Duration
+
+	// admission gates payload-shaped authorization (services.privileged).
+	// The orchestrator enforces the same gate, but a release must be
+	// admitted BEFORE anything is applied — otherwise a denial lands
+	// mid-apply and has to be rolled back, and on the --detach path it
+	// lands in a background goroutine nobody is watching. Nil disables.
+	admission *authz.Gate
+}
+
+// SetAdmission installs the payload-admission gate. Wired by the API
+// server when authentication is on; nil leaves admission off.
+func (c *Controller) SetAdmission(gate *authz.Gate) { c.admission = gate }
+
+// admit checks every service payload in the release against the
+// admission gate, using the caller's context — the only place in the
+// cast path where the authenticated subject is guaranteed present.
+func (c *Controller) admit(ctx context.Context, p Payloads) error {
+	for _, key := range sortedServiceKeys(p.Services) {
+		if err := c.admission.AdmitService(ctx, p.Services[key]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sortedServiceKeys gives admission a deterministic order so a release
+// with several offending services always reports the same one.
+func sortedServiceKeys(m map[string]*types.Service) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // NewController builds a Controller from the orchestrator and store.
@@ -64,6 +100,12 @@ func NewController(orch orchestrator.Orchestrator, st store.Store, logger log.Lo
 
 // Cast runs a full reconcile for the given spec + rendered payloads.
 func (c *Controller) Cast(ctx context.Context, spec release.ReleaseSpec, p Payloads) (*types.Release, *release.Plan, error) {
+	// Admit before planning: nothing in this release reaches the store
+	// unless every payload passes.
+	if err := c.admit(ctx, p); err != nil {
+		return nil, nil, err
+	}
+
 	// Precompute the revision so the OwnedBy stamp matches the record Reconcile
 	// will write (Reconcile derives the same value independently).
 	revision := 1
@@ -100,7 +142,12 @@ func (c *Controller) Cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 		return nil, nil, err
 	}
 	go func() {
-		if _, e := prep.Execute(context.Background(), a); e != nil {
+		// The request context dies with Cast, taking the authenticated
+		// subject with it. admit() already ran synchronously above, over
+		// this exact payload set, so mark the detached apply as an
+		// already-admitted system write rather than letting the
+		// orchestrator gate deny it for having no subject.
+		if _, e := prep.Execute(authz.WithSystem(context.Background()), a); e != nil {
 			c.log.Warn("detached release reconcile failed",
 				log.Str("release", spec.Name),
 				log.Str("namespace", spec.Namespace),
@@ -368,7 +415,12 @@ func (a *applier) capturePreDelete(ctx context.Context, ref types.OwnerRef) {
 // Revert restores ref to its captured pre-image (atomic rollback): absent
 // before the cast → delete-if-exists; present before → restore that state via
 // update-or-create. Tolerates the original change having never landed.
+// Revert restores state the cluster already accepted, so it runs as a
+// system write: a rollback must never be blocked by a verb the
+// rolling-back subject lacks, or a failed cast would strand the cluster
+// half-applied.
 func (a *applier) Revert(ctx context.Context, ref types.OwnerRef) error {
+	ctx = authz.WithSystem(ctx)
 	pi, ok := a.pre[ref.Key()]
 	if !ok {
 		// No pre-image means the change never reached a mutation: capture

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator"
 	"github.com/runestack/rune/pkg/runner/manager"
@@ -137,6 +138,9 @@ func (s *ServiceService) CreateService(ctx context.Context, req *generated.Creat
 
 	// Use orchestrator to create the service
 	if err := s.orchestrator.CreateService(ctx, service); err != nil {
+		if authz.IsDenied(err) {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
 		// If the service already exists, fall back to the ServiceService.UpdateService
 		if store.IsAlreadyExistsError(err) {
 			s.logger.Info("Service already exists, updating instead",
@@ -477,6 +481,9 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 
 	// Use orchestrator to update the service
 	if err := s.orchestrator.UpdateService(ctx, updatedService); err != nil {
+		if authz.IsDenied(err) {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
 		s.logger.Error("Failed to update service", log.Err(err))
 		return nil, status.Errorf(codes.Internal, "failed to update service: %v", err)
 	}

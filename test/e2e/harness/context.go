@@ -134,3 +134,14 @@ func (c *Context) Eventually(timeout time.Duration, what string, fn func() bool)
 	}
 	c.t.Fatalf("harness: timed out after %s waiting for %s", timeout, what)
 }
+
+// CLIAs returns a second CLI bound to the same server but authenticated
+// with the given bearer token. Used by tests that need to exercise a
+// narrower credential (e.g. a `--permissions cast` service account)
+// alongside the bootstrapped admin.
+func (c *Context) CLIAs(t *testing.T, token string) *CLI {
+	t.Helper()
+	cli := newCLI(t, c.CLI.bin, c.Server.GRPCAddr)
+	cli.writeConfig(t, c.Server.GRPCAddr, token)
+	return cli
+}
