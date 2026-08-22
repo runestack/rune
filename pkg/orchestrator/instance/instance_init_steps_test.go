@@ -287,8 +287,8 @@ func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {
 	c := controllerIface
 
 	tmp := t.TempDir()
-	sentinel := "ready"
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, sentinel), []byte("ok"), 0o600))
+	sentinel := "/data/ready"
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "ready"), []byte("ok"), 0o600))
 
 	svc := makeInitStepService(ctx, t, ts, "fm-skip", []types.InitStep{
 		{
@@ -296,6 +296,11 @@ func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {
 			RunIf: types.RunIf{Type: types.RunIfFileMissing, Path: sentinel, Volume: "data"},
 		},
 	})
+	svc.Volumes = []types.VolumeMount{{
+		Name: "data", MountPath: "/data",
+		ClaimTemplate: &types.VolumeClaimTemplate{StorageClassName: "local-host", Size: "1Gi", AccessMode: types.AccessModeRWO},
+	}}
+	require.NoError(t, svc.Validate())
 	require.NoError(t, ts.CreateService(ctx, svc))
 	inst := &types.Instance{
 		ID: "inst-fm-skip", Name: "inst-fm-skip", ServiceID: svc.ID, Namespace: "default",
@@ -320,12 +325,18 @@ func TestRunInitSteps_FileMissing_RunsWhenSentinelAbsent(t *testing.T) {
 	c := controllerIface
 
 	tmp := t.TempDir()
+	sentinel := "/data/ready"
 	svc := makeInitStepService(ctx, t, ts, "fm-run", []types.InitStep{
 		{
 			Name: "format", Image: "x:1", Command: "x",
-			RunIf: types.RunIf{Type: types.RunIfFileMissing, Path: "ready", Volume: "data"},
+			RunIf: types.RunIf{Type: types.RunIfFileMissing, Path: sentinel, Volume: "data"},
 		},
 	})
+	svc.Volumes = []types.VolumeMount{{
+		Name: "data", MountPath: "/data",
+		ClaimTemplate: &types.VolumeClaimTemplate{StorageClassName: "local-host", Size: "1Gi", AccessMode: types.AccessModeRWO},
+	}}
+	require.NoError(t, svc.Validate())
 	require.NoError(t, ts.CreateService(ctx, svc))
 	inst := &types.Instance{
 		ID: "inst-fm-run", Name: "inst-fm-run", ServiceID: svc.ID, Namespace: "default",
