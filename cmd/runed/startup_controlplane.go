@@ -3,9 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
+	observebackend "github.com/runestack/rune/pkg/observe/backend"
+
+	"github.com/runestack/rune/internal/config"
 	pb "github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/server"
+	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/networking/vip"
@@ -138,4 +143,108 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 	cp.observe = observeStore
 	cp.api = apiServer
 	return cp
+}
+
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, eventLog events.EventLog, observeStore observe.LogStore, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
+	opts := []server.Option{
+		server.WithGRPCAddr(grpcAddress),
+		server.WithHTTPAddr(httpAddress),
+		server.WithStore(st),
+		server.WithLogger(logger),
+	}
+	if eventLog != nil {
+		opts = append(opts, server.WithEventLog(eventLog))
+	}
+	if observeStore != nil {
+		opts = append(opts, server.WithObserveStore(observeStore))
+	}
+	// Token-based auth (MVP)
+	opts = append(opts, server.WithAuth(nil))
+	if netSP != nil {
+		opts = append(opts, server.WithNetworkStatusProvider(netSP))
+	}
+	if vipAlloc != nil {
+		opts = append(opts, server.WithVIPAllocator(vipAlloc))
+	}
+	// Thread per-driver storage config from the runefile
+	// through to the orchestrator (e.g. local.localVolumeRoot,
+	// local-host.hostPathAllowlist).
+	if appCfg != nil && len(appCfg.Storage.Drivers) > 0 {
+		opts = append(opts, server.WithStorageDriverConfigs(appCfg.Storage.Drivers))
+	}
+	// Thread typed [storage] knobs (defaultStorageClass,
+	// preserveOnDelete) through to the volume controller. Each is
+	// only set when the operator explicitly supplied it; nil/false
+	// preserve the built-in defaults.
+	if appCfg != nil && appCfg.Storage.DefaultStorageClass != nil {
+		opts = append(opts, server.WithStorageDefaultStorageClass(appCfg.Storage.DefaultStorageClass))
+	}
+	if appCfg != nil && appCfg.Storage.PreserveOnDelete {
+		opts = append(opts, server.WithStoragePreserveOnDelete(true))
+	}
+	// Resolver for `secret:...` refs in StorageClass / Volume parameters.
+	// See RUNE-200 PR 3 — drivers receive plaintext via OpContext.Parameters
+	// regardless of where the ref lives in the parameter chain.
+	opts = append(opts, server.WithStorageSecretLookup(newStoreSecretLookup(st)))
+	// Pre-seed a never-ready MountResolver so the orchestrator's first
+	// reconcile tick (inside apiServer.Start) treats every volume as
+	// "not yet mounted — retry" rather than falling back to using
+	// Volume.Handle as the bind source. The agent's volumes Subsystem
+	// will replace this with its real resolver once it's up.
+	opts = append(opts, server.WithInitialMountResolver(notReadyMountResolver{}))
+	// Embedded dashboard + gRPC-Web transcoder (RUNE-200).
+	if appCfg != nil {
+		opts = append(opts, server.WithUI(server.UIOptions{
+			Enabled:        appCfg.UI.Enabled,
+			Path:           appCfg.UI.Path,
+			HandoffEnabled: appCfg.UI.HandoffEnabled,
+			HandoffTTL:     appCfg.UI.HandoffTTL,
+			RequireTLS:     appCfg.UI.RequireTLS,
+		}))
+		// RUNE-201 session lifetimes (zero fields keep defaults).
+		opts = append(opts, server.WithSession(server.SessionOptions{
+			AccessTTL:   appCfg.Auth.SessionAccessTTL,
+			RefreshTTL:  appCfg.Auth.SessionRefreshTTL,
+			GraceWindow: appCfg.Auth.SessionGraceWindow,
+		}))
+	}
+	for _, r := range extraRegistrars {
+		opts = append(opts, server.WithExtraGRPCRegistrar(r))
+	}
+	return opts
+}
+
+// buildObserveStore constructs the native observability (RuneSight) log store
+// from the runefile [observability] block (plan §5). Only called when
+// observability is enabled. An empty/embedded backend yields the in-process
+// store; clickhouse/loki yield the optional-sink skeletons.
+func buildObserveStore(appCfg *config.Config, dataDir string, logger log.Logger) (observe.LogStore, error) {
+	o := appCfg.Observability
+	// Persist the embedded store to node-local disk under the runed data dir
+	// so logs survive a restart; empty dataDir => in-memory only.
+	var embeddedDir string
+	if dataDir != "" {
+		embeddedDir = filepath.Join(dataDir, "observe")
+	}
+	return observebackend.Open(observebackend.Backend(o.Backend), observebackend.Options{
+		Embedded: observebackend.EmbeddedConfig{
+			RetentionDays: o.RetentionDays,
+			Dir:           embeddedDir,
+		},
+		Loki: observebackend.LokiConfig{
+			BaseURL:  o.Loki.URL,
+			TenantID: o.Loki.TenantID,
+		},
+		ClickHouse: observebackend.ClickHouseConfig{
+			DSN:           o.ClickHouse.DSN,
+			Database:      o.ClickHouse.Database,
+			Table:         o.ClickHouse.Table,
+			RetentionDays: o.RetentionDays,
+			AutoMigrate:   o.ClickHouse.AutoMigrate,
+			StoragePolicy: o.ClickHouse.StoragePolicy,
+			S3Volume:      o.ClickHouse.S3Volume,
+			HotDays:       o.ClickHouse.HotDays,
+		},
+		Logger: logger.WithComponent("observe"),
+	})
 }

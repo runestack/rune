@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/version"
@@ -46,4 +51,44 @@ func mustInitRuntime() *boot {
 	}
 
 	return &boot{ctx: ctx, logger: logger, runefile: resolvedRunefile, closers: &closers}
+}
+
+func buildLogger(levelStr, formatStr string, pretty, debug bool) log.Logger {
+	if pretty {
+		formatStr = "text"
+	}
+	if debug {
+		levelStr = "debug"
+	}
+	var opts []log.LoggerOption
+	lvl, err := log.ParseLevel(levelStr)
+	if err != nil {
+		fmt.Printf("Invalid log level: %s, defaulting to 'info'\n", levelStr)
+		lvl = log.InfoLevel
+	}
+	opts = append(opts, log.WithLevel(lvl))
+	switch strings.ToLower(formatStr) {
+	case "json":
+		opts = append(opts, log.WithFormatter(&log.JSONFormatter{}))
+	case "text", "pretty":
+		opts = append(opts, log.WithFormatter(&log.TextFormatter{}))
+	default:
+		fmt.Printf("Invalid log format: %s, defaulting to 'text'\n", formatStr)
+		opts = append(opts, log.WithFormatter(&log.TextFormatter{}))
+	}
+	return log.NewLogger(opts...)
+}
+func setupSignalContext(logger log.Logger) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		logger.Info("Received signal, shutting down (press Ctrl+C again to force quit)", log.Str("signal", sig.String()))
+		cancel()
+		sig = <-sigCh
+		logger.Warn("Received second signal, forcing exit", log.Str("signal", sig.String()))
+		os.Exit(1)
+	}()
+	return ctx, cancel
 }

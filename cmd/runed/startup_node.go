@@ -7,8 +7,16 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	acmesvc "github.com/runestack/rune/pkg/networking/acme"
+	"github.com/runestack/rune/pkg/runner/docker/bridges"
+	"github.com/runestack/rune/pkg/storage/driver"
+	"github.com/runestack/rune/pkg/storage/driverparams"
+	"github.com/runestack/rune/pkg/store"
 
 	dnssub "github.com/runestack/rune/internal/agent/dns"
 	volsub "github.com/runestack/rune/internal/agent/volumes"
@@ -20,6 +28,7 @@ import (
 	"github.com/runestack/rune/internal/agent/ingressctl"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/networking/ingress"
+	"github.com/runestack/rune/pkg/store/orderedlog"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -324,4 +333,201 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 	// started=true is what wireNodeEndpoints checks before reading node
 	// identity; see its guard.
 	return &node{agent: agentInst, stop: agentStop, dns: dnsSub, started: true}
+}
+
+// newStoreSecretLookup returns a SecretRepo-backed SecretLookup that
+// resolves a (namespace, name, key) triple to the plaintext value of a
+// Rune Secret. Shared by the volume / snapshot controllers and the
+// node-side agent volume subsystem so secret-ref-shaped values in
+// StorageClass / Volume parameters resolve identically wherever they
+// land. See RUNE-200 PR 3 / pkg/storage/driverparams.
+//
+// The closure performs a fresh lookup on every call so secret rotation
+// takes effect on the next reconcile without restarting runed.
+func newStoreSecretLookup(st store.Store) driverparams.SecretLookup {
+	repo := repos.NewSecretRepo(st)
+	return func(ctx context.Context, ns, name, key string) (string, error) {
+		sec, err := repo.Get(ctx, ns, name)
+		if err != nil {
+			return "", err
+		}
+		v, ok := sec.Data[key]
+		if !ok {
+			return "", fmt.Errorf("secret %s/%s has no key %q", ns, name, key)
+		}
+		return v, nil
+	}
+}
+
+// makeAgentDriverLookup returns a volsub.DriverLookup closure that
+// resolves a Volume to its driver by reading the Volume's StorageClass
+// from the store and instantiating the driver from the registry, with
+// per-driver config drawn from the runefile [storage.drivers] section.
+// Driver instances are cached so repeated lookups don't allocate.
+func makeAgentDriverLookup(st store.Store, driverConfigs map[string]map[string]any) volsub.DriverLookup {
+	var (
+		mu      sync.Mutex
+		drivers = make(map[string]driver.Driver)
+	)
+	return func(ctx context.Context, vol *types.Volume) (driver.Driver, error) {
+		if vol.StorageClassName == "" {
+			return nil, fmt.Errorf("volume %s has no storageClassName", vol.String())
+		}
+		var sc types.StorageClass
+		if err := st.Get(ctx, types.ResourceTypeStorageClass, "", vol.StorageClassName, &sc); err != nil {
+			return nil, fmt.Errorf("get storage class %q: %w", vol.StorageClassName, err)
+		}
+		if sc.Driver == "" {
+			return nil, fmt.Errorf("storage class %q has empty driver", sc.Name)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if d, ok := drivers[sc.Driver]; ok {
+			return d, nil
+		}
+		d, err := driver.New(sc.Driver, driverConfigs[sc.Driver])
+		if err != nil {
+			return nil, fmt.Errorf("instantiate driver %q: %w", sc.Driver, err)
+		}
+		drivers[sc.Driver] = d
+		return d, nil
+	}
+}
+
+// startAgent boots the per-node agent against an already-open
+// OrderedLog. The orderedlog is owned by the caller (main) so it can
+// also be shared with the API server's WatchService. Returns the
+// agent and a stop function the caller invokes during shutdown.
+func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, dataDirPath string, dev bool, extraLabels map[string]string, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
+	identity, err := agent.LoadOrCreateIdentity(dataDirPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("agent: load identity: %w", err)
+	}
+	if len(extraLabels) > 0 {
+		if identity.Labels == nil {
+			identity.Labels = make(map[string]string, len(extraLabels))
+		}
+		for k, v := range extraLabels {
+			identity.Labels[k] = v
+		}
+	}
+
+	mode := agent.ModeProduction
+	if dev {
+		mode = agent.ModeDev
+	}
+
+	a, err := agent.New(agent.Config{
+		Identity:   identity,
+		OrderedLog: olog,
+		Mode:       mode,
+		Logger:     logger,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("agent: construct: %w", err)
+	}
+
+	if registerSubsystems != nil {
+		if err := registerSubsystems(a); err != nil {
+			return nil, nil, fmt.Errorf("agent: register subsystems: %w", err)
+		}
+	}
+
+	if err := a.Start(ctx); err != nil {
+		return nil, nil, fmt.Errorf("agent: start: %w", err)
+	}
+
+	logger.Info("Agent started",
+		log.Str("node_id", identity.NodeID),
+		log.Str("hostname", identity.Hostname),
+		log.Str("mode", string(mode)),
+	)
+
+	stop := func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := a.Stop(stopCtx); err != nil {
+			logger.Warn("Agent stop returned error", log.Err(err))
+		}
+	}
+	return a, stop, nil
+}
+
+// dnsBindCandidates returns the DNS listen addresses to probe before
+// starting the embedded resolver.
+func dnsBindCandidates(devMode bool, logger log.Logger) []string {
+	out := []string{dnssub.DefaultBindAddr}
+	if devMode {
+		out = append([]string{dnssub.DevDefaultBindAddr}, out...)
+	}
+	out = append(out, dnsBridgeBindAddrs(logger)...)
+	return out
+}
+
+// dnsBridgeBindAddrs enumerates docker bridge gateways and returns
+// `<ip>:53` for each one. The DNS subsystem binds these alongside
+// the host loopback so containers on any docker bridge can reach
+// the resolver through their own gateway IP (containers cannot
+// reach the host's 127.0.0.123 from inside their network
+// namespace). Best-effort: a docker-daemon error is logged and
+// returns an empty slice — the agent still binds the loopback so
+// host-side tools keep working.
+func dnsBridgeBindAddrs(logger log.Logger) []string {
+	c, err := bridges.NewClient()
+	if err != nil {
+		logger.Warn("DNS bridge enumeration: docker client unavailable; container DNS may fail",
+			log.Err(err))
+		return nil
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	gws, err := bridges.EnumerateGateways(ctx, c)
+	if err != nil {
+		logger.Warn("DNS bridge enumeration failed; container DNS may fail",
+			log.Err(err))
+		return nil
+	}
+	out := make([]string, 0, len(gws))
+	for _, g := range gws {
+		out = append(out, net.JoinHostPort(g.IP.String(), "53"))
+	}
+	if len(out) == 0 {
+		logger.Warn("No docker bridge gateways found; container DNS will rely on loopback only")
+	} else {
+		logger.Info("DNS bridge gateways discovered",
+			log.Str("binds", strings.Join(out, ",")))
+	}
+	return out
+}
+
+// ingressReservedPorts returns the host ports the edge ingress binds
+// (HTTP + HTTPS). The dataplane must not open VIP listeners on them —
+// see dataplane.Config.ReservedHostPorts.
+func ingressReservedPorts(httpAddr, httpsAddr string, dev bool) []int {
+	httpDefault, httpsDefault := 80, 443
+	if dev {
+		httpDefault, httpsDefault = 8080, 8443
+	}
+	return []int{
+		addrPortOr(httpAddr, httpDefault),
+		addrPortOr(httpsAddr, httpsDefault),
+	}
+}
+
+// addrPortOr extracts the port from a "host:port" bind address,
+// falling back to def when addr is empty or unparseable.
+func addrPortOr(addr string, def int) int {
+	if addr == "" {
+		return def
+	}
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return def
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"strings"
 
 	dnssub "github.com/runestack/rune/internal/agent/dns"
@@ -62,4 +63,36 @@ func wireNodeEndpoints(b *boot, cp *controlPlane, n *node) {
 		}
 	}
 
+}
+
+// dnsServerIPs strips the :port suffix from each "host:port" bind
+// address and returns the container-reachable IPs in stable order.
+// docker's --dns flag wants addresses, not host:port pairs (it always
+// queries on 53).
+//
+// Loopback addresses (e.g. the 127.0.0.123 host bind) are dropped:
+// inside a container 127.x.x.x is the container's *own* loopback, not
+// the host's, so injecting one as a nameserver gives every container a
+// dead resolver entry — lookups hit it first and intermittently fail
+// with ENOTFOUND. Only bridge-gateway addresses are reachable from a
+// container network namespace.
+func dnsServerIPs(bindAddrs []string) []string {
+	out := make([]string, 0, len(bindAddrs))
+	seen := make(map[string]struct{}, len(bindAddrs))
+	for _, addr := range bindAddrs {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil || host == "" {
+			continue
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		if _, dup := seen[host]; dup {
+			continue
+		}
+		seen[host] = struct{}{}
+		out = append(out, host)
+	}
+	return out
 }
