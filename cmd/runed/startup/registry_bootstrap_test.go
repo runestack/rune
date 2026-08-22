@@ -17,15 +17,7 @@ import (
 
 func TestProcessRegistryAuth_FromSecretString(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	secRepo := repos.NewSecretRepo(testStore)
 	logger := log.NewLogger(log.WithLevel(log.InfoLevel))
@@ -56,15 +48,7 @@ func TestProcessRegistryAuth_FromSecretString(t *testing.T) {
 
 func TestProcessRegistryAuth_FromSecretMap(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	secRepo := repos.NewSecretRepo(testStore)
 	logger := log.NewLogger(log.WithLevel(log.InfoLevel))
@@ -96,15 +80,7 @@ func TestProcessRegistryAuth_FromSecretMap(t *testing.T) {
 
 func TestProcessRegistryAuth_DirectFields(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	secRepo := repos.NewSecretRepo(testStore)
 	logger := log.NewLogger(log.WithLevel(log.InfoLevel))
@@ -134,15 +110,7 @@ func TestProcessRegistryAuth_DirectFields(t *testing.T) {
 
 func TestBootstrapRegistrySecret_CreateNew(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	secRepo := repos.NewSecretRepo(testStore)
 	logger := log.NewLogger(log.WithLevel(log.InfoLevel))
@@ -165,15 +133,7 @@ func TestBootstrapRegistrySecret_CreateNew(t *testing.T) {
 
 func TestBootstrapRegistrySecret_UpdateExisting(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	// Create an existing secret first using the SecretRepo to ensure proper encryption
 	secRepo := repos.NewSecretRepo(testStore)
@@ -207,15 +167,7 @@ func TestBootstrapRegistrySecret_UpdateExisting(t *testing.T) {
 
 func TestBootstrapRegistrySecret_Immutable(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	// Create an existing secret first using the SecretRepo
 	secRepo := repos.NewSecretRepo(testStore)
@@ -248,15 +200,7 @@ func TestBootstrapRegistrySecret_Immutable(t *testing.T) {
 
 func TestResolveRegistrySecret_DockerConfigJSON(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	// Create a secret with dockerconfigjson using SecretRepo
 	secRepo := repos.NewSecretRepo(testStore)
@@ -283,15 +227,7 @@ func TestResolveRegistrySecret_DockerConfigJSON(t *testing.T) {
 
 func TestResolveRegistrySecret_Token(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	// Create a secret with token using SecretRepo
 	secRepo := repos.NewSecretRepo(testStore)
@@ -318,15 +254,7 @@ func TestResolveRegistrySecret_Token(t *testing.T) {
 
 func TestResolveRegistrySecret_Basic(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	// Create a secret with basic auth using SecretRepo
 	secRepo := repos.NewSecretRepo(testStore)
@@ -355,15 +283,7 @@ func TestResolveRegistrySecret_Basic(t *testing.T) {
 
 func TestResolveRegistrySecret_ECR(t *testing.T) {
 	// Setup
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	// Create a secret with ECR credentials using SecretRepo
 	secRepo := repos.NewSecretRepo(testStore)
@@ -421,20 +341,9 @@ func TestBootstrapAndResolveRegistryAuth_Integration(t *testing.T) {
 		},
 	}
 
-	testStore := store.NewTestStoreWithOptions(store.StoreOptions{
-		KEKBytes: []byte("0123456789abcdef0123456789abcdef"), // 32 bytes for testing
-		SecretLimits: store.Limits{
-			MaxObjectBytes:   1 << 20, // 1MB
-			MaxKeyNameLength: 256,
-		},
-	})
-	require.NoError(t, testStore.Open(""))
-	defer testStore.Close()
+	testStore := newRegistryTestStore(t)
 
 	logger := log.NewLogger(log.WithLevel(log.InfoLevel))
-
-	// Clear viper before test
-	viper.Reset()
 
 	err := bootstrapAndResolveRegistryAuth(cfg, testStore, logger)
 	require.NoError(t, err)
@@ -466,18 +375,8 @@ func TestBootstrapAndResolveRegistryAuth_Integration(t *testing.T) {
 	assert.Equal(t, "secret-token", auth1["tok"])
 }
 
-// helper to reset viper between tests
-func resetViper() {
-	viper.Reset()
-}
-
 func TestBootstrapAndResolveRegistryAuth_FromSecretBasic(t *testing.T) {
-	resetViper()
-	ts := store.NewTestStoreWithOptions(store.StoreOptions{
-		SecretEncryptionEnabled: true,
-		KEKBytes:                make([]byte, 32),
-		SecretLimits:            store.Limits{MaxObjectBytes: 1 << 20, MaxKeyNameLength: 256},
-	})
+	ts := newRegistryTestStore(t)
 
 	// Precreate a secret with username/password in team-a namespace
 	secRepo := repos.NewSecretRepo(ts)
@@ -528,12 +427,7 @@ func TestBootstrapAndResolveRegistryAuth_FromSecretBasic(t *testing.T) {
 }
 
 func TestBootstrapAndResolveRegistryAuth_BootstrapSecretFromEnv(t *testing.T) {
-	resetViper()
-	ts := store.NewTestStoreWithOptions(store.StoreOptions{
-		SecretEncryptionEnabled: true,
-		KEKBytes:                make([]byte, 32),
-		SecretLimits:            store.Limits{MaxObjectBytes: 1 << 20, MaxKeyNameLength: 256},
-	})
+	ts := newRegistryTestStore(t)
 
 	// Set envs used by bootstrap data
 	os.Setenv("GHCR_USER", "envuser")
@@ -589,12 +483,7 @@ func TestBootstrapAndResolveRegistryAuth_BootstrapSecretFromEnv(t *testing.T) {
 }
 
 func TestBootstrapAndResolveRegistryAuth_DockerConfigJSON(t *testing.T) {
-	resetViper()
-	ts := store.NewTestStoreWithOptions(store.StoreOptions{
-		SecretEncryptionEnabled: true,
-		KEKBytes:                make([]byte, 32),
-		SecretLimits:            store.Limits{MaxObjectBytes: 1 << 20, MaxKeyNameLength: 256},
-	})
+	ts := newRegistryTestStore(t)
 	secRepo := repos.NewSecretRepo(ts)
 	raw := `{"auths":{"ghcr.io":{"auth":"` + "dXNlcjp0b2tlbg==" + `"}}}`
 	if err := secRepo.Create(context.Background(), &types.Secret{
@@ -626,4 +515,26 @@ func TestBootstrapAndResolveRegistryAuth_DockerConfigJSON(t *testing.T) {
 	if auth["type"] != "dockerconfigjson" || auth["dockerconfigjson"] == "" {
 		t.Fatalf("unexpected auth: %#v", auth)
 	}
+}
+
+// newRegistryTestStore builds the store every test in this file needs: a
+// TestStore whose options carry a KEK and the secret limits, because
+// repos.NewSecretRepo reads both off the store via GetOpts.
+//
+// It also resets viper, which bootstrapAndResolveRegistryAuth writes into.
+// That global is why these tests cannot run in parallel.
+func newRegistryTestStore(t *testing.T) *store.TestStore {
+	t.Helper()
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	ts := store.NewTestStoreWithOptions(store.StoreOptions{
+		KEKBytes:     []byte("0123456789abcdef0123456789abcdef"), // 32 bytes
+		SecretLimits: store.Limits{MaxObjectBytes: 1 << 20, MaxKeyNameLength: 256},
+	})
+	// NewTestStoreWithOptions already marks the store open, so this only
+	// guards against that changing.
+	require.NoError(t, ts.Open(""))
+	t.Cleanup(func() { _ = ts.Close() })
+	return ts
 }
