@@ -749,7 +749,7 @@ func TestPrepareSecretMounts_Base64Decoding(t *testing.T) {
 	t.Parallel()
 
 	// Construct a runner directly to avoid Docker client creation.
-	r := &DockerRunner{config: DefaultDockerConfig()}
+	r := newMountMaterializer(DefaultDockerConfig())
 
 	decoded := "-----BEGIN KEY-----\nabc\n-----END KEY-----\n"
 	encoded := base64.StdEncoding.EncodeToString([]byte(decoded))

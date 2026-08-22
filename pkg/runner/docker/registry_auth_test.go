@@ -36,17 +36,8 @@ func TestParseImageHost(t *testing.T) {
 	}
 }
 
-func TestMatchWildcardHost(t *testing.T) {
-	if !matchWildcardHost("*.dkr.ecr.us-east-1.amazonaws.com", "123456789012.dkr.ecr.us-east-1.amazonaws.com") {
-		t.Fatal("wildcard should match ECR host")
-	}
-	if matchWildcardHost("*.example.com", "repo.example.org") {
-		t.Fatal("wildcard should not match different TLD")
-	}
-}
-
 func TestResolveRegistryAuth_BasicExactAndWildcard(t *testing.T) {
-	r := &DockerRunner{
+	r := &registryAuthResolver{
 		logger: nil,
 		config: &DockerConfig{
 			// Keep the test hermetic: without this the ambient
@@ -104,7 +95,7 @@ func TestResolveRegistryAuth_AmbientDockerConfigFallback(t *testing.T) {
 	}
 	t.Setenv("DOCKER_CONFIG", dir)
 
-	r := &DockerRunner{config: &DockerConfig{}}
+	r := &registryAuthResolver{config: &DockerConfig{}}
 	got := r.resolveRegistryAuth("registry.example.com/team/app:1")
 	if got == "" {
 		t.Fatal("expected ambient docker-config fallback to resolve auth")
@@ -128,7 +119,7 @@ func TestResolveRegistryAuth_ConfiguredWinsOverAmbient(t *testing.T) {
 	}
 	t.Setenv("DOCKER_CONFIG", dir)
 
-	r := &DockerRunner{config: &DockerConfig{Registries: []RegistryConfig{
+	r := &registryAuthResolver{config: &DockerConfig{Registries: []RegistryConfig{
 		{Registry: "registry.example.com", Auth: RegistryAuth{Type: "basic", Username: "cfg", Password: "cfgpw"}},
 	}}}
 	m, err := decodeAuth(r.resolveRegistryAuth("registry.example.com/team/app:1"))

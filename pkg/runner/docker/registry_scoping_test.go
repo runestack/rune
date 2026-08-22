@@ -10,16 +10,16 @@ import (
 	"github.com/runestack/rune/pkg/log"
 )
 
-// newAuthTestRunner builds a runner with only the registry config populated.
+// newAuthTestRunner builds a bare resolver with only the registry config populated.
 // resolveRegistryAuth needs no Docker daemon, so these stay pure unit tests.
-func newAuthTestRunner(t *testing.T, regs ...RegistryConfig) *DockerRunner {
+func newAuthTestRunner(t *testing.T, regs ...RegistryConfig) *registryAuthResolver {
 	t.Helper()
 	cfg := DefaultDockerConfig()
 	cfg.Registries = regs
 	// Ambient providers read the host's docker config / GCE metadata; disable
 	// them so these assertions are about the configured entries only.
 	cfg.DisableAmbientRegistryAuth = true
-	return &DockerRunner{
+	return &registryAuthResolver{
 		logger: log.NewLogger(),
 		config: cfg,
 	}
