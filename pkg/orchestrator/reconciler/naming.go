@@ -19,12 +19,7 @@ import (
 // gets a unique "{service}-{shorthash}" name per instance lifetime, so a
 // recreated replica never collides with its predecessor in logs (#84).
 func serviceHasStableIdentity(service *types.Service) bool {
-	for i := range service.Volumes {
-		if service.Volumes[i].ClaimTemplate != nil {
-			return true
-		}
-	}
-	return false
+	return service.HasClaimTemplateVolume()
 }
 
 // generateInstanceName builds the stable per-ordinal name for a stateful

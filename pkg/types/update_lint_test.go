@@ -57,12 +57,6 @@ func TestLintWarnings_NeedsReadiness(t *testing.T) {
 // Each exclusive-resource class must be named accurately — an operator
 // reading "a hostPort" when the cause is a volume will look in the wrong place.
 func TestLintWarnings_OneAtATimeNamesTheCause(t *testing.T) {
-	vol := &Service{
-		Name: "db", Runtime: RuntimeTypeContainer, Scale: 2,
-		Volumes: []VolumeMount{{Name: "data", MountPath: "/data", ClaimTemplate: &VolumeClaimTemplate{}}},
-	}
-	assert.Contains(t, warnsFor(vol), "claimTemplate volume")
-
 	hp := &Service{
 		Name: "edge", Runtime: RuntimeTypeContainer, Scale: 2,
 		Ports: []ServicePort{{Name: "http", Port: 80, HostPort: 8080}},
@@ -75,6 +69,41 @@ func TestLintWarnings_OneAtATimeNamesTheCause(t *testing.T) {
 	// At scale 1 the consequence is spelled out.
 	proc.Scale = 1
 	assert.Contains(t, warnsFor(proc), "brief gap")
+}
+
+// A stateful service is replaced all at once, so it must not also be told it
+// steps one replica at a time — the two readings send an operator to different
+// conclusions about how long the service is down.
+func TestLintWarnings_StatefulIsRecreatedNotStepped(t *testing.T) {
+	minServing := 1
+	svc := &Service{
+		ID: "db", Name: "db", Namespace: "default", Image: "postgres:16", Command: "postgres",
+		Runtime: RuntimeTypeContainer, Scale: 3,
+		UpdateStrategy: &UpdateStrategy{Type: UpdateRolling, MinServing: &minServing},
+		Volumes: []VolumeMount{{Name: "data", MountPath: "/data", ClaimTemplate: &VolumeClaimTemplate{
+			StorageClassName: "local-host", Size: "1Gi", AccessMode: AccessModeRWO}}},
+	}
+	require.NoError(t, svc.Validate(), "the warned-about spec must be one cast would accept")
+
+	w := warnsFor(svc)
+	assert.Contains(t, w, "update-recreates-stateful")
+	assert.Contains(t, w, "have no effect", "an explicit strategy must be called out as inert")
+	assert.NotContains(t, w, "update-one-at-a-time", "stateful services do not step one replica at a time")
+
+	// The operator who set nothing is the one most likely to expect rolling,
+	// so the fact is stated for them too — minus the inert-strategy clause.
+	svc.UpdateStrategy = nil
+	w = warnsFor(svc)
+	assert.Contains(t, w, "update-recreates-stateful")
+	assert.NotContains(t, w, "have no effect")
+
+	svc.UpdateStrategy = &UpdateStrategy{Type: UpdateRecreate}
+	assert.Empty(t, warnsFor(svc), "explicit recreate should silence update warnings")
+
+	stateless := *svc
+	stateless.UpdateStrategy = &UpdateStrategy{Type: UpdateRolling}
+	stateless.Volumes = nil
+	assert.NotContains(t, warnsFor(&stateless), "update-recreates-stateful")
 }
 
 // A plain multi-replica container service with a probe is the happy path and
@@ -102,4 +131,11 @@ service:
 	require.NotEmpty(t, warns)
 	assert.Contains(t, strings.Join(warns, "\n"), "update-runs-two-copies")
 	assert.Contains(t, strings.Join(warns, "\n"), "emailer", "the finding must name the service")
+}
+
+func TestCastFile_LintWarnings_StatefulRollingStrategy(t *testing.T) {
+	cf, err := ParseCastFileFromBytes([]byte("service:\n  name: db\n  image: postgres:16\n  updateStrategy: rolling\n  volumes:\n    - name: data\n      mountPath: /data\n      claimTemplate: {storageClassName: local, size: \"1Gi\", accessMode: ReadWriteOnce}\n"), "")
+	require.NoError(t, err)
+	warns := strings.Join(cf.LintWarnings(), "\n")
+	assert.Contains(t, warns, "update-recreates-stateful")
 }

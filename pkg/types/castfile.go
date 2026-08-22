@@ -483,6 +483,22 @@ func updateStrategyWarnings(svc *Service) []string {
 		return nil
 	}
 
+	// Stateful services never reach the update planner: the reconciler matches
+	// instances to ordinal slots and replaces every incompatible one in the
+	// same pass (Reconciler.ensureStatefulInstances), so the whole service
+	// goes down together. Say so whether or not a strategy was set — the
+	// operator who set nothing is the one most likely to expect rolling.
+	stateful := svc.HasClaimTemplateVolume()
+	if stateful {
+		msg := "update-recreates-stateful: stateful services (claimTemplate volumes) skip the rolling " +
+			"planner — every replica is deleted and recreated together, so expect the service to be down " +
+			"for the length of an update"
+		if svc.UpdateStrategy != nil {
+			msg += "; updateStrategy and its rolling parameters have no effect here"
+		}
+		warns = append(warns, msg)
+	}
+
 	// update-needs-readiness: without a probe, an update advances on
 	// "the runner accepted the container", not "the app is serving".
 	if len(svc.Ports) > 0 && !svc.HasReadinessProbe() {
@@ -502,20 +518,11 @@ func updateStrategyWarnings(svc *Service) []string {
 	}
 
 	// update-one-at-a-time: no surge possible, so expect a gap at scale 1.
-	if !svc.IsSurgeCapable() {
-		reason := "a claimTemplate volume"
-		switch {
-		case svc.Runtime == RuntimeTypeProcess:
-			reason = "the process runtime"
-		default:
-			for i := range svc.Ports {
-				if svc.Ports[i].HostPort != 0 {
-					reason = "a hostPort"
-				}
-			}
-		}
+	// Stateful services are excluded: they do not step one replica at a time,
+	// they go all at once — update-recreates-stateful above says that.
+	if !stateful && !svc.IsSurgeCapable() {
 		msg := fmt.Sprintf("update-one-at-a-time: this service updates one replica at a time (%s), "+
-			"so it cannot run a spare copy during an update", reason)
+			"so it cannot run a spare copy during an update", surgeBlocker(svc))
 		if svc.Scale <= 1 {
 			msg += " — at scale 1 that means a brief gap on every update"
 		}
