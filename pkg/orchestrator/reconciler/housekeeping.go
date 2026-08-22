@@ -1,5 +1,6 @@
-// Package reconciler — periodic sweeps: orphan cleanup, garbage collection of
-// deleted and failed instances.
+// periodic sweeps: orphan cleanup, garbage collection of
+// deleted and failed instances, and reaping stuck-Terminating instances.
+
 package reconciler
 
 import (
@@ -10,6 +11,21 @@ import (
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/types"
+)
+
+// The amount of time to keep deleted instances before removing them from store
+const deletedInstanceRetentionTime = 10 * time.Minute
+
+// Defaults for the failed-instance retention GC. Kept here as constants for
+// v1; the orchestrator can plumb config-driven overrides in a follow-up
+// (runed.FailedInstanceRetention is already defined in internal/config).
+const (
+	// failedInstancePerServiceCap is the maximum number of tombstoned
+	// Failed instances retained per service before the oldest is evicted.
+	failedInstancePerServiceCap = 3
+	// failedInstanceTTL is the maximum age of a tombstoned Failed instance
+	// before it is evicted regardless of cap.
+	failedInstanceTTL = 1 * time.Hour
 )
 
 // runHousekeeping performs the one remaining cross-service sweep: reaping
@@ -195,6 +211,45 @@ func (r *Reconciler) gcFailedInstances(ctx context.Context, instances []types.In
 					log.Str("tombstone_instance", t.ID),
 					log.Err(err))
 			}
+		}
+	}
+}
+
+// reapStuckTerminating re-drives instances stranded in Terminating.
+//
+// Teardown flips an instance to Terminating, publishes the withdrawal, drains,
+// then stops and marks it Deleted. If runed is killed — or a cancellable
+// request context is cut, e.g. Ctrl-C on a command that triggered the
+// teardown — inside that window, the record is left Terminating with a live
+// container and nothing ever revisits it: the planner excludes Terminating
+// from every candidate list, so it can be neither retired nor replaced, and
+// the service runs permanently below scale.
+//
+// Re-entering DeleteInstance is idempotent (it tolerates an already-stopped or
+// already-absent container), so the repair is simply to finish the teardown.
+func (r *Reconciler) reapStuckTerminating(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) {
+	// Generous: the drain plus the runner stop timeout plus slack. Anything
+	// older than this is not a teardown in flight, it is an abandoned one.
+	deadline := service.DrainWindow() + 30*time.Second
+	now := time.Now()
+
+	for i := range instanceData.Instances {
+		inst := &instanceData.Instances[i]
+		if inst.Status != types.InstanceStatusTerminating {
+			continue
+		}
+		stuckFor := now.Sub(inst.UpdatedAt)
+		if stuckFor < deadline {
+			continue // a teardown genuinely in progress
+		}
+		r.logger.Warn("Re-driving instance stranded in Terminating",
+			log.Str("service", service.Name),
+			log.Str("instance", inst.Name),
+			log.Duration("stuck_for", stuckFor))
+		r.healthController.RemoveInstance(inst.ID)
+		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
+			r.logger.Error("Failed to re-drive stranded instance",
+				log.Str("instance", inst.ID), log.Err(err))
 		}
 	}
 }

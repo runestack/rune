@@ -1,5 +1,6 @@
-// Package instance — Attach/read operations: status, logs, Exec, ExecDebug, Dial.
+// Attach/read operations: status, logs, Exec, ExecDebug, Dial.
 // Split from instance_controller.go (RUNE-311).
+
 package instance
 
 import (

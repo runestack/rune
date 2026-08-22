@@ -1,7 +1,8 @@
-// Package instance — RUNE-121 init-step orchestration for the
+// RUNE-121 init-step orchestration for the
 // instance controller. Owns iteration order, runIf evaluation,
 // per-step retry policy, and persistence of InitStepState. Runners
 // only execute one step at a time via Runner.RunInit.
+
 package instance
 
 import (

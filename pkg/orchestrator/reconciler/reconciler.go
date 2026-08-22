@@ -16,23 +16,8 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
-// The amount of time to keep deleted instances before removing them from store
-const deletedInstanceRetentionTime = 10 * time.Minute
-
 // The amount of time to wait before running garbage collection
 const garbageCollectionInterval = 1 * time.Minute
-
-// Defaults for the failed-instance retention GC. Kept here as constants for
-// v1; the orchestrator can plumb config-driven overrides in a follow-up
-// (runed.FailedInstanceRetention is already defined in internal/config).
-const (
-	// failedInstancePerServiceCap is the maximum number of tombstoned
-	// Failed instances retained per service before the oldest is evicted.
-	failedInstancePerServiceCap = 3
-	// failedInstanceTTL is the maximum age of a tombstoned Failed instance
-	// before it is evicted regardless of cap.
-	failedInstanceTTL = 1 * time.Hour
-)
 
 // reconcileWorkerCount is how many queue workers reconcile services in
 // parallel. Per-key exclusivity is guaranteed by the queue regardless of this
@@ -40,12 +25,6 @@ const (
 // this only bounds cross-service parallelism.
 const reconcileWorkerCount = 4
 
-// reconciler ensures the actual state of instances matches the desired state
-// defined in the services. All per-service reconciliation is serialized
-// through a coalescing per-key workqueue (RFC #129 Phase 3): watch events and
-// the periodic resync enqueue "namespace/name" keys, and queue workers run
-// syncService — so reconciles of one service can never interleave, making the
-// reconciler the single orchestrator-side writer of Service status.
 // InstanceOps is the slice of the instance controller the
 // reconciler drives — lifecycle plus classification (RUNE-311 Phase 3).
 // The consumer owns the interface; *InstanceController satisfies it.
@@ -63,6 +42,12 @@ type InstanceOps interface {
 	IsInstanceCompatibleWithService(ctx context.Context, instance *types.Instance, service *types.Service) (bool, string)
 }
 
+// Reconciler ensures the actual state of instances matches the desired state
+// defined in the services. All per-service reconciliation is serialized
+// through a coalescing per-key workqueue (RFC #129 Phase 3): watch events and
+// the periodic resync enqueue "namespace/name" keys, and queue workers run
+// syncService — so reconciles of one service can never interleave, making the
+// reconciler the single orchestrator-side writer of Service status.
 type Reconciler struct {
 	store              store.Store
 	instanceController InstanceOps

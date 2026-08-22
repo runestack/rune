@@ -1,5 +1,6 @@
-// Package docker — Secret/configmap mount materialization. Split from runner.go
+// Secret/configmap mount materialization. Split from runner.go
 // (RUNE-312).
+
 package docker
 
 import (

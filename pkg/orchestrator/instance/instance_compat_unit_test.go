@@ -1,6 +1,7 @@
-// Package instance — isolated table tests for the pure halves of
+// isolated table tests for the pure halves of
 // classification (RUNE-311 Phase 2): preClassifyInstance and
 // classifyObserved need no store, no runner, no controller.
+
 package instance
 
 import (

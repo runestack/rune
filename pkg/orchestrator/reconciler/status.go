@@ -1,5 +1,5 @@
-// Package reconciler — service status roll-up, update status computation, and stuck-
-// Terminating reaping.
+// service status roll-up and update status computation.
+
 package reconciler
 
 import (
@@ -231,45 +231,6 @@ func (r *Reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 	}
 
 	return nil
-}
-
-// reapStuckTerminating re-drives instances stranded in Terminating.
-//
-// Teardown flips an instance to Terminating, publishes the withdrawal, drains,
-// then stops and marks it Deleted. If runed is killed — or a cancellable
-// request context is cut, e.g. Ctrl-C on a command that triggered the
-// teardown — inside that window, the record is left Terminating with a live
-// container and nothing ever revisits it: the planner excludes Terminating
-// from every candidate list, so it can be neither retired nor replaced, and
-// the service runs permanently below scale.
-//
-// Re-entering DeleteInstance is idempotent (it tolerates an already-stopped or
-// already-absent container), so the repair is simply to finish the teardown.
-func (r *Reconciler) reapStuckTerminating(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) {
-	// Generous: the drain plus the runner stop timeout plus slack. Anything
-	// older than this is not a teardown in flight, it is an abandoned one.
-	deadline := service.DrainWindow() + 30*time.Second
-	now := time.Now()
-
-	for i := range instanceData.Instances {
-		inst := &instanceData.Instances[i]
-		if inst.Status != types.InstanceStatusTerminating {
-			continue
-		}
-		stuckFor := now.Sub(inst.UpdatedAt)
-		if stuckFor < deadline {
-			continue // a teardown genuinely in progress
-		}
-		r.logger.Warn("Re-driving instance stranded in Terminating",
-			log.Str("service", service.Name),
-			log.Str("instance", inst.Name),
-			log.Duration("stuck_for", stuckFor))
-		r.healthController.RemoveInstance(inst.ID)
-		if err := r.instanceController.DeleteInstance(ctx, inst); err != nil {
-			r.logger.Error("Failed to re-drive stranded instance",
-				log.Str("instance", inst.ID), log.Err(err))
-		}
-	}
 }
 
 // computeUpdateStatus derives the in-flight update block for a service, and

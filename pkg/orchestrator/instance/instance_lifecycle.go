@@ -1,5 +1,6 @@
-// Package instance — Instance lifecycle: create/retry/recreate/update/stop/delete/restart
+// Instance lifecycle: create/retry/recreate/update/stop/delete/restart
 // and runner-state collection. Split from instance_controller.go (RUNE-311).
+
 package instance
 
 import (

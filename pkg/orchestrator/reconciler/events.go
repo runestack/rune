@@ -1,4 +1,5 @@
-// Package reconciler — persisted event emission for service and update transitions.
+// persisted event emission for service and update transitions.
+
 package reconciler
 
 import (

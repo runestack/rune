@@ -1,6 +1,6 @@
-// Package client — Service/Instance <-> protobuf conversion. Split from
-// service_client.go: ~1,050 lines of mechanical mapping that dominated
-// the client's RPC surface.
+// Service/Instance <-> protobuf conversion for the API client. Kept apart
+// from service_client.go so the RPC surface there stays readable.
+
 package client
 
 import (

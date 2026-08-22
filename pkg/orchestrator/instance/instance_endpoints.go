@@ -1,5 +1,6 @@
-// Package instance — Dataplane endpoint publishing and drain: republish, signature dedup,
+// Dataplane endpoint publishing and drain: republish, signature dedup,
 // batch withdraw. Split from instance_controller.go (RUNE-311).
+
 package instance
 
 import (

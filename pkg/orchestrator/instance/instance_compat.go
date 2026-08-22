@@ -1,6 +1,7 @@
-// Package instance — Instance-vs-service compatibility classification (drives the update
+// Instance-vs-service compatibility classification (drives the update
 // plan). Split from instance_controller.go (RUNE-311); restructured in Phase 2 as
 // pre-checks → observe → pure classify (RUNE-311 D5).
+
 package instance
 
 import (

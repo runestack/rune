@@ -1,5 +1,6 @@
-// Package reconciler — bringing instance counts to desired: stateful ordinals,
+// bringing instance counts to desired: stateful ordinals,
 // stateless slots, and update planning.
+
 package reconciler
 
 import (

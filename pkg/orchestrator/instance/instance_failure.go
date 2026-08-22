@@ -1,5 +1,6 @@
-// Package instance — Create-failure bookkeeping: backoff ladder, error classification,
+// Create-failure bookkeeping: backoff ladder, error classification,
 // crash-log snapshots. Split from instance_controller.go (RUNE-311).
+
 package instance
 
 import (

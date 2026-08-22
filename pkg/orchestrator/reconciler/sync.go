@@ -1,5 +1,6 @@
-// Package reconciler — per-service reconcile: the sync entry point, instance
+// per-service reconcile: the sync entry point, instance
 // collection, scale-down, and existing-instance handling.
+
 package reconciler
 
 import (

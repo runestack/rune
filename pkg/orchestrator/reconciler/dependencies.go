@@ -1,4 +1,5 @@
-// Package reconciler — service dependency readiness checks.
+// service dependency readiness checks.
+
 package reconciler
 
 import (

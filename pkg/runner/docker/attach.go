@@ -1,5 +1,6 @@
-// Package docker — Attach surfaces: GetLogs, Exec, RunDebug (inspection sidecar), Dial.
+// Attach surfaces: GetLogs, Exec, RunDebug (inspection sidecar), Dial.
 // Split from runner.go (RUNE-312).
+
 package docker
 
 import (

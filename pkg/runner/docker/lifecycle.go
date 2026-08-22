@@ -1,6 +1,7 @@
-// Package docker — Container lifecycle: Create/Start/Stop/Remove/Status/List, the
+// Container lifecycle: Create/Start/Stop/Remove/Status/List, the
 // label-based container-ID heal, and name-conflict retry. Split from
 // runner.go (RUNE-312).
+
 package docker
 
 import (
