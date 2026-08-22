@@ -306,9 +306,9 @@ func (s *Service) validateInitSteps() error {
 		return nil
 	}
 
-	parentVolumes := make(map[string]struct{}, len(s.Volumes))
+	parentVolumes := make(map[string]string, len(s.Volumes))
 	for _, v := range s.Volumes {
-		parentVolumes[v.Name] = struct{}{}
+		parentVolumes[v.Name] = v.MountPath
 	}
 
 	parentSecrets := make(map[string]struct{}, len(s.SecretMounts))
@@ -393,7 +393,7 @@ func (s *Service) validateInitSteps() error {
 }
 
 // validateInitRunIf validates the RunIf clause for one step.
-func validateInitRunIf(ctx string, step InitStep, parentVolumes map[string]struct{}) error {
+func validateInitRunIf(ctx string, step InitStep, parentVolumes map[string]string) error {
 	t := step.RunIf.Type
 	if t == "" {
 		t = RunIfFreshVolume
@@ -428,7 +428,8 @@ func validateInitRunIf(ctx string, step InitStep, parentVolumes map[string]struc
 			return NewValidationError(ctx + " (" + step.Name + "): runIf.type=fileMissing requires the step to mount at least one parent volume")
 		}
 		if step.RunIf.Volume != "" {
-			if _, ok := parentVolumes[step.RunIf.Volume]; !ok {
+			mountPath, ok := parentVolumes[step.RunIf.Volume]
+			if !ok {
 				return NewValidationError(ctx + " (" + step.Name + "): runIf.volume " + strconv.Quote(step.RunIf.Volume) + " does not match any parent service volume")
 			}
 			// If the step has an explicit filter, the named volume
@@ -445,6 +446,23 @@ func validateInitRunIf(ctx string, step InitStep, parentVolumes map[string]struc
 					return NewValidationError(ctx + " (" + step.Name + "): runIf.volume " + strconv.Quote(step.RunIf.Volume) + " is not in the step's volumes filter")
 				}
 			}
+			if !isPathWithinMount(step.RunIf.Path, mountPath) {
+				return NewValidationError(ctx + " (" + step.Name + "): runIf.path " + strconv.Quote(step.RunIf.Path) + " is outside the mounted parent volume " + strconv.Quote(step.RunIf.Volume))
+			}
+		} else {
+			pathMounted := false
+			for name, mountPath := range parentVolumes {
+				if len(step.Volumes) > 0 && !containsString(step.Volumes, name) {
+					continue
+				}
+				if isPathWithinMount(step.RunIf.Path, mountPath) {
+					pathMounted = true
+					break
+				}
+			}
+			if !pathMounted {
+				return NewValidationError(ctx + " (" + step.Name + "): runIf.path " + strconv.Quote(step.RunIf.Path) + " is outside the mounted parent volumes")
+			}
 		}
 
 	case RunIfAlways:
@@ -457,6 +475,12 @@ func validateInitRunIf(ctx string, step InitStep, parentVolumes map[string]struc
 	}
 
 	return nil
+}
+
+func isPathWithinMount(filePath, mountPath string) bool {
+	filePath = path.Clean(filePath)
+	mountPath = path.Clean(mountPath)
+	return filePath == mountPath || strings.HasPrefix(filePath, mountPath+"/")
 }
 
 // isDNS1123Label is a minimal DNS-1123 label check (lowercase a–z, 0–9,

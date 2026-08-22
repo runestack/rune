@@ -138,6 +138,17 @@ func TestServiceValidate_InitSteps_RejectsBadInputs(t *testing.T) {
 			wantSub: "must be absolute",
 		},
 		{
+			name: "fileMissing outside mounted volume",
+			mutate: func(s *Service) {
+				*s = *withVolume(t)
+				s.InitSteps = []InitStep{{
+					Name: "x", Image: "i", Command: "c",
+					RunIf: RunIf{Type: RunIfFileMissing, Path: "/other/file"},
+				}}
+			},
+			wantSub: "outside the mounted parent volumes",
+		},
+		{
 			name: "freshVolume with no parent volume to anchor",
 			mutate: func(s *Service) {
 				// no volumes at all on the parent

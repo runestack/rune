@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
@@ -295,12 +296,15 @@ func (c *Controller) persistInitStates(ctx context.Context, instance *types.Inst
 //	rune cast` correctly re-formats while crash-recovery and `rune
 //	restart` correctly skip.
 //
-// fileMissing  — stat <volumeSource>/<runIf.path> for every parent
+// fileMissing  — stat runIf.path, an absolute container path, against
 //
-//	volume permitted by step.Volumes filter (or all parents if filter
-//	is nil). Run iff the file is absent in every matching mount.
-//	A nil/empty step.RunIf.Volume considers all permitted mounts; a
-//	non-empty one restricts to that single name.
+//	every parent volume permitted by step.Volumes (or all parents if
+//	the filter is nil). The path is translated through the mount:
+//	<Source>/<SubPath>/<path relative to MountPath>. Mounts that do
+//	not contain the path are skipped; validation rejects a path that
+//	is outside every mount. Run iff the file is absent in every
+//	matching mount. A nil/empty step.RunIf.Volume considers all
+//	permitted mounts; a non-empty one restricts to that single name.
 //
 // always       — always run.
 func (c *Controller) evaluateRunIf(
@@ -351,10 +355,14 @@ func (c *Controller) evaluateRunIf(
 			return true, ""
 		}
 		for _, m := range mounts {
-			if m.Source == "" {
+			if m.Source == "" || m.MountPath == "" {
 				continue
 			}
-			full := filepath.Join(m.Source, step.RunIf.Path)
+			rel, err := filepath.Rel(filepath.Clean(m.MountPath), filepath.Clean(step.RunIf.Path))
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			full := filepath.Join(m.Source, m.SubPath, rel)
 			if _, err := os.Stat(full); err == nil {
 				return false, fmt.Sprintf("fileMissing: %s exists in volume %q", step.RunIf.Path, m.Name)
 			}
