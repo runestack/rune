@@ -296,7 +296,8 @@ func (c *Controller) persistInitStates(ctx context.Context, instance *types.Inst
 //	rune cast` correctly re-formats while crash-recovery and `rune
 //	restart` correctly skip.
 //
-// fileMissing  — translate runIf.path from the container mount path and stat it under the host source for every parent volume.
+// fileMissing  — translate runIf.path from the container mount path and stat
+// it under the host source for every parent volume.
 //
 //	volume permitted by step.Volumes filter (or all parents if filter
 //	is nil). Run iff the file is absent in every matching mount.
@@ -359,7 +360,7 @@ func (c *Controller) evaluateRunIf(
 			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				continue
 			}
-			full := filepath.Join(m.Source, rel)
+			full := filepath.Join(m.Source, m.SubPath, rel)
 			if _, err := os.Stat(full); err == nil {
 				return false, fmt.Sprintf("fileMissing: %s exists in volume %q", step.RunIf.Path, m.Name)
 			}

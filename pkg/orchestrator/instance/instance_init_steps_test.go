@@ -288,7 +288,8 @@ func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {
 
 	tmp := t.TempDir()
 	sentinel := "/data/ready"
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, "ready"), []byte("ok"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(tmp, "pg"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "pg", "ready"), []byte("ok"), 0o600))
 
 	svc := makeInitStepService(ctx, t, ts, "fm-skip", []types.InitStep{
 		{
@@ -306,7 +307,7 @@ func TestRunInitSteps_FileMissing_SkipsWhenSentinelExists(t *testing.T) {
 		ID: "inst-fm-skip", Name: "inst-fm-skip", ServiceID: svc.ID, Namespace: "default",
 		Metadata: &types.InstanceMetadata{
 			VolumeMounts: []types.ResolvedVolumeMount{
-				{Name: "data", MountPath: "/data", Source: tmp},
+				{Name: "data", MountPath: "/data", Source: tmp, SubPath: "pg"},
 			},
 		},
 	}
