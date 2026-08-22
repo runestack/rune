@@ -1,4 +1,4 @@
-package main
+package startup
 
 import (
 	"context"
@@ -75,12 +75,12 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 	var dnsSub *dnssub.Subsystem
 	var dpRef *dataplane.Subsystem
 	extraLabels := map[string]string{}
-	if *nodeRole != "" {
-		extraLabels[types.LabelNodeRole] = *nodeRole
+	if b.flags.NodeRole != "" {
+		extraLabels[types.LabelNodeRole] = b.flags.NodeRole
 	}
-	agentInst, agentStop, err := startAgent(ctx, logger, olog, *dataDir, *devMode, extraLabels, func(a *agent.Agent) error {
+	agentInst, agentStop, err := startAgent(ctx, logger, olog, b.flags.DataDir, b.flags.DevMode, extraLabels, func(a *agent.Agent) error {
 		dpMode := dataplane.ModeProduction
-		if *devMode {
+		if b.flags.DevMode {
 			dpMode = dataplane.ModeDev
 		}
 		// On an edge node the ingress owns :80/:443; the dataplane must
@@ -88,7 +88,7 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 		// wildcard bind and fails the whole ingress subsystem.
 		var reservedPorts []int
 		if types.IsEdgeNode(a.Identity().Labels) {
-			reservedPorts = ingressReservedPorts(*ingressHTTP, *ingressHTTPS, *devMode)
+			reservedPorts = ingressReservedPorts(b.flags.IngressHTTP, b.flags.IngressHTTPS, b.flags.DevMode)
 		}
 		dp, derr := dataplane.New(dataplane.Config{
 			OrderedLog: olog,
@@ -155,7 +155,7 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 		// through a disk spool for at-least-once delivery.
 		if observeStore != nil {
 			obsSvc := apiServer.GetObserveService()
-			spoolPath := filepath.Join(*dataDir, "observe-spool.jsonl")
+			spoolPath := filepath.Join(b.flags.DataDir, "observe-spool.jsonl")
 			spool, serr := forwarder.NewDiskSpool(spoolPath, 0, logger.WithComponent("agent.forwarder.spool"))
 			if serr != nil {
 				return fmt.Errorf("forwarder spool: %w", serr)
@@ -195,10 +195,10 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 		// bridge gateways that are not host-bindable). In dev mode we
 		// also try a non-privileged loopback port and skip DNS entirely
 		// if nothing binds — laptop dev still works via dataplane.
-		bindAddrs := dnsBindCandidates(*devMode, logger)
+		bindAddrs := dnsBindCandidates(b.flags.DevMode, logger)
 		bindAddrs, bindSkipped := dnssub.FilterBindable(bindAddrs, logger)
 		if len(bindAddrs) == 0 {
-			if *devMode {
+			if b.flags.DevMode {
 				logger.Warn("DNS subsystem skipped: no bindable addresses on this host (common on macOS/Docker Desktop); use dataplane on 127.0.0.1 for host access")
 			} else {
 				return fmt.Errorf("dns: no bindable addresses: %s", dnssub.DiagnoseEmptyBind(bindSkipped))
@@ -240,17 +240,17 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 			// them at handshake time.
 			clientCAs := ingress.NewClientCARegistry()
 
-			httpAddr := *ingressHTTP
-			httpsAddr := *ingressHTTPS
+			httpAddr := b.flags.IngressHTTP
+			httpsAddr := b.flags.IngressHTTPS
 			if httpAddr == "" {
-				if *devMode {
+				if b.flags.DevMode {
 					httpAddr = ":8080"
 				} else {
 					httpAddr = ":80"
 				}
 			}
 			if httpsAddr == "" {
-				if *devMode {
+				if b.flags.DevMode {
 					httpsAddr = ":8443"
 				} else {
 					httpsAddr = ":443"
@@ -259,8 +259,8 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 
 			// ACME orchestrator. Single-node = always leader.
 			issuer := &acmesvc.HTTP01Issuer{
-				Directory:  *acmeDirectory,
-				Email:      *acmeEmail,
+				Directory:  b.flags.ACMEDirectory,
+				Email:      b.flags.ACMEEmail,
 				Challenges: challenges,
 			}
 			orch := acmesvc.New(acmesvc.Config{
@@ -285,7 +285,7 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 				Certs:             acmeCertStoreWithReload{store: certStore, loader: loader},
 				ClientCAs:         clientCAs,
 				Logger:            logger.WithComponent("ingressctl"),
-				ReservedHostPorts: ingressReservedPorts(httpAddr, httpsAddr, *devMode),
+				ReservedHostPorts: ingressReservedPorts(httpAddr, httpsAddr, b.flags.DevMode),
 			})
 
 			isub, ierr := ingress.New(ingress.Config{

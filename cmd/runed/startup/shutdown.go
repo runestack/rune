@@ -1,4 +1,4 @@
-package main
+package startup
 
 import (
 	"github.com/runestack/rune/pkg/log"

@@ -1,4 +1,4 @@
-package main
+package startup
 
 import (
 	"fmt"
@@ -23,7 +23,7 @@ func mustOpenStore(b *boot) *controlPlane {
 	closers := b.closers
 
 	// Open state store via helper
-	stateStore, appCfg, _, err := openStateStore(logger, resolvedRunefile, *dataDir)
+	stateStore, appCfg, _, err := openStateStore(logger, resolvedRunefile, b.flags.DataDir)
 	if err != nil {
 		logger.Error("Failed to open state store", log.Err(err))
 		os.Exit(1)
@@ -36,7 +36,7 @@ func mustOpenStore(b *boot) *controlPlane {
 	// that's mkdir'able under the developer's home (the production
 	// /var/lib/rune/volumes default usually requires root). Operator
 	// config wins; we never overwrite explicit values.
-	if *devMode && appCfg != nil {
+	if b.flags.DevMode && appCfg != nil {
 		applyDevModeStorageOverlay(&appCfg.Storage, logger)
 	}
 
@@ -86,7 +86,7 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 //
 // Operator-provided values always win — every key is only filled in
 // when the operator left it unset. Callers should only invoke this
-// when *devMode is true.
+// when b.flags.DevMode is true.
 func applyDevModeStorageOverlay(s *config.Storage, logger log.Logger) {
 	if s == nil {
 		return

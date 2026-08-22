@@ -1,4 +1,4 @@
-package main
+package startup
 
 import (
 	"fmt"
@@ -64,7 +64,7 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 	// same CIDR succeeds; a different CIDR after first bootstrap is
 	// rejected to protect the persisted ClusterNetwork state.
 	vipAllocator, err := vip.New(olog, vip.Options{
-		CIDR:   *clusterCIDR,
+		CIDR:   b.flags.ClusterCIDR,
 		Logger: logger.WithComponent("vip-allocator"),
 	})
 	if err != nil {
@@ -72,7 +72,7 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 		os.Exit(1)
 	}
 	if err := vipAllocator.Bootstrap(ctx); err != nil {
-		logger.Error("Failed to bootstrap cluster network", log.Err(err), log.Str("cidr", *clusterCIDR))
+		logger.Error("Failed to bootstrap cluster network", log.Err(err), log.Str("cidr", b.flags.ClusterCIDR))
 		os.Exit(1)
 	}
 	closers.push("vip-allocator", func() { vipAllocator.Close() })
@@ -97,10 +97,10 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 	// Fold reconciled UI flags onto the typed config so buildServerOptions
 	// can map a single struct into server.WithUI (RUNE-200). Handoff knobs
 	// have no flags and ride the runefile/config defaults.
-	appCfg.UI.Enabled = *uiEnabled
-	appCfg.UI.RequireTLS = *uiRequireTLS
-	if *uiPath != "" {
-		appCfg.UI.Path = *uiPath
+	appCfg.UI.Enabled = b.flags.UIEnabled
+	appCfg.UI.RequireTLS = b.flags.UIRequireTLS
+	if b.flags.UIPath != "" {
+		appCfg.UI.Path = b.flags.UIPath
 	}
 
 	// Native observability (RuneSight). When [observability] is enabled, build
@@ -110,7 +110,7 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 	// enabled=false and `rune logs` stays on the live ephemeral stream.
 	var observeStore observe.LogStore
 	if appCfg != nil && appCfg.Observability.Enabled {
-		observeStore, err = buildObserveStore(appCfg, *dataDir, logger)
+		observeStore, err = buildObserveStore(appCfg, b.flags.DataDir, logger)
 		if err != nil {
 			logger.Error("Failed to construct observability store", log.Err(err))
 			os.Exit(1)
@@ -119,7 +119,7 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 			log.Str("backend", observeStore.Capabilities().Backend))
 	}
 
-	apiServer, err := server.New(buildServerOptions(*grpcAddr, *httpAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)...)
+	apiServer, err := server.New(buildServerOptions(b.flags.GRPCAddr, b.flags.HTTPAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)

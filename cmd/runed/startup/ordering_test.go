@@ -1,4 +1,4 @@
-package main
+package startup
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 // refactor that moves node wiring earlier — reading node identity before the
 // agent has started, or hoisting the mount resolver out of subsystem
 // registration. Neither is expressible in the type system (every phase is in
-// package main, so a nil *node compiles), and neither is caught by the e2e
+// the phase package, so a nil *node compiles), and neither is caught by the e2e
 // harness, which never runs an edge node and whose DNS coverage is
 // host-dependent. So it is asserted here.
 
@@ -41,11 +41,11 @@ func TestWireNodeEndpoints_RequiresStartedNode(t *testing.T) {
 // An earlier draft of RUNE-313 proposed exactly that move; it would have
 // widened the window in which every volume reports "not yet mounted".
 func TestMountResolverWiredBeforeAgentStart(t *testing.T) {
-	nodeSrc := readSource(t, "startup_node.go")
-	wiringSrc := readSource(t, "startup_wiring.go")
+	nodeSrc := readSource(t, "node.go")
+	wiringSrc := readSource(t, "wiring.go")
 
 	if !contains(nodeSrc, "SetMountResolver") {
-		t.Error("SetMountResolver must live in startup_node.go, inside subsystem " +
+		t.Error("SetMountResolver must live in node.go, inside subsystem " +
 			"registration, which runs BEFORE agent.Start (RUNE-313 D2)")
 	}
 	if contains(wiringSrc, "SetMountResolver") {

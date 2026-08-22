@@ -1,4 +1,4 @@
-package main
+package startup
 
 import (
 	"context"
@@ -21,14 +21,19 @@ import (
 // The three startup groups (RUNE-313). They exist for arity and grouping —
 // main() carries ~18 cross-phase values — and because they mirror the
 // teardown groups, which is what gives shutdown its shape. They are NOT a
-// compile-time ordering guarantee: every phase lives in package main, so a
-// nil *node compiles fine. Ordering is protected by node.started (checked in
+// compile-time ordering guarantee: every phase lives in this package, so a
+// nil *node compiles fine. Moving out of package main did not change that —
+// unexported fields only constrain callers outside the package, and every
+// phase is inside it. Ordering is protected by node.started (checked in
 // wireNodeEndpoints), by the single ordered registration list in
 // startup_node.go, and by the ordering test in cmd/runed.
 
 // boot is what every later phase needs: cancellable context, logger, the
 // resolved runefile path, and the teardown stack.
 type boot struct {
+	// flags is the effective configuration (see Flags): the resolved values,
+	// not the raw command line.
+	flags    *Flags
 	ctx      context.Context
 	logger   log.Logger
 	runefile string

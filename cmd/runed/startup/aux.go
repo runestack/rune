@@ -1,4 +1,4 @@
-package main
+package startup
 
 import (
 	"net/http"
@@ -20,20 +20,21 @@ func startAuxiliarySurfaces(b *boot, n *node) *http.Server {
 	ctx := b.ctx
 	logger := b.logger
 	dnsSub := n.dns
+	metricsAddr := b.flags.MetricsAddr
 
 	// Optional: serve Prometheus metrics on a private address so
 	// scrapers can collect dataplane + future subsystem metrics.
 	var metricsServer *http.Server
-	if *metricsAddr != "" {
+	if metricsAddr != "" {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
 		metricsServer = &http.Server{
-			Addr:              *metricsAddr,
+			Addr:              metricsAddr,
 			Handler:           mux,
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 		go func() {
-			logger.Info("Metrics server listening", log.Str("addr", *metricsAddr))
+			logger.Info("Metrics server listening", log.Str("addr", metricsAddr))
 			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Warn("Metrics server stopped", log.Err(err))
 			}
