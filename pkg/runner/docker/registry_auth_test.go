@@ -36,15 +36,6 @@ func TestParseImageHost(t *testing.T) {
 	}
 }
 
-func TestMatchWildcardHost(t *testing.T) {
-	if !matchWildcardHost("*.dkr.ecr.us-east-1.amazonaws.com", "123456789012.dkr.ecr.us-east-1.amazonaws.com") {
-		t.Fatal("wildcard should match ECR host")
-	}
-	if matchWildcardHost("*.example.com", "repo.example.org") {
-		t.Fatal("wildcard should not match different TLD")
-	}
-}
-
 func TestResolveRegistryAuth_BasicExactAndWildcard(t *testing.T) {
 	r := &DockerRunner{
 		logger: nil,

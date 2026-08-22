@@ -8,19 +8,12 @@ import (
 	"io"
 	"sort"
 	"strings"
-	"time"
 
 	imageTypes "github.com/docker/docker/api/types/image"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner/docker/registryauth"
 	runetypes "github.com/runestack/rune/pkg/types"
 )
-
-type ecrAuthEntry struct {
-	Username string
-	Password string
-	Expires  time.Time
-}
 
 // pullImage pulls an image from the registry, honoring the supplied
 // imagePull mode ("always", "missing", "never"). Empty defaults to
@@ -270,15 +263,4 @@ func parseImageHost(imageRef string) string {
 	}
 	// registry not explicit -> Docker Hub
 	return "index.docker.io"
-}
-
-func matchWildcardHost(pattern, host string) bool {
-	// very simple wildcard: "*.domain.tld" -> suffix match without leading dot constraint
-	if !strings.Contains(pattern, "*") {
-		return strings.EqualFold(pattern, host)
-	}
-	// split on first '*'
-	idx := strings.Index(pattern, "*")
-	suffix := pattern[idx+1:]
-	return strings.HasSuffix(host, suffix)
 }

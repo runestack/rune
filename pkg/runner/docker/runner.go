@@ -126,10 +126,9 @@ func (r *DockerRunner) HealthCheck(ctx context.Context) error {
 
 // DockerRunner implements the runner.Runner interface for Docker.
 type DockerRunner struct {
-	client       *client.Client
-	logger       log.Logger
-	config       *DockerConfig
-	ecrAuthCache map[string]ecrAuthEntry
+	client *client.Client
+	logger log.Logger
+	config *DockerConfig
 
 	// providers is the registry-auth chain, built once on first use
 	// because AmbientProviders probes the GCE metadata service and the
@@ -206,10 +205,9 @@ func NewDockerRunnerWithConfig(logger log.Logger, config *DockerConfig) (*Docker
 	}
 
 	return &DockerRunner{
-		client:       client,
-		logger:       logger,
-		config:       config,
-		ecrAuthCache: make(map[string]ecrAuthEntry),
+		client: client,
+		logger: logger,
+		config: config,
 		// providers is built on first pull via registryProviders().
 		stats: newStatsCache(),
 	}, nil
