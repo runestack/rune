@@ -1,4 +1,5 @@
-// Package client — StorageClassClient gRPC wrapper.
+// StorageClassClient gRPC wrapper.
+
 package client
 
 import (

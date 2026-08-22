@@ -1,4 +1,5 @@
-// Package docker — RUNE-121 init-step execution.
+// RUNE-121 init-step execution.
+
 package docker
 
 import (

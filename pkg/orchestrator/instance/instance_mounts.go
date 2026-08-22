@@ -1,5 +1,6 @@
-// Package instance — Volume mount resolution: readiness waits, mount-target lookup, claim
+// Volume mount resolution: readiness waits, mount-target lookup, claim
 // templates. Split from instance_controller.go (RUNE-311).
+
 package instance
 
 import (

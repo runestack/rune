@@ -1,5 +1,6 @@
-// Package docker — Container IP discovery for endpoint publishing. Split from runner.go
+// Container IP discovery for endpoint publishing. Split from runner.go
 // (RUNE-312).
+
 package docker
 
 import (

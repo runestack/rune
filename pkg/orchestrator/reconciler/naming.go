@@ -1,6 +1,7 @@
-// Package reconciler — instance naming for replica slots. Moved from the
+// instance naming for replica slots. Moved from the
 // controllers utils in the RUNE-311 Phase 4 package split: naming new
 // instances is the reconciler's job.
+
 package reconciler
 
 import (

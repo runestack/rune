@@ -1,5 +1,6 @@
-// Package docker — Registry auth + image pulls: provider chain, wildcard
+// Registry auth + image pulls: provider chain, wildcard
 // scoping, pull-error annotation. Split from runner.go (RUNE-312).
+
 package docker
 
 import (

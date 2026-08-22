@@ -1,5 +1,6 @@
-// Package instance — Environment preparation and {{...}} template interpolation against
+// Environment preparation and {{...}} template interpolation against
 // secrets/configmaps. Split from instance_controller.go (RUNE-311).
+
 package instance
 
 import (

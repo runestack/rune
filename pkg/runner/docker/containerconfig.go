@@ -1,4 +1,5 @@
-// Package docker — Spec -> container config translation. Split from runner.go (RUNE-312).
+// Spec -> container config translation. Split from runner.go (RUNE-312).
+
 package docker
 
 import (

@@ -1,6 +1,7 @@
-// Package instance — PeekingReader, an io.ReadCloser wrapper that can
+// PeekingReader, an io.ReadCloser wrapper that can
 // answer "is this stream non-empty?" without consuming it. Used by the
 // attach path here and by the service controller's merged log reader.
+
 package instance
 
 import "io"
