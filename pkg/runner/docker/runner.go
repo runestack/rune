@@ -14,7 +14,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
-	"github.com/runestack/rune/pkg/runner/docker/registryauth"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -130,18 +129,13 @@ type DockerRunner struct {
 	logger log.Logger
 	config *DockerConfig
 
-	// providers is the registry-auth chain, built once on first use
-	// because AmbientProviders probes the GCE metadata service and the
-	// docker CLI config, which we don't want to pay for at construction.
-	//
-	// providersOnce is load-bearing, not decorative: pulls run on the
-	// reconciler's worker pool (reconcileWorkerCount goroutines, one per
-	// service key), so several goroutines can reach first-use at the same
-	// time. A plain `if providers == nil` check raced, and because the
-	// build is never repeated, a half-built slice would have been the
-	// value every later pull used.
-	providersOnce sync.Once
-	providers     []registryauth.Provider
+	// auth and mounts are the RUNE-312 Phase 2 collaborators: auth owns
+	// registry-auth policy + its state, mounts materializes secret/config
+	// mounts. auth is wired only here in the constructor (its sync.Once
+	// provider chain must be shared); mounts is stateless and mounter()
+	// derives one lazily for bare-struct tests.
+	auth   *registryAuthResolver
+	mounts *mountMaterializer
 
 	// dnsMu guards dnsServers + dnsSearch which are toggled at
 	// runtime by the agent once the data path (RUNE-041) is healthy
@@ -154,11 +148,6 @@ type DockerRunner struct {
 	// (runner.StatsProvider) can compute deltas across calls without a
 	// blocking two-sample read every time. See stats.go.
 	stats *statsCache
-
-	// lastAuthPattern records which configured registry pattern supplied the
-	// credential for the most recent pull of an image, so a rejected pull can
-	// name the entry (and therefore the secret) to fix.
-	lastAuthPattern sync.Map
 }
 
 func (r *DockerRunner) Type() types.RunnerType {
@@ -208,8 +197,11 @@ func NewDockerRunnerWithConfig(logger log.Logger, config *DockerConfig) (*Docker
 		client: client,
 		logger: logger,
 		config: config,
-		// providers is built on first pull via registryProviders().
-		stats: newStatsCache(),
+		// The resolver's provider chain is still built on first pull,
+		// inside registryAuthResolver.registryProviders.
+		auth:   newRegistryAuthResolver(config, logger),
+		mounts: newMountMaterializer(config),
+		stats:  newStatsCache(),
 	}, nil
 }
 
@@ -293,14 +285,4 @@ func verifyClientCompatibility(dockerClient *client.Client, clientVersion, fallb
 	}
 
 	return dockerClient, nil
-}
-
-// logOrDefault returns the runner's logger, falling back to the global one.
-// Some construction paths (notably tests) leave logger nil, and the auth
-// resolution path must stay usable there rather than panicking.
-func (r *DockerRunner) logOrDefault() log.Logger {
-	if r.logger != nil {
-		return r.logger
-	}
-	return log.GetDefaultLogger().WithComponent("docker-runner")
 }

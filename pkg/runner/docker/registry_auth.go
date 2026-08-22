@@ -8,12 +8,59 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 
 	imageTypes "github.com/docker/docker/api/types/image"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner/docker/registryauth"
 	runetypes "github.com/runestack/rune/pkg/types"
 )
+
+// registryAuthResolver owns the runner-side registry-auth POLICY —
+// provider precedence, the anonymity short-circuit, and naming the
+// pattern that supplied a rejected credential — over the mechanism
+// layer in registryauth/ (RUNE-312 Phase 2). It owns the auth state:
+// the once-built provider chain and lastAuthPattern. The zero value is
+// usable (tests construct it bare, with a nil logger); production
+// construction happens exactly once in NewDockerRunnerWithConfig —
+// per-call construction would rebuild the provider chain (GCE metadata
+// + docker-config probes) and defeat registryauth.ECRProvider's
+// internal token cache.
+type registryAuthResolver struct {
+	config *DockerConfig
+	logger log.Logger
+
+	// providers is the registry-auth chain, built once on first use
+	// because AmbientProviders probes the GCE metadata service and the
+	// docker CLI config, which we don't want to pay for at construction.
+	//
+	// providersOnce is load-bearing, not decorative: pulls run on the
+	// reconciler's worker pool (reconcileWorkerCount goroutines, one per
+	// service key), so several goroutines can reach first-use at the same
+	// time. A plain `if providers == nil` check raced, and because the
+	// build is never repeated, a half-built slice would have been the
+	// value every later pull used.
+	providersOnce sync.Once
+	providers     []registryauth.Provider
+
+	// lastAuthPattern records which configured registry pattern supplied the
+	// credential for the most recent pull of an image, so a rejected pull can
+	// name the entry (and therefore the secret) to fix.
+	lastAuthPattern sync.Map
+}
+
+func newRegistryAuthResolver(config *DockerConfig, logger log.Logger) *registryAuthResolver {
+	return &registryAuthResolver{config: config, logger: logger}
+}
+
+// logOrDefault returns the resolver's logger, falling back to the global
+// one so the zero value stays usable.
+func (r *registryAuthResolver) logOrDefault() log.Logger {
+	if r.logger != nil {
+		return r.logger
+	}
+	return log.GetDefaultLogger().WithComponent("docker-runner")
+}
 
 // pullImage pulls an image from the registry, honoring the supplied
 // imagePull mode ("always", "missing", "never"). Empty defaults to
@@ -51,7 +98,7 @@ func (r *DockerRunner) pullImage(ctx context.Context, image string, policy strin
 		r.logger.Debug("Pulling anonymously (imagePullAnonymous)",
 			log.Str("image", image), log.Str("host", host))
 	} else {
-		registryAuth = r.resolveRegistryAuth(image)
+		registryAuth = r.auth.resolveRegistryAuth(image)
 	}
 	if registryAuth == "" {
 		r.logger.Debug("No registry auth resolved for image",
@@ -66,7 +113,7 @@ func (r *DockerRunner) pullImage(ctx context.Context, image string, policy strin
 	// Pull the image
 	reader, err := r.client.ImagePull(ctx, image, imageTypes.PullOptions{RegistryAuth: registryAuth})
 	if err != nil {
-		return r.annotatePullError(image, registryAuth != "", err)
+		return r.auth.annotatePullError(image, registryAuth != "", err)
 	}
 	defer reader.Close()
 
@@ -74,7 +121,7 @@ func (r *DockerRunner) pullImage(ctx context.Context, image string, policy strin
 	// auth rejections) surface here rather than from ImagePull itself, because
 	// the daemon streams them back as part of the pull output.
 	if _, err = io.Copy(io.Discard, reader); err != nil {
-		return r.annotatePullError(image, registryAuth != "", err)
+		return r.auth.annotatePullError(image, registryAuth != "", err)
 	}
 	return nil
 }
@@ -86,7 +133,7 @@ func (r *DockerRunner) pullImage(ctx context.Context, image string, policy strin
 // the error read as though the image itself were private. Naming the pattern
 // that supplied the credential points straight at the entry (and therefore the
 // secret) to fix, and at the alternative of scoping it more narrowly.
-func (r *DockerRunner) annotatePullError(image string, usedAuth bool, err error) error {
+func (r *registryAuthResolver) annotatePullError(image string, usedAuth bool, err error) error {
 	if err == nil || !isRegistryAuthError(err) {
 		return err
 	}
@@ -130,7 +177,7 @@ func isRegistryAuthError(err error) bool {
 // also the only correct place for the "no providers" case to be
 // distinguished from "not built yet" — the previous nil-check idiom
 // conflated them and needed a sentinel to compensate.
-func (r *DockerRunner) registryProviders() []registryauth.Provider {
+func (r *registryAuthResolver) registryProviders() []registryauth.Provider {
 	r.providersOnce.Do(func() {
 		var regs []map[string]any
 		for _, rc := range r.config.Registries {
@@ -162,7 +209,7 @@ func (r *DockerRunner) registryProviders() []registryauth.Provider {
 }
 
 // resolveRegistryAuth selects an auth entry based on image host and encodes it for Docker ImagePull
-func (r *DockerRunner) resolveRegistryAuth(imageRef string) string {
+func (r *registryAuthResolver) resolveRegistryAuth(imageRef string) string {
 	host := parseImageHost(imageRef)
 	if host == "" {
 		return ""
@@ -238,7 +285,7 @@ func (r *DockerRunner) resolveRegistryAuth(imageRef string) string {
 // credential for the last pull attempt of imageRef, if any. Used to name the
 // offending entry when a registry rejects the credential — a bare "denied"
 // gives an operator no indication a *configured credential* was even involved.
-func (r *DockerRunner) authPatternFor(imageRef string) string {
+func (r *registryAuthResolver) authPatternFor(imageRef string) string {
 	if v, ok := r.lastAuthPattern.Load(imageRef); ok {
 		if s, _ := v.(string); s != "" {
 			return s

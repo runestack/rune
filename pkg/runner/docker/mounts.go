@@ -13,8 +13,52 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
-// prepareSecretMounts creates temporary files and Docker mounts for secret mounts
+// mountMaterializer turns resolved secret/config mounts into host-side
+// files and docker mount.Mount entries (RUNE-312 Phase 2). Stateless:
+// constructed from the four DockerConfig FileMode fields alone, so the
+// runner's mounter() can derive one lazily and bare-struct tests keep
+// working. Zero-valued modes fall back to the historical defaults at
+// the use sites.
+type mountMaterializer struct {
+	secretDirMode  os.FileMode
+	secretFileMode os.FileMode
+	configDirMode  os.FileMode
+	configFileMode os.FileMode
+}
+
+func newMountMaterializer(cfg *DockerConfig) *mountMaterializer {
+	if cfg == nil {
+		return &mountMaterializer{}
+	}
+	return &mountMaterializer{
+		secretDirMode:  cfg.SecretDirMode,
+		secretFileMode: cfg.SecretFileMode,
+		configDirMode:  cfg.ConfigDirMode,
+		configFileMode: cfg.ConfigFileMode,
+	}
+}
+
+// mounter returns the wired materializer, deriving one from config for
+// bare-struct callers (it is stateless, so this is equivalent).
+func (r *DockerRunner) mounter() *mountMaterializer {
+	if r.mounts != nil {
+		return r.mounts
+	}
+	return newMountMaterializer(r.config)
+}
+
+// Thin delegators: init.go and config translation call these on the
+// runner; the logic lives on mountMaterializer.
 func (r *DockerRunner) prepareSecretMounts(secretMounts []types.ResolvedSecretMount) ([]mount.Mount, error) {
+	return r.mounter().prepareSecretMounts(secretMounts)
+}
+
+func (r *DockerRunner) prepareConfigmapsMounts(configMounts []types.ResolvedConfigmapMount) ([]mount.Mount, error) {
+	return r.mounter().prepareConfigmapsMounts(configMounts)
+}
+
+// prepareSecretMounts creates temporary files and Docker mounts for secret mounts
+func (m *mountMaterializer) prepareSecretMounts(secretMounts []types.ResolvedSecretMount) ([]mount.Mount, error) {
 	var mounts []mount.Mount
 
 	for _, secretMount := range secretMounts {
@@ -25,7 +69,7 @@ func (r *DockerRunner) prepareSecretMounts(secretMounts []types.ResolvedSecretMo
 		}
 		// Adjust directory permissions to allow Docker Desktop to stat/bind mount
 		// Keep files themselves locked down (0600) while directory is world-executable for traversal
-		dirMode := r.config.SecretDirMode
+		dirMode := m.secretDirMode
 		if dirMode == 0 {
 			dirMode = 0o755
 		}
@@ -54,7 +98,7 @@ func (r *DockerRunner) prepareSecretMounts(secretMounts []types.ResolvedSecretMo
 
 			// Ensure subdirectories exist if path contains directories
 			// Use 0755 so the container user (often not the host owner due to Docker Desktop FUSE) can traverse
-			parentMode := r.config.SecretDirMode
+			parentMode := m.secretDirMode
 			if parentMode == 0 {
 				parentMode = 0o755
 			}
@@ -63,7 +107,7 @@ func (r *DockerRunner) prepareSecretMounts(secretMounts []types.ResolvedSecretMo
 				return nil, fmt.Errorf("failed to create directory for secret file %s: %w", filePath, err)
 			}
 			// Create the file with the secret value (decode base64 if applicable)
-			fileMode := r.config.SecretFileMode
+			fileMode := m.secretFileMode
 			if fileMode == 0 {
 				fileMode = 0o444
 			}
@@ -114,7 +158,7 @@ func decodeIfBase64(s string) ([]byte, bool) {
 }
 
 // prepareConfigmapsMounts creates temporary files and Docker mounts for config mounts
-func (r *DockerRunner) prepareConfigmapsMounts(configMounts []types.ResolvedConfigmapMount) ([]mount.Mount, error) {
+func (m *mountMaterializer) prepareConfigmapsMounts(configMounts []types.ResolvedConfigmapMount) ([]mount.Mount, error) {
 	var mounts []mount.Mount
 
 	for _, configMount := range configMounts {
@@ -124,7 +168,7 @@ func (r *DockerRunner) prepareConfigmapsMounts(configMounts []types.ResolvedConf
 			return nil, fmt.Errorf("failed to create temp directory for config mount %s: %w", configMount.Name, err)
 		}
 		// Adjust directory permissions to allow Docker Desktop to stat/bind mount
-		dirMode := r.config.ConfigDirMode
+		dirMode := m.configDirMode
 		if dirMode == 0 {
 			dirMode = 0o755
 		}
@@ -153,7 +197,7 @@ func (r *DockerRunner) prepareConfigmapsMounts(configMounts []types.ResolvedConf
 
 			// Ensure subdirectories exist if path contains directories
 			// Use 0755 so the container user can traverse
-			parentMode := r.config.ConfigDirMode
+			parentMode := m.configDirMode
 			if parentMode == 0 {
 				parentMode = 0o755
 			}
@@ -162,7 +206,7 @@ func (r *DockerRunner) prepareConfigmapsMounts(configMounts []types.ResolvedConf
 				return nil, fmt.Errorf("failed to create directory for config file %s: %w", filePath, err)
 			}
 			// Create the file with the config value
-			fileMode := r.config.ConfigFileMode
+			fileMode := m.configFileMode
 			if fileMode == 0 {
 				fileMode = 0o644
 			}

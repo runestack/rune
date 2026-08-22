@@ -67,7 +67,7 @@ func TestRegistryProvidersConcurrentFirstUse(t *testing.T) {
 // reused. Rebuilding per pull would re-probe the GCE metadata service and
 // the docker CLI config on every image pull.
 func TestRegistryProvidersBuiltOnce(t *testing.T) {
-	r := &DockerRunner{
+	r := &registryAuthResolver{
 		logger: log.NewLogger(),
 		config: func() *DockerConfig {
 			c := DefaultDockerConfig()
