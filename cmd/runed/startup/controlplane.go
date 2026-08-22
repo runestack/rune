@@ -134,12 +134,8 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 	// in buildServerOptions, before apiServer.Start runs the
 	// orchestrator's first reconcile.)
 
-	cp.db = bs.DB()
 	cp.olog = olog
 	cp.vip = vipAllocator
-	cp.watch = watchServer
-	cp.watchRegistrar = watchRegistrar
-	cp.events = eventLog
 	cp.observe = observeStore
 	cp.api = apiServer
 	return cp

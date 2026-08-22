@@ -12,8 +12,7 @@ import (
 // Adapters that let a phase hand a collaborator something before its real
 // implementation exists, or bridge two interfaces that do not quite line up.
 // They live here rather than in a phase file because they belong to no single
-// phase — and because the ordering guard matches phase files by source text, so
-// a shim's doc comment must not sit in one.
+// phase.
 
 type acmeCertStoreWithReload struct {
 	store  acmesvc.CertStore

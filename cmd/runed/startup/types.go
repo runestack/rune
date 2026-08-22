@@ -3,19 +3,15 @@ package startup
 import (
 	"context"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/runestack/rune/internal/agent"
 	dnssub "github.com/runestack/rune/internal/agent/dns"
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/api/server"
-	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/networking/vip"
 	"github.com/runestack/rune/pkg/observe"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/orderedlog"
-	watchsvc "github.com/runestack/rune/pkg/watch"
-	"google.golang.org/grpc"
 )
 
 // The three startup groups (RUNE-313). They exist for arity and grouping —
@@ -40,21 +36,21 @@ type boot struct {
 	closers  *closerStack
 }
 
-// controlPlane is everything that must exist before the node starts. cfg is a
+// controlPlane is everything that must exist before the node starts. It holds
+// only what a LATER phase reads: values that live and die inside the
+// control-plane phase (the Badger handle, the watch server and its registrar,
+// the event log) stay local there, so a field here means a real cross-phase
+// dependency. cfg is a
 // POINTER on purpose: the API-server phase folds the reconciled UI flags onto
 // the config the store phase built (main.go's appCfg.UI.* writes), so a
 // by-value copy would silently drop them.
 type controlPlane struct {
-	store          store.Store
-	db             *badger.DB
-	cfg            *config.Config
-	olog           orderedlog.OrderedLog
-	vip            *vip.Allocator
-	watch          *watchsvc.Server
-	watchRegistrar func(grpc.ServiceRegistrar)
-	events         events.EventLog
-	observe        observe.LogStore
-	api            *server.APIServer
+	store   store.Store
+	cfg     *config.Config
+	olog    orderedlog.OrderedLog
+	vip     *vip.Allocator
+	observe observe.LogStore
+	api     *server.APIServer
 }
 
 // node is the per-host agent and the subsystem handles later phases wire back

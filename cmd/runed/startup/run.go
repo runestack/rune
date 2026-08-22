@@ -57,9 +57,14 @@ func Run(f *Flags) {
 		os.Exit(1)
 	}
 
+	logger.Info("Rune server stopped")
+
+	// Teardown last, and AFTER the log line: the original logged "Rune server
+	// stopped" and only then unwound its defers, so a closer that blocks (a
+	// watch server holding a client stream, say) must not swallow the line
+	// operators grep for to confirm a clean exit.
+	//
 	// Pops watch-server -> vip-allocator -> orderedlog -> state-store ->
 	// signal-context, the same LIFO the defers produced.
 	closers.closeAll(logger)
-
-	logger.Info("Rune server stopped")
 }

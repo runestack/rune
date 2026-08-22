@@ -34,13 +34,17 @@ func (c *closerStack) push(name string, closeFn func()) {
 	c.entries = append(c.entries, closerEntry{name: name, close: closeFn})
 }
 
-// closeAll pops every closer in reverse registration order (LIFO), matching
-// what deferred calls did. Each closer runs even if an earlier one panics is
-// NOT attempted — a panicking Close is a bug we want loud, same as before.
+// closeAll runs every closer in reverse registration order (LIFO).
+//
+// Each is registered as a deferred call rather than invoked in a loop, which
+// reproduces the ORIGINAL semantics exactly: with five `defer`s, a panic in one
+// closer still ran the remaining ones during unwinding. A plain loop would
+// abort on the first panicking closer and strand Badger open.
 func (c *closerStack) closeAll(logger log.Logger) {
-	for i := len(c.entries) - 1; i >= 0; i-- {
-		e := c.entries[i]
-		logger.Debug("Closing", log.Str("resource", e.name))
-		e.close()
+	for _, e := range c.entries {
+		defer func(e closerEntry) {
+			logger.Debug("Closing", log.Str("resource", e.name))
+			e.close()
+		}(e)
 	}
 }
