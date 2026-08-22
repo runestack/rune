@@ -422,7 +422,11 @@ func main() {
 
 	// Context with cancellation
 	ctx, cancel := setupSignalContext(logger)
-	defer cancel()
+
+	// Teardown order, explicit and reversed at the end of main (RUNE-313).
+	// Pushes sit exactly where the matching `defer` used to.
+	var closers closerStack
+	closers.push("signal-context", cancel)
 
 	// Bind the global viper to the same runefile initRuntimeConfig
 	// resolved. Without a runefile we fail fast — production deployments
@@ -445,7 +449,7 @@ func main() {
 		logger.Error("Failed to open state store", log.Err(err))
 		os.Exit(1)
 	}
-	defer stateStore.Close()
+	closers.push("state-store", func() { stateStore.Close() })
 
 	// Dev-mode storage overlay: when --dev-mode is on, force the
 	// local/local-host drivers into a laptop-friendly layout —
@@ -480,7 +484,8 @@ func main() {
 		logger.Error("Failed to open orderedlog", log.Err(err))
 		os.Exit(1)
 	}
-	defer olog.Close()
+	// Must close BEFORE the state store: same *badger.DB.
+	closers.push("orderedlog", func() { olog.Close() })
 
 	// Construct the cluster VIP allocator (RUNE-040). Bootstrapping the
 	// CIDR through the OrderedLog is idempotent — re-running with the
@@ -498,10 +503,10 @@ func main() {
 		logger.Error("Failed to bootstrap cluster network", log.Err(err), log.Str("cidr", *clusterCIDR))
 		os.Exit(1)
 	}
-	defer vipAllocator.Close()
+	closers.push("vip-allocator", func() { vipAllocator.Close() })
 
 	watchServer := watchsvc.NewServer(olog, logger)
-	defer watchServer.Close()
+	closers.push("watch-server", func() { watchServer.Close() })
 
 	watchRegistrar := func(reg grpc.ServiceRegistrar) {
 		pb.RegisterWatchServiceServer(reg, watchServer)
@@ -919,6 +924,10 @@ func main() {
 		logger.Error("API server stop timed out after 20s; exiting anyway")
 		os.Exit(1)
 	}
+
+	// Pops watch-server -> vip-allocator -> orderedlog -> state-store ->
+	// signal-context, the same LIFO the defers produced.
+	closers.closeAll(logger)
 
 	logger.Info("Rune server stopped")
 }
