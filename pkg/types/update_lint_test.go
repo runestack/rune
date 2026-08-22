@@ -77,6 +77,27 @@ func TestLintWarnings_OneAtATimeNamesTheCause(t *testing.T) {
 	assert.Contains(t, warnsFor(proc), "brief gap")
 }
 
+func TestLintWarnings_StatefulUpdateStrategyIsIgnored(t *testing.T) {
+	minServing := 1
+	svc := &Service{
+		Name: "db", Runtime: RuntimeTypeContainer, Scale: 1,
+		UpdateStrategy: &UpdateStrategy{Type: UpdateRolling, MinServing: &minServing},
+		Volumes:        []VolumeMount{{Name: "data", MountPath: "/data", ClaimTemplate: &VolumeClaimTemplate{}}},
+	}
+	w := warnsFor(svc)
+	assert.Contains(t, w, "update-strategy-ignored")
+	assert.Contains(t, w, "recreate semantics")
+	assert.Contains(t, w, "rolling parameters")
+
+	svc.UpdateStrategy = &UpdateStrategy{Type: UpdateRecreate}
+	assert.Empty(t, warnsFor(svc), "explicit recreate should silence update warnings")
+
+	stateless := *svc
+	stateless.UpdateStrategy = &UpdateStrategy{Type: UpdateRolling}
+	stateless.Volumes = nil
+	assert.NotContains(t, warnsFor(&stateless), "update-strategy-ignored")
+}
+
 // A plain multi-replica container service with a probe is the happy path and
 // must produce no noise at all.
 func TestLintWarnings_HealthyServiceIsQuiet(t *testing.T) {
@@ -102,4 +123,11 @@ service:
 	require.NotEmpty(t, warns)
 	assert.Contains(t, strings.Join(warns, "\n"), "update-runs-two-copies")
 	assert.Contains(t, strings.Join(warns, "\n"), "emailer", "the finding must name the service")
+}
+
+func TestCastFile_LintWarnings_StatefulRollingStrategy(t *testing.T) {
+	cf, err := ParseCastFileFromBytes([]byte("service:\n  name: db\n  image: postgres:16\n  updateStrategy: rolling\n  volumes:\n    - name: data\n      mountPath: /data\n      claimTemplate: {storageClassName: local, size: \"1Gi\", accessMode: ReadWriteOnce}\n"), "")
+	require.NoError(t, err)
+	warns := strings.Join(cf.LintWarnings(), "\n")
+	assert.Contains(t, warns, "update-strategy-ignored")
 }

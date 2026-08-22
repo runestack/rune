@@ -483,6 +483,14 @@ func updateStrategyWarnings(svc *Service) []string {
 		return nil
 	}
 
+	// Stateful services currently use the slot-based reconciler path, which
+	// replaces incompatible instances in place instead of using the update
+	// planner. Make an explicit rolling strategy's no-op visible to operators.
+	if svc.UpdateStrategy != nil && serviceHasClaimTemplate(svc) {
+		warns = append(warns, "update-strategy-ignored: stateful services with claimTemplate volumes use recreate semantics; "+
+			"updateStrategy and its rolling parameters are ignored")
+	}
+
 	// update-needs-readiness: without a probe, an update advances on
 	// "the runner accepted the container", not "the app is serving".
 	if len(svc.Ports) > 0 && !svc.HasReadinessProbe() {
@@ -522,6 +530,15 @@ func updateStrategyWarnings(svc *Service) []string {
 		warns = append(warns, msg)
 	}
 	return warns
+}
+
+func serviceHasClaimTemplate(svc *Service) bool {
+	for i := range svc.Volumes {
+		if svc.Volumes[i].ClaimTemplate != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (cf *CastFile) Lint() []error {
