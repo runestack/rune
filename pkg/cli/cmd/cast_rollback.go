@@ -66,9 +66,19 @@ func runReleaseRollback(namespace, name string, toRevision int, opts *castOption
 		return err
 	}
 	// Override the freshly-merged values with the stored revision's values so the
-	// render is faithful to the historical deployment.
-	if len(target.Values) > 0 {
-		rendered.values = target.Values
+	// render is faithful to the historical deployment. Values are not carried on
+	// the history response — they can hold secret material — so fetch them
+	// explicitly, and only when the revision actually recorded some.
+	if target.HasValues {
+		values, err := rcl.RevealValues(namespace, name, target.Revision)
+		if err != nil {
+			return fmt.Errorf("cannot roll back %s/%s to revision %d: reading its recorded "+
+				"values requires the releases:reveal permission (they may contain secrets): %w",
+				namespace, name, target.Revision, err)
+		}
+		if len(values) > 0 {
+			rendered.values = values
+		}
 	}
 
 	if err := rendered.resolveSecretTemplates(api); err != nil {

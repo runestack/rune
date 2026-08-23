@@ -155,6 +155,11 @@ func methodToAction(method string) (string, string) {
 		return "releases", "delete"
 	case strings.HasPrefix(method, "/rune.api.ReleaseService/Rollback"):
 		return "releases", "update"
+	case strings.HasPrefix(method, "/rune.api.ReleaseService/RevealReleaseValues"):
+		// Values can carry the same plaintext secrets:reveal gates, so they get
+		// their own verb rather than riding on releases:get. No builtin policy
+		// below admin grants it — mirrors secrets:reveal.
+		return "releases", "reveal"
 
 	// Observability (RuneSight, native). Execute/GetCapabilities are reads of
 	// the log store; PushLogs is the agent forwarder's ingest path on

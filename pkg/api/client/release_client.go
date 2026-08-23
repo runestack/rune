@@ -131,6 +131,37 @@ func (c *ReleaseClient) History(namespace, name string) ([]*types.Release, error
 	return out, nil
 }
 
+// RevealValues fetches a revision's merged value set. revision <= 0 means the
+// current one. Requires releases:reveal — values can carry the same plaintext
+// secrets:reveal gates, so they do not ride along on History/GetRelease.
+// Callers should check Release.HasValues first and skip this entirely when the
+// revision recorded none.
+func (c *ReleaseClient) RevealValues(namespace, name string, revision int) (map[string]interface{}, error) {
+	req := &generated.RevealReleaseValuesRequest{
+		Name:      name,
+		Namespace: namespace,
+		Revision:  int32(revision), //nolint:gosec // revision bounded by caller, as in RollbackRelease
+	}
+	ctx, cancel := c.client.Context()
+	defer cancel()
+	resp, err := c.svc.RevealReleaseValues(ctx, req)
+	if err != nil {
+		return nil, convertGRPCError("reveal release values", err)
+	}
+	if resp.Status != nil && resp.Status.Code != int32(codes.OK) {
+		return nil, fmt.Errorf("API error: %s", resp.Status.Message)
+	}
+	vj := resp.GetValuesJson()
+	if vj == "" {
+		return nil, nil
+	}
+	var values map[string]interface{}
+	if err := json.Unmarshal([]byte(vj), &values); err != nil {
+		return nil, fmt.Errorf("decode release values: %w", err)
+	}
+	return values, nil
+}
+
 // Diff computes the reconcile plan for a release without applying it. Today the
 // CLI exercises this for an already-recorded release by supplying its current
 // desired ref set; the full render-from-source path lands with the cast PR.
@@ -379,9 +410,7 @@ func protoToRelease(p *generated.Release) (*types.Release, error) {
 			_ = json.Unmarshal([]byte(dj), &rel.Manifest.Defaults)
 		}
 	}
-	if vj := p.GetValuesJson(); vj != "" {
-		_ = json.Unmarshal([]byte(vj), &rel.Values)
-	}
+	rel.HasValues = p.GetHasValues()
 	for _, ref := range p.GetOwns() {
 		rel.Owns = append(rel.Owns, protoToOwnerRef(ref))
 	}

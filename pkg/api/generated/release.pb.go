@@ -292,24 +292,26 @@ func (x *RunesetManifest) GetDefaultsJson() string {
 
 // Release mirrors types.Release.
 type Release struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Namespace string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Status    string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // pending | deployed | superseded | failed | uninstalling | uninstalled
-	Revision  int32                  `protobuf:"varint,5,opt,name=revision,proto3" json:"revision,omitempty"`
-	Source    *ReleaseSource         `protobuf:"bytes,6,opt,name=source,proto3" json:"source,omitempty"`
-	Manifest  *RunesetManifest       `protobuf:"bytes,7,opt,name=manifest,proto3" json:"manifest,omitempty"`
-	// values_json is the fully-merged value set used to render this revision,
-	// JSON-encoded (kept for diff and rollback).
-	ValuesJson     string      `protobuf:"bytes,8,opt,name=values_json,json=valuesJson,proto3" json:"values_json,omitempty"`
-	RenderedDigest string      `protobuf:"bytes,9,opt,name=rendered_digest,json=renderedDigest,proto3" json:"rendered_digest,omitempty"`
-	Owns           []*OwnerRef `protobuf:"bytes,10,rep,name=owns,proto3" json:"owns,omitempty"`             // authoritative owned set
-	References     []*OwnerRef `protobuf:"bytes,11,rep,name=references,proto3" json:"references,omitempty"` // shared kinds depended on but not owned (D2)
-	CreatedAt      string      `protobuf:"bytes,12,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt      string      `protobuf:"bytes,13,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name           string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace      string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Status         string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // pending | deployed | superseded | failed | uninstalling | uninstalled
+	Revision       int32                  `protobuf:"varint,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	Source         *ReleaseSource         `protobuf:"bytes,6,opt,name=source,proto3" json:"source,omitempty"`
+	Manifest       *RunesetManifest       `protobuf:"bytes,7,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	RenderedDigest string                 `protobuf:"bytes,9,opt,name=rendered_digest,json=renderedDigest,proto3" json:"rendered_digest,omitempty"`
+	Owns           []*OwnerRef            `protobuf:"bytes,10,rep,name=owns,proto3" json:"owns,omitempty"`             // authoritative owned set
+	References     []*OwnerRef            `protobuf:"bytes,11,rep,name=references,proto3" json:"references,omitempty"` // shared kinds depended on but not owned (D2)
+	CreatedAt      string                 `protobuf:"bytes,12,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt      string                 `protobuf:"bytes,13,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// has_values reports whether this revision recorded a merged value set,
+	// without disclosing it. Rollback uses it to decide whether it needs to call
+	// RevealReleaseValues at all, so rolling back a values-free release does not
+	// require releases:reveal.
+	HasValues     bool `protobuf:"varint,14,opt,name=has_values,json=hasValues,proto3" json:"has_values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Release) Reset() {
@@ -391,13 +393,6 @@ func (x *Release) GetManifest() *RunesetManifest {
 	return nil
 }
 
-func (x *Release) GetValuesJson() string {
-	if x != nil {
-		return x.ValuesJson
-	}
-	return ""
-}
-
 func (x *Release) GetRenderedDigest() string {
 	if x != nil {
 		return x.RenderedDigest
@@ -431,6 +426,13 @@ func (x *Release) GetUpdatedAt() string {
 		return x.UpdatedAt
 	}
 	return ""
+}
+
+func (x *Release) GetHasValues() bool {
+	if x != nil {
+		return x.HasValues
+	}
+	return false
 }
 
 // Resource payloads carried by a Cast, keyed by OwnerRef.Key()
@@ -1351,6 +1353,124 @@ func (x *DeleteReleaseRequest) GetPurge() bool {
 	return false
 }
 
+// RevealReleaseValuesRequest fetches the merged value set for one revision.
+// Separate from GetRelease for the same reason RevealSecret is separate from
+// GetSecret: the payload is secret-bearing and needs its own verb.
+type RevealReleaseValuesRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Name      string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	// revision selects a historical revision. 0 means the current one.
+	Revision      int32 `protobuf:"varint,3,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevealReleaseValuesRequest) Reset() {
+	*x = RevealReleaseValuesRequest{}
+	mi := &file_pkg_api_proto_release_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevealReleaseValuesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevealReleaseValuesRequest) ProtoMessage() {}
+
+func (x *RevealReleaseValuesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_release_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevealReleaseValuesRequest.ProtoReflect.Descriptor instead.
+func (*RevealReleaseValuesRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_release_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *RevealReleaseValuesRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RevealReleaseValuesRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *RevealReleaseValuesRequest) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+type RevealReleaseValuesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// values_json is the fully-merged value set, JSON-encoded. Empty when the
+	// revision recorded no values.
+	ValuesJson    string  `protobuf:"bytes,1,opt,name=values_json,json=valuesJson,proto3" json:"values_json,omitempty"`
+	Status        *Status `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevealReleaseValuesResponse) Reset() {
+	*x = RevealReleaseValuesResponse{}
+	mi := &file_pkg_api_proto_release_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevealReleaseValuesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevealReleaseValuesResponse) ProtoMessage() {}
+
+func (x *RevealReleaseValuesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_release_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevealReleaseValuesResponse.ProtoReflect.Descriptor instead.
+func (*RevealReleaseValuesResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_release_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *RevealReleaseValuesResponse) GetValuesJson() string {
+	if x != nil {
+		return x.ValuesJson
+	}
+	return ""
+}
+
+func (x *RevealReleaseValuesResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
 type RollbackReleaseRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Name      string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -1364,7 +1484,7 @@ type RollbackReleaseRequest struct {
 
 func (x *RollbackReleaseRequest) Reset() {
 	*x = RollbackReleaseRequest{}
-	mi := &file_pkg_api_proto_release_proto_msgTypes[19]
+	mi := &file_pkg_api_proto_release_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1376,7 +1496,7 @@ func (x *RollbackReleaseRequest) String() string {
 func (*RollbackReleaseRequest) ProtoMessage() {}
 
 func (x *RollbackReleaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_release_proto_msgTypes[19]
+	mi := &file_pkg_api_proto_release_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1389,7 +1509,7 @@ func (x *RollbackReleaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackReleaseRequest.ProtoReflect.Descriptor instead.
 func (*RollbackReleaseRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_release_proto_rawDescGZIP(), []int{19}
+	return file_pkg_api_proto_release_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RollbackReleaseRequest) GetName() string {
@@ -1432,7 +1552,7 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1c\n" +
 	"\tnamespace\x18\x04 \x01(\tR\tnamespace\x12#\n" +
-	"\rdefaults_json\x18\x05 \x01(\tR\fdefaultsJson\"\xcb\x03\n" +
+	"\rdefaults_json\x18\x05 \x01(\tR\fdefaultsJson\"\xdc\x03\n" +
 	"\aRelease\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -1440,9 +1560,7 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x1a\n" +
 	"\brevision\x18\x05 \x01(\x05R\brevision\x12/\n" +
 	"\x06source\x18\x06 \x01(\v2\x17.rune.api.ReleaseSourceR\x06source\x125\n" +
-	"\bmanifest\x18\a \x01(\v2\x19.rune.api.RunesetManifestR\bmanifest\x12\x1f\n" +
-	"\vvalues_json\x18\b \x01(\tR\n" +
-	"valuesJson\x12'\n" +
+	"\bmanifest\x18\a \x01(\v2\x19.rune.api.RunesetManifestR\bmanifest\x12'\n" +
 	"\x0frendered_digest\x18\t \x01(\tR\x0erenderedDigest\x12&\n" +
 	"\x04owns\x18\n" +
 	" \x03(\v2\x12.rune.api.OwnerRefR\x04owns\x122\n" +
@@ -1452,7 +1570,9 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\f \x01(\tR\tcreatedAt\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\r \x01(\tR\tupdatedAt\"\x9e\x04\n" +
+	"updated_at\x18\r \x01(\tR\tupdatedAt\x12\x1d\n" +
+	"\n" +
+	"has_values\x18\x0e \x01(\bR\thasValuesJ\x04\b\b\x10\tR\vvalues_json\"\x9e\x04\n" +
 	"\x10RenderedPayloads\x12D\n" +
 	"\bservices\x18\x01 \x03(\v2(.rune.api.RenderedPayloads.ServicesEntryR\bservices\x12A\n" +
 	"\asecrets\x18\x02 \x03(\v2'.rune.api.RenderedPayloads.SecretsEntryR\asecrets\x12J\n" +
@@ -1528,7 +1648,15 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12!\n" +
 	"\fkeep_volumes\x18\x03 \x01(\bR\vkeepVolumes\x12\x14\n" +
-	"\x05purge\x18\x04 \x01(\bR\x05purge\"f\n" +
+	"\x05purge\x18\x04 \x01(\bR\x05purge\"j\n" +
+	"\x1aRevealReleaseValuesRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x1a\n" +
+	"\brevision\x18\x03 \x01(\x05R\brevision\"h\n" +
+	"\x1bRevealReleaseValuesResponse\x12\x1f\n" +
+	"\vvalues_json\x18\x01 \x01(\tR\n" +
+	"valuesJson\x12(\n" +
+	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"f\n" +
 	"\x16RollbackReleaseRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x1a\n" +
@@ -1539,7 +1667,7 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"\rACTION_UPDATE\x10\x02\x12\x10\n" +
 	"\fACTION_PRUNE\x10\x03\x12\x10\n" +
 	"\fACTION_ADOPT\x10\x04\x12\x14\n" +
-	"\x10ACTION_REFERENCE\x10\x052\xdf\x03\n" +
+	"\x10ACTION_REFERENCE\x10\x052\xc3\x04\n" +
 	"\x0eReleaseService\x125\n" +
 	"\x04Cast\x12\x15.rune.api.CastRequest\x1a\x16.rune.api.CastResponse\x125\n" +
 	"\x04Plan\x12\x15.rune.api.PlanRequest\x1a\x16.rune.api.PlanResponse\x12M\n" +
@@ -1548,7 +1676,8 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"GetRelease\x12\x1b.rune.api.GetReleaseRequest\x1a\x19.rune.api.ReleaseResponse\x12>\n" +
 	"\aHistory\x12\x18.rune.api.HistoryRequest\x1a\x19.rune.api.HistoryResponse\x12A\n" +
 	"\rDeleteRelease\x12\x1e.rune.api.DeleteReleaseRequest\x1a\x10.rune.api.Status\x12G\n" +
-	"\bRollback\x12 .rune.api.RollbackReleaseRequest\x1a\x19.rune.api.ReleaseResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
+	"\bRollback\x12 .rune.api.RollbackReleaseRequest\x1a\x19.rune.api.ReleaseResponse\x12b\n" +
+	"\x13RevealReleaseValues\x12$.rune.api.RevealReleaseValuesRequest\x1a%.rune.api.RevealReleaseValuesResponseB-Z+github.com/runestack/rune/pkg/api/generatedb\x06proto3"
 
 var (
 	file_pkg_api_proto_release_proto_rawDescOnce sync.Once
@@ -1563,44 +1692,46 @@ func file_pkg_api_proto_release_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_release_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_api_proto_release_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_pkg_api_proto_release_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_pkg_api_proto_release_proto_goTypes = []any{
-	(Action)(0),                    // 0: rune.api.Action
-	(*OwnerRef)(nil),               // 1: rune.api.OwnerRef
-	(*ReleaseSource)(nil),          // 2: rune.api.ReleaseSource
-	(*RunesetManifest)(nil),        // 3: rune.api.RunesetManifest
-	(*Release)(nil),                // 4: rune.api.Release
-	(*RenderedPayloads)(nil),       // 5: rune.api.RenderedPayloads
-	(*ReleaseSpec)(nil),            // 6: rune.api.ReleaseSpec
-	(*PlannedChange)(nil),          // 7: rune.api.PlannedChange
-	(*Plan)(nil),                   // 8: rune.api.Plan
-	(*CastRequest)(nil),            // 9: rune.api.CastRequest
-	(*CastResponse)(nil),           // 10: rune.api.CastResponse
-	(*PlanRequest)(nil),            // 11: rune.api.PlanRequest
-	(*PlanResponse)(nil),           // 12: rune.api.PlanResponse
-	(*ListReleasesRequest)(nil),    // 13: rune.api.ListReleasesRequest
-	(*ListReleasesResponse)(nil),   // 14: rune.api.ListReleasesResponse
-	(*GetReleaseRequest)(nil),      // 15: rune.api.GetReleaseRequest
-	(*ReleaseResponse)(nil),        // 16: rune.api.ReleaseResponse
-	(*HistoryRequest)(nil),         // 17: rune.api.HistoryRequest
-	(*HistoryResponse)(nil),        // 18: rune.api.HistoryResponse
-	(*DeleteReleaseRequest)(nil),   // 19: rune.api.DeleteReleaseRequest
-	(*RollbackReleaseRequest)(nil), // 20: rune.api.RollbackReleaseRequest
-	nil,                            // 21: rune.api.RenderedPayloads.ServicesEntry
-	nil,                            // 22: rune.api.RenderedPayloads.SecretsEntry
-	nil,                            // 23: rune.api.RenderedPayloads.ConfigmapsEntry
-	nil,                            // 24: rune.api.RenderedPayloads.VolumesEntry
-	(*Status)(nil),                 // 25: rune.api.Status
+	(Action)(0),                         // 0: rune.api.Action
+	(*OwnerRef)(nil),                    // 1: rune.api.OwnerRef
+	(*ReleaseSource)(nil),               // 2: rune.api.ReleaseSource
+	(*RunesetManifest)(nil),             // 3: rune.api.RunesetManifest
+	(*Release)(nil),                     // 4: rune.api.Release
+	(*RenderedPayloads)(nil),            // 5: rune.api.RenderedPayloads
+	(*ReleaseSpec)(nil),                 // 6: rune.api.ReleaseSpec
+	(*PlannedChange)(nil),               // 7: rune.api.PlannedChange
+	(*Plan)(nil),                        // 8: rune.api.Plan
+	(*CastRequest)(nil),                 // 9: rune.api.CastRequest
+	(*CastResponse)(nil),                // 10: rune.api.CastResponse
+	(*PlanRequest)(nil),                 // 11: rune.api.PlanRequest
+	(*PlanResponse)(nil),                // 12: rune.api.PlanResponse
+	(*ListReleasesRequest)(nil),         // 13: rune.api.ListReleasesRequest
+	(*ListReleasesResponse)(nil),        // 14: rune.api.ListReleasesResponse
+	(*GetReleaseRequest)(nil),           // 15: rune.api.GetReleaseRequest
+	(*ReleaseResponse)(nil),             // 16: rune.api.ReleaseResponse
+	(*HistoryRequest)(nil),              // 17: rune.api.HistoryRequest
+	(*HistoryResponse)(nil),             // 18: rune.api.HistoryResponse
+	(*DeleteReleaseRequest)(nil),        // 19: rune.api.DeleteReleaseRequest
+	(*RevealReleaseValuesRequest)(nil),  // 20: rune.api.RevealReleaseValuesRequest
+	(*RevealReleaseValuesResponse)(nil), // 21: rune.api.RevealReleaseValuesResponse
+	(*RollbackReleaseRequest)(nil),      // 22: rune.api.RollbackReleaseRequest
+	nil,                                 // 23: rune.api.RenderedPayloads.ServicesEntry
+	nil,                                 // 24: rune.api.RenderedPayloads.SecretsEntry
+	nil,                                 // 25: rune.api.RenderedPayloads.ConfigmapsEntry
+	nil,                                 // 26: rune.api.RenderedPayloads.VolumesEntry
+	(*Status)(nil),                      // 27: rune.api.Status
 }
 var file_pkg_api_proto_release_proto_depIdxs = []int32{
 	2,  // 0: rune.api.Release.source:type_name -> rune.api.ReleaseSource
 	3,  // 1: rune.api.Release.manifest:type_name -> rune.api.RunesetManifest
 	1,  // 2: rune.api.Release.owns:type_name -> rune.api.OwnerRef
 	1,  // 3: rune.api.Release.references:type_name -> rune.api.OwnerRef
-	21, // 4: rune.api.RenderedPayloads.services:type_name -> rune.api.RenderedPayloads.ServicesEntry
-	22, // 5: rune.api.RenderedPayloads.secrets:type_name -> rune.api.RenderedPayloads.SecretsEntry
-	23, // 6: rune.api.RenderedPayloads.configmaps:type_name -> rune.api.RenderedPayloads.ConfigmapsEntry
-	24, // 7: rune.api.RenderedPayloads.volumes:type_name -> rune.api.RenderedPayloads.VolumesEntry
+	23, // 4: rune.api.RenderedPayloads.services:type_name -> rune.api.RenderedPayloads.ServicesEntry
+	24, // 5: rune.api.RenderedPayloads.secrets:type_name -> rune.api.RenderedPayloads.SecretsEntry
+	25, // 6: rune.api.RenderedPayloads.configmaps:type_name -> rune.api.RenderedPayloads.ConfigmapsEntry
+	26, // 7: rune.api.RenderedPayloads.volumes:type_name -> rune.api.RenderedPayloads.VolumesEntry
 	2,  // 8: rune.api.ReleaseSpec.source:type_name -> rune.api.ReleaseSource
 	3,  // 9: rune.api.ReleaseSpec.manifest:type_name -> rune.api.RunesetManifest
 	1,  // 10: rune.api.ReleaseSpec.resources:type_name -> rune.api.OwnerRef
@@ -1611,35 +1742,38 @@ var file_pkg_api_proto_release_proto_depIdxs = []int32{
 	6,  // 15: rune.api.CastRequest.spec:type_name -> rune.api.ReleaseSpec
 	4,  // 16: rune.api.CastResponse.release:type_name -> rune.api.Release
 	8,  // 17: rune.api.CastResponse.plan:type_name -> rune.api.Plan
-	25, // 18: rune.api.CastResponse.status:type_name -> rune.api.Status
+	27, // 18: rune.api.CastResponse.status:type_name -> rune.api.Status
 	6,  // 19: rune.api.PlanRequest.spec:type_name -> rune.api.ReleaseSpec
 	8,  // 20: rune.api.PlanResponse.plan:type_name -> rune.api.Plan
-	25, // 21: rune.api.PlanResponse.status:type_name -> rune.api.Status
+	27, // 21: rune.api.PlanResponse.status:type_name -> rune.api.Status
 	4,  // 22: rune.api.ListReleasesResponse.releases:type_name -> rune.api.Release
-	25, // 23: rune.api.ListReleasesResponse.status:type_name -> rune.api.Status
+	27, // 23: rune.api.ListReleasesResponse.status:type_name -> rune.api.Status
 	4,  // 24: rune.api.ReleaseResponse.release:type_name -> rune.api.Release
-	25, // 25: rune.api.ReleaseResponse.status:type_name -> rune.api.Status
+	27, // 25: rune.api.ReleaseResponse.status:type_name -> rune.api.Status
 	4,  // 26: rune.api.HistoryResponse.revisions:type_name -> rune.api.Release
-	25, // 27: rune.api.HistoryResponse.status:type_name -> rune.api.Status
-	9,  // 28: rune.api.ReleaseService.Cast:input_type -> rune.api.CastRequest
-	11, // 29: rune.api.ReleaseService.Plan:input_type -> rune.api.PlanRequest
-	13, // 30: rune.api.ReleaseService.ListReleases:input_type -> rune.api.ListReleasesRequest
-	15, // 31: rune.api.ReleaseService.GetRelease:input_type -> rune.api.GetReleaseRequest
-	17, // 32: rune.api.ReleaseService.History:input_type -> rune.api.HistoryRequest
-	19, // 33: rune.api.ReleaseService.DeleteRelease:input_type -> rune.api.DeleteReleaseRequest
-	20, // 34: rune.api.ReleaseService.Rollback:input_type -> rune.api.RollbackReleaseRequest
-	10, // 35: rune.api.ReleaseService.Cast:output_type -> rune.api.CastResponse
-	12, // 36: rune.api.ReleaseService.Plan:output_type -> rune.api.PlanResponse
-	14, // 37: rune.api.ReleaseService.ListReleases:output_type -> rune.api.ListReleasesResponse
-	16, // 38: rune.api.ReleaseService.GetRelease:output_type -> rune.api.ReleaseResponse
-	18, // 39: rune.api.ReleaseService.History:output_type -> rune.api.HistoryResponse
-	25, // 40: rune.api.ReleaseService.DeleteRelease:output_type -> rune.api.Status
-	16, // 41: rune.api.ReleaseService.Rollback:output_type -> rune.api.ReleaseResponse
-	35, // [35:42] is the sub-list for method output_type
-	28, // [28:35] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	27, // 27: rune.api.HistoryResponse.status:type_name -> rune.api.Status
+	27, // 28: rune.api.RevealReleaseValuesResponse.status:type_name -> rune.api.Status
+	9,  // 29: rune.api.ReleaseService.Cast:input_type -> rune.api.CastRequest
+	11, // 30: rune.api.ReleaseService.Plan:input_type -> rune.api.PlanRequest
+	13, // 31: rune.api.ReleaseService.ListReleases:input_type -> rune.api.ListReleasesRequest
+	15, // 32: rune.api.ReleaseService.GetRelease:input_type -> rune.api.GetReleaseRequest
+	17, // 33: rune.api.ReleaseService.History:input_type -> rune.api.HistoryRequest
+	19, // 34: rune.api.ReleaseService.DeleteRelease:input_type -> rune.api.DeleteReleaseRequest
+	22, // 35: rune.api.ReleaseService.Rollback:input_type -> rune.api.RollbackReleaseRequest
+	20, // 36: rune.api.ReleaseService.RevealReleaseValues:input_type -> rune.api.RevealReleaseValuesRequest
+	10, // 37: rune.api.ReleaseService.Cast:output_type -> rune.api.CastResponse
+	12, // 38: rune.api.ReleaseService.Plan:output_type -> rune.api.PlanResponse
+	14, // 39: rune.api.ReleaseService.ListReleases:output_type -> rune.api.ListReleasesResponse
+	16, // 40: rune.api.ReleaseService.GetRelease:output_type -> rune.api.ReleaseResponse
+	18, // 41: rune.api.ReleaseService.History:output_type -> rune.api.HistoryResponse
+	27, // 42: rune.api.ReleaseService.DeleteRelease:output_type -> rune.api.Status
+	16, // 43: rune.api.ReleaseService.Rollback:output_type -> rune.api.ReleaseResponse
+	21, // 44: rune.api.ReleaseService.RevealReleaseValues:output_type -> rune.api.RevealReleaseValuesResponse
+	37, // [37:45] is the sub-list for method output_type
+	29, // [29:37] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_release_proto_init() }
@@ -1654,7 +1788,7 @@ func file_pkg_api_proto_release_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_release_proto_rawDesc), len(file_pkg_api_proto_release_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   24,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

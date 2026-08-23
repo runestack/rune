@@ -67,8 +67,13 @@ message Instance {
   // Resource usage
   Resources resources = 15;
 
-  // Environment variables
-  map<string, string> environment = 16;
+  // 16 was `environment`: the instance's fully-resolved environment, which
+  // folds in plaintext secret values (envFrom secret data and
+  // {{secret:...}} interpolation). Serving it on the read path handed every
+  // `instances:get`/`list` caller the same plaintext that `secrets:reveal`
+  // exists to gate. No client ever read it.
+  reserved 16;
+  reserved "environment";
 
   // Metadata
   InstanceMetadata metadata = 17;
@@ -123,7 +128,12 @@ message InstanceMetadata {
   // Number of times the instance has been restarted
   int32 restart_count = 3;
 
-  // Secret mounts with resolved data
+  // Secret mounts with resolved data.
+  //
+  // NEVER populate this on a read path: ResolvedSecretMount.data is
+  // plaintext secret material, and instances:get/list is a strictly weaker
+  // grant than secrets:reveal. instanceModelToProto deliberately drops it;
+  // TestInstanceModelToProto_DropsSecretMaterial guards that.
   repeated ResolvedSecretMount secret_mounts = 4;
 
   // Config mounts with resolved data

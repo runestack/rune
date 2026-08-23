@@ -145,6 +145,62 @@ func (s *ReleaseService) History(ctx context.Context, req *generated.HistoryRequ
 	return &generated.HistoryResponse{Revisions: out, Status: &generated.Status{Code: int32(codes.OK)}}, nil
 }
 
+// RevealReleaseValues returns one revision's merged value set.
+//
+// Separate from GetRelease/History for the same reason RevealSecret is
+// separate from GetSecret: a value set routinely carries secret material
+// (`--set postgres.password=...` rendered into a secret), while the read path
+// is authorized by releases:get/list — which `readonly` holds. This RPC is
+// gated on releases:reveal, granted by no builtin policy below admin.
+func (s *ReleaseService) RevealReleaseValues(ctx context.Context, req *generated.RevealReleaseValuesRequest) (*generated.RevealReleaseValuesResponse, error) {
+	if req == nil || req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	rel, err := s.releaseAtRevision(ctx, req.Namespace, req.Name, int(req.GetRevision()))
+	if err != nil {
+		return nil, err
+	}
+
+	out := &generated.RevealReleaseValuesResponse{Status: &generated.Status{Code: int32(codes.OK)}}
+	if len(rel.Values) > 0 {
+		b, err := json.Marshal(rel.Values)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "encode values: %v", err)
+		}
+		out.ValuesJson = string(b)
+	}
+	return out, nil
+}
+
+// releaseAtRevision resolves a release by name, optionally pinned to a
+// historical revision. revision <= 0 means the current record.
+func (s *ReleaseService) releaseAtRevision(ctx context.Context, namespace, name string, revision int) (*types.Release, error) {
+	if revision <= 0 {
+		rel, err := s.repo.GetByName(ctx, namespace, name)
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "get release: %v", err)
+		}
+		return rel, nil
+	}
+
+	ref := string(types.ResourceTypeRelease) + ":" + name + "." + namespace + ".rune"
+	versions, err := s.repo.History(ctx, ref)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "history: %v", err)
+	}
+	for _, v := range versions {
+		rel, ok := historicalToRelease(v)
+		if !ok {
+			continue
+		}
+		if rel.Revision == revision {
+			return rel, nil
+		}
+	}
+	return nil, status.Errorf(codes.NotFound, "release %s/%s has no revision %d", namespace, name, revision)
+}
+
 // DeleteRelease uninstalls a release (soft by default, --purge to forget — D4).
 func (s *ReleaseService) DeleteRelease(ctx context.Context, req *generated.DeleteReleaseRequest) (*generated.Status, error) {
 	if req == nil || req.Name == "" {
@@ -297,11 +353,7 @@ func toProtoRelease(r *types.Release) *generated.Release {
 		CreatedAt:      r.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:      r.UpdatedAt.Format(time.RFC3339),
 	}
-	if len(r.Values) > 0 {
-		if b, err := json.Marshal(r.Values); err == nil {
-			out.ValuesJson = string(b)
-		}
-	}
+	out.HasValues = len(r.Values) > 0
 	for _, ref := range r.Owns {
 		out.Owns = append(out.Owns, toProtoOwnerRef(ref))
 	}

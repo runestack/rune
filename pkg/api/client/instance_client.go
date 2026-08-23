@@ -384,7 +384,10 @@ func instanceEquals(a, b *types.Instance) bool {
 		a.IP == b.IP
 }
 
-// Helper function to convert a protobuf Instance message to a types.Instance
+// Helper function to convert a protobuf Instance message to a types.Instance.
+// Lossy by design: the wire form carries no environment and no resolved secret
+// mounts (see instance.proto `reserved 16`), so the result is a view, not a
+// substitute for the stored record.
 func (i *InstanceClient) protoToInstance(proto *generated.Instance) (*types.Instance, error) {
 	if proto == nil {
 		return nil, fmt.Errorf("proto instance is nil")
@@ -403,7 +406,6 @@ func (i *InstanceClient) protoToInstance(proto *generated.Instance) (*types.Inst
 		StatusMessage: proto.StatusMessage,
 		ContainerID:   proto.ContainerId,
 		PID:           int(proto.Pid),
-		Environment:   proto.Environment,
 		Labels:        proto.Labels,
 		Metadata: &types.InstanceMetadata{
 			ServiceGeneration: int64(proto.Metadata.Generation),

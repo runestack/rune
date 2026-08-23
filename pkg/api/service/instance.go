@@ -42,22 +42,9 @@ func (s *InstanceService) GetInstance(ctx context.Context, req *generated.GetIns
 		return nil, status.Error(codes.InvalidArgument, "instance ID is required")
 	}
 
-	if req.Namespace == "" {
-		req.Namespace = DefaultNamespace
-	}
-
-	instance, err := s.store.GetInstanceByID(ctx, req.Namespace, req.Id)
+	instance, err := s.loadInstance(ctx, req.Namespace, req.Id)
 	if err != nil {
-		// A missing instance is NotFound, not Internal. Blanket-wrapping it as
-		// Internal made "this id doesn't exist" indistinguishable from a real
-		// store failure, so callers that probe-then-fall-back (the CLI target
-		// resolver tries GetInstance by id before matching by name) logged a
-		// scary ERROR on every successful name lookup. Matches the mapping the
-		// namespace/volume/describe services already use.
-		if store.IsNotFoundError(err) {
-			return nil, status.Errorf(codes.NotFound, "instance %s/%s not found", req.Namespace, req.Id)
-		}
-		return nil, status.Errorf(codes.Internal, "failed to get instance: %v", err)
+		return nil, err
 	}
 
 	// Get instance status from the appropriate runner
@@ -94,6 +81,31 @@ func (s *InstanceService) GetInstance(ctx context.Context, req *generated.GetIns
 			Message: "Instance retrieved successfully",
 		},
 	}, nil
+}
+
+// loadInstance fetches the full domain-model instance from the store. Use it
+// rather than the proto whenever a caller needs a real instance object: the
+// wire form is the redacted external view and drops the instance's
+// environment and resolved secret mounts.
+//
+// A missing instance is NotFound, not Internal. Blanket-wrapping it as
+// Internal made "this id doesn't exist" indistinguishable from a real store
+// failure, so callers that probe-then-fall-back (the CLI target resolver
+// tries GetInstance by id before matching by name) logged a scary ERROR on
+// every successful name lookup. Matches the mapping the namespace/volume/
+// describe services already use.
+func (s *InstanceService) loadInstance(ctx context.Context, namespace, id string) (*types.Instance, error) {
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
+	instance, err := s.store.GetInstanceByID(ctx, namespace, id)
+	if err != nil {
+		if store.IsNotFoundError(err) {
+			return nil, status.Errorf(codes.NotFound, "instance %s/%s not found", namespace, id)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get instance: %v", err)
+	}
+	return instance, nil
 }
 
 // ListInstances lists instances with optional filtering.
@@ -192,17 +204,15 @@ func (s *InstanceService) StartInstance(ctx context.Context, req *generated.Inst
 		return nil, status.Error(codes.InvalidArgument, "instance ID is required")
 	}
 
-	// Get the instance
-	instanceResp, err := s.GetInstance(ctx, &generated.GetInstanceRequest{Id: req.Id})
+	// Load the instance from the store rather than round-tripping it through
+	// the proto: the wire form is deliberately redacted (no environment, no
+	// resolved secret mounts), so a proto-derived model is not a faithful
+	// object to hand a runner.
+	instance, err := s.loadInstance(ctx, "", req.Id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Determine the appropriate runner
-	instance, err := s.ProtoInstanceToInstanceModel(instanceResp.Instance)
-	if err != nil {
-		return nil, err
-	}
 	runnerToUse, err := s.runnerManager.GetInstanceRunner(instance)
 	if err != nil {
 		return nil, err
@@ -226,17 +236,12 @@ func (s *InstanceService) StopInstance(ctx context.Context, req *generated.Insta
 		return nil, status.Error(codes.InvalidArgument, "instance ID is required")
 	}
 
-	// Get the instance
-	instanceResp, err := s.GetInstance(ctx, &generated.GetInstanceRequest{Id: req.Id})
+	// See StartInstance: the redacted wire form is not a faithful model.
+	instance, err := s.loadInstance(ctx, "", req.Id)
 	if err != nil {
 		return nil, err
 	}
 
-	// Determine the appropriate runner
-	instance, err := s.ProtoInstanceToInstanceModel(instanceResp.Instance)
-	if err != nil {
-		return nil, err
-	}
 	runnerToUse, err := s.runnerManager.GetInstanceRunner(instance)
 	if err != nil {
 		return nil, err
@@ -276,110 +281,17 @@ func (s *InstanceService) RestartInstance(ctx context.Context, req *generated.In
 	return s.StartInstance(ctx, req)
 }
 
-// ProtoInstanceToInstanceModel converts a protobuf message to a domain model instance.
-func (s *InstanceService) ProtoInstanceToInstanceModel(protoInstance *generated.Instance) (*types.Instance, error) {
-	if protoInstance == nil {
-		return nil, fmt.Errorf("proto instance is nil")
-	}
-
-	// Create a new Instance with basic fields
-	instance := &types.Instance{
-		ID:            protoInstance.Id,
-		Name:          protoInstance.Name,
-		Namespace:     protoInstance.Namespace,
-		ServiceID:     protoInstance.ServiceId,
-		ServiceName:   protoInstance.ServiceName,
-		NodeID:        protoInstance.NodeId,
-		IP:            protoInstance.Ip,
-		StatusMessage: protoInstance.StatusMessage,
-		ContainerID:   protoInstance.ContainerId,
-		Environment:   protoInstance.Environment,
-		Metadata: &types.InstanceMetadata{
-			ServiceGeneration: int64(protoInstance.Metadata.Generation),
-			RestartCount:      int(protoInstance.Metadata.RestartCount),
-			DeletionTimestamp: utils.ProtoStringToTimestamp(protoInstance.Metadata.DeletionTimestamp),
-		},
-	}
-
-	// Convert PID (int32 -> int)
-	if protoInstance.Pid > 0 {
-		instance.PID = int(protoInstance.Pid)
-	}
-
-	// Parse timestamps
-	if protoInstance.CreatedAt != "" {
-		createdAt, err := time.Parse(time.RFC3339, protoInstance.CreatedAt)
-		if err != nil {
-			return nil, fmt.Errorf("invalid created_at timestamp: %w", err)
-		}
-		instance.CreatedAt = createdAt
-	} else {
-		instance.CreatedAt = time.Now() // Default to current time if not provided
-	}
-
-	if protoInstance.UpdatedAt != "" {
-		updatedAt, err := time.Parse(time.RFC3339, protoInstance.UpdatedAt)
-		if err != nil {
-			return nil, fmt.Errorf("invalid updated_at timestamp: %w", err)
-		}
-		instance.UpdatedAt = updatedAt
-	} else {
-		instance.UpdatedAt = instance.CreatedAt // Default to created time if not provided
-	}
-
-	// Convert status
-	instance.Status = s.protoStatusToInstanceStatus(protoInstance.Status)
-
-	// Convert resources if provided
-	if protoInstance.Resources != nil {
-		instance.Resources = &types.Resources{}
-
-		if protoInstance.Resources.Cpu != nil {
-			instance.Resources.CPU = types.ResourceLimit{
-				Request: protoInstance.Resources.Cpu.Request,
-				Limit:   protoInstance.Resources.Cpu.Limit,
-			}
-		}
-
-		if protoInstance.Resources.Memory != nil {
-			instance.Resources.Memory = types.ResourceLimit{
-				Request: protoInstance.Resources.Memory.Request,
-				Limit:   protoInstance.Resources.Memory.Limit,
-			}
-		}
-	}
-
-	// Validate the instance
-	if err := instance.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid instance: %w", err)
-	}
-
-	return instance, nil
-}
-
-// Convert proto status enum to domain model status
-func (s *InstanceService) protoStatusToInstanceStatus(status generated.InstanceStatus) types.InstanceStatus {
-	switch status {
-	case generated.InstanceStatus_INSTANCE_STATUS_PENDING:
-		return types.InstanceStatusPending
-	case generated.InstanceStatus_INSTANCE_STATUS_CREATED:
-		return types.InstanceStatusCreated
-	case generated.InstanceStatus_INSTANCE_STATUS_STARTING:
-		return types.InstanceStatusStarting
-	case generated.InstanceStatus_INSTANCE_STATUS_RUNNING:
-		return types.InstanceStatusRunning
-	case generated.InstanceStatus_INSTANCE_STATUS_STOPPED:
-		return types.InstanceStatusStopped
-	case generated.InstanceStatus_INSTANCE_STATUS_FAILED:
-		return types.InstanceStatusFailed
-	case generated.InstanceStatus_INSTANCE_STATUS_EXITED:
-		return types.InstanceStatusExited
-	default:
-		return types.InstanceStatusPending // Default to pending if unspecified
-	}
-}
-
 // instanceModelToProto converts a domain model instance to a protobuf message.
+//
+// This is a *redacting* conversion, and the redaction is the point. An
+// instance record carries fully-resolved secret material — Environment folds
+// in envFrom secret data and {{secret:...}} interpolation, and
+// Metadata.SecretMounts carries mounted secret payloads. The read path this
+// feeds (GetInstance/ListInstances) is authorized by instances:get/list,
+// which readonly holds and which is strictly weaker than the secrets:reveal
+// verb that gates the same plaintext on SecretService. So neither field
+// crosses the wire. See instance.proto (`reserved 16`) and
+// TestInstanceModelToProto_DropsSecretMaterial.
 func (s *InstanceService) instanceModelToProto(instance *types.Instance) (*generated.Instance, error) {
 	if instance == nil {
 		return nil, fmt.Errorf("instance is nil")
@@ -397,7 +309,6 @@ func (s *InstanceService) instanceModelToProto(instance *types.Instance) (*gener
 		StatusMessage: instance.StatusMessage,
 		ContainerId:   instance.ContainerID,
 		Pid:           utils.ToInt32NonNegative(instance.PID),
-		Environment:   instance.Environment,
 		Labels:        instance.Labels,
 		Metadata: &generated.InstanceMetadata{
 			Generation:   utils.ToInt32NonNegative64(instance.Metadata.ServiceGeneration),

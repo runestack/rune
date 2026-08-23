@@ -19,13 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ReleaseService_Cast_FullMethodName          = "/rune.api.ReleaseService/Cast"
-	ReleaseService_Plan_FullMethodName          = "/rune.api.ReleaseService/Plan"
-	ReleaseService_ListReleases_FullMethodName  = "/rune.api.ReleaseService/ListReleases"
-	ReleaseService_GetRelease_FullMethodName    = "/rune.api.ReleaseService/GetRelease"
-	ReleaseService_History_FullMethodName       = "/rune.api.ReleaseService/History"
-	ReleaseService_DeleteRelease_FullMethodName = "/rune.api.ReleaseService/DeleteRelease"
-	ReleaseService_Rollback_FullMethodName      = "/rune.api.ReleaseService/Rollback"
+	ReleaseService_Cast_FullMethodName                = "/rune.api.ReleaseService/Cast"
+	ReleaseService_Plan_FullMethodName                = "/rune.api.ReleaseService/Plan"
+	ReleaseService_ListReleases_FullMethodName        = "/rune.api.ReleaseService/ListReleases"
+	ReleaseService_GetRelease_FullMethodName          = "/rune.api.ReleaseService/GetRelease"
+	ReleaseService_History_FullMethodName             = "/rune.api.ReleaseService/History"
+	ReleaseService_DeleteRelease_FullMethodName       = "/rune.api.ReleaseService/DeleteRelease"
+	ReleaseService_Rollback_FullMethodName            = "/rune.api.ReleaseService/Rollback"
+	ReleaseService_RevealReleaseValues_FullMethodName = "/rune.api.ReleaseService/RevealReleaseValues"
 )
 
 // ReleaseServiceClient is the client API for ReleaseService service.
@@ -49,6 +50,10 @@ type ReleaseServiceClient interface {
 	// Unimplemented: it requires re-rendering historical source, which lands
 	// with the cast PR.
 	Rollback(ctx context.Context, in *RollbackReleaseRequest, opts ...grpc.CallOption) (*ReleaseResponse, error)
+	// RevealReleaseValues returns a revision's merged value set. Gated on
+	// releases:reveal, which no builtin policy below admin grants — values can
+	// carry the same plaintext secrets:reveal exists to protect.
+	RevealReleaseValues(ctx context.Context, in *RevealReleaseValuesRequest, opts ...grpc.CallOption) (*RevealReleaseValuesResponse, error)
 }
 
 type releaseServiceClient struct {
@@ -129,6 +134,16 @@ func (c *releaseServiceClient) Rollback(ctx context.Context, in *RollbackRelease
 	return out, nil
 }
 
+func (c *releaseServiceClient) RevealReleaseValues(ctx context.Context, in *RevealReleaseValuesRequest, opts ...grpc.CallOption) (*RevealReleaseValuesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevealReleaseValuesResponse)
+	err := c.cc.Invoke(ctx, ReleaseService_RevealReleaseValues_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ReleaseServiceServer is the server API for ReleaseService service.
 // All implementations must embed UnimplementedReleaseServiceServer
 // for forward compatibility.
@@ -150,6 +165,10 @@ type ReleaseServiceServer interface {
 	// Unimplemented: it requires re-rendering historical source, which lands
 	// with the cast PR.
 	Rollback(context.Context, *RollbackReleaseRequest) (*ReleaseResponse, error)
+	// RevealReleaseValues returns a revision's merged value set. Gated on
+	// releases:reveal, which no builtin policy below admin grants — values can
+	// carry the same plaintext secrets:reveal exists to protect.
+	RevealReleaseValues(context.Context, *RevealReleaseValuesRequest) (*RevealReleaseValuesResponse, error)
 	mustEmbedUnimplementedReleaseServiceServer()
 }
 
@@ -180,6 +199,9 @@ func (UnimplementedReleaseServiceServer) DeleteRelease(context.Context, *DeleteR
 }
 func (UnimplementedReleaseServiceServer) Rollback(context.Context, *RollbackReleaseRequest) (*ReleaseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Rollback not implemented")
+}
+func (UnimplementedReleaseServiceServer) RevealReleaseValues(context.Context, *RevealReleaseValuesRequest) (*RevealReleaseValuesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevealReleaseValues not implemented")
 }
 func (UnimplementedReleaseServiceServer) mustEmbedUnimplementedReleaseServiceServer() {}
 func (UnimplementedReleaseServiceServer) testEmbeddedByValue()                        {}
@@ -328,6 +350,24 @@ func _ReleaseService_Rollback_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ReleaseService_RevealReleaseValues_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevealReleaseValuesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ReleaseServiceServer).RevealReleaseValues(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ReleaseService_RevealReleaseValues_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ReleaseServiceServer).RevealReleaseValues(ctx, req.(*RevealReleaseValuesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ReleaseService_ServiceDesc is the grpc.ServiceDesc for ReleaseService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -362,6 +402,10 @@ var ReleaseService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Rollback",
 			Handler:    _ReleaseService_Rollback_Handler,
+		},
+		{
+			MethodName: "RevealReleaseValues",
+			Handler:    _ReleaseService_RevealReleaseValues_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
