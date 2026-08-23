@@ -339,6 +339,10 @@ func (s *BadgerStore) UpdateFunc(ctx context.Context, resourceType types.Resourc
 			} else if err != nil {
 				return fmt.Errorf("failed to get resource: %w", err)
 			}
+			// Decode into a zeroed target: on a retry it still holds the
+			// rejected attempt's mutation, and json.Unmarshal would merge
+			// rather than replace (see resetTarget).
+			resetTarget(target)
 			if err := item.Value(func(val []byte) error { return json.Unmarshal(val, target) }); err != nil {
 				return fmt.Errorf("failed to deserialize resource: %w", err)
 			}
