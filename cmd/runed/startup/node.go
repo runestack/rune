@@ -15,6 +15,15 @@ import (
 	acmesvc "github.com/runestack/rune/pkg/networking/acme"
 	"github.com/runestack/rune/pkg/runner/docker/bridges"
 	"github.com/runestack/rune/pkg/storage/driver"
+
+	// Blank imports register the built-in storage drivers with
+	// pkg/storage/driver's registry; nothing references them by name, so
+	// they MUST stay even though every tool will call them unused.
+	_ "github.com/runestack/rune/pkg/storage/driver/awsebs"
+	_ "github.com/runestack/rune/pkg/storage/driver/dovolume"
+	_ "github.com/runestack/rune/pkg/storage/driver/gcepd"
+	_ "github.com/runestack/rune/pkg/storage/driver/hcloudvolume"
+	_ "github.com/runestack/rune/pkg/storage/driver/local"
 	"github.com/runestack/rune/pkg/storage/driverparams"
 	"github.com/runestack/rune/pkg/store"
 
