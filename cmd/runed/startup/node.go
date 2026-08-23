@@ -18,7 +18,7 @@ import (
 
 	// Blank imports register the built-in storage drivers with
 	// pkg/storage/driver's registry; nothing references them by name, so
-	// they MUST stay even though every tool will call them unused. 
+	// they MUST stay even though every tool will call them unused.
 	_ "github.com/runestack/rune/pkg/storage/driver/awsebs"
 	_ "github.com/runestack/rune/pkg/storage/driver/dovolume"
 	_ "github.com/runestack/rune/pkg/storage/driver/gcepd"
