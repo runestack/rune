@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/health"
@@ -89,6 +90,11 @@ type Orchestrator interface {
 	// not-ready stub is wired at construction and runed swaps in the
 	// real subsystem on a live orchestrator after start.
 	SetMountResolver(resolver wiring.MountResolver)
+
+	// SetAdmission installs the payload-admission gate applied to
+	// CreateService/UpdateService. Optional; a nil gate disables
+	// admission. Wired by the API server when authentication is on.
+	SetAdmission(gate *authz.Gate)
 }
 
 // instanceOps is the slice of the instance controller the orchestrator
@@ -124,6 +130,12 @@ type orchestrator struct {
 
 	// Runner manager for executing commands
 	runnerManager manager.IRunnerManager
+
+	// Admission gate for payload-shaped authorization (e.g. the
+	// services.privileged verb). Nil means no enforcement — the shape
+	// used by in-process tests and by servers with auth disabled. See
+	// SetAdmission.
+	admission *authz.Gate
 
 	// Context for background operations
 	ctx    context.Context
@@ -404,6 +416,14 @@ func (o *orchestrator) CreateService(ctx context.Context, service *types.Service
 		log.Str("name", service.Name),
 		log.Str("namespace", service.Namespace))
 
+	// Admission runs here rather than in the API layer because this is
+	// the choke point BOTH entry points share: ServiceService/CreateService
+	// and the release applier (rune cast), which calls in-process and so
+	// never touches a gRPC interceptor.
+	if err := o.admission.AdmitService(ctx, service); err != nil {
+		return err
+	}
+
 	// Seed metadata defaults at the single choke point every create path
 	// funnels through (API CreateService pre-fills these; cast/releasectl does
 	// not — its services used to land with Generation 0, no
@@ -443,6 +463,11 @@ func (o *orchestrator) UpdateService(ctx context.Context, service *types.Service
 	o.logger.Info("Updating service",
 		log.Str("name", service.Name),
 		log.Str("namespace", service.Namespace))
+
+	// See CreateService: the shared choke point, not the interceptor table.
+	if err := o.admission.AdmitService(ctx, service); err != nil {
+		return err
+	}
 
 	// Update the service in store - service controller watcher will pick this up
 	if err := o.store.Update(ctx, types.ResourceTypeService, service.Namespace, service.Name, service); err != nil {
@@ -656,6 +681,14 @@ func (o *orchestrator) SetEndpointPublisher(publisher wiring.EndpointPublisher, 
 
 // SetMountResolver wires the agent-side volumes Subsystem (RUNE-069)
 // to the underlying instance controller.
+// SetAdmission installs the payload-admission gate. Late-bound like the
+// other Set* wiring because the orchestrator can be constructed before
+// (or independently of) the API server that knows whether authentication
+// is enabled. A nil gate leaves admission off.
+func (o *orchestrator) SetAdmission(gate *authz.Gate) {
+	o.admission = gate
+}
+
 func (o *orchestrator) SetMountResolver(resolver wiring.MountResolver) {
 	o.instanceController.SetMountResolver(resolver)
 }

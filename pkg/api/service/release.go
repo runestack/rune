@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/release"
 	"github.com/runestack/rune/pkg/releasectl"
@@ -57,6 +58,9 @@ func (s *ReleaseService) Cast(ctx context.Context, req *generated.CastRequest) (
 
 	rel, plan, err := s.ctl.Cast(ctx, spec, payloads)
 	if err != nil {
+		if authz.IsDenied(err) {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
 		// A conflict plan is an actionable client error, not an internal fault.
 		resp := &generated.CastResponse{Plan: toProtoPlan(plan)}
 		return resp, status.Errorf(codes.FailedPrecondition, "cast: %v", err)

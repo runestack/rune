@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/orchestrator/wiring"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
@@ -479,3 +480,6 @@ func (fsr *fakeStderrReader) Read(p []byte) (n int, err error) {
 	fsr.pos += n
 	return n, nil
 }
+
+// SetAdmission implements Orchestrator interface; the fake never gates.
+func (fo *FakeOrchestrator) SetAdmission(_ *authz.Gate) {}

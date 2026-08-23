@@ -16,6 +16,7 @@ import (
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/api/service"
 	"github.com/runestack/rune/pkg/api/session"
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/observe/alerting"
 	"github.com/runestack/rune/pkg/orchestrator"
@@ -23,7 +24,6 @@ import (
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
-	"github.com/runestack/rune/pkg/types"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -185,6 +185,18 @@ func (s *APIServer) Start() error {
 		}
 	}
 
+	// Install payload admission on the orchestrator's Create/UpdateService.
+	// This is the choke point every entry point shares — the RBAC
+	// interceptor only sees inbound RPCs, so `rune cast` (ReleaseService,
+	// applying in-process) would otherwise skip the services.privileged
+	// gate entirely. Gated on EnableAuth because with auth off nothing
+	// stamps a subject and the gate would deny every privileged write.
+	var admissionGate *authz.Gate
+	if s.options.EnableAuth {
+		admissionGate = authz.NewGate(authz.NewStoreAuthorizer(s.store))
+		s.orchestrator.SetAdmission(admissionGate)
+	}
+
 	// Start the orchestrator
 	if err := s.orchestrator.Start(context.Background()); err != nil {
 		return fmt.Errorf("failed to start orchestrator: %w", err)
@@ -224,6 +236,10 @@ func (s *APIServer) Start() error {
 	// needs the live orchestrator (constructed just above) + store + logger, so
 	// it's wired here alongside the other services rather than in main.go.
 	releaseController := releasectl.NewController(s.orchestrator, s.store, s.logger)
+	// Admit the whole release up front (see Controller.SetAdmission): the
+	// orchestrator gate alone would deny mid-apply, and on --detach it
+	// would deny inside a background goroutine.
+	releaseController.SetAdmission(admissionGate)
 	s.releaseService = service.NewReleaseService(releaseController, s.store, s.logger)
 	// Native observability (RuneSight). A nil ObserveStore means the
 	// runefile [observability] block was absent or disabled; the service
@@ -451,6 +467,13 @@ type rbacRequirement struct{ resource, verb string }
 // default verb derived from the method name. Used to gate privileged
 // payload-shaped operations (e.g. setting a StorageClass Default:true)
 // without inventing a separate gRPC method.
+//
+// Only rules whose ONLY entry point is an inbound RPC belong here.
+// Anything a resource can also acquire in-process (cast/releasectl calls
+// the orchestrator directly, where no interceptor runs) must live in
+// pkg/authz and be enforced at the shared choke point instead. This hook
+// cannot see those callers, so a rule placed here would cover one entry
+// point and silently skip the other.
 func extraRBACRequirements(fullMethod string, req interface{}) []rbacRequirement {
 	switch fullMethod {
 	case "/rune.api.StorageClassService/CreateStorageClass":
@@ -461,49 +484,8 @@ func extraRBACRequirements(fullMethod string, req interface{}) []rbacRequirement
 		if r, ok := req.(*generated.UpdateStorageClassRequest); ok && r.GetStorageClass().GetDefault() {
 			return []rbacRequirement{{resource: "storageclasses", verb: "set-default"}}
 		}
-	case "/rune.api.ServiceService/CreateService":
-		if r, ok := req.(*generated.CreateServiceRequest); ok && servicePrivilegedRequired(r.GetService()) {
-			return []rbacRequirement{{resource: "services", verb: "privileged"}}
-		}
-	case "/rune.api.ServiceService/UpdateService":
-		if r, ok := req.(*generated.UpdateServiceRequest); ok && servicePrivilegedRequired(r.GetService()) {
-			return []rbacRequirement{{resource: "services", verb: "privileged"}}
-		}
 	}
 	return nil
-}
-
-// servicePrivilegedRequired reports whether the service payload uses
-// security knobs that must be gated behind the services.privileged
-// policy verb. Mirrors types.SecurityContext.RequiresPrivilegedGate.
-func servicePrivilegedRequired(svc *generated.Service) bool {
-	if svc == nil {
-		return false
-	}
-	if securityContextNeedsGate(svc.SecurityContext) {
-		return true
-	}
-	for _, step := range svc.InitSteps {
-		if step != nil && securityContextNeedsGate(step.SecurityContext) {
-			return true
-		}
-	}
-	return false
-}
-
-func securityContextNeedsGate(sc *generated.SecurityContext) bool {
-	if sc == nil {
-		return false
-	}
-	if sc.Privileged {
-		return true
-	}
-	// Normalize so e.g. k8s-style "Unconfined" gates the same as
-	// our lowercase "unconfined". Mirrors types.SeccompProfileType.Canonical().
-	if sp := sc.SeccompProfile; sp != nil && strings.EqualFold(sp.Type, "unconfined") {
-		return true
-	}
-	return false
 }
 
 // admin interceptors (local-only)
@@ -563,54 +545,11 @@ func (s *APIServer) rbacStreamInterceptor() grpc.StreamServerInterceptor {
 	}
 }
 
-// evaluatePolicies loads the subject's policies and checks if any rule allows the action
+// evaluatePolicies loads the subject's policies and checks if any rule allows
+// the action. Delegates to the shared store-backed evaluator so the RBAC
+// interceptor and the orchestrator's admission gate resolve verbs identically.
 func (s *APIServer) evaluatePolicies(ctx context.Context, subjectID, resource, verb, namespace string) (bool, error) {
-	// Load user by ID (list and match) as we don't have GetByID
-	var users []types.User
-	if err := s.store.List(ctx, types.ResourceTypeUser, "system", &users); err != nil {
-		return false, err
-	}
-	var user *types.User
-	for i := range users {
-		if users[i].ID == subjectID || users[i].Name == subjectID {
-			user = &users[i]
-			break
-		}
-	}
-	if user == nil {
-		return false, nil
-	}
-	// If no policies attached, deny by default
-	if len(user.Policies) == 0 {
-		return false, nil
-	}
-	pr := repos.NewPolicyRepo(s.store)
-	for _, pname := range user.Policies {
-		p, err := pr.Get(ctx, pname)
-		if err != nil {
-			continue
-		}
-		for _, rule := range p.Rules {
-			if rule.Resource != "*" && rule.Resource != resource {
-				continue
-			}
-			verbAllowed := false
-			for _, v := range rule.Verbs {
-				if v == "*" || v == verb {
-					verbAllowed = true
-					break
-				}
-			}
-			if !verbAllowed {
-				continue
-			}
-			// Namespace check: if rule.Namespace empty or "*", allow; if set, require match
-			if rule.Namespace == "" || rule.Namespace == "*" || rule.Namespace == namespace {
-				return true, nil
-			}
-		}
-	}
-	return false, nil
+	return authz.NewStoreAuthorizer(s.store).Authorize(ctx, subjectID, resource, verb, namespace)
 }
 
 // Stop stops the API server gracefully.
