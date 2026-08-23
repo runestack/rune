@@ -140,7 +140,7 @@ func (c *ReleaseClient) RevealValues(namespace, name string, revision int) (map[
 	req := &generated.RevealReleaseValuesRequest{
 		Name:      name,
 		Namespace: namespace,
-		Revision:  int32(revision),
+		Revision:  int32(revision), //nolint:gosec // revision bounded by caller, as in RollbackRelease
 	}
 	ctx, cancel := c.client.Context()
 	defer cancel()
