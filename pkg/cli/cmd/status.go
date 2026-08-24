@@ -150,6 +150,12 @@ type clusterReport struct {
 	NodeUsage     *nodeUsageBrief   `json:"nodeUsage,omitempty" yaml:"nodeUsage,omitempty"`
 	Network       *networkBrief     `json:"network,omitempty" yaml:"network,omitempty"`
 	Registries    *registriesBrief  `json:"registries,omitempty" yaml:"registries,omitempty"`
+
+	// GPUs is device-probe health, one entry per node that has
+	// something to say (RUNE-301 §11.2). NIL — not an empty map — on a
+	// machine with no GPUs and a clean probe, so renderCluster emits no
+	// line at all rather than "GPUs: none" (§12.4a).
+	GPUs map[string]string `json:"gpus,omitempty" yaml:"gpus,omitempty"`
 }
 
 // nodeUsageBrief is live node pressure: CPU as a percent of capacity
@@ -324,6 +330,20 @@ func collectCluster(api *client.Client) *clusterReport {
 	if ctx, cancel := api.Context(); true {
 		if resp, err := hc.GetHealth(ctx, &generated.GetHealthRequest{ComponentType: "store"}); err == nil && resp != nil && len(resp.Components) > 0 {
 			cr.Store = healthWord(resp.Components[0].Status, resp.Components[0].Message)
+		}
+		cancel()
+	}
+	// Device-probe health. Best-effort like every other probe here, and
+	// deliberately silent when the server reports no components: an
+	// absent signal must stay an absent line (RUNE-301 §12.4a). An older
+	// server rejects the component type, which lands in the same place.
+	if ctx, cancel := api.Context(); true {
+		if resp, err := hc.GetHealth(ctx, &generated.GetHealthRequest{ComponentType: "gpu"}); err == nil && resp != nil && len(resp.Components) > 0 {
+			m := map[string]string{}
+			for _, c := range resp.Components {
+				m[c.Name] = healthWord(c.Status, c.Message)
+			}
+			cr.GPUs = m
 		}
 		cancel()
 	}
@@ -677,6 +697,24 @@ func renderCluster(w *os.File, c *clusterReport) {
 	}
 	if c.NodeUsage != nil {
 		fmt.Fprintf(w, "  %-11s %s\n", "Node:", formatNodeUsage(c.NodeUsage))
+	}
+	if len(c.GPUs) > 0 {
+		names := make([]string, 0, len(c.GPUs))
+		for n := range c.GPUs {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		parts := make([]string, 0, len(names))
+		for _, n := range names {
+			// Single-node has one node and naming it adds nothing; on
+			// multi-node the name is the whole point.
+			if len(names) == 1 {
+				parts = append(parts, c.GPUs[n])
+			} else {
+				parts = append(parts, fmt.Sprintf("%s=%s", n, c.GPUs[n]))
+			}
+		}
+		fmt.Fprintf(w, "  %-11s %s\n", "GPUs:", strings.Join(parts, ", "))
 	}
 	if c.Network != nil {
 		extra := ""
