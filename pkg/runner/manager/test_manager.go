@@ -23,6 +23,8 @@ type TestRunnerManager struct {
 	InitializeCalled      bool
 	CloseCalled           bool
 	SetDNSInjectionCalled bool
+	NodeID                string
+	SetNodeIDCalled       bool
 	DNSInjectionServers   []string
 	DNSInjectionSearch    []string
 }
@@ -82,6 +84,13 @@ func (m *TestRunnerManager) SetDNSInjection(servers []string, search []string) {
 	m.DNSInjectionServers = append([]string(nil), servers...)
 	m.DNSInjectionSearch = append([]string(nil), search...)
 	m.SetDNSInjectionCalled = true
+}
+
+// SetNodeID records the call for tests that want to assert the wiring
+// happened. No-op on the runners.
+func (m *TestRunnerManager) SetNodeID(nodeID string) {
+	m.NodeID = nodeID
+	m.SetNodeIDCalled = true
 }
 
 // SetDockerRunner sets the Docker runner for testing

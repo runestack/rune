@@ -334,11 +334,11 @@ func TestDescribe_Volume_StorageClassRef(t *testing.T) {
 	assert.Contains(t, scRef.Detail, "do-volume")
 }
 
-func TestDescribe_Node_Unimplemented(t *testing.T) {
+func TestDescribe_Node_NotFound(t *testing.T) {
 	svc, _ := newDescribeTestService(t)
 	_, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "local"})
 	require.Error(t, err)
-	assert.Equal(t, codes.Unimplemented, status.Code(err))
+	assert.Equal(t, codes.NotFound, status.Code(err))
 }
 
 // When a real EventLog is wired, describe folds the resource's recent

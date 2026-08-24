@@ -71,6 +71,15 @@ type Controller struct {
 	publishedMu   sync.Mutex
 	lastPublished map[string]string
 
+	// nodeID is the identity of the machine this controller places
+	// instances on — agent.Identity().NodeID, the SAME string
+	// Volume.BoundNode and the observability stream label already use.
+	// Wired at construction because runed reads node-identity.json before
+	// the reconciler's first pass. Empty only where no identity exists at
+	// all (tests, embedded use); CreateInstance then falls back to
+	// types.LocalNodeIDFallback.
+	nodeID string
+
 	// mountRes, when set, lets resolveVolumeMount consult the
 	// agent-side volumes Subsystem (RUNE-069 Slice 4) for the per-node
 	// mount target before falling back to Volume.Handle. The fallback
@@ -135,6 +144,21 @@ func WithEventLog(eventLog events.EventLog) Option {
 	return func(c *Controller) { c.events = eventLog }
 }
 
+// WithNodeID wires this node's identity. Empty is accepted and leaves
+// CreateInstance on types.LocalNodeIDFallback.
+func WithNodeID(nodeID string) Option {
+	return func(c *Controller) { c.nodeID = nodeID }
+}
+
+// NodeID returns the identity of the node this controller places
+// instances on, or types.LocalNodeIDFallback when none was wired.
+func (c *Controller) NodeID() string {
+	if c.nodeID != "" {
+		return c.nodeID
+	}
+	return types.LocalNodeIDFallback
+}
+
 // NewController creates a new instance controller. Construction
 // covers every dependency that exists at startup; the endpoint publisher
 // and mount resolver are deliberately NOT options — they depend on agent
@@ -152,7 +176,15 @@ func NewController(store store.Store, runnerManager manager.IRunnerManager, logg
 	}
 	// The binder reads mountResolver and nodeID through the controller at
 	// each use — never captured — because runed wires both into a live
-	// controller after start (RUNE-311 D4).
+	// controller after start.
+	//
+	// Its node ID comes from endpointBinding, NOT from c.NodeID(), and the
+	// difference is load-bearing: endpointBinding is empty until the
+	// networking data plane is wired and resolveVolumeMount skips binding
+	// while it is, whereas c.NodeID() is never empty (it falls back to a
+	// literal). Switching this to c.NodeID() would start binding volumes
+	// earlier AND would make embedded callers with no identity bind every
+	// volume to that fallback literal, which is not a node.
 	c.mounts = newMountBinder(store, secretRepo, configRepo,
 		c.resolver,
 		func() string { _, nodeID := c.endpointBinding(); return nodeID })

@@ -119,7 +119,7 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 			log.Str("backend", observeStore.Capabilities().Backend))
 	}
 
-	apiServer, err := server.New(buildServerOptions(b.flags.GRPCAddr, b.flags.HTTPAddr, stateStore, appCfg, logger, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)...)
+	apiServer, err := server.New(buildServerOptions(b.flags.GRPCAddr, b.flags.HTTPAddr, stateStore, appCfg, logger, b.identity.NodeID, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)
@@ -134,6 +134,7 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 	// in buildServerOptions, before apiServer.Start runs the
 	// orchestrator's first reconcile.)
 
+	cp.events = eventLog
 	cp.olog = olog
 	cp.vip = vipAllocator
 	cp.observe = observeStore
@@ -141,12 +142,18 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 	return cp
 }
 
-func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, eventLog events.EventLog, observeStore observe.LogStore, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
+func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg *config.Config, logger log.Logger, nodeID string, netSP service.NetworkStatusProvider, vipAlloc service.VIPAllocator, eventLog events.EventLog, observeStore observe.LogStore, extraRegistrars ...func(grpc.ServiceRegistrar)) []server.Option {
 	opts := []server.Option{
 		server.WithGRPCAddr(grpcAddress),
 		server.WithHTTPAddr(httpAddress),
 		server.WithStore(st),
 		server.WithLogger(logger),
+	}
+	// Threaded here so the orchestrator's first reconcile — which runs
+	// inside apiServer.Start(), before the agent is up — already stamps
+	// the real node ID rather than a placeholder.
+	if nodeID != "" {
+		opts = append(opts, server.WithNodeID(nodeID))
 	}
 	if eventLog != nil {
 		opts = append(opts, server.WithEventLog(eventLog))

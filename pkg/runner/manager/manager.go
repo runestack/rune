@@ -272,6 +272,19 @@ func (m *RunnerManager) SetDNSInjection(servers []string, search []string) {
 	}
 }
 
+// SetNodeID forwards this node's identity to the docker runner, whose
+// List() reconstructs instances from container labels — those used to
+// carry a literal "local" while the same machine's volumes and log
+// streams were keyed by the agent's real node ID. The process runner
+// does not reconstruct instances; we silently skip.
+func (m *RunnerManager) SetNodeID(nodeID string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if dr, ok := m.dockerRunner.(interface{ SetNodeID(nodeID string) }); ok && dr != nil {
+		dr.SetNodeID(nodeID)
+	}
+}
+
 func (m *RunnerManager) Close() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()

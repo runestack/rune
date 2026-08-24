@@ -28,6 +28,7 @@ import (
 	"github.com/runestack/rune/pkg/store"
 
 	dnssub "github.com/runestack/rune/internal/agent/dns"
+	"github.com/runestack/rune/internal/agent/nodeinfo"
 	volsub "github.com/runestack/rune/internal/agent/volumes"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -49,9 +50,9 @@ import (
 //
 //  1. Registration order IS start order. agent.Register appends to a slice and
 //     agent.Start starts subsystems in that order (internal/agent/agent.go).
-//     The order below — dataplane, volumes, forwarder, DNS, ingress — is a
-//     contract: ingressctl reads dpRef.Cache(), so moving ingress ahead of the
-//     dataplane panics at startup on edge nodes only. Keep this one ordered
+//     The order below — nodeinfo, dataplane, volumes, forwarder, DNS, ingress —
+//     is a contract: ingressctl reads dpRef.Cache(), so moving ingress ahead of
+//     the dataplane panics at startup on edge nodes only. Keep this one ordered
 //     block; do not scatter these into independently-called functions.
 //
 //  2. The REAL mount resolver is installed inside the volumes registration
@@ -87,7 +88,32 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 	if b.flags.NodeRole != "" {
 		extraLabels[types.LabelNodeRole] = b.flags.NodeRole
 	}
-	agentInst, agentStop, err := startAgent(ctx, logger, olog, b.flags.DataDir, b.flags.DevMode, extraLabels, func(a *agent.Agent) error {
+	agentInst, agentStop, err := startAgent(ctx, logger, olog, b.identity, b.flags.DevMode, extraLabels, func(a *agent.Agent) error {
+		// Node inventory. First because it depends on nothing and its
+		// Start is just a goroutine launch, so the record lands as early
+		// as the store allows. It is also the only subsystem whose Ready
+		// is bounded by a deadline rather than by completion — see the
+		// nodeinfo package comment for why a device probe must never gate
+		// the daemon.
+		gpuProvider, gpErr := nodeinfo.SelectProvider(b.flags.GPUProvider)
+		if gpErr != nil {
+			return fmt.Errorf("agent nodeinfo: %w", gpErr)
+		}
+		niSub, niErr := nodeinfo.New(nodeinfo.Config{
+			Repo:     repos.NewNodeRepo(stateStore),
+			NodeID:   a.Identity().NodeID,
+			Labels:   a.Identity().Labels,
+			Provider: gpuProvider,
+			Events:   cp.events,
+			Logger:   logger.WithComponent("agent.nodeinfo"),
+		})
+		if niErr != nil {
+			return fmt.Errorf("agent nodeinfo: %w", niErr)
+		}
+		if err := a.Register(niSub); err != nil {
+			return err
+		}
+
 		dpMode := dataplane.ModeProduction
 		if b.flags.DevMode {
 			dpMode = dataplane.ModeDev
@@ -405,13 +431,11 @@ func makeAgentDriverLookup(st store.Store, driverConfigs map[string]map[string]a
 
 // startAgent boots the per-node agent against an already-open
 // OrderedLog. The orderedlog is owned by the caller (main) so it can
-// also be shared with the API server's WatchService. Returns the
-// agent and a stop function the caller invokes during shutdown.
-func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, dataDirPath string, dev bool, extraLabels map[string]string, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
-	identity, err := agent.LoadOrCreateIdentity(dataDirPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("agent: load identity: %w", err)
-	}
+// also be shared with the API server's WatchService. identity is passed in
+// rather than read here because the control plane already stamped
+// instances with the same NodeID before this runs. Returns the agent and
+// a stop function the caller invokes during shutdown.
+func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, identity agent.Identity, dev bool, extraLabels map[string]string, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
 	if len(extraLabels) > 0 {
 		if identity.Labels == nil {
 			identity.Labels = make(map[string]string, len(extraLabels))

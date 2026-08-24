@@ -7,6 +7,7 @@ import (
 	dnssub "github.com/runestack/rune/internal/agent/dns"
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/api/server"
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/networking/vip"
 	"github.com/runestack/rune/pkg/observe"
@@ -34,6 +35,15 @@ type boot struct {
 	logger   log.Logger
 	runefile string
 	closers  *closerStack
+
+	// identity is the persisted node identity. It is loaded up front
+	// rather than alongside the agent because everything keyed by node —
+	// Instance.NodeID, Volume.BoundNode, the node inventory record — must
+	// agree on ONE ID, and the orchestrator starts reconciling (and so
+	// stamping instances) before the agent exists. Reading
+	// node-identity.json is a pure file operation, so nothing forces it
+	// later and every consumer is handed the same value.
+	identity agent.Identity
 }
 
 // controlPlane is everything that must exist before the node starts. It holds
@@ -51,6 +61,11 @@ type controlPlane struct {
 	vip     *vip.Allocator
 	observe observe.LogStore
 	api     *server.APIServer
+
+	// events is the persisted event log. It is shared because the
+	// agent's inventory subsystem emits Node events too, not just the
+	// control plane's controllers.
+	events events.EventLog
 }
 
 // node is the per-host agent and the subsystem handles later phases wire back

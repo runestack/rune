@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/runestack/rune/internal/agent"
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/version"
@@ -53,7 +54,33 @@ func mustInitRuntime(f *Flags) *boot {
 		os.Exit(1)
 	}
 
-	return &boot{flags: f, ctx: ctx, logger: logger, runefile: resolvedRunefile, closers: &closers}
+	// Node identity is read this early because everything keyed by node
+	// has to agree on one ID, and the orchestrator starts stamping
+	// Instance.NodeID during its first reconcile — which happens while
+	// the API server starts, before the agent exists. Reading
+	// <data-dir>/node-identity.json (minting it on first boot) needs
+	// neither the store nor the agent, so nothing forces it later.
+	identity, minted, err := agent.LoadOrCreateIdentity(f.DataDir, f.NodeName)
+	if err != nil {
+		logger.Error("Failed to load node identity", log.Str("data_dir", f.DataDir), log.Err(err))
+		os.Exit(1)
+	}
+	switch {
+	case f.NodeName != "" && !minted:
+		// Only a first boot mints an ID, so the flag is inert here — and
+		// silence would read as "the rename worked". It did not, and on
+		// this machine it never will: volumes on disk are bound to the
+		// existing ID.
+		logger.Warn("--node-name ignored: this node already has an identity",
+			log.Str("requested", f.NodeName), log.Str("node_id", identity.NodeID))
+	case f.NodeName != "" && identity.NodeID != f.NodeName:
+		// Minted, but not as asked: the name was not a usable DNS-1123
+		// label, or differed only in case.
+		logger.Warn("--node-name was not used verbatim",
+			log.Str("requested", f.NodeName), log.Str("node_id", identity.NodeID))
+	}
+
+	return &boot{flags: f, ctx: ctx, logger: logger, runefile: resolvedRunefile, closers: &closers, identity: identity}
 }
 
 func buildLogger(levelStr, formatStr string, pretty, debug bool) log.Logger {

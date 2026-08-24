@@ -56,7 +56,20 @@ func (s *EventService) ListEvents(ctx context.Context, req *generated.ListEvents
 		if !ok {
 			return nil, status.Errorf(codes.InvalidArgument, "for must be <kind>/<name>, got %q", req.For)
 		}
-		out, err = s.log.ListByResource(ctx, req.Namespace, canonicalEventKind(kind), name, limit)
+		canonKind := canonicalEventKind(kind)
+		// Node events are cluster-scoped: the record they describe lives
+		// under an empty-namespace key, so honouring the caller's
+		// namespace here returns nothing on any install with a default
+		// namespace configured — a write-only event log. Forced HERE
+		// rather than in the CLI so the namespace the caller sent still
+		// reaches RBAC: a namespace-pinned grant is allowed to read node
+		// events (they are hardware facts, not tenant data) and
+		// `rune describe node` already shows them.
+		ns := req.Namespace
+		if canonKind == "Node" {
+			ns = ""
+		}
+		out, err = s.log.ListByResource(ctx, ns, canonKind, name, limit)
 	} else {
 		// Namespace-wide view: scan the cursor index and filter. Cheap
 		// for typical TTL windows (~1h of state-transition events).
