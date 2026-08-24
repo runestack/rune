@@ -12,7 +12,8 @@
 //     again. Hotplug is out of scope (these are servers); a re-probe means
 //     a restart. Adding a ticker "so it picks up a card later" would put a
 //     recurring wakeup on every GPU-less machine in the fleet, which is
-//     the cost this design exists to avoid. no_ticker_test.go enforces it.
+//     the cost this design exists to avoid. no_ticker_test.go trips on the
+//     shapes people actually write; it is a tripwire, not a proof.
 //
 //   - THE PROBE NEVER BLOCKS OR FAILS runed's BOOT. Agent.Start runs each
 //     subsystem's Start serially with no timeout and treats any error as

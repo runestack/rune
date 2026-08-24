@@ -55,9 +55,12 @@ func TestLoadOrCreateIdentity_ExistingIsNeverRenamed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := LoadOrCreateIdentity(dir, "brand-new-name")
+	got, minted, err := LoadOrCreateIdentity(dir, "brand-new-name")
 	if err != nil {
 		t.Fatalf("LoadOrCreateIdentity: %v", err)
+	}
+	if minted {
+		t.Fatal("reported as minted, but the identity was read from disk")
 	}
 	if got.NodeID != seed.NodeID {
 		t.Fatalf("NodeID = %q, want the persisted %q — an existing identity must never be renamed", got.NodeID, seed.NodeID)
@@ -66,17 +69,23 @@ func TestLoadOrCreateIdentity_ExistingIsNeverRenamed(t *testing.T) {
 
 func TestLoadOrCreateIdentity_MintsPreferredNameOnFirstBoot(t *testing.T) {
 	dir := t.TempDir()
-	got, err := LoadOrCreateIdentity(dir, "gpu-1")
+	got, minted, err := LoadOrCreateIdentity(dir, "gpu-1")
 	if err != nil {
 		t.Fatalf("LoadOrCreateIdentity: %v", err)
+	}
+	if !minted {
+		t.Fatal("first boot must report the identity as minted")
 	}
 	if got.NodeID != "gpu-1" {
 		t.Fatalf("NodeID = %q, want %q", got.NodeID, "gpu-1")
 	}
 	// And it is persisted, so the second boot agrees.
-	again, err := LoadOrCreateIdentity(dir, "something-else")
+	again, reminted, err := LoadOrCreateIdentity(dir, "something-else")
 	if err != nil {
 		t.Fatalf("LoadOrCreateIdentity (second): %v", err)
+	}
+	if reminted {
+		t.Fatal("the second load must not report as minted")
 	}
 	if again.NodeID != "gpu-1" {
 		t.Fatalf("second load NodeID = %q, want %q", again.NodeID, "gpu-1")

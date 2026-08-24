@@ -27,47 +27,52 @@ import (
 // existing file is returned verbatim, because Volume.BoundNode rows on
 // disk already carry whatever ID was minted then and renaming in place
 // would unmount every volume on the next restart.
-func LoadOrCreateIdentity(dir string, preferredName string) (Identity, error) {
+// minted reports whether the returned identity was created by this call
+// rather than read from disk. Only this function can tell — the caller
+// cannot infer it by comparing preferredName to the result, because
+// minting lowercases its input and rejects candidates that are not
+// DNS-1123 labels.
+func LoadOrCreateIdentity(dir string, preferredName string) (id Identity, minted bool, err error) {
 	if dir == "" {
-		return Identity{}, errors.New("identity: empty directory")
+		return Identity{}, false, errors.New("identity: empty directory")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return Identity{}, fmt.Errorf("identity: mkdir %q: %w", dir, err)
+		return Identity{}, false, fmt.Errorf("identity: mkdir %q: %w", dir, err)
 	}
 	path := filepath.Join(dir, "node-identity.json")
 
 	if data, err := os.ReadFile(path); err == nil {
-		var id Identity
-		if err := json.Unmarshal(data, &id); err != nil {
-			return Identity{}, fmt.Errorf("identity: parse %q: %w", path, err)
+		var existing Identity
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return Identity{}, false, fmt.Errorf("identity: parse %q: %w", path, err)
 		}
-		if id.NodeID == "" {
-			return Identity{}, fmt.Errorf("identity: empty NodeID in %q", path)
+		if existing.NodeID == "" {
+			return Identity{}, false, fmt.Errorf("identity: empty NodeID in %q", path)
 		}
-		return id, nil
+		return existing, false, nil
 	} else if !os.IsNotExist(err) {
-		return Identity{}, fmt.Errorf("identity: read %q: %w", path, err)
+		return Identity{}, false, fmt.Errorf("identity: read %q: %w", path, err)
 	}
 
 	record, mintFrom := hostnameForIdentity(os.Hostname())
-	id := Identity{
+	fresh := Identity{
 		NodeID:   mintNodeID(preferredName, mintFrom),
 		Hostname: record,
 	}
-	out, err := json.MarshalIndent(id, "", "  ")
+	out, err := json.MarshalIndent(fresh, "", "  ")
 	if err != nil {
-		return Identity{}, fmt.Errorf("identity: marshal: %w", err)
+		return Identity{}, false, fmt.Errorf("identity: marshal: %w", err)
 	}
 	// Atomic write: write to .tmp then rename.
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return Identity{}, fmt.Errorf("identity: write %q: %w", tmp, err)
+		return Identity{}, false, fmt.Errorf("identity: write %q: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return Identity{}, fmt.Errorf("identity: rename %q: %w", path, err)
+		return Identity{}, false, fmt.Errorf("identity: rename %q: %w", path, err)
 	}
-	return id, nil
+	return fresh, true, nil
 }
 
 // hostnameForIdentity splits os.Hostname()'s result into the value to

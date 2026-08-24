@@ -22,13 +22,16 @@ const nvidiaSMIBinary = "nvidia-smi"
 // nvidiaSMIQuery is the field list, in the order parseNVIDIACSV expects.
 const nvidiaSMIQuery = "uuid,index,name,memory.total,driver_version"
 
-// maxProbeOutputBytes and maxProbeRows bound what the probe will accept.
-// nvidia-smi output is untrusted input: a host with many devices — or a
-// per-process query a hostile container can pad with CUDA processes —
-// must not become unbounded memory here. On exceeding either bound the
-// probe is REJECTED rather than truncated: a truncated inventory is a
-// silently wrong answer, and DeviceProbeError is where the failure
-// belongs.
+// maxProbeOutputBytes and maxProbeRows bound what the probe will ACCEPT,
+// not what it holds: cmd.Run() buffers the whole of stdout before either
+// is checked. That is fine for --query-gpu, which is a few hundred bytes
+// of driver-generated text. It would NOT be fine for a per-process query
+// a hostile container can pad with CUDA processes — adding one means
+// streaming the read, not raising these numbers.
+//
+// On exceeding either bound the probe is REJECTED rather than truncated:
+// a truncated inventory is a silently wrong answer, and DeviceProbeError
+// is where the failure belongs.
 const (
 	maxProbeOutputBytes = 1 << 20 // 1 MiB
 	maxProbeRows        = 256

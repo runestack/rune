@@ -176,15 +176,15 @@ func NewController(store store.Store, runnerManager manager.IRunnerManager, logg
 	}
 	// The binder reads mountResolver and nodeID through the controller at
 	// each use — never captured — because runed wires both into a live
-	// controller after start (RUNE-311 D4).
-	// The binder reads the node ID from endpointBinding, NOT from
-	// c.NodeID(), and the difference is load-bearing. endpointBinding is
-	// empty until the networking data plane is wired, and
-	// resolveVolumeMount skips binding while it is — whereas c.NodeID()
-	// is never empty (it falls back to a literal). Switching this to
-	// c.NodeID() would start binding volumes earlier AND would make
-	// embedded callers with no identity bind every volume to that
-	// fallback literal, which is not a node.
+	// controller after start.
+	//
+	// Its node ID comes from endpointBinding, NOT from c.NodeID(), and the
+	// difference is load-bearing: endpointBinding is empty until the
+	// networking data plane is wired and resolveVolumeMount skips binding
+	// while it is, whereas c.NodeID() is never empty (it falls back to a
+	// literal). Switching this to c.NodeID() would start binding volumes
+	// earlier AND would make embedded callers with no identity bind every
+	// volume to that fallback literal, which is not a node.
 	c.mounts = newMountBinder(store, secretRepo, configRepo,
 		c.resolver,
 		func() string { _, nodeID := c.endpointBinding(); return nodeID })

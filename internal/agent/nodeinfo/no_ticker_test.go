@@ -23,6 +23,7 @@ func TestNoPeriodicTimersInPackage(t *testing.T) {
 	forbidden := map[string]string{
 		"time.NewTicker": why,
 		"time.Tick":      why,
+		"time.AfterFunc": why + " once it rearms itself, which is what it is for",
 		// time.After is fine once (probe() would use it); inside a loop
 		// it is a ticker spelled differently, and spelling is not a
 		// distinction the fleet can feel. Checked by the loop scan below
