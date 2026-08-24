@@ -235,10 +235,12 @@ func (s *Subsystem) emitDeviceSetChange(ctx context.Context, previous, current *
 		return
 	}
 
-	level, reason := types.EventLevelInfo, "GpuInventoryChanged"
+	// Both slugs come from the fixed event vocabulary this design owns;
+	// inventing a new one here would fork it for every consumer that
+	// scripts against these. Capacity going down is the direction that
+	// strands a workload, so it reads louder than capacity going up.
+	level, reason := types.EventLevelInfo, "GpuInventoryProbed"
 	if len(after) < len(before) {
-		// Capacity going down is the direction that strands a workload,
-		// so it reads louder than capacity going up.
 		level, reason = types.EventLevelWarn, "GpuCapacityShrunk"
 	}
 	message := fmt.Sprintf("device set changed on re-probe: was [%s], now [%s]",

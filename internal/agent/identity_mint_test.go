@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,5 +80,38 @@ func TestLoadOrCreateIdentity_MintsPreferredNameOnFirstBoot(t *testing.T) {
 	}
 	if again.NodeID != "gpu-1" {
 		t.Fatalf("second load NodeID = %q, want %q", again.NodeID, "gpu-1")
+	}
+}
+
+// The hex fallback must be reachable on the path that actually exists.
+// os.Hostname() failing substitutes a placeholder for the Hostname field,
+// and that placeholder is a valid DNS-1123 label — so if it reached the
+// minter it would become the node's ID and name every such machine the
+// same thing.
+func TestHostnameForIdentity(t *testing.T) {
+	record, mint := hostnameForIdentity("gpu-1", nil)
+	if record != "gpu-1" || mint != "gpu-1" {
+		t.Fatalf("hostnameForIdentity(\"gpu-1\", nil) = (%q, %q), want both %q", record, mint, "gpu-1")
+	}
+
+	record, mint = hostnameForIdentity("", errors.New("no hostname"))
+	if record != "unknown" {
+		t.Fatalf("unreadable hostname recorded as %q, want %q", record, "unknown")
+	}
+	if mint != "" {
+		t.Fatalf("unreadable hostname minted from %q, want \"\" so the ID falls back to node-<hex>", mint)
+	}
+	// And that empty value is what makes the hex branch reachable.
+	if got := mintNodeID("", mint); !strings.HasPrefix(got, "node-") {
+		t.Fatalf("mintNodeID with no hostname = %q, want a node-<hex> name", got)
+	}
+}
+
+// The minter itself does NOT special-case the placeholder string: a
+// machine genuinely named "unknown" is a real machine and keeps its name.
+// The discrimination belongs at the call site, where the error is known.
+func TestMintNodeID_DoesNotSpecialCaseThePlaceholder(t *testing.T) {
+	if got := mintNodeID("", "unknown"); got != "unknown" {
+		t.Fatalf("mintNodeID(\"\", \"unknown\") = %q, want %q", got, "unknown")
 	}
 }

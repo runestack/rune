@@ -147,10 +147,14 @@ func TestSubsystem_StartReturnsImmediately(t *testing.T) {
 	require.NoError(t, sub.Stop(context.Background()))
 }
 
-// A GPU-less box gets no goroutine and no timer. Asserted on the live
-// stack dump rather than a goroutine count, so the claim is about THIS
+// Nothing this package started outlives Stop. Asserted on the live stack
+// dump rather than a goroutine count, so the claim is about THIS
 // package's goroutines and not about whatever the store happens to be
 // running.
+//
+// This is NOT the no-periodic-wakeup guard, and must not be mistaken for
+// one: a ticker loop that exits on ctx cancel leaves nothing behind and
+// would pass here. no_ticker_test.go is what forbids the ticker.
 func TestSubsystem_NothingPeriodicOnAGPULessBox(t *testing.T) {
 	sub, _ := newTestSubsystem(t, Config{})
 	ctx := context.Background()

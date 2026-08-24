@@ -49,13 +49,10 @@ func LoadOrCreateIdentity(dir string, preferredName string) (Identity, error) {
 		return Identity{}, fmt.Errorf("identity: read %q: %w", path, err)
 	}
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "unknown"
-	}
+	record, mintFrom := hostnameForIdentity(os.Hostname())
 	id := Identity{
-		NodeID:   mintNodeID(preferredName, hostname),
-		Hostname: hostname,
+		NodeID:   mintNodeID(preferredName, mintFrom),
+		Hostname: record,
 	}
 	out, err := json.MarshalIndent(id, "", "  ")
 	if err != nil {
@@ -71,6 +68,19 @@ func LoadOrCreateIdentity(dir string, preferredName string) (Identity, error) {
 		return Identity{}, fmt.Errorf("identity: rename %q: %w", path, err)
 	}
 	return id, nil
+}
+
+// hostnameForIdentity splits os.Hostname()'s result into the value to
+// record and the value to mint an ID from. They differ in exactly one
+// case: a hostname we could not read is recorded as a placeholder but
+// never minted from, because the placeholder is itself a valid DNS-1123
+// label — minting from it would name every such machine the same thing
+// instead of giving each a unique one.
+func hostnameForIdentity(hostname string, err error) (record, mint string) {
+	if err != nil {
+		return "unknown", ""
+	}
+	return hostname, hostname
 }
 
 // mintNodeID picks the NodeID for a brand-new identity: an explicit

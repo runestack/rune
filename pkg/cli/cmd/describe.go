@@ -47,7 +47,7 @@ func newDescribeCmd() *cobra.Command {
 one screen: its status with a real reason, the related resources it
 depends on, and suggested next commands.
 
-Supported types: instance (inst), service (svc), volume (vol).`,
+Supported types: instance (inst), service (svc), volume (vol), node.`,
 		Example: `  rune describe instance flo-0 -n shared
   rune describe service flo -n shared
   rune describe volume/flo-data-flo-0 -n shared

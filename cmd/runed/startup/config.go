@@ -65,6 +65,14 @@ func mustInitRuntime(f *Flags) *boot {
 		logger.Error("Failed to load node identity", log.Str("data_dir", f.DataDir), log.Err(err))
 		os.Exit(1)
 	}
+	if f.NodeName != "" && f.NodeName != identity.NodeID {
+		// Only first boot mints an ID, so this flag is inert here — and
+		// silence would read as "the rename worked". It did not, and on
+		// this machine it never will: volumes on disk are bound to the
+		// existing ID.
+		logger.Warn("--node-name ignored: this node already has an identity",
+			log.Str("requested", f.NodeName), log.Str("node_id", identity.NodeID))
+	}
 
 	return &boot{flags: f, ctx: ctx, logger: logger, runefile: resolvedRunefile, closers: &closers, identity: identity}
 }

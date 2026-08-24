@@ -571,7 +571,9 @@ func nodeDevicesSection(node *types.Node) *generated.DescribeSection {
 }
 
 // humanGiB renders device memory the way the driver and every GPU
-// datasheet do.
+// datasheet do: "48Gi", not types.FormatMemory's "48.0Gi". A tenth of a
+// gibibyte is noise on a card and the whole-number form is what an
+// operator is comparing against the box's spec sheet.
 func humanGiB(b int64) string {
 	if b <= 0 {
 		return "-"

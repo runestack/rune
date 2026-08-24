@@ -17,6 +17,13 @@ const nodeNamespaceKey = ""
 // NodeRepo provides CRUD over the node inventory record — what hardware
 // a machine has, written by that machine's own agent.
 //
+// Nothing reaps rows. A node writes its own record under its own ID and
+// keeps that ID for life, so on a single-node install there is exactly
+// one row forever. Regenerating node-identity.json (deleting the data
+// directory but keeping the store, say) strands the old row, which then
+// reports a machine that no longer exists. Whatever adds nodes to a
+// cluster owes a removal path.
+//
 // # Why this repo never uses UpdateFunc
 //
 // The inventory record has exactly ONE writer: the agent that owns the
