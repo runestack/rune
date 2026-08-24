@@ -236,10 +236,18 @@ func (m *MemoryStore) UpdateFunc(ctx context.Context, resourceType types.Resourc
 	}
 
 	// Load the current value into target (JSON round-trip mirrors Badger).
+	// Zeroed first so the decode replaces rather than merges — matters when a
+	// caller reuses one target across calls (see resetTarget).
+	//
+	// MARSHAL BEFORE RESET, and do not reorder these: this store hands out
+	// the stored pointer itself, so when stored and target are the same
+	// object, resetTarget zeroes the record. Capturing the bytes first is
+	// what makes that safe.
 	b, err := json.Marshal(stored)
 	if err != nil {
 		return fmt.Errorf("failed to serialize stored resource: %w", err)
 	}
+	resetTarget(target)
 	if err := json.Unmarshal(b, target); err != nil {
 		return fmt.Errorf("failed to deserialize resource: %w", err)
 	}

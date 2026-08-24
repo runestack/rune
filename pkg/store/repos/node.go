@@ -27,23 +27,12 @@ const nodeNamespaceKey = ""
 // # Why this repo never uses UpdateFunc
 //
 // The inventory record has exactly ONE writer: the agent that owns the
-// node. There is no read-modify-write race to protect against, so Upsert
-// does a whole-object Update rather than a store.UpdateFunc CAS.
+// node. With no read-modify-write race to protect against, a CAS buys
+// nothing, so Upsert writes the whole object through Update.
 //
-// That is deliberate, not incidental. BadgerStore.UpdateFunc unmarshals
-// the freshly-read row into the SAME target on every retry without
-// zeroing it (pkg/store/badger_store.go, inside the retry loop), and
-// encoding/json leaves a field absent from the JSON untouched. Any
-// `omitempty` field would therefore keep a discarded attempt's value.
-// types.Node has three such fields of its own (Labels, StatusReason,
-// StatusMessage) and the device fields add three more; node_test.go
-// reproduces the failure.
-//
-// Whole-object Update sidesteps the hazard instead of relying on tag
-// discipline: the caller supplies a fully-populated struct and the store
-// marshals it as given, with no un-zeroed re-read anywhere on the path.
-// A future second writer must add a CAS path AND revisit the tags
-// together — hence this comment rather than a silent choice.
+// Give this record a second writer and that stops being true: it would
+// need UpdateFunc, whose retry loop re-reads and re-runs the mutation,
+// which a whole-object write cannot express.
 type NodeRepo struct {
 	base *BaseRepo[types.Node]
 }

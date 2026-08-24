@@ -51,7 +51,9 @@ type Store interface {
 	// replacement for the Get → mutate-snapshot → Update pattern: two
 	// controllers can each touch only their own fields without clobbering one
 	// another. mutate MUST be a deterministic setter of target's fields — it may
-	// be invoked more than once (once per retry) on a freshly-read target.
+	// be invoked more than once (once per retry) on a target that is zeroed and
+	// re-read each time — so anything a rejected attempt wrote is gone, and any
+	// state mutate needs across attempts must live outside target.
 	// Returns a not-found error if the resource is absent.
 	UpdateFunc(ctx context.Context, resourceType types.ResourceType, namespace string, name string, target interface{}, mutate func() error, opts ...UpdateOption) error
 

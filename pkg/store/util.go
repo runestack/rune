@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/runestack/rune/pkg/types"
@@ -78,6 +79,29 @@ func ResourceTypes() []string {
 		"networks",
 		"volumes",
 	}
+}
+
+// resetTarget zeroes *target so a following json.Unmarshal decodes into a clean
+// value. encoding/json never zeroes its destination: absent keys keep whatever
+// was in the slot, non-nil maps are merged into, non-nil pointers are decoded
+// through, and a slice's existing backing array is reused element-by-element.
+// Every field an `omitempty` writer left out therefore survives the decode — so
+// a re-read that is supposed to replace the target instead merges the previous
+// contents into it. In UpdateFunc that previous content is the mutation of an
+// attempt the store already rejected, which is how discarded state gets
+// committed. Zeroing first makes each decode a replace, as callers assume.
+//
+// A non-pointer or nil target is left alone; json.Unmarshal reports it.
+func resetTarget(target interface{}) {
+	v := reflect.ValueOf(target)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return
+	}
+	elem := v.Elem()
+	if !elem.CanSet() {
+		return
+	}
+	elem.SetZero()
 }
 
 // UnmarshalResource converts a resource interface to a target type using JSON marshaling/unmarshaling.
