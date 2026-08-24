@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	badger "github.com/dgraph-io/badger/v4"
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
@@ -215,4 +217,66 @@ func (blockingProvider) Name() string { return "blocking" }
 func (p blockingProvider) Probe(context.Context) ([]types.GPUDevice, error) {
 	<-p.release
 	return nil, nil
+}
+
+// A re-probe whose device set changed fires a Node event. The comparison
+// is by device UUID, not by a Generation counter — types.Node has no
+// such field, and the UUID set is the thing that actually changed (D28).
+func TestSubsystem_EmitsOnDeviceSetChange(t *testing.T) {
+	st := store.NewBadgerStore(log.NewTestLogger())
+	require.NoError(t, st.Open(t.TempDir()))
+	t.Cleanup(func() { _ = st.Close() })
+	repo := repos.NewNodeRepo(st)
+
+	db, err := badger.Open(badger.DefaultOptions("").WithInMemory(true).WithLogger(nil))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	rec, err := events.NewRecorder(db, log.NewTestLogger(), events.Options{})
+	require.NoError(t, err)
+
+	two := []types.GPUDevice{{UUID: "GPU-8f6a"}, {UUID: "GPU-2c11"}}
+	run := func(devices []types.GPUDevice) {
+		t.Helper()
+		sub, err := New(Config{
+			Repo: repo, NodeID: "node-1", Events: rec,
+			Provider: StaticProvider("static", devices, nil), Logger: log.NewTestLogger(),
+		})
+		require.NoError(t, err)
+		require.NoError(t, sub.Start(context.Background()))
+		waitReady(t, sub, 5*time.Second)
+		require.NoError(t, sub.Stop(context.Background()))
+	}
+
+	// First boot is not a change: there is nothing to have changed from.
+	run(two)
+	evs, err := rec.ListByResource(context.Background(), "", "Node", "node-1", 10)
+	require.NoError(t, err)
+	assert.Empty(t, evs, "first boot emits nothing")
+
+	// Same set again: still nothing.
+	run(two)
+	evs, err = rec.ListByResource(context.Background(), "", "Node", "node-1", 10)
+	require.NoError(t, err)
+	assert.Empty(t, evs, "an unchanged device set emits nothing")
+
+	// A card went away.
+	run([]types.GPUDevice{{UUID: "GPU-8f6a"}})
+	evs, err = rec.ListByResource(context.Background(), "", "Node", "node-1", 10)
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+	assert.Equal(t, "GpuCapacityShrunk", evs[0].Reason)
+	assert.Equal(t, types.EventLevelWarn, evs[0].Level)
+	assert.Equal(t, "", evs[0].Namespace, "node events are cluster-scoped")
+	assert.Contains(t, evs[0].Message, "GPU-2c11")
+}
+
+// Without an EventLog wired the subsystem is silent and does not crash.
+func TestSubsystem_NilEventLogIsSafe(t *testing.T) {
+	sub, repo := newTestSubsystem(t, Config{Provider: StaticProvider("s", []types.GPUDevice{{UUID: "GPU-1"}}, nil)})
+	ctx := context.Background()
+	require.NoError(t, sub.Start(ctx))
+	waitReady(t, sub, 5*time.Second)
+	_, err := repo.Get(ctx, "node-8f6a12cd")
+	require.NoError(t, err)
+	require.NoError(t, sub.Stop(ctx))
 }

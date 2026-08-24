@@ -104,6 +104,7 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 			NodeID:   a.Identity().NodeID,
 			Labels:   a.Identity().Labels,
 			Provider: gpuProvider,
+			Events:   cp.events,
 			Logger:   logger.WithComponent("agent.nodeinfo"),
 		})
 		if niErr != nil {

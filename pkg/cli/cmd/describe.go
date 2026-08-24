@@ -119,7 +119,7 @@ func parseDescribeTarget(args []string) (kind, name string, err error) {
 	}
 	canon, ok := describeKind(kind)
 	if !ok {
-		return "", "", fmt.Errorf("cannot describe %q (supported: instance, service, volume)", kind)
+		return "", "", fmt.Errorf("cannot describe %q (supported: instance, service, volume, node)", kind)
 	}
 	return canon, name, nil
 }
@@ -155,7 +155,12 @@ func renderDescribe(w io.Writer, r *generated.DescribeResult) {
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%-16s %s\n", "Status:", colorizeDescribeStatus(r.Status))
+	// Omitted rather than blank when the kind maintains no status —
+	// nothing refreshes a node's Status or LastHeartbeat, and a blank
+	// status reads as a dead node on a healthy box (RUNE-301 §6.1).
+	if r.Status != "" {
+		fmt.Fprintf(w, "%-16s %s\n", "Status:", colorizeDescribeStatus(r.Status))
+	}
 	if r.Reason != "" {
 		fmt.Fprintf(w, "%-16s %s\n", "Reason:", r.Reason)
 	}

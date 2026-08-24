@@ -34,15 +34,24 @@ func handleEventsGet(opts *getOptions) error {
 		limit = 50
 	}
 
+	// Node events are cluster-scoped: the record lives under an empty
+	// namespace key, so passing the caller's default namespace here
+	// silently returns nothing on any install that has one configured
+	// (RUNE-301 §12.3).
+	ns := effectiveCmdNS(opts.namespace)
+	if strings.EqualFold(forKind, "node") {
+		ns = ""
+	}
+
 	evs, err := client.NewEventClient(apiClient).ListEvents(
-		effectiveCmdNS(opts.namespace), forKind, forName, limit,
+		ns, forKind, forName, limit,
 	)
 	if err != nil {
 		return err
 	}
 
 	table := NewResourceTable()
-	table.Namespace = effectiveCmdNS(opts.namespace)
+	table.Namespace = ns
 	table.ShowHeaders = !opts.noHeaders
 	return table.RenderEvents(evs)
 }

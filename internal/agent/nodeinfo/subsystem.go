@@ -29,9 +29,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
@@ -62,6 +65,12 @@ type Config struct {
 
 	// Provider probes for devices. Defaults to NullProvider().
 	Provider DeviceProvider
+
+	// Events is the persisted event log. Optional and nil-safe: when
+	// wired, a re-probe whose device set changed emits a Node event so
+	// `rune describe node` shows the transition. There is no re-probe
+	// loop, so this fires at most once per agent start.
+	Events events.EventLog
 
 	// ProbeDeadline overrides DefaultProbeDeadline. Test seam.
 	ProbeDeadline time.Duration
@@ -177,6 +186,16 @@ func (s *Subsystem) probeAndWrite(ctx context.Context) {
 		node.DeviceProbeError = probeErr.Error()
 	}
 
+	// RUNE-301 D28: the device set is compared by UUID, not by a
+	// Generation counter — types.Node has no such field, the UUID set is
+	// the thing that actually changed, and Missing/GpuCapacityShrunk are
+	// already keyed on UUIDs. Read before the write, since Upsert
+	// replaces the row.
+	previous, prevErr := s.cfg.Repo.Get(ctx, s.cfg.NodeID)
+	if prevErr != nil {
+		previous = nil
+	}
+
 	switch {
 	case probeErr != nil:
 		// A probe that could not answer IS worth a warning: a driver
@@ -199,7 +218,65 @@ func (s *Subsystem) probeAndWrite(ctx context.Context) {
 		// The record is diagnostics, never the correctness path: a
 		// failed write must not take the agent down with it.
 		s.log.Warn("failed to write node record", log.Err(err))
+		return
 	}
+	s.emitDeviceSetChange(ctx, previous, node)
+}
+
+// emitDeviceSetChange fires a Node event when a re-probe found a
+// different set of device UUIDs than the last one did. First boot is not
+// a change — there is nothing to have changed from.
+func (s *Subsystem) emitDeviceSetChange(ctx context.Context, previous, current *types.Node) {
+	if s.cfg.Events == nil || previous == nil {
+		return
+	}
+	before, after := deviceUUIDs(previous.Devices), deviceUUIDs(current.Devices)
+	if equalUUIDSets(before, after) {
+		return
+	}
+
+	level, reason := types.EventLevelInfo, "GpuInventoryChanged"
+	if len(after) < len(before) {
+		// Capacity going down is the direction that strands a workload,
+		// so it reads louder than capacity going up.
+		level, reason = types.EventLevelWarn, "GpuCapacityShrunk"
+	}
+	message := fmt.Sprintf("device set changed on re-probe: was [%s], now [%s]",
+		strings.Join(before, ", "), strings.Join(after, ", "))
+
+	if err := s.cfg.Events.Emit(ctx, types.Event{
+		// Cluster-scoped, like the record itself.
+		Namespace: "",
+		Kind:      "Node",
+		Name:      current.Name,
+		UID:       current.ID,
+		Level:     level,
+		Reason:    reason,
+		Message:   message,
+	}); err != nil {
+		s.log.Warn("failed to emit node event", log.Err(err))
+	}
+}
+
+func deviceUUIDs(devices []types.GPUDevice) []string {
+	out := make([]string, 0, len(devices))
+	for _, d := range devices {
+		out = append(out, d.UUID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func equalUUIDSets(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // probe runs Provider.Probe in a goroutine and gives up on it after the

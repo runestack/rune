@@ -7,6 +7,7 @@ import (
 	dnssub "github.com/runestack/rune/internal/agent/dns"
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/api/server"
+	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/networking/vip"
 	"github.com/runestack/rune/pkg/observe"
@@ -60,6 +61,11 @@ type controlPlane struct {
 	vip     *vip.Allocator
 	observe observe.LogStore
 	api     *server.APIServer
+
+	// events is the persisted event log. It is a cross-phase value
+	// because the node phase's inventory subsystem emits Node events
+	// (RUNE-301 §12.3) as well as the control plane's controllers.
+	events events.EventLog
 }
 
 // node is the per-host agent and the subsystem handles later phases wire back
