@@ -87,7 +87,7 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 	if b.flags.NodeRole != "" {
 		extraLabels[types.LabelNodeRole] = b.flags.NodeRole
 	}
-	agentInst, agentStop, err := startAgent(ctx, logger, olog, b.flags.DataDir, b.flags.DevMode, extraLabels, func(a *agent.Agent) error {
+	agentInst, agentStop, err := startAgent(ctx, logger, olog, b.identity, b.flags.DevMode, extraLabels, func(a *agent.Agent) error {
 		dpMode := dataplane.ModeProduction
 		if b.flags.DevMode {
 			dpMode = dataplane.ModeDev
@@ -405,13 +405,11 @@ func makeAgentDriverLookup(st store.Store, driverConfigs map[string]map[string]a
 
 // startAgent boots the per-node agent against an already-open
 // OrderedLog. The orderedlog is owned by the caller (main) so it can
-// also be shared with the API server's WatchService. Returns the
-// agent and a stop function the caller invokes during shutdown.
-func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, dataDirPath string, dev bool, extraLabels map[string]string, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
-	identity, err := agent.LoadOrCreateIdentity(dataDirPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("agent: load identity: %w", err)
-	}
+// also be shared with the API server's WatchService. identity was loaded
+// in phase 1 — the control plane already stamped instances with the same
+// NodeID before this phase ran (RUNE-301 §4). Returns the agent and a
+// stop function the caller invokes during shutdown.
+func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, identity agent.Identity, dev bool, extraLabels map[string]string, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
 	if len(extraLabels) > 0 {
 		if identity.Labels == nil {
 			identity.Labels = make(map[string]string, len(extraLabels))

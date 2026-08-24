@@ -232,14 +232,14 @@ func TestAgent_ReadyTimeoutSetsReadyErr(t *testing.T) {
 
 func TestLoadOrCreateIdentity_Persists(t *testing.T) {
 	dir := t.TempDir()
-	id1, err := LoadOrCreateIdentity(dir)
+	id1, err := LoadOrCreateIdentity(dir, "")
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	if id1.NodeID == "" {
 		t.Fatal("empty node id")
 	}
-	id2, err := LoadOrCreateIdentity(dir)
+	id2, err := LoadOrCreateIdentity(dir, "")
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestLoadOrCreateIdentity_RejectsMalformed(t *testing.T) {
 	if err := writeFile(path, []byte("{not json")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadOrCreateIdentity(dir); err == nil {
+	if _, err := LoadOrCreateIdentity(dir, ""); err == nil {
 		t.Fatal("expected parse error")
 	}
 }

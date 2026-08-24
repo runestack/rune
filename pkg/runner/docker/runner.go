@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -148,10 +149,30 @@ type DockerRunner struct {
 	// (runner.StatsProvider) can compute deltas across calls without a
 	// blocking two-sample read every time. See stats.go.
 	stats *statsCache
+
+	// nodeID is this machine's identity, stamped onto the instances
+	// List() reconstructs from container labels so they agree with the
+	// stored records (RUNE-301 §4). Late-bound like dnsServers because
+	// the manager builds its runners before runed hands over identity.
+	nodeID atomic.Pointer[string]
 }
 
 func (r *DockerRunner) Type() types.RunnerType {
 	return types.RunnerTypeDocker
+}
+
+// SetNodeID wires this machine's node identity (RUNE-301 §4). Until it
+// is called, NodeID() reports the pre-301 literal.
+func (r *DockerRunner) SetNodeID(nodeID string) {
+	r.nodeID.Store(&nodeID)
+}
+
+// NodeID returns the wired node identity, or types.LocalNodeIDFallback.
+func (r *DockerRunner) NodeID() string {
+	if p := r.nodeID.Load(); p != nil && *p != "" {
+		return *p
+	}
+	return types.LocalNodeIDFallback
 }
 
 // SetDNSInjection toggles --dns/--dns-search injection on subsequent

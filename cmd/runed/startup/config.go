@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/runestack/rune/internal/agent"
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/version"
@@ -53,7 +54,19 @@ func mustInitRuntime(f *Flags) *boot {
 		os.Exit(1)
 	}
 
-	return &boot{flags: f, ctx: ctx, logger: logger, runefile: resolvedRunefile, closers: &closers}
+	// Node identity, phase 1. It is a pure read of
+	// <data-dir>/node-identity.json (minting on first boot) with no
+	// dependency on the store, the API server or the agent — and the
+	// control plane, which starts reconciling in phase 5, needs it to
+	// stamp Instance.NodeID (RUNE-301 §4). Loading it here is what makes
+	// one machine have one node ID.
+	identity, err := agent.LoadOrCreateIdentity(f.DataDir, f.NodeName)
+	if err != nil {
+		logger.Error("Failed to load node identity", log.Str("data_dir", f.DataDir), log.Err(err))
+		os.Exit(1)
+	}
+
+	return &boot{flags: f, ctx: ctx, logger: logger, runefile: resolvedRunefile, closers: &closers, identity: identity}
 }
 
 func buildLogger(levelStr, formatStr string, pretty, debug bool) log.Logger {

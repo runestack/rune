@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/runestack/rune/pkg/utils"
 )
 
 // LoadOrCreateIdentity reads the agent identity from <dir>/node-identity.json,
@@ -17,7 +20,14 @@ import (
 // regenerate NodeID once written; if the file exists but is malformed,
 // LoadOrCreateIdentity returns an error rather than silently overwriting
 // it (operator must intervene).
-func LoadOrCreateIdentity(dir string) (Identity, error) {
+//
+// preferredName, when non-empty and DNS-1123 valid, is the NodeID for a
+// NEW identity (`runed --node-name`). Otherwise a valid hostname is used,
+// falling back to node-<hex>. Minting only ever affects first boot: an
+// existing file is returned verbatim, because Volume.BoundNode rows on
+// disk already carry whatever ID was minted then and renaming in place
+// would unmount every volume on the next restart (RUNE-301 §4).
+func LoadOrCreateIdentity(dir string, preferredName string) (Identity, error) {
 	if dir == "" {
 		return Identity{}, errors.New("identity: empty directory")
 	}
@@ -44,7 +54,7 @@ func LoadOrCreateIdentity(dir string) (Identity, error) {
 		hostname = "unknown"
 	}
 	id := Identity{
-		NodeID:   "node-" + randomHex(8),
+		NodeID:   mintNodeID(preferredName, hostname),
 		Hostname: hostname,
 	}
 	out, err := json.MarshalIndent(id, "", "  ")
@@ -61,6 +71,25 @@ func LoadOrCreateIdentity(dir string) (Identity, error) {
 		return Identity{}, fmt.Errorf("identity: rename %q: %w", path, err)
 	}
 	return id, nil
+}
+
+// mintNodeID picks the NodeID for a brand-new identity: an explicit
+// --node-name first, then the hostname, then a random hex fallback. The
+// first two are only taken when they are valid DNS-1123 labels, because
+// the ID is used as a store key, a stream label and (for the DigitalOcean
+// volume driver) a droplet-name lookup.
+func mintNodeID(preferredName, hostname string) string {
+	for _, candidate := range []string{preferredName, hostname} {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate == "" {
+			continue
+		}
+		if err := utils.ValidateDNS1123Name(candidate); err != nil {
+			continue
+		}
+		return candidate
+	}
+	return "node-" + randomHex(8)
 }
 
 func randomHex(n int) string {

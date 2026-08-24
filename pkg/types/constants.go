@@ -72,6 +72,15 @@ const (
 	ResourceTypeChannel ResourceType = "channel"
 )
 
+// LocalNodeIDFallback is the Instance.NodeID written when no agent
+// identity has been wired — embedded/library use and unit tests, which
+// have no node-identity.json. It is the literal every instance carried
+// before RUNE-301 §4, kept as the fallback so those paths are unchanged
+// and Instance.Validate() (which requires a non-empty nodeId) still
+// passes. `runed` always wires the real agent identity, so a real
+// deployment never takes this branch.
+const LocalNodeIDFallback = "local"
+
 // RunnerType is the type of runner for an instance.
 type RunnerType string
 

@@ -71,6 +71,16 @@ type Controller struct {
 	publishedMu   sync.Mutex
 	lastPublished map[string]string
 
+	// nodeID is the identity of the machine this controller places
+	// instances on — agent.Identity().NodeID, the SAME string
+	// Volume.BoundNode and the observability stream label already use
+	// (RUNE-301 §4). Wired at construction because runed loads
+	// node-identity.json in startup phase 1, before the reconciler's
+	// first pass. Empty only where no identity exists at all (tests,
+	// embedded use); CreateInstance then falls back to
+	// types.LocalNodeIDFallback.
+	nodeID string
+
 	// mountRes, when set, lets resolveVolumeMount consult the
 	// agent-side volumes Subsystem (RUNE-069 Slice 4) for the per-node
 	// mount target before falling back to Volume.Handle. The fallback
@@ -133,6 +143,21 @@ type Option func(*Controller)
 // construction. Nil is accepted and keeps emit a no-op.
 func WithEventLog(eventLog events.EventLog) Option {
 	return func(c *Controller) { c.events = eventLog }
+}
+
+// WithNodeID wires this node's identity (RUNE-301 §4). Empty is accepted
+// and leaves CreateInstance on the pre-301 literal.
+func WithNodeID(nodeID string) Option {
+	return func(c *Controller) { c.nodeID = nodeID }
+}
+
+// NodeID returns the identity of the node this controller places
+// instances on, or types.LocalNodeIDFallback when none was wired.
+func (c *Controller) NodeID() string {
+	if c.nodeID != "" {
+		return c.nodeID
+	}
+	return types.LocalNodeIDFallback
 }
 
 // NewController creates a new instance controller. Construction

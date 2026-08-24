@@ -34,6 +34,15 @@ type boot struct {
 	logger   log.Logger
 	runefile string
 	closers  *closerStack
+
+	// identity is the persisted node identity, loaded in phase 1 rather
+	// than alongside the agent in phase 7. Everything keyed by node —
+	// Instance.NodeID, Volume.BoundNode, the node inventory record — must
+	// agree on ONE ID (RUNE-301 §4), and the control plane starts
+	// reconciling before the agent exists. Reading node-identity.json is a
+	// pure file operation with no dependency on any later phase, so it
+	// happens first and every phase is handed the same value.
+	identity agent.Identity
 }
 
 // controlPlane is everything that must exist before the node starts. It holds
