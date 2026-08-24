@@ -171,3 +171,48 @@ func TestDescribeNode_IgnoresCallerNamespace(t *testing.T) {
 		assert.NotContains(t, line, "prod")
 	}
 }
+
+// `rune get events --for node/<name>` must find the node's events even
+// when the caller has a default namespace configured. The record is
+// stored under the empty-namespace key, so honouring the caller's
+// namespace here made the node's event log write-only (RUNE-301 §12.3).
+//
+// The rescope is server-side deliberately: the namespace the caller sent
+// still reaches RBAC, so a namespace-pinned grant keeps the access it
+// has today. Doing it in the CLI instead would send "" to the
+// authorizer, which denies any grant pinned to a namespace — turning a
+// silent empty list into a permission error for exactly the operator the
+// fix was for.
+func TestListEvents_NodeIsClusterScoped(t *testing.T) {
+	db, err := badger.Open(badger.DefaultOptions("").WithInMemory(true).WithLogger(nil))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	rec, err := events.NewRecorder(db, log.GetDefaultLogger(), events.Options{})
+	require.NoError(t, err)
+
+	require.NoError(t, rec.Emit(context.Background(), types.Event{
+		Namespace: "", Kind: "Node", Name: "node-1", UID: "node-1",
+		Level: types.EventLevelWarn, Reason: "GpuCapacityShrunk", Message: "a card went away",
+	}))
+	require.NoError(t, rec.Emit(context.Background(), types.Event{
+		Namespace: "prod", Kind: "Instance", Name: "api-0", UID: "i-1",
+		Level: types.EventLevelInfo, Reason: "Started", Message: "started",
+	}))
+
+	svc := NewEventService(rec, log.GetDefaultLogger())
+
+	// A caller with a default namespace still finds the node's events.
+	resp, err := svc.ListEvents(context.Background(), &generated.ListEventsRequest{
+		For: "node/node-1", Namespace: "prod",
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Events, 1)
+	assert.Equal(t, "GpuCapacityShrunk", resp.Events[0].Reason)
+
+	// Other kinds are unchanged: still scoped to the caller's namespace.
+	resp, err = svc.ListEvents(context.Background(), &generated.ListEventsRequest{
+		For: "instance/api-0", Namespace: "staging",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.Events, "a non-node kind still honours the caller's namespace")
+}

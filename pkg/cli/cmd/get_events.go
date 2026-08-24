@@ -34,14 +34,11 @@ func handleEventsGet(opts *getOptions) error {
 		limit = 50
 	}
 
-	// Node events are cluster-scoped: the record lives under an empty
-	// namespace key, so passing the caller's default namespace here
-	// silently returns nothing on any install that has one configured
-	// (RUNE-301 §12.3).
+	// The caller's namespace still goes on the wire, including for
+	// node/<name>: it is the RBAC input, and a namespace-pinned grant is
+	// allowed to read a node's (cluster-scoped) events. The server
+	// rescopes the QUERY for node — see EventService.ListEvents.
 	ns := effectiveCmdNS(opts.namespace)
-	if strings.EqualFold(forKind, "node") {
-		ns = ""
-	}
 
 	evs, err := client.NewEventClient(apiClient).ListEvents(
 		ns, forKind, forName, limit,
@@ -52,6 +49,11 @@ func handleEventsGet(opts *getOptions) error {
 
 	table := NewResourceTable()
 	table.Namespace = ns
+	if strings.EqualFold(forKind, "node") {
+		// Cluster-scoped: labelling the table with a namespace the rows
+		// do not have would be a lie.
+		table.Namespace = ""
+	}
 	table.ShowHeaders = !opts.noHeaders
 	return table.RenderEvents(evs)
 }

@@ -154,18 +154,18 @@ func renderDescribe(w io.Writer, r *generated.DescribeResult) {
 		fmt.Fprintf(w, "%-16s %s\n", kv.Key+":", kv.Value)
 	}
 
-	fmt.Fprintln(w)
-	// Omitted rather than blank when the kind maintains no status —
-	// nothing refreshes a node's Status or LastHeartbeat, and a blank
-	// status reads as a dead node on a healthy box (RUNE-301 §6.1).
+	// The whole status block is skipped when the kind maintains no
+	// status — nothing refreshes a node's Status or LastHeartbeat, and a
+	// blank status reads as a dead node on a healthy box (RUNE-301 §6.1).
 	if r.Status != "" {
+		fmt.Fprintln(w)
 		fmt.Fprintf(w, "%-16s %s\n", "Status:", colorizeDescribeStatus(r.Status))
-	}
-	if r.Reason != "" {
-		fmt.Fprintf(w, "%-16s %s\n", "Reason:", r.Reason)
-	}
-	if r.Message != "" {
-		fmt.Fprintf(w, "%-16s %s\n", "Message:", r.Message)
+		if r.Reason != "" {
+			fmt.Fprintf(w, "%-16s %s\n", "Reason:", r.Reason)
+		}
+		if r.Message != "" {
+			fmt.Fprintf(w, "%-16s %s\n", "Message:", r.Message)
+		}
 	}
 
 	if len(r.Timestamps) > 0 {
