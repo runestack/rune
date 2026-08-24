@@ -12,8 +12,8 @@ import (
 )
 
 // Instances carry the node's real identity — the same string
-// Volume.BoundNode and the observability stream label use — not the
-// pre-RUNE-301 literal "local".
+// Volume.BoundNode and the observability stream label use — not a
+// hardcoded "local".
 func TestCreateInstance_StampsWiredNodeID(t *testing.T) {
 	ctx, testStore, _, _ := setupTestController(t)
 
@@ -33,7 +33,7 @@ func TestCreateInstance_StampsWiredNodeID(t *testing.T) {
 	assert.Equal(t, "node-8f6a12cd", stored.NodeID)
 }
 
-// With no identity wired — embedded use and unit tests — the pre-301
+// With no identity wired — embedded use and unit tests — the fallback
 // literal is preserved, because Instance.Validate() requires a non-empty
 // nodeId and those callers have no node-identity.json to read.
 func TestCreateInstance_FallsBackToLocalWithoutIdentity(t *testing.T) {

@@ -1,4 +1,4 @@
-// Package repos — Node inventory repository (RUNE-301 §6.1).
+// Package repos — Node inventory repository.
 package repos
 
 import (
@@ -15,7 +15,7 @@ import (
 const nodeNamespaceKey = ""
 
 // NodeRepo provides CRUD over the node inventory record — what hardware
-// a machine has, written by that machine's own agent (RUNE-301 §6.1).
+// a machine has, written by that machine's own agent.
 //
 // # Why this repo never uses UpdateFunc
 //
@@ -27,12 +27,10 @@ const nodeNamespaceKey = ""
 // the freshly-read row into the SAME target on every retry without
 // zeroing it (pkg/store/badger_store.go, inside the retry loop), and
 // encoding/json leaves a field absent from the JSON untouched. Any
-// `omitempty` field would therefore keep a discarded attempt's value —
-// RUNE-301 D-24 documents the reproduction for the P2 ledger, whose rows
-// carry no `omitempty` for exactly this reason. types.Node predates that
-// rule and has three `omitempty` fields of its own (Labels,
-// StatusReason, StatusMessage), and the P1 fields the design specifies
-// (Devices, DevicesProbedAt, DeviceProbeError) add three more.
+// `omitempty` field would therefore keep a discarded attempt's value.
+// types.Node has three such fields of its own (Labels, StatusReason,
+// StatusMessage) and the device fields add three more; node_test.go
+// reproduces the failure.
 //
 // Whole-object Update sidesteps the hazard instead of relying on tag
 // discipline: the caller supplies a fully-populated struct and the store
@@ -69,8 +67,8 @@ func (r *NodeRepo) List(ctx context.Context) ([]*types.Node, error) {
 //
 // The write goes through Node.Validate(), which requires a non-empty
 // Address — a validation function the write path skips is a validation
-// function that stops being true, so the caller supplies one (127.0.0.1
-// for the local node) rather than routing around it.
+// function that stops being true, so the caller supplies one rather than
+// routing around it.
 func (r *NodeRepo) Upsert(ctx context.Context, node *types.Node) error {
 	if node == nil || node.ID == "" {
 		return fmt.Errorf("node: id is required")

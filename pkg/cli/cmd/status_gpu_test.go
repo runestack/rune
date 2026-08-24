@@ -29,9 +29,8 @@ func captureCluster(t *testing.T, c *clusterReport) string {
 	return out
 }
 
-// The zero-change guarantee at the render layer: with no GPU signal
-// gathered there is no GPU line, not a "none". A feature must not
-// announce itself to someone who did not ask for it (RUNE-301 §12.4a).
+// With no GPU signal gathered there is no GPU line, not a "none". A
+// feature must not announce itself to someone who did not ask for it.
 func TestRenderCluster_NoGPULineWhenSignalAbsent(t *testing.T) {
 	out := captureCluster(t, &clusterReport{
 		ServerVersion: "v0.0.1-dev.150",

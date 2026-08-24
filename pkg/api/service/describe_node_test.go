@@ -69,8 +69,7 @@ func TestDescribeNode_RendersDevices(t *testing.T) {
 }
 
 // A GPU-less box gets NO GPU section at all — not a "none" line. A
-// feature must not announce itself to someone who did not ask for it
-// (RUNE-301 §12.4a).
+// feature must not announce itself to someone who did not ask for it.
 func TestDescribeNode_GPULessBoxRendersNoGPUSection(t *testing.T) {
 	svc, st := newDescribeTestService(t)
 	probedAt := time.Now()
@@ -150,9 +149,10 @@ func TestDescribeNode_ResolvesLocalAlias(t *testing.T) {
 }
 
 // Describe ignores namespace for nodes: the record is cluster-scoped, so
-// a namespace-pinned caller reads the same hardware inventory. In P1
-// there is nothing per-namespace on the record to redact — the holders
-// §12.3 redacts live on the P2 ledger.
+// a namespace-pinned caller reads the same hardware inventory. There is
+// nothing per-namespace on the record to redact — once reservations exist
+// they will need one, and this test is what shows there is nothing to
+// leak today.
 func TestDescribeNode_IgnoresCallerNamespace(t *testing.T) {
 	svc, st := newDescribeTestService(t)
 	probedAt := time.Now()
@@ -175,7 +175,7 @@ func TestDescribeNode_IgnoresCallerNamespace(t *testing.T) {
 // `rune get events --for node/<name>` must find the node's events even
 // when the caller has a default namespace configured. The record is
 // stored under the empty-namespace key, so honouring the caller's
-// namespace here made the node's event log write-only (RUNE-301 §12.3).
+// namespace here made the node's event log write-only.
 //
 // The rescope is server-side deliberately: the namespace the caller sent
 // still reaches RBAC, so a namespace-pinned grant keeps the access it

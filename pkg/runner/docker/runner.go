@@ -152,8 +152,8 @@ type DockerRunner struct {
 
 	// nodeID is this machine's identity, stamped onto the instances
 	// List() reconstructs from container labels so they agree with the
-	// stored records (RUNE-301 §4). Late-bound like dnsServers because
-	// the manager builds its runners before runed hands over identity.
+	// stored records. Late-bound like dnsServers because the manager
+	// builds its runners before runed hands over identity.
 	nodeID atomic.Pointer[string]
 }
 
@@ -161,8 +161,8 @@ func (r *DockerRunner) Type() types.RunnerType {
 	return types.RunnerTypeDocker
 }
 
-// SetNodeID wires this machine's node identity (RUNE-301 §4). Until it
-// is called, NodeID() reports the pre-301 literal.
+// SetNodeID wires this machine's node identity. Until it is called,
+// NodeID() reports types.LocalNodeIDFallback.
 func (r *DockerRunner) SetNodeID(nodeID string) {
 	r.nodeID.Store(&nodeID)
 }

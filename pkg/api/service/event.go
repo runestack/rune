@@ -60,11 +60,11 @@ func (s *EventService) ListEvents(ctx context.Context, req *generated.ListEvents
 		// Node events are cluster-scoped: the record they describe lives
 		// under an empty-namespace key, so honouring the caller's
 		// namespace here returns nothing on any install with a default
-		// namespace configured — a write-only event log (RUNE-301
-		// §12.3). Forced HERE rather than in the CLI so the namespace the
-		// caller sent still reaches RBAC: a namespace-pinned grant is
-		// allowed to read node events (they are hardware facts, not
-		// tenant data) and `rune describe node` already shows them.
+		// namespace configured — a write-only event log. Forced HERE
+		// rather than in the CLI so the namespace the caller sent still
+		// reaches RBAC: a namespace-pinned grant is allowed to read node
+		// events (they are hardware facts, not tenant data) and
+		// `rune describe node` already shows them.
 		ns := req.Namespace
 		if canonKind == "Node" {
 			ns = ""

@@ -273,9 +273,9 @@ func (m *RunnerManager) SetDNSInjection(servers []string, search []string) {
 }
 
 // SetNodeID forwards this node's identity to the docker runner, whose
-// List() reconstructs instances from container labels — those carried
-// the literal "local" before RUNE-301 §4 while the same machine's
-// volumes and log streams were keyed by node-<hex>. The process runner
+// List() reconstructs instances from container labels — those used to
+// carry a literal "local" while the same machine's volumes and log
+// streams were keyed by the agent's real node ID. The process runner
 // does not reconstruct instances; we silently skip.
 func (m *RunnerManager) SetNodeID(nodeID string) {
 	m.mutex.Lock()

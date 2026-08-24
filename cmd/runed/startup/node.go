@@ -89,12 +89,12 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 		extraLabels[types.LabelNodeRole] = b.flags.NodeRole
 	}
 	agentInst, agentStop, err := startAgent(ctx, logger, olog, b.identity, b.flags.DevMode, extraLabels, func(a *agent.Agent) error {
-		// Node inventory (RUNE-301 §6.1). First in the list because it
-		// depends on nothing and its Start is a goroutine launch, so the
-		// record lands as early as the store allows. It is also the only
-		// subsystem whose Ready is deadline-bounded rather than
-		// completion-bounded — see the package comment for why a device
-		// probe must never gate the daemon.
+		// Node inventory. First because it depends on nothing and its
+		// Start is just a goroutine launch, so the record lands as early
+		// as the store allows. It is also the only subsystem whose Ready
+		// is bounded by a deadline rather than by completion — see the
+		// nodeinfo package comment for why a device probe must never gate
+		// the daemon.
 		gpuProvider, gpErr := nodeinfo.SelectProvider(b.flags.GPUProvider)
 		if gpErr != nil {
 			return fmt.Errorf("agent nodeinfo: %w", gpErr)
@@ -431,10 +431,10 @@ func makeAgentDriverLookup(st store.Store, driverConfigs map[string]map[string]a
 
 // startAgent boots the per-node agent against an already-open
 // OrderedLog. The orderedlog is owned by the caller (main) so it can
-// also be shared with the API server's WatchService. identity was loaded
-// in phase 1 — the control plane already stamped instances with the same
-// NodeID before this phase ran (RUNE-301 §4). Returns the agent and a
-// stop function the caller invokes during shutdown.
+// also be shared with the API server's WatchService. identity is passed in
+// rather than read here because the control plane already stamped
+// instances with the same NodeID before this runs. Returns the agent and
+// a stop function the caller invokes during shutdown.
 func startAgent(ctx context.Context, logger log.Logger, olog orderedlog.OrderedLog, identity agent.Identity, dev bool, extraLabels map[string]string, registerSubsystems func(*agent.Agent) error) (*agent.Agent, func(), error) {
 	if len(extraLabels) > 0 {
 		if identity.Labels == nil {

@@ -196,8 +196,9 @@ type OrchestratorOptions struct {
 	// NodeID is this machine's identity (agent.Identity().NodeID). The
 	// instance controller stamps it onto every instance it creates, so
 	// Instance.NodeID, Volume.BoundNode and the observability stream
-	// label all name the same node (RUNE-301 §4). Empty leaves the
-	// pre-301 literal in place, which is what in-process tests want.
+	// label all name the same node. Empty leaves
+	// types.LocalNodeIDFallback in place, which is what in-process tests
+	// want.
 	NodeID string
 
 	// EventLog is the persisted event log (RUNE-126 Phase 2). When set,

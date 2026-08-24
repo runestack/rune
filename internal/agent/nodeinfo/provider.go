@@ -6,14 +6,13 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
-// DeviceProvider reports the GPU devices physically present on this node
-// (RUNE-301 §5.2).
+// DeviceProvider reports the GPU devices physically present on this node.
 //
-// Inventory is a dependency rather than a direct driver call so that
-// admission — which lands in P2 — is testable on GPU-less CI, which is
-// all of CI. Implementations: nullProvider (default, and the only one a
-// machine without a driver ever selects), nvidiaSMIProvider (v1), a
-// static fixture provider for tests, and an NVML/purego provider later.
+// Inventory is a dependency rather than a direct driver call so that code
+// which reasons about capacity stays testable on GPU-less CI, which is
+// all of CI. Implementations: nullProvider (the default, and the only one
+// a machine without a driver ever selects), nvidiaSMIProvider, and a
+// static fixture provider for tests.
 //
 // The contract that matters: Probe returning (nil, nil) is the NORMAL
 // GPU-less result, not an error path. An error means the probe could not
@@ -40,7 +39,7 @@ func (nullProvider) Probe(context.Context) ([]types.GPUDevice, error) { return n
 func NullProvider() DeviceProvider { return nullProvider{} }
 
 // StaticProvider returns a provider that answers with a fixed device
-// list. It is the seam the P2 admission tests run against on a laptop.
+// list — the seam that lets capacity logic be tested on a laptop.
 func StaticProvider(name string, devices []types.GPUDevice, err error) DeviceProvider {
 	return staticProvider{name: name, devices: devices, err: err}
 }

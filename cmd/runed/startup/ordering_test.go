@@ -114,19 +114,19 @@ func TestMountResolverWiredInsideRegistration(t *testing.T) {
 	//
 	// STALE RATIONALE, FLAGGED NOT REWRITTEN: this guard was justified by
 	// "it needs node identity, which does not exist until the agent has
-	// started". That is no longer true — RUNE-301 §4 moved the identity
-	// load to startup phase 1, and NewEndpointPublisher takes only the
-	// OrderedLog, which phase 5 already opened. Whatever still pins the
-	// call to phase 8 (op-kind registration order against the DNS
-	// subsystem is the likely candidate, see wiring.go's comment) has not
-	// been established here, so the assertion is left exactly as RUNE-313
-	// wrote it rather than re-justified on a guess. Establish the real
+	// started". That is no longer true — the identity load now happens
+	// before the store opens, and NewEndpointPublisher takes only the
+	// OrderedLog, which is already open by then. Whatever still pins the
+	// call to after agent.Start (op-kind registration order against the
+	// DNS subsystem is the likely candidate, see wiring.go's comment) has
+	// not been established here, so the assertion is left exactly as it
+	// was rather than re-justified on a guess. Establish the real
 	// constraint before relaxing or rewording this.
 	pubInside, _ := findCalls(file, "SetEndpointPublisher", regClosure)
 	if pubInside > 0 {
-		t.Error("SetEndpointPublisher must NOT be called inside the registration closure " +
-			"(RUNE-313); see the note above — the original identity-based rationale is stale " +
-			"but the constraint has not been shown to be")
+		t.Error("SetEndpointPublisher must NOT be called inside the registration closure; " +
+			"see the note above — the original identity-based rationale is stale but the " +
+			"constraint has not been shown to be")
 	}
 }
 

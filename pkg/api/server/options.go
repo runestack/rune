@@ -96,8 +96,8 @@ type Options struct {
 	// NodeID is this machine's identity (agent.Identity().NodeID),
 	// loaded from node-identity.json before the control plane starts.
 	// Threaded to the orchestrator so created instances carry the same
-	// node ID as their volumes and log streams (RUNE-301 §4), and to the
-	// runner manager so container-derived instances agree.
+	// node ID as their volumes and log streams, and to the runner manager
+	// so container-derived instances agree.
 	NodeID string
 
 	// EventLog is the persisted resource event log (RUNE-126 Phase 2).
@@ -312,7 +312,7 @@ func WithInitialMountResolver(resolver wiring.MountResolver) Option {
 }
 
 // WithNodeID wires this node's identity into the orchestrator and the
-// runner manager (RUNE-301 §4). Empty keeps the pre-301 literal.
+// runner manager. Empty keeps types.LocalNodeIDFallback.
 func WithNodeID(nodeID string) Option {
 	return func(opts *Options) {
 		opts.NodeID = nodeID

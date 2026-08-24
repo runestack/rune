@@ -26,7 +26,7 @@ import (
 // falling back to node-<hex>. Minting only ever affects first boot: an
 // existing file is returned verbatim, because Volume.BoundNode rows on
 // disk already carry whatever ID was minted then and renaming in place
-// would unmount every volume on the next restart (RUNE-301 §4).
+// would unmount every volume on the next restart.
 func LoadOrCreateIdentity(dir string, preferredName string) (Identity, error) {
 	if dir == "" {
 		return Identity{}, errors.New("identity: empty directory")

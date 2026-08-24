@@ -62,10 +62,9 @@ func TestSubsystem_WritesEmptyInventory(t *testing.T) {
 	assert.Equal(t, LocalNodeAddress, node.Address)
 	assert.Equal(t, map[string]string{"rune.io/role": "edge"}, node.Labels)
 
-	// The three types.Node gaps P1 cannot ship around: no Generation
-	// field exists, and nothing refreshes Status or LastHeartbeat — so
-	// the record leaves them zero and the render omits them rather than
-	// showing a blank status on a healthy box (RUNE-301 §6.1).
+	// Nothing refreshes Status or LastHeartbeat on a cadence, so the
+	// record leaves them zero and the render omits them rather than
+	// showing a blank status on a healthy box.
 	assert.Empty(t, string(node.Status))
 	assert.True(t, node.LastHeartbeat.IsZero())
 
@@ -91,7 +90,7 @@ func TestSubsystem_WritesDevices(t *testing.T) {
 	require.NoError(t, sub.Stop(ctx))
 }
 
-// A probe error is recorded verbatim, because §11.2 quotes it back to the
+// A probe error is recorded verbatim, because it is quoted back to the
 // operator — without the field, six distinct causes collapse into "no
 // devices".
 func TestSubsystem_RecordsProbeError(t *testing.T) {
@@ -112,7 +111,7 @@ func TestSubsystem_RecordsProbeError(t *testing.T) {
 
 // A wedged driver must not hold the daemon down: Ready closes on the
 // deadline, the record says so, and the stuck goroutine is abandoned
-// rather than joined (D26).
+// rather than joined.
 func TestSubsystem_ProbeTimeoutDoesNotBlockReady(t *testing.T) {
 	block := make(chan struct{})
 	t.Cleanup(func() { close(block) })
@@ -148,10 +147,10 @@ func TestSubsystem_StartReturnsImmediately(t *testing.T) {
 	require.NoError(t, sub.Stop(context.Background()))
 }
 
-// RUNE-301 §12.4(a): a GPU-less box gets no goroutine and no timer.
-// Asserted on the live stack dump rather than a goroutine count, so the
-// claim is about THIS package's goroutines and not about whatever the
-// store happens to be running.
+// A GPU-less box gets no goroutine and no timer. Asserted on the live
+// stack dump rather than a goroutine count, so the claim is about THIS
+// package's goroutines and not about whatever the store happens to be
+// running.
 func TestSubsystem_NothingPeriodicOnAGPULessBox(t *testing.T) {
 	sub, _ := newTestSubsystem(t, Config{})
 	ctx := context.Background()
@@ -221,7 +220,7 @@ func (p blockingProvider) Probe(context.Context) ([]types.GPUDevice, error) {
 
 // A re-probe whose device set changed fires a Node event. The comparison
 // is by device UUID, not by a Generation counter — types.Node has no
-// such field, and the UUID set is the thing that actually changed (D28).
+// such field, and the UUID set is the thing that actually changed.
 func TestSubsystem_EmitsOnDeviceSetChange(t *testing.T) {
 	st := store.NewBadgerStore(log.NewTestLogger())
 	require.NoError(t, st.Open(t.TempDir()))

@@ -149,10 +149,9 @@ func buildServerOptions(grpcAddress, httpAddress string, st store.Store, appCfg 
 		server.WithStore(st),
 		server.WithLogger(logger),
 	}
-	// This node's identity, loaded in phase 1. Threaded here so the
-	// orchestrator's first reconcile — which happens inside
-	// apiServer.Start(), before the agent phase runs — already stamps the
-	// real node ID rather than a placeholder (RUNE-301 §4).
+	// Threaded here so the orchestrator's first reconcile — which runs
+	// inside apiServer.Start(), before the agent is up — already stamps
+	// the real node ID rather than a placeholder.
 	if nodeID != "" {
 		opts = append(opts, server.WithNodeID(nodeID))
 	}

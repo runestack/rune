@@ -151,10 +151,10 @@ type clusterReport struct {
 	Network       *networkBrief     `json:"network,omitempty" yaml:"network,omitempty"`
 	Registries    *registriesBrief  `json:"registries,omitempty" yaml:"registries,omitempty"`
 
-	// GPUs is device-probe health, one entry per node that has
-	// something to say (RUNE-301 §11.2). NIL — not an empty map — on a
-	// machine with no GPUs and a clean probe, so renderCluster emits no
-	// line at all rather than "GPUs: none" (§12.4a).
+	// GPUs is device-probe health, one entry per node that has something
+	// to say. NIL — not an empty map — on a machine with no GPUs and a
+	// clean probe, so renderCluster emits no line at all rather than
+	// "GPUs: none".
 	GPUs map[string]string `json:"gpus,omitempty" yaml:"gpus,omitempty"`
 }
 
@@ -335,8 +335,8 @@ func collectCluster(api *client.Client) *clusterReport {
 	}
 	// Device-probe health. Best-effort like every other probe here, and
 	// deliberately silent when the server reports no components: an
-	// absent signal must stay an absent line (RUNE-301 §12.4a). An older
-	// server rejects the component type, which lands in the same place.
+	// absent signal must stay an absent line. An older server rejects the
+	// component type, which lands in the same place.
 	if ctx, cancel := api.Context(); true {
 		if resp, err := hc.GetHealth(ctx, &generated.GetHealthRequest{ComponentType: "gpu"}); err == nil && resp != nil && len(resp.Components) > 0 {
 			m := map[string]string{}

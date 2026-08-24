@@ -27,9 +27,8 @@ func gpuHealth(t *testing.T, nodes ...*types.Node) []*generated.ComponentHealth 
 	return resp.Components
 }
 
-// The zero-change guarantee, at the surface an operator sees most often:
-// a machine with no GPUs and a clean probe produces NO component, so
-// `rune status` emits no line — not "GPUs: none" (RUNE-301 §12.4a).
+// A machine with no GPUs and a clean probe produces NO component, so
+// `rune status` emits no line — not "GPUs: none".
 func TestGPUHealth_GPULessBoxReportsNothing(t *testing.T) {
 	probedAt := time.Now()
 	comps := gpuHealth(t, &types.Node{ID: "node-1", Address: "127.0.0.1", DevicesProbedAt: &probedAt})

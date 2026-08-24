@@ -153,7 +153,7 @@ func (s *APIServer) Start() error {
 	}
 	// Hand the runners this node's identity before anything reconciles,
 	// so instances reconstructed from container labels carry the same
-	// node ID the instance controller writes (RUNE-301 §4).
+	// node ID the instance controller writes.
 	if s.options.NodeID != "" {
 		s.runnerManager.SetNodeID(s.options.NodeID)
 	}

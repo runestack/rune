@@ -156,7 +156,7 @@ func renderDescribe(w io.Writer, r *generated.DescribeResult) {
 
 	// The whole status block is skipped when the kind maintains no
 	// status — nothing refreshes a node's Status or LastHeartbeat, and a
-	// blank status reads as a dead node on a healthy box (RUNE-301 §6.1).
+	// blank status reads as a dead node on a healthy box.
 	if r.Status != "" {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "%-16s %s\n", "Status:", colorizeDescribeStatus(r.Status))

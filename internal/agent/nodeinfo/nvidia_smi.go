@@ -23,12 +23,12 @@ const nvidiaSMIBinary = "nvidia-smi"
 const nvidiaSMIQuery = "uuid,index,name,memory.total,driver_version"
 
 // maxProbeOutputBytes and maxProbeRows bound what the probe will accept.
-// nvidia-smi output is untrusted input: a host with many devices — or, in
-// P2, a --query-compute-apps list a hostile container can pad with CUDA
-// processes — must not become unbounded memory here. On exceeding either
-// bound the probe is REJECTED rather than truncated: a truncated
-// inventory is a silently wrong answer, and DeviceProbeError is the right
-// place for the failure to land (RUNE-301 §5.2).
+// nvidia-smi output is untrusted input: a host with many devices — or a
+// per-process query a hostile container can pad with CUDA processes —
+// must not become unbounded memory here. On exceeding either bound the
+// probe is REJECTED rather than truncated: a truncated inventory is a
+// silently wrong answer, and DeviceProbeError is where the failure
+// belongs.
 const (
 	maxProbeOutputBytes = 1 << 20 // 1 MiB
 	maxProbeRows        = 256
@@ -41,9 +41,8 @@ const (
 // "C"` anywhere. Turning cgo on to read a GPU would break the
 // cross-compile matrix, end the static single binary, and change the
 // shipped artifact for every user who does not have a GPU. A purego
-// dlopen of NVML is the later optimisation, adopted when a polling loop
-// makes fork-per-poll the binding cost — and it lands behind this same
-// interface, invisible to callers (RUNE-301 D8).
+// dlopen of NVML would avoid the fork-per-call cost and can land behind
+// this same interface, invisible to callers.
 func NVIDIASMIProvider() DeviceProvider { return nvidiaSMIProvider{} }
 
 type nvidiaSMIProvider struct{}
@@ -54,7 +53,7 @@ func (p nvidiaSMIProvider) Probe(ctx context.Context) ([]types.GPUDevice, error)
 	path, err := exec.LookPath(nvidiaSMIBinary)
 	if err != nil {
 		// The single most common first-run state, and it must read as
-		// itself rather than as "no devices" (RUNE-301 §5.3, §11.2).
+		// itself rather than as "no devices".
 		return nil, fmt.Errorf("nvidia-smi not found on PATH")
 	}
 
@@ -62,7 +61,7 @@ func (p nvidiaSMIProvider) Probe(ctx context.Context) ([]types.GPUDevice, error)
 	// does NOT bound this call — a process blocked in an uninterruptible
 	// driver ioctl cannot be killed, so cmd.Wait() outlives any deadline.
 	// The bound that actually holds is the subsystem's: run the probe in
-	// a goroutine and abandon it (D26).
+	// a goroutine and abandon it.
 	cmd := exec.CommandContext(ctx, path,
 		"--query-gpu="+nvidiaSMIQuery,
 		"--format=csv,noheader,nounits",

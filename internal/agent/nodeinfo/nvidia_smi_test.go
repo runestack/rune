@@ -60,7 +60,7 @@ func TestParseNVIDIACSV_Rejects(t *testing.T) {
 }
 
 // A device list past the cap is rejected, not truncated: a truncated
-// inventory is a silently wrong answer (RUNE-301 §5.2).
+// inventory is a silently wrong answer.
 func TestParseNVIDIACSV_RejectsRatherThanTruncates(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i <= maxProbeRows; i++ {

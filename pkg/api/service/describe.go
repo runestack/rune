@@ -449,8 +449,7 @@ func (s *DescribeService) describeVolume(ctx context.Context, ns, name string) (
 	return res, nil
 }
 
-// describeNode renders one node's inventory record (RUNE-301 §6.1,
-// §12.3), retiring RUNE-126's Unimplemented stub.
+// describeNode renders one node's inventory record.
 //
 // The record is cluster-scoped, so Describe passes no namespace and the
 // events are read under the empty-namespace key the record is stored
@@ -471,8 +470,7 @@ func (s *DescribeService) describeNode(ctx context.Context, name string) (*gener
 		// frozen at the last restart — which reads as a dead node on a
 		// perfectly healthy box, and would be the first thing every
 		// operator sees from this command. An unmaintained field is
-		// worse than an absent one; RUNE-304 brings the real heartbeat
-		// (RUNE-301 §6.1).
+		// worse than an absent one.
 	}
 	res.Identity = []*generated.DescribeKV{
 		kv("ID", node.ID),
@@ -499,9 +497,9 @@ func (s *DescribeService) describeNode(ctx context.Context, name string) (*gener
 
 // resolveNode looks the record up by its store key, then falls back to a
 // scan matching ID or Name. `local` resolves to the single node on a
-// one-node install: it is the literal every instance carried before
-// RUNE-301 §4, and until `rune get nodes` exists (RUNE-304) an operator
-// has no other way to discover the minted ID.
+// one-node install: it is the literal every instance used to carry, and
+// there is no node-listing command yet, so an operator has no other way
+// to discover the minted ID.
 func (s *DescribeService) resolveNode(ctx context.Context, repo *repos.NodeRepo, name string) (*types.Node, error) {
 	if node, err := repo.Get(ctx, name); err == nil {
 		return node, nil
@@ -528,22 +526,22 @@ func (s *DescribeService) resolveNode(ctx context.Context, repo *repos.NodeRepo,
 // nothing to say about devices.
 //
 // Nil, not a "GPUs: none" line: a GPU-less box must not have a feature
-// announcing itself to someone who did not ask for it (RUNE-301 §12.4a).
-// The three states behind "no GPUs" are distinct and only two of them
-// produce output — never probed, and probe failed (§11.2).
+// announcing itself to someone who did not ask for it. The three states
+// behind "no GPUs" are distinct and only two of them produce output —
+// never probed, and probe failed.
 func nodeDevicesSection(node *types.Node) *generated.DescribeSection {
 	switch {
 	case node.DevicesProbedAt == nil:
 		// Not an error, and specifically NOT "this node has no GPUs" —
 		// the agent starts after the control plane, so this is the
-		// window where the answer is not known yet (RUNE-301 D27).
+		// window where the answer is not known yet.
 		return &generated.DescribeSection{
 			Title: "GPUs",
 			Lines: []string{"not probed yet"},
 		}
 	case node.DeviceProbeError != "":
 		// Quoted verbatim: without it, six distinct causes collapse
-		// into one unactionable "no devices" (RUNE-301 §5.3).
+		// into one unactionable "no devices".
 		return &generated.DescribeSection{
 			Title: "GPUs",
 			Lines: []string{"probe failed: " + node.DeviceProbeError},

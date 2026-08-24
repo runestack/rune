@@ -34,8 +34,8 @@ type IRunnerManager interface {
 
 	// SetNodeID wires this machine's node identity so instances the
 	// runner reconstructs from container labels carry the same node ID
-	// as the stored records (RUNE-301 §4). No-op on runners that don't
-	// reconstruct instances.
+	// as the stored records. No-op on runners that don't reconstruct
+	// instances.
 	SetNodeID(nodeID string)
 
 	// Close closes all runners

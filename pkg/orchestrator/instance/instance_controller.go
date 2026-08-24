@@ -73,11 +73,10 @@ type Controller struct {
 
 	// nodeID is the identity of the machine this controller places
 	// instances on — agent.Identity().NodeID, the SAME string
-	// Volume.BoundNode and the observability stream label already use
-	// (RUNE-301 §4). Wired at construction because runed loads
-	// node-identity.json in startup phase 1, before the reconciler's
-	// first pass. Empty only where no identity exists at all (tests,
-	// embedded use); CreateInstance then falls back to
+	// Volume.BoundNode and the observability stream label already use.
+	// Wired at construction because runed reads node-identity.json before
+	// the reconciler's first pass. Empty only where no identity exists at
+	// all (tests, embedded use); CreateInstance then falls back to
 	// types.LocalNodeIDFallback.
 	nodeID string
 
@@ -145,8 +144,8 @@ func WithEventLog(eventLog events.EventLog) Option {
 	return func(c *Controller) { c.events = eventLog }
 }
 
-// WithNodeID wires this node's identity (RUNE-301 §4). Empty is accepted
-// and leaves CreateInstance on the pre-301 literal.
+// WithNodeID wires this node's identity. Empty is accepted and leaves
+// CreateInstance on types.LocalNodeIDFallback.
 func WithNodeID(nodeID string) Option {
 	return func(c *Controller) { c.nodeID = nodeID }
 }

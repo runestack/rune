@@ -651,14 +651,14 @@ func (s *HealthService) getNodeHealth(ctx context.Context, req *generated.GetHea
 }
 
 // getGPUHealth reports device-probe health from the node inventory
-// record (RUNE-301 §11.2).
+// record.
 //
 // It returns ZERO COMPONENTS on a machine with no GPUs and a clean probe
 // — not a "none" component. `rune status` emits a line only for signals
 // it actually gathered, so an absent component is an absent line, which
-// is what keeps a GPU-less box byte-identical to today (§12.4a). A
-// present-but-empty component would render "GPUs: none", a feature
-// announcing itself to someone who did not ask.
+// is what keeps a GPU-less box's output unchanged. A present-but-empty
+// component would render "GPUs: none", a feature announcing itself to
+// someone who did not ask.
 //
 // The only instrument before this was a debug log line, and runed runs at
 // info — so a driver that broke overnight stayed invisible until the next

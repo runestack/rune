@@ -67,7 +67,7 @@ func TestNodeInfoSubsystemRegistered(t *testing.T) {
 	if !constructed {
 		t.Error("nodeinfo.New must be called inside the registration closure: without it no " +
 			"node record is ever written, and `rune describe node` reports the node as " +
-			"absent on a perfectly healthy box (RUNE-301 §6.1)")
+			"absent on a perfectly healthy box")
 	}
 
 	// ... and a.Register(...) hands it to the agent. Counted rather than
@@ -83,7 +83,7 @@ func TestNodeInfoSubsystemRegistered(t *testing.T) {
 // The provider is selected from the flag, not hardcoded. A hardcoded
 // NVIDIASMIProvider would fork nvidia-smi on every GPU-less machine in
 // the fleet and take away `--gpu-provider=none`, the operator's
-// guarantee that nothing is probed (RUNE-301 §5.2).
+// guarantee that nothing is probed.
 func TestGPUProviderComesFromTheFlag(t *testing.T) {
 	src, err := parser.ParseFile(token.NewFileSet(), "node.go", nil, parser.ParseComments)
 	if err != nil {

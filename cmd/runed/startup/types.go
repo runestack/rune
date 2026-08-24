@@ -36,13 +36,13 @@ type boot struct {
 	runefile string
 	closers  *closerStack
 
-	// identity is the persisted node identity, loaded in phase 1 rather
-	// than alongside the agent in phase 7. Everything keyed by node —
+	// identity is the persisted node identity. It is loaded up front
+	// rather than alongside the agent because everything keyed by node —
 	// Instance.NodeID, Volume.BoundNode, the node inventory record — must
-	// agree on ONE ID (RUNE-301 §4), and the control plane starts
-	// reconciling before the agent exists. Reading node-identity.json is a
-	// pure file operation with no dependency on any later phase, so it
-	// happens first and every phase is handed the same value.
+	// agree on ONE ID, and the orchestrator starts reconciling (and so
+	// stamping instances) before the agent exists. Reading
+	// node-identity.json is a pure file operation, so nothing forces it
+	// later and every consumer is handed the same value.
 	identity agent.Identity
 }
 
@@ -62,9 +62,9 @@ type controlPlane struct {
 	observe observe.LogStore
 	api     *server.APIServer
 
-	// events is the persisted event log. It is a cross-phase value
-	// because the node phase's inventory subsystem emits Node events
-	// (RUNE-301 §12.3) as well as the control plane's controllers.
+	// events is the persisted event log. It is shared because the
+	// agent's inventory subsystem emits Node events too, not just the
+	// control plane's controllers.
 	events events.EventLog
 }
 

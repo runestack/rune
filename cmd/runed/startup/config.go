@@ -54,12 +54,12 @@ func mustInitRuntime(f *Flags) *boot {
 		os.Exit(1)
 	}
 
-	// Node identity, phase 1. It is a pure read of
-	// <data-dir>/node-identity.json (minting on first boot) with no
-	// dependency on the store, the API server or the agent — and the
-	// control plane, which starts reconciling in phase 5, needs it to
-	// stamp Instance.NodeID (RUNE-301 §4). Loading it here is what makes
-	// one machine have one node ID.
+	// Node identity is read this early because everything keyed by node
+	// has to agree on one ID, and the orchestrator starts stamping
+	// Instance.NodeID during its first reconcile — which happens while
+	// the API server starts, before the agent exists. Reading
+	// <data-dir>/node-identity.json (minting it on first boot) needs
+	// neither the store nor the agent, so nothing forces it later.
 	identity, err := agent.LoadOrCreateIdentity(f.DataDir, f.NodeName)
 	if err != nil {
 		logger.Error("Failed to load node identity", log.Str("data_dir", f.DataDir), log.Err(err))

@@ -42,7 +42,7 @@ func TestMintNodeID(t *testing.T) {
 
 // An existing node-identity.json is never rewritten, whatever --node-name
 // says. Volume.BoundNode rows on disk already carry the minted ID, so
-// renaming in place would unmount every volume (RUNE-301 §4 rule 2).
+// renaming in place would unmount every volume.
 func TestLoadOrCreateIdentity_ExistingIsNeverRenamed(t *testing.T) {
 	dir := t.TempDir()
 	seed := Identity{NodeID: "node-deadbeefdeadbeef", Hostname: "old-host"}

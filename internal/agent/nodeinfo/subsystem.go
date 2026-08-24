@@ -1,6 +1,6 @@
 // Package nodeinfo is the per-node Subsystem that persists this
 // machine's inventory record — what hardware it has, written by its own
-// agent (RUNE-301 §6.1).
+// agent.
 //
 // It writes exactly one row, keyed by the agent's node identity under an
 // empty namespace. On a machine with no GPU that row carries an empty
@@ -9,10 +9,10 @@
 // Two commitments are load-bearing and easy to break by accident:
 //
 //   - NOTHING PERIODIC. The probe runs once per agent start and never
-//     again. Hotplug is a non-goal (these are servers); a re-probe means
-//     a restart. An implementer who adds a ticker "so it picks up a card
-//     later" has put a recurring wakeup on every GPU-less machine in the
-//     fleet, which is what RUNE-301 §12.4(a) promises does not exist.
+//     again. Hotplug is out of scope (these are servers); a re-probe means
+//     a restart. Adding a ticker "so it picks up a card later" would put a
+//     recurring wakeup on every GPU-less machine in the fleet, which is
+//     the cost this design exists to avoid. no_ticker_test.go enforces it.
 //
 //   - THE PROBE NEVER BLOCKS OR FAILS runed's BOOT. Agent.Start runs each
 //     subsystem's Start serially with no timeout and treats any error as
@@ -21,8 +21,8 @@
 //     Start therefore launches the probe in its own goroutine and
 //     returns; Ready closes on the first result or a deadline, whichever
 //     comes first; a probe past the deadline is ABANDONED, not joined,
-//     and records itself in DeviceProbeError. Twelve non-AI services must
-//     not stay down for a GPU they do not use (RUNE-301 §5.3, D26).
+//     and records itself in DeviceProbeError. The services on the box must
+//     not stay down for a GPU they do not use.
 package nodeinfo
 
 import (
@@ -46,9 +46,9 @@ import (
 const DefaultProbeDeadline = 10 * time.Second
 
 // LocalNodeAddress is the Address written for the node this agent runs
-// on. types.Node.Validate() requires a non-empty address and single-node
-// has no meaningful routable value; defining one here keeps the write on
-// the validated path instead of routing around it (RUNE-301 §6.1).
+// on. types.Node.Validate() requires a non-empty address and a single-node
+// install has no meaningful routable value; defining one here keeps the
+// write on the validated path instead of routing around it.
 const LocalNodeAddress = "127.0.0.1"
 
 // Config is what the subsystem needs. Store and NodeID are required.
@@ -56,8 +56,8 @@ type Config struct {
 	// Repo persists the node record. Required.
 	Repo *repos.NodeRepo
 
-	// NodeID is this machine's identity — the single node ID
-	// (RUNE-301 §4). Required.
+	// NodeID is this machine's identity: the same ID Volume.BoundNode and
+	// the observability stream label use. Required.
 	NodeID string
 
 	// Labels are the agent identity's labels, copied onto the record.
@@ -162,7 +162,8 @@ func (s *Subsystem) Stop(context.Context) error {
 
 // probeAndWrite runs the probe under a deadline and persists whatever it
 // learned. Both outcomes — devices or an error — end in a written record,
-// because §11.2's diagnosis is assembled from the record, not from logs.
+// because every diagnosis an operator gets is assembled from the record,
+// not from logs.
 func (s *Subsystem) probeAndWrite(ctx context.Context) {
 	defer s.readyOnce.Do(func() { close(s.readyCh) })
 
@@ -186,11 +187,10 @@ func (s *Subsystem) probeAndWrite(ctx context.Context) {
 		node.DeviceProbeError = probeErr.Error()
 	}
 
-	// RUNE-301 D28: the device set is compared by UUID, not by a
-	// Generation counter — types.Node has no such field, the UUID set is
-	// the thing that actually changed, and Missing/GpuCapacityShrunk are
-	// already keyed on UUIDs. Read before the write, since Upsert
-	// replaces the row.
+	// The device set is compared by UUID rather than by a version counter:
+	// types.Node has no such field, and the UUID set is the thing that
+	// actually changed. Read before the write, since Upsert replaces the
+	// row.
 	previous, prevErr := s.cfg.Repo.Get(ctx, s.cfg.NodeID)
 	if prevErr != nil {
 		previous = nil
@@ -199,13 +199,13 @@ func (s *Subsystem) probeAndWrite(ctx context.Context) {
 	switch {
 	case probeErr != nil:
 		// A probe that could not answer IS worth a warning: a driver
-		// that broke overnight is otherwise invisible until the next
-		// cast (RUNE-301 §11.2).
+		// that broke overnight is otherwise invisible until someone
+		// tries to use the GPU.
 		s.log.Warn("device probe failed",
 			log.Str("provider", s.cfg.Provider.Name()), log.Err(probeErr))
 	case len(devices) == 0:
 		// Graceful absence is the contract. ONE debug line, never warn —
-		// a GPU-less box has nothing to warn about (RUNE-301 §5.3).
+		// a GPU-less box has nothing to warn about.
 		s.log.Debug("no devices found",
 			log.Str("provider", s.cfg.Provider.Name()))
 	default:
@@ -284,7 +284,7 @@ func equalUUIDSets(a, b []string) bool {
 // a process blocked in a driver ioctl cannot be interrupted, so waiting
 // for it would be waiting forever. The accepted cost is one leaked
 // goroutine for the lifetime of the process on a wedged driver — which
-// is strictly better than a daemon that will not boot (D26).
+// is strictly better than a daemon that will not boot.
 func (s *Subsystem) probe(ctx context.Context) ([]types.GPUDevice, error) {
 	type result struct {
 		devices []types.GPUDevice

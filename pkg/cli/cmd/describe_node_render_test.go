@@ -11,7 +11,7 @@ import (
 
 // A node maintains no Status and no LastHeartbeat, so the render omits
 // the line rather than printing a blank one — a blank status reads as a
-// dead node on a perfectly healthy box (RUNE-301 §6.1).
+// dead node on a perfectly healthy box.
 func TestRenderDescribe_OmitsEmptyStatus(t *testing.T) {
 	var buf bytes.Buffer
 	renderDescribe(&buf, &generated.DescribeResult{

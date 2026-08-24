@@ -57,12 +57,12 @@ func TestNodeRepo_UpsertCreatesThenReplaces(t *testing.T) {
 }
 
 // The record's `omitempty` fields must not survive a write that clears
-// them. This is the hazard RUNE-301 D-24 documents for the P2 ledger:
-// BadgerStore.UpdateFunc re-reads into an un-zeroed target inside its
-// retry loop, so an absent `omitempty` field keeps whatever the target
-// already held. NodeRepo.Upsert avoids it by writing the whole object
-// through Update instead of a read-modify-write — this test is what
-// stops a future refactor to UpdateFunc from silently reintroducing it.
+// them. BadgerStore.UpdateFunc re-reads into an un-zeroed target inside
+// its retry loop, so an absent `omitempty` field keeps whatever the
+// target already held. NodeRepo.Upsert avoids it by writing the whole
+// object through Update instead of a read-modify-write — this test is
+// what stops a future refactor to UpdateFunc from silently
+// reintroducing it.
 func TestNodeRepo_UpsertClearsOmitemptyFields(t *testing.T) {
 	repo, _ := newNodeRepo(t)
 	ctx := context.Background()

@@ -6,9 +6,9 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
-// List() reconstructs instances from container labels. Before RUNE-301 §4
-// it stamped the literal "local" while the same machine's volumes and log
-// streams were keyed by the agent's node-<hex> identity.
+// List() reconstructs instances from container labels. It used to stamp a
+// literal "local" while the same machine's volumes and log streams were
+// keyed by the agent's real node ID.
 func TestDockerRunner_NodeID(t *testing.T) {
 	r := &DockerRunner{}
 	if got := r.NodeID(); got != types.LocalNodeIDFallback {

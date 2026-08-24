@@ -9,16 +9,15 @@ import (
 	"testing"
 )
 
-// RUNE-301 §12.4(a) promises that a GPU-less box gets no recurring
-// wakeup. TestSubsystem_NothingPeriodicOnAGPULessBox asserts that at
-// runtime; this asserts it at the source level, because the failure the
-// design names is not a bug an implementer hits — it is a ticker someone
-// adds on purpose "so it picks up a card later", and hotplug is a
-// non-goal. A re-probe is a restart.
+// A GPU-less box must get no recurring wakeup.
+// TestSubsystem_NothingPeriodicOnAGPULessBox asserts that at runtime;
+// this asserts it at the source level, because the failure mode is not a
+// bug someone hits — it is a ticker someone adds on purpose "so it picks
+// up a card later". Hotplug is out of scope; a re-probe is a restart.
 //
-// If a future slice genuinely needs a periodic re-probe, that is a change
-// to the design, not a detail of a patch: update RUNE-301 first, then
-// this test.
+// If a periodic re-probe is ever genuinely needed, that is a deliberate
+// decision about what runs on every machine in the fleet, not a detail of
+// a patch. Delete this test on purpose, with that argument written down.
 func TestNoPeriodicTimersInPackage(t *testing.T) {
 	forbidden := map[string]string{
 		"time.NewTicker": "a ticker is a recurring wakeup on every GPU-less machine in the fleet",
@@ -46,7 +45,7 @@ func TestNoPeriodicTimersInPackage(t *testing.T) {
 				}
 				name := ident.Name + "." + sel.Sel.Name
 				if why, bad := forbidden[name]; bad {
-					t.Errorf("%s uses %s at %s — %s (RUNE-301 §12.4a)",
+					t.Errorf("%s uses %s at %s — %s",
 						path, name, fset.Position(sel.Pos()), why)
 				}
 				return true
