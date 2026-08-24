@@ -86,8 +86,11 @@ func hostnameForIdentity(hostname string, err error) (record, mint string) {
 // mintNodeID picks the NodeID for a brand-new identity: an explicit
 // --node-name first, then the hostname, then a random hex fallback. The
 // first two are only taken when they are valid DNS-1123 labels, because
-// the ID is used as a store key, a stream label and (for the DigitalOcean
-// volume driver) a droplet-name lookup.
+// the ID becomes a store key and an observability stream label.
+//
+// It is NOT what the cloud volume drivers match a machine on — they use
+// the OS hostname and fall back to this ID only for callers with no agent
+// — so minting from the hostname does not change what they resolve.
 func mintNodeID(preferredName, hostname string) string {
 	for _, candidate := range []string{preferredName, hostname} {
 		candidate = strings.ToLower(strings.TrimSpace(candidate))
