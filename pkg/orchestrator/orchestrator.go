@@ -193,6 +193,14 @@ type OrchestratorOptions struct {
 	// to come up.
 	InitialMountResolver wiring.MountResolver
 
+	// NodeID is this machine's identity (agent.Identity().NodeID). The
+	// instance controller stamps it onto every instance it creates, so
+	// Instance.NodeID, Volume.BoundNode and the observability stream
+	// label all name the same node. Empty leaves
+	// types.LocalNodeIDFallback in place, which is what in-process tests
+	// want.
+	NodeID string
+
 	// EventLog is the persisted event log (RUNE-126 Phase 2). When set,
 	// the instance and volume controllers emit status-transition events
 	// for `rune describe`. Nil disables emission; controllers and tests
@@ -234,6 +242,9 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	var icOpts []instancectl.Option
 	if options.EventLog != nil {
 		icOpts = append(icOpts, instancectl.WithEventLog(options.EventLog))
+	}
+	if options.NodeID != "" {
+		icOpts = append(icOpts, instancectl.WithNodeID(options.NodeID))
 	}
 	instanceController := instancectl.NewController(
 		options.Store,

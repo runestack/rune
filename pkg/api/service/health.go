@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/pkg/version"
 	"google.golang.org/grpc/codes"
@@ -343,6 +345,8 @@ func (s *HealthService) GetHealth(ctx context.Context, req *generated.GetHealthR
 		return s.getRunnerHealth(ctx, req)
 	case "store":
 		return s.getStoreHealth(ctx, req)
+	case "gpu":
+		return s.getGPUHealth(ctx, req)
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown component type: %s", req.ComponentType)
 	}
@@ -644,6 +648,101 @@ func (s *HealthService) getNodeHealth(ctx context.Context, req *generated.GetHea
 			Message: fmt.Sprintf("Retrieved health for %d nodes", len(components)),
 		},
 	}, nil
+}
+
+// getGPUHealth reports device-probe health from the node inventory
+// record.
+//
+// It returns ZERO COMPONENTS on a machine with no GPUs and a clean probe
+// — not a "none" component. `rune status` emits a line only for signals
+// it actually gathered, so an absent component is an absent line, which
+// is what keeps a GPU-less box's output unchanged. A present-but-empty
+// component would render "GPUs: none", a feature announcing itself to
+// someone who did not ask.
+//
+// The only instrument before this was a debug log line, and runed runs at
+// info — so a driver that broke overnight stayed invisible until the next
+// cast.
+func (s *HealthService) getGPUHealth(ctx context.Context, _ *generated.GetHealthRequest) (*generated.GetHealthResponse, error) {
+	nodes, err := repos.NewNodeRepo(s.store).List(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list nodes: %v", err)
+	}
+
+	var components []*generated.ComponentHealth
+	for _, node := range nodes {
+		st, msg, ok := gpuProbeHealth(node)
+		if !ok {
+			continue
+		}
+		components = append(components, &generated.ComponentHealth{
+			ComponentType: "gpu",
+			Id:            node.ID,
+			Name:          node.Name,
+			Status:        st,
+			Message:       msg,
+			Timestamp:     time.Now().Format(time.RFC3339),
+		})
+	}
+
+	return &generated.GetHealthResponse{
+		Components: components,
+		Status: &generated.Status{
+			Code:    int32(codes.OK),
+			Message: fmt.Sprintf("Retrieved GPU probe health for %d nodes", len(components)),
+		},
+	}, nil
+}
+
+// gpuProbeHealth summarises one node's probe. ok is false when the node
+// has nothing to say — never probed, or probed cleanly and found no
+// devices.
+func gpuProbeHealth(node *types.Node) (generated.HealthStatus, string, bool) {
+	if node.DeviceProbeError != "" {
+		return generated.HealthStatus_HEALTH_STATUS_UNHEALTHY,
+			"probe failed: " + node.DeviceProbeError, true
+	}
+	if node.DevicesProbedAt == nil || len(node.Devices) == 0 {
+		return generated.HealthStatus_HEALTH_STATUS_HEALTHY, "", false
+	}
+
+	byProduct := map[string]int{}
+	order := make([]string, 0, len(node.Devices))
+	for _, d := range node.Devices {
+		name := d.Product
+		if name == "" {
+			name = "GPU"
+		}
+		if _, seen := byProduct[name]; !seen {
+			order = append(order, name)
+		}
+		byProduct[name]++
+	}
+	sort.Strings(order)
+
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		parts = append(parts, fmt.Sprintf("%d×%s", byProduct[name], name))
+	}
+	msg := strings.Join(parts, ", ")
+	if node.DevicesProbedAt != nil {
+		msg += ", probed " + shortAge(time.Since(*node.DevicesProbedAt)) + " ago"
+	}
+	return generated.HealthStatus_HEALTH_STATUS_HEALTHY, msg, true
+}
+
+// shortAge renders an elapsed duration the way `rune get` renders ages.
+func shortAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 // getAPIServerHealth retrieves health for the API server.

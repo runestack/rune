@@ -70,7 +70,22 @@ const (
 	// ResourceTypeChannel represents a cluster-scoped notification channel
 	// (templated webhook / slack) referenced by alert rules.
 	ResourceTypeChannel ResourceType = "channel"
+
+	// ResourceTypeNode represents a cluster-scoped node inventory record:
+	// what hardware the machine has, written by that machine's own agent.
+	// Rows live under an empty-namespace key, the same pattern
+	// StorageClass uses.
+	ResourceTypeNode ResourceType = "node"
 )
+
+// LocalNodeIDFallback is the Instance.NodeID written when no agent
+// identity has been wired — embedded/library use and unit tests, which
+// have no node-identity.json. It is the literal every instance used to
+// carry, kept as the fallback so those paths are unchanged and
+// Instance.Validate() (which requires a non-empty nodeId) still passes.
+// `runed` always wires the real agent identity, so a real deployment
+// never takes this branch.
+const LocalNodeIDFallback = "local"
 
 // RunnerType is the type of runner for an instance.
 type RunnerType string

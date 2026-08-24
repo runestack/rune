@@ -34,15 +34,26 @@ func handleEventsGet(opts *getOptions) error {
 		limit = 50
 	}
 
+	// The caller's namespace still goes on the wire, including for
+	// node/<name>: it is the RBAC input, and a namespace-pinned grant is
+	// allowed to read a node's (cluster-scoped) events. The server
+	// rescopes the QUERY for node — see EventService.ListEvents.
+	ns := effectiveCmdNS(opts.namespace)
+
 	evs, err := client.NewEventClient(apiClient).ListEvents(
-		effectiveCmdNS(opts.namespace), forKind, forName, limit,
+		ns, forKind, forName, limit,
 	)
 	if err != nil {
 		return err
 	}
 
 	table := NewResourceTable()
-	table.Namespace = effectiveCmdNS(opts.namespace)
+	table.Namespace = ns
+	if strings.EqualFold(forKind, "node") {
+		// Cluster-scoped: labelling the table with a namespace the rows
+		// do not have would be a lie.
+		table.Namespace = ""
+	}
 	table.ShowHeaders = !opts.noHeaders
 	return table.RenderEvents(evs)
 }

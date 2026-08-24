@@ -80,7 +80,7 @@ func (c *Controller) CreateInstance(ctx context.Context, service *types.Service,
 		Namespace:   service.Namespace,
 		ServiceName: service.Name,
 		ServiceID:   service.ID,
-		NodeID:      "local",
+		NodeID:      c.NodeID(),
 		Status:      types.InstanceStatusPending,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
@@ -92,9 +92,10 @@ func (c *Controller) CreateInstance(ctx context.Context, service *types.Service,
 	// substrate for future affinity/topology-spread scheduling. A copy keeps the
 	// instance independent of later mutations to the service spec.
 	//
-	// TODO(scheduler): once a placement scheduler assigns NodeID (instead of the
-	// hardcoded "local"), merge the chosen Node's topology labels here too, so
-	// instances carry region/zone for region-aware log queries and spread.
+	// TODO(scheduler): once a placement scheduler CHOOSES a node (today
+	// NodeID is always this node's own identity), merge the chosen Node's
+	// topology labels here too, so instances carry region/zone for
+	// region-aware log queries and spread.
 	if len(service.Labels) > 0 {
 		instance.Labels = make(map[string]string, len(service.Labels))
 		for k, v := range service.Labels {

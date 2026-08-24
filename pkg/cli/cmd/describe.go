@@ -47,7 +47,7 @@ func newDescribeCmd() *cobra.Command {
 one screen: its status with a real reason, the related resources it
 depends on, and suggested next commands.
 
-Supported types: instance (inst), service (svc), volume (vol).`,
+Supported types: instance (inst), service (svc), volume (vol), node.`,
 		Example: `  rune describe instance flo-0 -n shared
   rune describe service flo -n shared
   rune describe volume/flo-data-flo-0 -n shared
@@ -119,7 +119,7 @@ func parseDescribeTarget(args []string) (kind, name string, err error) {
 	}
 	canon, ok := describeKind(kind)
 	if !ok {
-		return "", "", fmt.Errorf("cannot describe %q (supported: instance, service, volume)", kind)
+		return "", "", fmt.Errorf("cannot describe %q (supported: instance, service, volume, node)", kind)
 	}
 	return canon, name, nil
 }
@@ -154,13 +154,18 @@ func renderDescribe(w io.Writer, r *generated.DescribeResult) {
 		fmt.Fprintf(w, "%-16s %s\n", kv.Key+":", kv.Value)
 	}
 
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%-16s %s\n", "Status:", colorizeDescribeStatus(r.Status))
-	if r.Reason != "" {
-		fmt.Fprintf(w, "%-16s %s\n", "Reason:", r.Reason)
-	}
-	if r.Message != "" {
-		fmt.Fprintf(w, "%-16s %s\n", "Message:", r.Message)
+	// The whole status block is skipped when the kind maintains no
+	// status — nothing refreshes a node's Status or LastHeartbeat, and a
+	// blank status reads as a dead node on a healthy box.
+	if r.Status != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%-16s %s\n", "Status:", colorizeDescribeStatus(r.Status))
+		if r.Reason != "" {
+			fmt.Fprintf(w, "%-16s %s\n", "Reason:", r.Reason)
+		}
+		if r.Message != "" {
+			fmt.Fprintf(w, "%-16s %s\n", "Message:", r.Message)
+		}
 	}
 
 	if len(r.Timestamps) > 0 {

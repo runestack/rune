@@ -151,6 +151,12 @@ func (s *APIServer) Start() error {
 	if err := s.runnerManager.Initialize(); err != nil {
 		s.logger.Warn("Error initializing runners", log.Err(err))
 	}
+	// Hand the runners this node's identity before anything reconciles,
+	// so instances reconstructed from container labels carry the same
+	// node ID the instance controller writes.
+	if s.options.NodeID != "" {
+		s.runnerManager.SetNodeID(s.options.NodeID)
+	}
 
 	// Initialize orchestrator if not provided
 	if s.orchestrator == nil {
@@ -165,6 +171,7 @@ func (s *APIServer) Start() error {
 			s.options.StoragePreserveOnDelete ||
 			s.options.StorageSecretLookup != nil ||
 			s.options.InitialMountResolver != nil ||
+			s.options.NodeID != "" ||
 			s.options.EventLog != nil {
 			s.orchestrator, err = orchestrator.NewOrchestrator(orchestrator.OrchestratorOptions{
 				Store:                   s.store,
@@ -175,6 +182,7 @@ func (s *APIServer) Start() error {
 				StoragePreserveOnDelete: s.options.StoragePreserveOnDelete,
 				StorageSecretLookup:     s.options.StorageSecretLookup,
 				InitialMountResolver:    s.options.InitialMountResolver,
+				NodeID:                  s.options.NodeID,
 				EventLog:                s.options.EventLog,
 			})
 		} else {

@@ -12,6 +12,7 @@ import (
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -76,10 +77,7 @@ func (s *DescribeService) Describe(ctx context.Context, req *generated.DescribeR
 	case "volume":
 		result, err = s.describeVolume(ctx, ns, req.Name)
 	case "node":
-		// RUNE-126 follow-up: nodes are not persisted store resources
-		// on single-node, so there is nothing to describe yet.
-		return nil, status.Error(codes.Unimplemented,
-			"describe node is not available on single-node yet (RUNE-126 follow-up)")
+		result, err = s.describeNode(ctx, req.Name)
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "cannot describe %q", req.Kind)
 	}
@@ -449,6 +447,151 @@ func (s *DescribeService) describeVolume(ctx context.Context, ns, name string) (
 	res.Hints = []string{fmt.Sprintf("rune get volume %s -n %s -o yaml", vol.Name, vol.Namespace)}
 	s.attachEvents(ctx, res, vol.Namespace, "Volume", vol.Name)
 	return res, nil
+}
+
+// describeNode renders one node's inventory record.
+//
+// The record is cluster-scoped, so Describe passes no namespace and the
+// events are read under the empty-namespace key the record is stored
+// under.
+func (s *DescribeService) describeNode(ctx context.Context, name string) (*generated.DescribeResult, error) {
+	repo := repos.NewNodeRepo(s.store)
+	node, err := s.resolveNode(ctx, repo, name)
+	if err != nil {
+		return nil, err
+	}
+
+	res := &generated.DescribeResult{
+		Kind: "Node",
+		Name: node.Name,
+		// Status and Reason are DELIBERATELY LEFT EMPTY. Nothing
+		// refreshes types.Node.Status or LastHeartbeat on a cadence, so
+		// rendering them would show a blank status and a heartbeat
+		// frozen at the last restart — which reads as a dead node on a
+		// perfectly healthy box, and would be the first thing every
+		// operator sees from this command. An unmaintained field is
+		// worse than an absent one.
+	}
+	res.Identity = []*generated.DescribeKV{
+		kv("ID", node.ID),
+		kv("Address", node.Address),
+	}
+	res.Timestamps = timestampKVs(node.CreatedAt, nil, time.Time{})
+
+	if len(node.Labels) > 0 {
+		res.Sections = append(res.Sections, &generated.DescribeSection{
+			Title: "Labels",
+			Lines: sortedKeyValueLines(node.Labels),
+		})
+	}
+	if sec := nodeDevicesSection(node); sec != nil {
+		res.Sections = append(res.Sections, sec)
+	}
+
+	res.Hints = []string{fmt.Sprintf("rune get events --for node/%s", node.Name)}
+	// The "" namespace is the cluster-scoped key the record is stored
+	// under; without this the node's event trail is write-only.
+	s.attachEvents(ctx, res, "", "Node", node.Name)
+	return res, nil
+}
+
+// resolveNode looks the record up by its store key, then falls back to a
+// scan matching ID or Name. `local` resolves to the single node on a
+// one-node install: it is the literal every instance used to carry, and
+// there is no node-listing command yet, so an operator has no other way
+// to discover the minted ID.
+func (s *DescribeService) resolveNode(ctx context.Context, repo *repos.NodeRepo, name string) (*types.Node, error) {
+	if node, err := repo.Get(ctx, name); err == nil {
+		return node, nil
+	} else if !store.IsNotFoundError(err) {
+		return nil, err
+	}
+
+	nodes, err := repo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range nodes {
+		if strings.EqualFold(n.ID, name) || strings.EqualFold(n.Name, name) {
+			return n, nil
+		}
+	}
+	if strings.EqualFold(name, types.LocalNodeIDFallback) && len(nodes) == 1 {
+		return nodes[0], nil
+	}
+	return nil, fmt.Errorf("node %q: %w", name, errDescribeNotFound)
+}
+
+// nodeDevicesSection renders the GPU block, or nil when this node has
+// nothing to say about devices.
+//
+// Nil, not a "GPUs: none" line: a GPU-less box must not have a feature
+// announcing itself to someone who did not ask for it. The three states
+// behind "no GPUs" are distinct and only two of them produce output —
+// never probed, and probe failed.
+func nodeDevicesSection(node *types.Node) *generated.DescribeSection {
+	switch {
+	case node.DevicesProbedAt == nil:
+		// Not an error, and specifically NOT "this node has no GPUs" —
+		// the agent starts after the control plane, so this is the
+		// window where the answer is not known yet.
+		return &generated.DescribeSection{
+			Title: "GPUs",
+			Lines: []string{"not probed yet"},
+		}
+	case node.DeviceProbeError != "":
+		// Quoted verbatim: without it, six distinct causes collapse
+		// into one unactionable "no devices".
+		return &generated.DescribeSection{
+			Title: "GPUs",
+			Lines: []string{"probe failed: " + node.DeviceProbeError},
+		}
+	case len(node.Devices) == 0:
+		return nil
+	}
+
+	devices := append([]types.GPUDevice(nil), node.Devices...)
+	sort.Slice(devices, func(i, j int) bool { return devices[i].Index < devices[j].Index })
+
+	lines := make([]string, 0, len(devices))
+	for _, d := range devices {
+		line := fmt.Sprintf("%s  %s  %s", d.UUID, d.Product, humanGiB(d.VRAMBytes))
+		if d.DriverVersion != "" {
+			line += "  driver " + d.DriverVersion
+		}
+		if d.CUDAVersion != "" {
+			line += "  CUDA " + d.CUDAVersion
+		}
+		if d.Missing {
+			line += "  [missing]"
+		}
+		lines = append(lines, line)
+	}
+	return &generated.DescribeSection{Title: "GPUs", Lines: lines}
+}
+
+// humanGiB renders device memory the way the driver and every GPU
+// datasheet do: "48Gi", not types.FormatMemory's "48.0Gi". A tenth of a
+// gibibyte is noise on a card and the whole-number form is what an
+// operator is comparing against the box's spec sheet.
+func humanGiB(b int64) string {
+	if b <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.0fGi", float64(b)/float64(1<<30))
+}
+
+func sortedKeyValueLines(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, k := range keys {
+		lines = append(lines, fmt.Sprintf("%s: %s", k, m[k]))
+	}
+	return lines
 }
 
 // attachEvents folds the most recent events for the target into

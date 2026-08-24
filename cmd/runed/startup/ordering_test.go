@@ -109,13 +109,24 @@ func TestMountResolverWiredInsideRegistration(t *testing.T) {
 			"not-yet-mounted window (RUNE-313 D2)", fset.Position(pos))
 	}
 
-	// The publisher is the opposite constraint: it needs node identity, which
-	// does not exist until the agent has started, so it must NOT be in
+	// The publisher is the opposite constraint: it must NOT be in
 	// registration.
+	//
+	// STALE RATIONALE, FLAGGED NOT REWRITTEN: this guard was justified by
+	// "it needs node identity, which does not exist until the agent has
+	// started". That is no longer true — the identity load now happens
+	// before the store opens, and NewEndpointPublisher takes only the
+	// OrderedLog, which is already open by then. Whatever still pins the
+	// call to after agent.Start (op-kind registration order against the
+	// DNS subsystem is the likely candidate, see wiring.go's comment) has
+	// not been established here, so the assertion is left exactly as it
+	// was rather than re-justified on a guess. Establish the real
+	// constraint before relaxing or rewording this.
 	pubInside, _ := findCalls(file, "SetEndpointPublisher", regClosure)
 	if pubInside > 0 {
-		t.Error("SetEndpointPublisher must NOT be called inside the registration closure: " +
-			"it needs agent identity, which does not exist until agent.Start has returned")
+		t.Error("SetEndpointPublisher must NOT be called inside the registration closure; " +
+			"see the note above — the original identity-based rationale is stale but the " +
+			"constraint has not been shown to be")
 	}
 }
 

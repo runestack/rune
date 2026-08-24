@@ -93,6 +93,13 @@ type Options struct {
 	// of falling back to Volume.Handle.
 	InitialMountResolver wiring.MountResolver
 
+	// NodeID is this machine's identity (agent.Identity().NodeID),
+	// loaded from node-identity.json before the control plane starts.
+	// Threaded to the orchestrator so created instances carry the same
+	// node ID as their volumes and log streams, and to the runner manager
+	// so container-derived instances agree.
+	NodeID string
+
 	// EventLog is the persisted resource event log (RUNE-126 Phase 2).
 	// When set, the orchestrator wires it into the instance and volume
 	// controllers so status transitions surface in `rune describe`.
@@ -301,6 +308,14 @@ func WithStorageSecretLookup(lookup driverparams.SecretLookup) Option {
 func WithInitialMountResolver(resolver wiring.MountResolver) Option {
 	return func(opts *Options) {
 		opts.InitialMountResolver = resolver
+	}
+}
+
+// WithNodeID wires this node's identity into the orchestrator and the
+// runner manager. Empty keeps types.LocalNodeIDFallback.
+func WithNodeID(nodeID string) Option {
+	return func(opts *Options) {
+		opts.NodeID = nodeID
 	}
 }
 

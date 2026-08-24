@@ -309,7 +309,7 @@ func (r *DockerRunner) List(ctx context.Context, namespace string) ([]*runetypes
 			Namespace:   c.Labels["rune.namespace"],
 			ServiceID:   c.Labels["rune.service.id"],
 			ServiceName: c.Labels["rune.service.name"],
-			NodeID:      "local", // Assume local node for now
+			NodeID:      r.NodeID(),
 		}
 
 		// Set status based on container state
