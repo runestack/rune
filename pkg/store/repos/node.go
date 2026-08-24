@@ -30,20 +30,13 @@ const nodeNamespaceKey = ""
 // node. There is no read-modify-write race to protect against, so Upsert
 // does a whole-object Update rather than a store.UpdateFunc CAS.
 //
-// That is deliberate, not incidental. BadgerStore.UpdateFunc unmarshals
-// the freshly-read row into the SAME target on every retry without
-// zeroing it (pkg/store/badger_store.go, inside the retry loop), and
-// encoding/json leaves a field absent from the JSON untouched. Any
-// `omitempty` field would therefore keep a discarded attempt's value.
-// types.Node has three such fields of its own (Labels, StatusReason,
-// StatusMessage) and the device fields add three more; node_test.go
-// reproduces the failure.
+// That remains true if a second writer ever appears, but it is no longer
+// the only reason: UpdateFunc used to re-read into an un-zeroed target on
+// retry, so any `omitempty` field absent from the fresh JSON kept the
+// discarded attempt's value. types.Node has six such fields. It now
+// zeroes the target first, and node_test.go pins that.
 //
-// Whole-object Update sidesteps the hazard instead of relying on tag
-// discipline: the caller supplies a fully-populated struct and the store
-// marshals it as given, with no un-zeroed re-read anywhere on the path.
-// A future second writer must add a CAS path AND revisit the tags
-// together — hence this comment rather than a silent choice.
+// A future second writer therefore needs a CAS path but not a tag audit.
 type NodeRepo struct {
 	base *BaseRepo[types.Node]
 }

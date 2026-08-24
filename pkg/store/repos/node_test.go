@@ -104,37 +104,49 @@ func TestNodeRepo_UpsertRejectsInvalid(t *testing.T) {
 	assert.Error(t, repo.Upsert(ctx, nil))
 }
 
-// The hazard NodeRepo.Upsert is avoiding, demonstrated on types.Node so
-// the choice in node.go is backed by a reproduction rather than a claim.
-// UpdateFunc re-reads the stored row into the SAME target on every
-// attempt without zeroing it, and encoding/json leaves an absent field
-// untouched — so a target that already carries a device list keeps it
-// even when the stored row has none.
-func TestUpdateFuncKeepsStaleOmitemptyFieldsOnNode(t *testing.T) {
+// The hazard that used to make this repo's whole-object write necessary,
+// pinned on types.Node so it stays closed. UpdateFunc once re-read the
+// stored row into the SAME target on every attempt without zeroing it,
+// and encoding/json leaves an absent field untouched — so a target
+// already carrying a device list kept it even when the stored row had
+// none, and committed it.
+//
+// UpdateFunc now zeroes the target before each read. types.Node is a
+// worthwhile canary because it carries six `omitempty` fields across
+// three of the four leaking shapes: scalars, a map, a pointer and a
+// slice.
+func TestUpdateFuncZeroesTargetBeforeReadingNode(t *testing.T) {
 	repo, st := newNodeRepo(t)
 	ctx := context.Background()
 
-	// Stored state: a node with no devices and no probe error.
+	// Stored state: a node with no devices, no probe error, no labels.
 	require.NoError(t, repo.Upsert(ctx, &types.Node{ID: "node-1", Address: "127.0.0.1"}))
 
-	// A caller that reuses a target already holding a previous read —
-	// exactly what UpdateFunc's retry loop does to itself.
+	// A caller whose target already holds a previous read — exactly what
+	// the retry loop used to do to itself.
+	probedAt := time.Now()
 	target := &types.Node{
 		Devices:          []types.GPUDevice{{UUID: "GPU-stale"}},
 		DeviceProbeError: "stale probe error",
+		Labels:           map[string]string{"stale": "label"},
+		DevicesProbedAt:  &probedAt,
+		StatusReason:     "StaleReason",
 	}
 	require.NoError(t, st.UpdateFunc(ctx, types.ResourceTypeNode, "", "node-1", target, func() error {
 		return nil
 	}))
 
-	assert.Equal(t, "GPU-stale", target.Devices[0].UUID,
-		"the un-zeroed target keeps a device list the stored row does not have")
-	assert.Equal(t, "stale probe error", target.DeviceProbeError,
-		"and keeps a probe error the stored row does not have")
+	assert.Empty(t, target.Devices, "a slice absent from the stored row must not survive the read")
+	assert.Empty(t, target.DeviceProbeError, "nor a scalar")
+	assert.Nil(t, target.Labels, "nor a map, which would otherwise merge")
+	assert.Nil(t, target.DevicesProbedAt, "nor a pointer, which would otherwise decode through")
+	assert.Empty(t, target.StatusReason)
+	assert.Equal(t, "node-1", target.ID, "and the stored row is still read into it")
 
-	// And the bad value is now committed, which is why Upsert does not
-	// go through this path.
+	// Nothing stale reached the store.
 	got, err := repo.Get(ctx, "node-1")
 	require.NoError(t, err)
-	assert.Len(t, got.Devices, 1, "the stale device list was written back to the store")
+	assert.Empty(t, got.Devices)
+	assert.Empty(t, got.DeviceProbeError)
+	assert.Nil(t, got.Labels)
 }
