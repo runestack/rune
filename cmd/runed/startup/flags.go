@@ -31,6 +31,7 @@ type Flags struct {
 	MetricsAddr string
 
 	NodeName     string
+	GPUProvider  string
 	NodeRole     string
 	IngressHTTP  string
 	IngressHTTPS string
@@ -62,6 +63,7 @@ func DefineFlags(fs *flag.FlagSet) *Flags {
 	fs.StringVar(&f.ClusterCIDR, "cluster-cidr", "10.96.0.0/16", "Cluster service CIDR for VIP allocation (RFC1918 or 100.64/10)")
 	fs.StringVar(&f.MetricsAddr, "metrics-addr", "127.0.0.1:9100", "Address for the Prometheus /metrics endpoint (empty disables). Exposes metrics from all subsystems (orchestrator, runners, networking, agent, DNS).")
 	fs.StringVar(&f.NodeName, "node-name", "", "Node ID to mint on FIRST boot (DNS-1123 label). Defaults to the hostname, then to a random node-<hex>. Ignored once node-identity.json exists — the ID is never rewritten.")
+	fs.StringVar(&f.GPUProvider, "gpu-provider", "auto", "Device inventory provider: auto (nvidia-smi when present, otherwise nothing), none (never probe), or nvidia-smi.")
 	fs.StringVar(&f.NodeRole, "node-role", "", "Comma-separated node roles. 'edge' enables the ingress controller and ACME orchestrator on this node.")
 	fs.StringVar(&f.IngressHTTP, "ingress-http-addr", "", "Bind address for the ingress HTTP listener. Defaults to :80 in production, :8080 in dev mode. Used only when node-role contains 'edge'.")
 	fs.StringVar(&f.IngressHTTPS, "ingress-https-addr", "", "Bind address for the ingress HTTPS listener. Defaults to :443 in production, :8443 in dev mode. Used only when node-role contains 'edge'. Empty disables TLS termination.")

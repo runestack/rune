@@ -95,11 +95,15 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 		// subsystem whose Ready is deadline-bounded rather than
 		// completion-bounded — see the package comment for why a device
 		// probe must never gate the daemon.
+		gpuProvider, gpErr := nodeinfo.SelectProvider(b.flags.GPUProvider)
+		if gpErr != nil {
+			return fmt.Errorf("agent nodeinfo: %w", gpErr)
+		}
 		niSub, niErr := nodeinfo.New(nodeinfo.Config{
 			Repo:     repos.NewNodeRepo(stateStore),
 			NodeID:   a.Identity().NodeID,
 			Labels:   a.Identity().Labels,
-			Provider: nodeinfo.NullProvider(),
+			Provider: gpuProvider,
 			Logger:   logger.WithComponent("agent.nodeinfo"),
 		})
 		if niErr != nil {
