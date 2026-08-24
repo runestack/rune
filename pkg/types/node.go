@@ -39,6 +39,65 @@ type Node struct {
 
 	// Last heartbeat timestamp
 	LastHeartbeat time.Time `json:"lastHeartbeat" yaml:"lastHeartbeat"`
+
+	// Devices is the GPU inventory the node's own agent probed
+	// (RUNE-301 §6.1). Empty on every machine without a GPU, which is
+	// the normal result and not an error — see DeviceProbeError.
+	//
+	// Devices hangs off Node rather than NodeResources because
+	// NodeResources is capacity scalars and this is a list of
+	// identities; the proto name NodeResources is also already taken by
+	// an unrelated live-health message.
+	Devices []GPUDevice `json:"devices,omitempty" yaml:"devices,omitempty"`
+
+	// DevicesProbedAt is when the device probe last returned. NIL MEANS
+	// NEVER PROBED, which is a different state from "probed and found
+	// nothing" and must never be read as "this node has no GPUs"
+	// (RUNE-301 §5.3, D27) — the agent starts after the control plane,
+	// so every restart has a window where the answer is not known yet.
+	DevicesProbedAt *time.Time `json:"devicesProbedAt,omitempty" yaml:"devicesProbedAt,omitempty"`
+
+	// DeviceProbeError is why the last probe failed, verbatim; empty
+	// means it succeeded. Without it "no devices" collapses six distinct
+	// causes — no driver, nvidia-smi absent from PATH, permission denied
+	// to the rune user, a probe hung on an Xid, CSV drift on a new
+	// driver, and not-probed-yet — into one unactionable string
+	// (RUNE-301 §5.3, §11.2).
+	DeviceProbeError string `json:"deviceProbeError,omitempty" yaml:"deviceProbeError,omitempty"`
+}
+
+// GPUDevice is one physical accelerator as the node's probe reported it
+// (RUNE-301 §6.1). Vendor-neutral by construction; the only v1 probe is
+// NVIDIA.
+type GPUDevice struct {
+	// UUID is the device identity — stable across reboots and
+	// renumbering. Everything that refers to a device refers to this.
+	UUID string `json:"uuid" yaml:"uuid"`
+
+	// Index is the driver's ordinal. DISPLAY ONLY: it is not stable and
+	// is never an identity.
+	Index int `json:"index" yaml:"index"`
+
+	// Vendor is the lowercase vendor slug, e.g. "nvidia".
+	Vendor string `json:"vendor" yaml:"vendor"`
+
+	// Product is the marketing name as the driver reports it, e.g.
+	// "NVIDIA L40S".
+	Product string `json:"product" yaml:"product"`
+
+	// VRAMBytes is total device memory, as the driver reports it.
+	VRAMBytes int64 `json:"vramBytes" yaml:"vramBytes"`
+
+	// DriverVersion is the kernel driver version, e.g. "550.54.15".
+	DriverVersion string `json:"driverVersion" yaml:"driverVersion"`
+
+	// CUDAVersion is the CUDA runtime version the driver supports, when
+	// the probe could determine it.
+	CUDAVersion string `json:"cudaVersion,omitempty" yaml:"cudaVersion,omitempty"`
+
+	// Missing marks a device seen by an earlier probe and absent now
+	// (RUNE-301 §11.4). Reserved for P3; P1 never sets it.
+	Missing bool `json:"missing,omitempty" yaml:"missing,omitempty"`
 }
 
 // NodeStatus represents the current status of a node.

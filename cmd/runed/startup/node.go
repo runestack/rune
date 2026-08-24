@@ -28,6 +28,7 @@ import (
 	"github.com/runestack/rune/pkg/store"
 
 	dnssub "github.com/runestack/rune/internal/agent/dns"
+	"github.com/runestack/rune/internal/agent/nodeinfo"
 	volsub "github.com/runestack/rune/internal/agent/volumes"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -49,9 +50,9 @@ import (
 //
 //  1. Registration order IS start order. agent.Register appends to a slice and
 //     agent.Start starts subsystems in that order (internal/agent/agent.go).
-//     The order below — dataplane, volumes, forwarder, DNS, ingress — is a
-//     contract: ingressctl reads dpRef.Cache(), so moving ingress ahead of the
-//     dataplane panics at startup on edge nodes only. Keep this one ordered
+//     The order below — nodeinfo, dataplane, volumes, forwarder, DNS, ingress —
+//     is a contract: ingressctl reads dpRef.Cache(), so moving ingress ahead of
+//     the dataplane panics at startup on edge nodes only. Keep this one ordered
 //     block; do not scatter these into independently-called functions.
 //
 //  2. The REAL mount resolver is installed inside the volumes registration
@@ -88,6 +89,26 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 		extraLabels[types.LabelNodeRole] = b.flags.NodeRole
 	}
 	agentInst, agentStop, err := startAgent(ctx, logger, olog, b.identity, b.flags.DevMode, extraLabels, func(a *agent.Agent) error {
+		// Node inventory (RUNE-301 §6.1). First in the list because it
+		// depends on nothing and its Start is a goroutine launch, so the
+		// record lands as early as the store allows. It is also the only
+		// subsystem whose Ready is deadline-bounded rather than
+		// completion-bounded — see the package comment for why a device
+		// probe must never gate the daemon.
+		niSub, niErr := nodeinfo.New(nodeinfo.Config{
+			Repo:     repos.NewNodeRepo(stateStore),
+			NodeID:   a.Identity().NodeID,
+			Labels:   a.Identity().Labels,
+			Provider: nodeinfo.NullProvider(),
+			Logger:   logger.WithComponent("agent.nodeinfo"),
+		})
+		if niErr != nil {
+			return fmt.Errorf("agent nodeinfo: %w", niErr)
+		}
+		if err := a.Register(niSub); err != nil {
+			return err
+		}
+
 		dpMode := dataplane.ModeProduction
 		if b.flags.DevMode {
 			dpMode = dataplane.ModeDev

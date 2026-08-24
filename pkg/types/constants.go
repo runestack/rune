@@ -70,6 +70,12 @@ const (
 	// ResourceTypeChannel represents a cluster-scoped notification channel
 	// (templated webhook / slack) referenced by alert rules.
 	ResourceTypeChannel ResourceType = "channel"
+
+	// ResourceTypeNode represents a cluster-scoped node inventory record:
+	// what hardware the machine has, written by that machine's own agent
+	// (RUNE-301 §6.1). Rows live under an empty-namespace key, the same
+	// pattern StorageClass uses.
+	ResourceTypeNode ResourceType = "node"
 )
 
 // LocalNodeIDFallback is the Instance.NodeID written when no agent
