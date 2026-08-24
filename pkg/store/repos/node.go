@@ -27,16 +27,12 @@ const nodeNamespaceKey = ""
 // # Why this repo never uses UpdateFunc
 //
 // The inventory record has exactly ONE writer: the agent that owns the
-// node. There is no read-modify-write race to protect against, so Upsert
-// does a whole-object Update rather than a store.UpdateFunc CAS.
+// node. With no read-modify-write race to protect against, a CAS buys
+// nothing, so Upsert writes the whole object through Update.
 //
-// That remains true if a second writer ever appears, but it is no longer
-// the only reason: UpdateFunc used to re-read into an un-zeroed target on
-// retry, so any `omitempty` field absent from the fresh JSON kept the
-// discarded attempt's value. types.Node has six such fields. It now
-// zeroes the target first, and node_test.go pins that.
-//
-// A future second writer therefore needs a CAS path but not a tag audit.
+// Give this record a second writer and that stops being true: it would
+// need UpdateFunc, whose retry loop re-reads and re-runs the mutation,
+// which a whole-object write cannot express.
 type NodeRepo struct {
 	base *BaseRepo[types.Node]
 }

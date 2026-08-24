@@ -101,7 +101,7 @@ func resetTarget(target interface{}) {
 	if !elem.CanSet() {
 		return
 	}
-	elem.Set(reflect.Zero(elem.Type()))
+	elem.SetZero()
 }
 
 // UnmarshalResource converts a resource interface to a target type using JSON marshaling/unmarshaling.

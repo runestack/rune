@@ -255,6 +255,52 @@ func TestUpdateFunc_NoStaleTargetOnRetry(t *testing.T) {
 		assert.NotContains(t, got.Env, "LEAKED", "a rejected attempt's map key must not survive the retry")
 		assert.Equal(t, "1", got.Env["KEEP"])
 	})
+
+	// A non-nil pointer is decoded THROUGH rather than replaced, so the
+	// struct it points at keeps whatever the re-read omits. This is the
+	// shape the orchestrator actually writes: the
+	// `if x.Metadata == nil { x.Metadata = &ServiceMetadata{} }` idiom
+	// (scaling_controller.go, status.go) allocates on attempt 1, and every
+	// interesting ServiceMetadata field is `omitempty`.
+	t.Run("pointer decoded through", func(t *testing.T) {
+		store, _, cleanup := setupTestStore(t)
+		defer cleanup()
+		ctx := context.Background()
+
+		require.NoError(t, store.Create(ctx, types.ResourceTypeService, "ns", "svc",
+			&types.Service{Name: "svc", Namespace: "ns", Scale: 1}))
+
+		// The competing writer's row carries a Metadata with the field at
+		// its zero value, so the field is absent from the fresh JSON.
+		interfere := forceConflictOnce(t, store, &types.Service{
+			Name: "svc", Namespace: "ns", Scale: 1,
+			Metadata: &types.ServiceMetadata{Generation: 7},
+		})
+
+		var fresh types.Service
+		attempt := 0
+		require.NoError(t, store.UpdateFunc(ctx, types.ResourceTypeService, "ns", "svc", &fresh, func() error {
+			attempt++
+			if fresh.Metadata == nil {
+				fresh.Metadata = &types.ServiceMetadata{}
+			}
+			if attempt == 1 {
+				fresh.Metadata.ObservedGeneration = 99
+				interfere()
+			}
+			fresh.Scale = 2
+			return nil
+		}))
+		require.Equal(t, 2, attempt, "the competing write must have forced exactly one retry")
+
+		var got types.Service
+		require.NoError(t, store.Get(ctx, types.ResourceTypeService, "ns", "svc", &got))
+		require.NotNil(t, got.Metadata)
+		assert.EqualValues(t, 0, got.Metadata.ObservedGeneration,
+			"a rejected attempt's write through a pointer must not survive the retry")
+		assert.EqualValues(t, 7, got.Metadata.Generation,
+			"and the competing writer's value must be the one that is read")
+	})
 }
 
 // TestUpdateFunc_ReplacesPrefilledTarget holds every Store implementation to the
@@ -267,7 +313,9 @@ func TestUpdateFunc_ReplacesPrefilledTarget(t *testing.T) {
 
 	memory, test := NewMemoryStore(), NewTestStore()
 	require.NoError(t, memory.Open(t.TempDir()))
+	t.Cleanup(func() { _ = memory.Close() })
 	require.NoError(t, test.Open(t.TempDir()))
+	t.Cleanup(func() { _ = test.Close() })
 
 	stores := map[string]Store{
 		"badger": badger, // already opened by setupTestStore
