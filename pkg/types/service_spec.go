@@ -478,6 +478,9 @@ func (s *ServiceSpec) Validate() error {
 				return NewValidationError("memory.request cannot exceed memory.limit")
 			}
 		}
+		if err := s.validateGPU(); err != nil {
+			return err
+		}
 	}
 
 	// Validate expose if present
@@ -578,6 +581,28 @@ var validUpdateStrategyFields = map[string]bool{
 	"minServing": true,
 }
 
+// validResourcesFields and validGPUFields are the map-form allowlists for
+// `resources:` and `resources.gpu:`. Without them the decoder's
+// non-strict mode accepts an unknown sub-key and drops it, and for GPU
+// that is not merely ignored — `gpu: {vrm: "20Gi"}` decodes to a non-nil
+// GPURequest with an empty VRAM, which means ONE WHOLE DEVICE. A typo
+// silently converts a 20Gi share into an exclusive claim on the card.
+//
+// `vendor` is listed as rejected-on-purpose rather than absent: the name
+// is reserved for a future multi-vendor request, and the error should say
+// so instead of reading like a typo.
+var validResourcesFields = map[string]bool{
+	"cpu":    true,
+	"memory": true,
+	"gpu":    true,
+}
+
+var validGPUFields = map[string]bool{
+	"count":              true,
+	"vram":               true,
+	"allowHeterogeneous": true,
+}
+
 // validateStructureFromNode validates unknown fields using the captured raw YAML node.
 // If no raw node is available (e.g., constructed programmatically), it is a no-op.
 func (s *ServiceSpec) validateStructureFromNode() error {
@@ -639,6 +664,9 @@ func (s *ServiceSpec) validateStructureFromNode() error {
 							"unknown field '%s' in service.updateStrategy at line %d", k.Value, k.Line))
 					}
 				}
+			}
+			if fieldKey.Value == "resources" && fieldVal.Kind == yaml.MappingNode {
+				collectResourcesErrors(fieldVal, &errors)
 			}
 			if fieldKey.Value == "discovery" && fieldVal.Kind == yaml.MappingNode {
 				validDiscoveryFields := map[string]bool{
@@ -1086,4 +1114,107 @@ func normalizeEnvFrom(defaultNS string, sources EnvFromList) []EnvFromSource {
 		out = append(out, n)
 	}
 	return out
+}
+
+// validateGPU checks resources.gpu. These are Validate() errors rather
+// than lints on purpose: the server's create path calls neither .Lint()
+// nor .Validate() directly, so a lint is a client-side courtesy a
+// scripted cast can skip — and a rule that stops a tenant from voiding
+// the GPU ledger cannot be optional.
+func (s *ServiceSpec) validateGPU() error {
+	g := s.Resources.GPU
+	if g == nil {
+		return nil
+	}
+
+	if g.Count < 0 {
+		return NewValidationError("resources.gpu.count cannot be negative")
+	}
+	if g.VRAM != "" {
+		v, err := ParseMemory(g.VRAM)
+		if err != nil {
+			return NewValidationError("invalid resources.gpu.vram: " + err.Error())
+		}
+		if v <= 0 {
+			return NewValidationError("resources.gpu.vram must be greater than zero")
+		}
+	}
+	// Multi-device is whole-device only. Splitting a vram request across
+	// several cards has no consumer and makes per-device accounting
+	// ambiguous — is 20Gi the total, or 20Gi on each?
+	if g.Count > 1 && g.VRAM != "" {
+		return NewValidationError(
+			"resources.gpu: count > 1 cannot be combined with vram — multi-device requests take whole devices")
+	}
+	if g.AllowHeterogeneous && g.Count <= 1 {
+		return NewValidationError(
+			"resources.gpu.allowHeterogeneous is meaningful only with count > 1")
+	}
+
+	// A GPU request is a statement about accounting; a privileged
+	// container is a statement that accounting does not apply. privileged
+	// bind-mounts host /dev and grants the device cgroup c *:* rwm, so
+	// the runtime's device scoping is void and the container sees every
+	// card on the box regardless of what it reserved.
+	if sc := s.SecurityContext; sc != nil {
+		switch {
+		case sc.Privileged:
+			return NewValidationError(
+				"resources.gpu cannot be combined with securityContext.privileged: " +
+					"a privileged container sees every GPU on the host, so the reservation would not hold")
+		case len(sc.CapAdd) > 0:
+			return NewValidationError(
+				"resources.gpu cannot be combined with securityContext.capAdd: " +
+					"added capabilities can reach devices outside the reservation")
+		case sc.SeccompProfile != nil && sc.SeccompProfile.Type.Canonical() == SeccompProfileUnconfined:
+			return NewValidationError(
+				"resources.gpu cannot be combined with seccompProfile: unconfined: " +
+					"an unconfined profile can reach devices outside the reservation")
+		}
+	}
+
+	// Rune sets these to scope the container to its assigned devices.
+	// A spec that sets them too would either be overridden silently or
+	// override Rune — and NVIDIA_VISIBLE_DEVICES=all in particular hands
+	// the container every card on the box.
+	for _, k := range []string{"CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES"} {
+		if _, ok := s.Env[k]; ok {
+			return NewValidationError(
+				"resources.gpu cannot be combined with a " + k + " entry in env: " +
+					"Rune sets it from the device assignment")
+		}
+	}
+	return nil
+}
+
+// collectResourcesErrors drills into `resources:` and `resources.gpu:`.
+// The decoder is non-strict, so anything not listed is dropped silently —
+// see validResourcesFields for why that is worse than usual under gpu.
+func collectResourcesErrors(node *yaml.Node, errors *[]string) {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k, v := node.Content[i], node.Content[i+1]
+		if !validResourcesFields[k.Value] {
+			*errors = append(*errors, fmt.Sprintf(
+				"unknown field '%s' in service.resources at line %d", k.Value, k.Line))
+			continue
+		}
+		if k.Value != "gpu" || v.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(v.Content); j += 2 {
+			gk := v.Content[j]
+			if validGPUFields[gk.Value] {
+				continue
+			}
+			if gk.Value == "vendor" {
+				*errors = append(*errors, fmt.Sprintf(
+					"'vendor' in service.resources.gpu at line %d is reserved and not yet accepted "+
+						"— NVIDIA is the only supported vendor; select a node with a gpu.vendor label instead",
+					gk.Line))
+				continue
+			}
+			*errors = append(*errors, fmt.Sprintf(
+				"unknown field '%s' in service.resources.gpu at line %d", gk.Value, gk.Line))
+		}
+	}
 }

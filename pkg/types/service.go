@@ -569,6 +569,64 @@ type Resources struct {
 
 	// Memory request in bytes
 	Memory ResourceLimit `json:"memory,omitempty" yaml:"memory,omitempty"`
+
+	// GPU is an accelerator request. A pointer because absent and
+	// "present but empty" mean different things: `gpu: {}` is a request
+	// for one whole device, and a zero-valued struct could not say that.
+	GPU *GPURequest `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+}
+
+// GPURequest asks for accelerator capacity. Request-only: there is no
+// limit field, because outside the engine's own arena Rune cannot enforce
+// a VRAM ceiling, and a `limit` that is not enforced is a lie told in the
+// spec grammar.
+//
+// The two shapes:
+//
+//   - `gpu: {}` or `count: N` — N whole devices, exclusively yours.
+//   - `vram: "20Gi"` — a share of one device. Rune sums the vram requests
+//     assigned to a device and refuses to exceed what it physically has.
+//
+// vram covers the WHOLE process footprint on the device — weights, KV
+// cache and the CUDA context — not just the weights. Sizing it from a
+// parameter count alone under-requests.
+//
+// There is deliberately no `vendor` field. One value would be legal, so
+// it could only ever be typed wrong; the device record carries Vendor and
+// the auto-labels give a multi-vendor box a nodeSelector path. The name
+// is reserved, not accepted.
+type GPURequest struct {
+	// Count is how many whole devices to reserve. Zero means one: a
+	// bare `gpu: {}` is the common case and must not have to say so.
+	Count int `json:"count,omitempty" yaml:"count,omitempty"`
+
+	// VRAM is a per-device memory request in ParseMemory units ("20Gi").
+	// Set it to share a device; leave it empty to take whole devices.
+	VRAM string `json:"vram,omitempty" yaml:"vram,omitempty"`
+
+	// AllowHeterogeneous permits a multi-device request to span
+	// different products. Off by default because tensor parallelism
+	// across mismatched cards fails at model load with an error that
+	// names neither card.
+	AllowHeterogeneous bool `json:"allowHeterogeneous,omitempty" yaml:"allowHeterogeneous,omitempty"`
+}
+
+// DeviceCount is the number of whole devices this request implies. A
+// request that shares a device by vram occupies one.
+func (g *GPURequest) DeviceCount() int {
+	if g == nil {
+		return 0
+	}
+	if g.Count <= 0 {
+		return 1
+	}
+	return g.Count
+}
+
+// SharesDevice reports whether this is a vram-share rather than a
+// whole-device claim.
+func (g *GPURequest) SharesDevice() bool {
+	return g != nil && g.VRAM != ""
 }
 
 // ResourceLimit defines request and limit for a resource.
