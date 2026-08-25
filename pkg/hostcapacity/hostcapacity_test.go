@@ -127,8 +127,23 @@ func TestAllocatable_NeverNegative(t *testing.T) {
 			"total=%d offered more than it has", total)
 	}
 	assert.EqualValues(t, 0, AllocatableMemory(0))
-	assert.EqualValues(t, 0, AllocatableMillicores(100), "a machine smaller than the CPU reserve offers no CPU")
 	assert.EqualValues(t, 0, AllocatableMillicores(0))
+}
+
+// The CPU reserve is capped against the machine, exactly as the memory
+// floor is. A flat 200m takes everything from a 200m cgroup quota — and
+// types.NodeResources documents zero as "unknown, not none available", so
+// the render would drop the CPU line and present a known "none" as an
+// unknown.
+func TestAllocatableMillicores_CappedOnSmallQuotas(t *testing.T) {
+	for _, total := range []int64{100, 200, 500, 1000} {
+		got := AllocatableMillicores(total)
+		assert.Greater(t, got, int64(0),
+			"a machine with %dm of CPU offers some of it; zero reads as 'unknown'", total)
+		assert.Less(t, got, total, "and never all of it")
+	}
+	// Above the cap the flat reserve takes over unchanged.
+	assert.EqualValues(t, 8000-ReservedMillicores, AllocatableMillicores(8000))
 }
 
 // CPU is compressible, so it is reserved thinly: an over-generous CPU

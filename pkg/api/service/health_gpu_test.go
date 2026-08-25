@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/hostcapacity"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
@@ -82,4 +83,44 @@ func TestGPUHealth_MixedProducts(t *testing.T) {
 	require.Len(t, comps, 1)
 	assert.Contains(t, comps[0].Message, "2×NVIDIA A100")
 	assert.Contains(t, comps[0].Message, "1×NVIDIA L40S")
+}
+
+// pkg/hostcapacity exists so this service and the agent's node record
+// cannot disagree about how big the machine is — a node reporting eighty
+// percent of one number while something schedules against another.
+//
+// That claim was unpinned: re-inlining detection into health.go, or
+// changing it, left every package green. This crosses the boundary, so
+// the two paths have to keep agreeing.
+func TestHealthCapacityMatchesHostCapacity(t *testing.T) {
+	svc := NewHealthService(store.NewTestStore(), nil, log.GetDefaultLogger())
+	resp, err := svc.GetHealth(context.Background(), &generated.GetHealthRequest{ComponentType: "node"})
+	require.NoError(t, err)
+	require.Len(t, resp.Components, 1)
+
+	got := resp.Components[0].GetResources()
+	require.NotNil(t, got)
+
+	assert.Equal(t, hostcapacity.CPUCores(), got.GetCpuCores(),
+		"the health service and pkg/hostcapacity must report one CPU number")
+	assert.Equal(t, hostcapacity.MemoryBytes(), got.GetMemTotalBytes(),
+		"and one memory number")
+}
+
+// The same number, one more boundary on: what the agent writes to the
+// node record must be what the health service reports. These are the two
+// consumers the package was extracted for.
+func TestNodeRecordCapacityMatchesHealthService(t *testing.T) {
+	svc := NewHealthService(store.NewTestStore(), nil, log.GetDefaultLogger())
+	resp, err := svc.GetHealth(context.Background(), &generated.GetHealthRequest{ComponentType: "node"})
+	require.NoError(t, err)
+	health := resp.Components[0].GetResources()
+
+	// What internal/agent/nodeinfo writes onto types.Node.Resources.
+	recordCPU := hostcapacity.MillicoresFromCores(hostcapacity.CPUCores())
+	recordMem := hostcapacity.MemoryBytes()
+
+	assert.Equal(t, hostcapacity.MillicoresFromCores(health.GetCpuCores()), recordCPU,
+		"the node record and the health service must not disagree about the machine's size")
+	assert.Equal(t, health.GetMemTotalBytes(), recordMem)
 }

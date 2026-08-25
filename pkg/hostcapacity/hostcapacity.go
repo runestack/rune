@@ -77,9 +77,9 @@ func MemoryBytes() int64 {
 // boxes Rune is for. The cap keeps the floor from exceeding an eighth of
 // the machine:
 //
-//	 1GB  → 125Mi   (12.5%, was 100% and left nothing)
-//	 2GB  → 250Mi   (12.5%, was 54%)
-//	 8GB  → 1Gi     (12.5%, the floor)
+//	 1GB  → 125MB   (12.5%, the cap — was 100%, leaving nothing)
+//	 2GB  → 250MB   (12.5%, the cap — was 54%)
+//	 8GiB → 1Gi     (12.5%; cap and floor coincide exactly here)
 //	24GB  → 2.4GB   (10%, the fraction takes over)
 //
 // CPU is deliberately reserved far more thinly. It is compressible —
@@ -146,7 +146,18 @@ func AllocatableMemory(total int64) int64 {
 
 // AllocatableMillicores is the CPU a node can offer to workloads.
 func AllocatableMillicores(totalMillicores int64) int64 {
-	if v := totalMillicores - ReservedMillicores; v > 0 {
+	if totalMillicores <= 0 {
+		return 0
+	}
+	// Capped against the machine, exactly as the memory floor is. A flat
+	// 200m takes everything from a 200m cgroup quota, and zero is
+	// documented as "unknown, not none available" — so the surfaces would
+	// drop the CPU line entirely and present a known "none" as an unknown.
+	reserved := ReservedMillicores
+	if maxReserve := totalMillicores / ReservedMemoryFloorDivisor; reserved > maxReserve {
+		reserved = maxReserve
+	}
+	if v := totalMillicores - reserved; v > 0 {
 		return v
 	}
 	return 0

@@ -263,8 +263,14 @@ func TestDescribeNode_ShowsAllocatableBesideCapacity(t *testing.T) {
 	}
 	require.Contains(t, got, "Capacity")
 	require.Contains(t, got, "For services")
-	assert.NotEqual(t, got["Capacity"], got["For services"],
-		"the two differ by the node's own reserve; showing one number would hide it")
+	// Compare the NUMBERS, not the rendered lines. The offer line always
+	// carries a trailing parenthetical, so the two strings differ however
+	// the numbers are computed — an assertion on the strings passes even
+	// if the offer is rendered from capacity.
+	assert.Contains(t, got["Capacity"], "22.4Gi", "24GB renders as 22.4Gi")
+	assert.Contains(t, got["For services"], "20.1Gi")
+	assert.NotContains(t, got["For services"], "22.4Gi",
+		"the offer must not be the capacity number wearing a different label")
 }
 
 // Undetectable capacity is omitted, not rendered as zero: "0 CPU" would
@@ -306,5 +312,10 @@ func TestDescribeNode_CapacityAndOfferStayDistinctOnBigNodes(t *testing.T) {
 		"the pair exists to show the reserve; it must not round it away")
 
 	// And the offer explains itself, so the number never needs a doc page.
-	assert.Contains(t, got["For services"], "held for the OS and Rune")
+	// "allows for", not "held for": nothing enforces this number, and a
+	// word implying the memory is kept back would be the same false claim
+	// the cast warning was reverted for.
+	assert.Contains(t, got["For services"], "allows for the OS and Rune")
+	assert.NotContains(t, got["For services"], "held",
+		"the render must not imply an enforcement that does not exist")
 }

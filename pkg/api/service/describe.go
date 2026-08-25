@@ -485,9 +485,15 @@ func (s *DescribeService) describeNode(ctx context.Context, name string) (*gener
 	// sends elsewhere. The parenthetical is what stops the number needing
 	// a doc page: without it the reader's first question, where did the
 	// rest go, has no answer anywhere in the repo.
+	//
+	// "allows for", not "is held for". Nothing enforces this yet — no
+	// admission path reads it — so a word implying the memory is being
+	// kept back would manufacture exactly the false safety this branch
+	// reverted a whole commit for asserting. It describes the
+	// subtraction, and claims nothing about what stops you exceeding it.
 	if offered := nodeAllocatableLine(node); offered != "" {
 		res.Identity = append(res.Identity,
-			kv("For services", offered+"  (the rest is held for the OS and Rune)"))
+			kv("For services", offered+"  (the rest allows for the OS and Rune)"))
 	}
 	res.Timestamps = timestampKVs(node.CreatedAt, nil, time.Time{})
 
@@ -554,6 +560,12 @@ func nodeCapacityLine(node *types.Node) string {
 // show — and does so on the largest machines, where the reserve is
 // biggest.
 func formatCores(millicores int64) string {
+	// Under a core, use the millicore unit the runefile uses. %.1f would
+	// render 175m as "0.2 CPU" and 1m as "0.0 CPU" — a confident zero on
+	// a machine that does have CPU.
+	if millicores > 0 && millicores < 1000 {
+		return fmt.Sprintf("%dm CPU", millicores)
+	}
 	if millicores%1000 == 0 {
 		return fmt.Sprintf("%d CPU", millicores/1000)
 	}
