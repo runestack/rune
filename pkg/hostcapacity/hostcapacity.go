@@ -8,6 +8,13 @@
 // would eventually drift, and the symptom would be a node reporting 80%
 // of one number while something else scheduled against another.
 //
+// SCALARS ONLY. GPUs are not here and should not be: they are a list of
+// identities rather than a quantity — each has a UUID that reservations
+// are keyed on — and probing one can fail in ways worth reporting and
+// hang in ways worth abandoning, none of which is true of reading a core
+// count. That probe lives behind an injectable provider in
+// internal/agent/nodeinfo. Both write to the same node record.
+//
 // Everything here is best-effort and returns a usable answer rather than
 // an error: a container that cannot read its own cgroup should report the
 // host's figures, not fail.
