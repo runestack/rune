@@ -101,22 +101,6 @@ func (r *renderedRelease) lint() error {
 // services, sorted so repeated casts print the same order. These never fail a
 // cast — they exist because `rune lint` is opt-in and nobody runs it before a
 // deploy that looks fine.
-// capacityWarnings reports requests no known node can satisfy. Ordered
-// like updateWarnings so the advisory block is stable across runs.
-func (r *renderedRelease) capacityWarnings(alloc *nodeAllocatable) []string {
-	keys := make([]string, 0, len(r.payloads.services))
-	for k := range r.payloads.services {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	svcs := make([]*types.Service, 0, len(keys))
-	for _, k := range keys {
-		svcs = append(svcs, r.payloads.services[k])
-	}
-	return capacityWarnings(svcs, alloc)
-}
-
 func (r *renderedRelease) updateWarnings() []string {
 	keys := make([]string, 0, len(r.payloads.services))
 	for k := range r.payloads.services {

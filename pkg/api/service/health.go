@@ -537,12 +537,6 @@ func (s *HealthService) getNodeHealth(ctx context.Context, req *generated.GetHea
 		MemTotalBytes:  s.capacityMem,
 		CpuUsedPercent: cpuPct,
 		MemUsedBytes:   memUsed,
-		// What a workload can actually be given, which is not the same as
-		// what the machine has. Computed from the same helpers the node
-		// record uses, so the two cannot disagree.
-		AllocatableCpuCores: float64(hostcapacity.AllocatableMillicores(
-			hostcapacity.MillicoresFromCores(s.capacityCPU))) / 1000,
-		AllocatableMemBytes: hostcapacity.AllocatableMemory(s.capacityMem),
 	}
 	if req.IncludeChecks && s.hasCapacity {
 		comp.CheckResults = []*generated.HealthCheckResult{
