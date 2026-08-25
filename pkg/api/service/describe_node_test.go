@@ -319,3 +319,29 @@ func TestDescribeNode_CapacityAndOfferStayDistinctOnBigNodes(t *testing.T) {
 	assert.NotContains(t, got["For services"], "held",
 		"the render must not imply an enforcement that does not exist")
 }
+
+// A sub-core offer must render in millicores. %.1f turns 50m into
+// "0.0 CPU" — a confident zero on a machine that does have CPU, which is
+// the thing the omit-when-unknown rule exists to avoid.
+func TestDescribeNode_SubCoreRendersInMillicores(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{
+		ID: "node-1", Address: "127.0.0.1",
+		Resources: types.NodeResources{
+			CPU: 200, Memory: 1 << 30,
+			AllocatableCPU: 175, AllocatableMemory: 900 << 20,
+		},
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, kv := range resp.Result.Identity {
+		got[kv.Key] = kv.Value
+	}
+	assert.Contains(t, got["Capacity"], "200m CPU")
+	assert.Contains(t, got["For services"], "175m CPU")
+	assert.NotContains(t, got["For services"], "0.0 CPU",
+		"a machine with CPU must never render as having none")
+}

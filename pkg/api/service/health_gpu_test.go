@@ -107,20 +107,14 @@ func TestHealthCapacityMatchesHostCapacity(t *testing.T) {
 		"and one memory number")
 }
 
-// The same number, one more boundary on: what the agent writes to the
-// node record must be what the health service reports. These are the two
-// consumers the package was extracted for.
-func TestNodeRecordCapacityMatchesHealthService(t *testing.T) {
-	svc := NewHealthService(store.NewTestStore(), nil, log.GetDefaultLogger())
-	resp, err := svc.GetHealth(context.Background(), &generated.GetHealthRequest{ComponentType: "node"})
-	require.NoError(t, err)
-	health := resp.Components[0].GetResources()
-
-	// What internal/agent/nodeinfo writes onto types.Node.Resources.
-	recordCPU := hostcapacity.MillicoresFromCores(hostcapacity.CPUCores())
-	recordMem := hostcapacity.MemoryBytes()
-
-	assert.Equal(t, hostcapacity.MillicoresFromCores(health.GetCpuCores()), recordCPU,
-		"the node record and the health service must not disagree about the machine's size")
-	assert.Equal(t, health.GetMemTotalBytes(), recordMem)
-}
+// NOTE: there is deliberately no third test comparing the node record to
+// the health service. One was written and deleted: it claimed to cross
+// into internal/agent/nodeinfo and did not — it re-derived the value from
+// hostcapacity inside the test, so mutating what the agent actually
+// writes left it green.
+//
+// The property is genuinely pinned, transitively and by two tests that
+// each cross a real boundary: the record equals hostcapacity
+// (internal/agent/nodeinfo/subsystem_test.go, TestSubsystem_RecordsNodeCapacity)
+// and the health service equals hostcapacity (above). If either drifts,
+// one of them fails.

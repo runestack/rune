@@ -572,10 +572,12 @@ func formatCores(millicores int64) string {
 	return fmt.Sprintf("%.1f CPU", float64(millicores)/1000)
 }
 
-// nodeAllocatableLine renders what the node offers workloads, which is
-// the number that decides whether a service fits. Shown beside capacity
-// rather than instead of it: an operator comparing a request against the
-// machine's advertised size needs to see why the two differ.
+// nodeAllocatableLine renders what the node would offer workloads.
+// NOTHING DECIDES ANYTHING WITH IT YET — no admission path reads these
+// fields — so it is a number to compare a request against by eye, not a
+// limit. Shown beside capacity rather than instead of it: an operator
+// comparing a request against the machine's advertised size needs to see
+// why the two differ.
 func nodeAllocatableLine(node *types.Node) string {
 	var parts []string
 	if node.Resources.AllocatableCPU > 0 {

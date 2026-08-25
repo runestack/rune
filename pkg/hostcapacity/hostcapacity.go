@@ -98,9 +98,10 @@ const (
 	// percentage of total.
 	ReservedMemoryFraction = 10
 
-	// ReservedMemoryFloorDivisor caps the floor at 1/N of the machine, so
-	// a small box is not mostly reserve.
-	ReservedMemoryFloorDivisor int64 = 8
+	// ReserveDivisor caps a reserve at 1/N of the machine, so a small box
+	// is not mostly reserve. Shared by both axes deliberately: the
+	// argument is about proportion, not about which resource.
+	ReserveDivisor int64 = 8
 
 	// ReservedMillicores is held back for the node's own processes.
 	ReservedMillicores int64 = 200
@@ -121,7 +122,7 @@ func ReservedMemory(total int64) int64 {
 	// allocatable — which the contract reads as "unknown", so the surfaces
 	// go silent exactly where a request is least likely to fit.
 	floor := ReservedMemoryFloor
-	if maxFloor := total / ReservedMemoryFloorDivisor; floor > maxFloor {
+	if maxFloor := total / ReserveDivisor; floor > maxFloor {
 		floor = maxFloor
 	}
 	if byFraction < floor {
@@ -154,7 +155,7 @@ func AllocatableMillicores(totalMillicores int64) int64 {
 	// documented as "unknown, not none available" — so the surfaces would
 	// drop the CPU line entirely and present a known "none" as an unknown.
 	reserved := ReservedMillicores
-	if maxReserve := totalMillicores / ReservedMemoryFloorDivisor; reserved > maxReserve {
+	if maxReserve := totalMillicores / ReserveDivisor; reserved > maxReserve {
 		reserved = maxReserve
 	}
 	if v := totalMillicores - reserved; v > 0 {

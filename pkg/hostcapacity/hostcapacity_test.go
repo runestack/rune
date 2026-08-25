@@ -108,13 +108,10 @@ func TestAllocatableMemory_LeavesHeadroom(t *testing.T) {
 	const total = 24_000_000_000 // a nominal 24GB node
 	alloc := AllocatableMemory(total)
 
-	assert.Less(t, alloc, int64(total), "a node cannot offer its own kernel's memory")
-	assert.Equal(t, total-ReservedMemory(total), alloc)
-
 	// The case that motivated this: requesting the advertised size must
 	// not fit, or the OOM killer arbitrates instead of the scheduler.
-	assert.Less(t, alloc, int64(total),
-		"a request for the node's advertised size must not fit its allocatable")
+	assert.Less(t, alloc, int64(total), "a node cannot offer its own kernel's memory")
+	assert.Equal(t, total-ReservedMemory(total), alloc)
 }
 
 // Never a negative budget, which arithmetic downstream would read as
