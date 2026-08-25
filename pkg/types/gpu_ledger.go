@@ -154,6 +154,17 @@ func (l *NodeDeviceLedger) HasWholeDeviceHolder(deviceUUID string) bool {
 // ReservedBytes is the system VRAM withheld from a device: a flat floor
 // plus a per-assigned-instance term for CUDA context overhead.
 func (l *NodeDeviceLedger) ReservedBytes(deviceUUID string) int64 {
-	return DefaultReservedVRAMFloor +
-		DefaultReservedVRAMPerInstance*int64(len(l.FindReservations(deviceUUID)))
+	return l.ReservedBytesWith(deviceUUID, 0)
+}
+
+// ReservedBytesWith is ReservedBytes for the state the device WILL be in
+// once `incoming` more reservations land on it.
+//
+// Admission has to use this rather than ReservedBytes: the per-instance
+// term covers the CUDA context of each process on the card, and a request
+// checked against a reserve that does not yet include its own context is
+// checked against a number that is too generous by exactly one context.
+func (l *NodeDeviceLedger) ReservedBytesWith(deviceUUID string, incoming int) int64 {
+	n := len(l.FindReservations(deviceUUID)) + incoming
+	return DefaultReservedVRAMFloor + DefaultReservedVRAMPerInstance*int64(n)
 }

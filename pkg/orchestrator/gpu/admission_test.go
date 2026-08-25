@@ -213,8 +213,11 @@ func TestRelease_FreesCapacityForAReplacement(t *testing.T) {
 	require.NoError(t, err, "the replacement must fit once its predecessor released")
 }
 
-// An idle hold has no instance by design. Release must not take it — it
-// is the feature that lets a model scale to zero and keep its VRAM.
+// An idle hold has no instance by design, and Release must not take it —
+// it is the whole point of letting a model scale to zero and keep its
+// VRAM. Release is driven by instance ID, and an idle row's is empty, so
+// a Release that matched on ID alone would sweep every idle hold on the
+// node the first time any instance went terminal.
 func TestRelease_LeavesIdleHoldsAlone(t *testing.T) {
 	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
 	ctx := context.Background()
@@ -224,26 +227,35 @@ func TestRelease_LeavesIdleHoldsAlone(t *testing.T) {
 	_, err := adm.Reserve(ctx, node, idle)
 	require.NoError(t, err)
 
-	// A crashed reserve leaves an instance-holder row with no instance
-	// ID; it must be distinguishable from the idle hold above.
-	midFlight := req("prod", "tei", "", types.GPURequest{VRAM: "1Gi"})
-	_, err = adm.Reserve(ctx, node, midFlight)
+	_, err = adm.Reserve(ctx, node, req("prod", "tei", "i-1", types.GPURequest{VRAM: "2Gi"}))
+	require.NoError(t, err)
+	require.Len(t, ledgerOf(t, st).Reservations, 2)
+
+	// Releasing the instance must take its row and ONLY its row.
+	require.NoError(t, adm.Release(ctx, "node-1", "i-1"))
+
+	remaining := ledgerOf(t, st).Reservations
+	require.Len(t, remaining, 1, "the idle hold must survive an unrelated instance release")
+	assert.Equal(t, types.GPUResHolderIdle, remaining[0].Holder)
+	assert.Equal(t, "vllm", remaining[0].ServiceName)
+}
+
+// A reservation whose instance record does not exist yet is byte-identical
+// to an idle hold except for Holder. Releasing by the empty ID must not
+// take either — that would make a crashed reserve destroy a live feature.
+func TestRelease_EmptyInstanceIDReleasesNothing(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+
+	idle := req("prod", "vllm", "", types.GPURequest{VRAM: "20Gi"})
+	idle.Holder = types.GPUResHolderIdle
+	_, err := adm.Reserve(ctx, node, idle)
+	require.NoError(t, err)
+	_, err = adm.Reserve(ctx, node, req("prod", "tei", "", types.GPURequest{VRAM: "2Gi"}))
 	require.NoError(t, err)
 
-	l := ledgerOf(t, st)
-	require.Len(t, l.Reservations, 2)
-	var idleRows, instanceRows int
-	for _, r := range l.Reservations {
-		require.Empty(t, r.InstanceID, "both rows have an empty instance ID")
-		switch r.Holder {
-		case types.GPUResHolderIdle:
-			idleRows++
-		case types.GPUResHolderInstance:
-			instanceRows++
-		}
-	}
-	assert.Equal(t, 1, idleRows, "Holder is what tells the two apart")
-	assert.Equal(t, 1, instanceRows)
+	require.Error(t, adm.Release(ctx, "node-1", ""), "releasing by an empty ID must be refused, not applied")
+	assert.Len(t, ledgerOf(t, st).Reservations, 2)
 }
 
 func TestReleaseService_TakesIdleHoldsToo(t *testing.T) {
@@ -323,4 +335,144 @@ func TestCanFit_NeverWrites(t *testing.T) {
 func nowPtr() *time.Time {
 	t := time.Now()
 	return &t
+}
+
+// Binding must take exactly ONE row per device. A scale-2 service sharing
+// one card has two unbound rows for the same (namespace, service,
+// device); stamping both with one instance's ID means releasing that
+// instance drops the other instance's reservation too, and the card reads
+// as free while an engine is still holding memory on it.
+func TestBindInstance_TakesOneRowPerDevice(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		_, err := adm.Reserve(ctx, node, req("prod", "llm", "", types.GPURequest{VRAM: "20Gi"}))
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, adm.BindInstance(ctx, "node-1", "prod", "llm", "i-1", []string{"GPU-1"}))
+	require.NoError(t, adm.BindInstance(ctx, "node-1", "prod", "llm", "i-2", []string{"GPU-1"}))
+
+	got := map[string]int{}
+	for _, r := range ledgerOf(t, st).Reservations {
+		got[r.InstanceID]++
+	}
+	assert.Equal(t, map[string]int{"i-1": 1, "i-2": 1}, got,
+		"each bind must claim one row, not every matching row")
+
+	// And releasing one leaves the other's memory accounted for.
+	require.NoError(t, adm.Release(ctx, "node-1", "i-1"))
+	l := ledgerOf(t, st)
+	require.Len(t, l.Reservations, 1)
+	assert.Equal(t, "i-2", l.Reservations[0].InstanceID)
+	assert.EqualValues(t, 20<<30, l.RequestedBytes("GPU-1"),
+		"the surviving instance's bytes must still be counted")
+}
+
+// Binding a device with no unbound row is an error, not silence: the
+// caller believes it holds a reservation there.
+func TestBindInstance_ErrorsWhenNothingToBind(t *testing.T) {
+	adm, node, _ := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+	_, err := adm.Reserve(ctx, node, req("prod", "llm", "", types.GPURequest{VRAM: "20Gi"}))
+	require.NoError(t, err)
+
+	require.NoError(t, adm.BindInstance(ctx, "node-1", "prod", "llm", "i-1", []string{"GPU-1"}))
+	err = adm.BindInstance(ctx, "node-1", "prod", "llm", "i-2", []string{"GPU-1"})
+	require.Error(t, err, "there is no second unbound row; silence would let the caller believe otherwise")
+	assert.Contains(t, err.Error(), "no unbound reservation")
+}
+
+// A release and the reservation that replaces it must be ONE write. Two
+// writes open a window where the freed bytes are visible to a concurrent
+// admission that should not get them, on the one key every GPU transition
+// on the node contends for.
+func TestReserveReplacing_IsASingleTransition(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+
+	_, err := adm.Reserve(ctx, node, req("prod", "vllm", "old", types.GPURequest{}))
+	require.NoError(t, err)
+	before := ledgerOf(t, st).UpdatedAt
+
+	// The card is held whole, so this can only succeed if the release
+	// happens in the same mutate.
+	p, err := adm.ReserveReplacing(ctx, node, "old", req("prod", "vllm", "new", types.GPURequest{}))
+	require.NoError(t, err, "the replacement must fit against the retired instance's freed device")
+	assert.Equal(t, []string{"GPU-1"}, p.DeviceUUIDs)
+
+	l := ledgerOf(t, st)
+	require.Len(t, l.Reservations, 1)
+	assert.Equal(t, "new", l.Reservations[0].InstanceID)
+	assert.True(t, l.UpdatedAt.After(before))
+}
+
+// The ledger row is created by the agent when it writes inventory, but
+// that write is best-effort. An admission against a node whose row never
+// landed must still get an admission answer, not a raw store error.
+func TestReserve_CreatesTheLedgerWhenAbsent(t *testing.T) {
+	st := store.NewBadgerStore(log.NewTestLogger())
+	require.NoError(t, st.Open(t.TempDir()))
+	t.Cleanup(func() { _ = st.Close() })
+
+	probed := nowPtr()
+	node := &types.Node{ID: "node-1", Address: "127.0.0.1",
+		Devices: []types.GPUDevice{dev("GPU-1", gi48)}, DevicesProbedAt: probed}
+
+	// No EnsureExists call: the row does not exist.
+	adm := gpu.NewAdmitter(st)
+	_, err := adm.Reserve(context.Background(), node, req("prod", "vllm", "i-1", types.GPURequest{}))
+	require.NoError(t, err, "the first reservation on a box must not fail for want of a row")
+	assert.Len(t, ledgerOf(t, st).Reservations, 1)
+}
+
+// A ledger keyed to one node checked against another node's devices would
+// record a claim against capacity that was never examined.
+func TestReserve_RefusesMismatchedNodeAndLedger(t *testing.T) {
+	adm, node, _ := newAdmitter(t, dev("GPU-1", gi48))
+	r := req("prod", "vllm", "i-1", types.GPURequest{})
+	r.NodeID = "some-other-node"
+
+	_, err := adm.Reserve(context.Background(), node, r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "node mismatch")
+}
+
+// The Holder filter in Release, pinned on the only state where it does
+// any work.
+//
+// It looks redundant: Release matches on instance ID, and an idle hold
+// normally has none, so the ID comparison alone already spares it. But
+// nothing in the type forbids an idle hold from carrying an instance ID —
+// a model that was serving and then scaled to zero is exactly that shape
+// — and there the ID comparison matches, leaving Holder as the only thing
+// between RUNE-310's feature and a Release that destroys it. Seeded
+// directly, because Reserve's callers cannot currently produce this state
+// and a test that cannot reach a state cannot guard it.
+func TestRelease_IdleHoldSurvivesEvenWithAnInstanceID(t *testing.T) {
+	st := store.NewBadgerStore(log.NewTestLogger())
+	require.NoError(t, st.Open(t.TempDir()))
+	t.Cleanup(func() { _ = st.Close() })
+
+	seeded := &types.NodeDeviceLedger{
+		NodeID: "node-1",
+		Reservations: []types.GPURes{
+			{DeviceUUID: "GPU-1", Namespace: "prod", ServiceName: "vllm",
+				InstanceID: "i-1", VRAMBytes: 20 << 30,
+				Holder: types.GPUResHolderIdle, CreatedAt: time.Now()},
+			{DeviceUUID: "GPU-1", Namespace: "prod", ServiceName: "tei",
+				InstanceID: "i-1", VRAMBytes: 2 << 30,
+				Holder: types.GPUResHolderInstance, CreatedAt: time.Now()},
+		},
+	}
+	require.NoError(t, st.Create(context.Background(), types.ResourceTypeNodeLedger, "", "node-1", seeded))
+
+	require.NoError(t, gpu.NewAdmitter(st).Release(context.Background(), "node-1", "i-1"))
+
+	l, err := repos.NewNodeLedgerRepo(st).Get(context.Background(), "node-1")
+	require.NoError(t, err)
+	require.Len(t, l.Reservations, 1, "the idle hold must survive a release of the same instance ID")
+	assert.Equal(t, types.GPUResHolderIdle, l.Reservations[0].Holder)
+	assert.Equal(t, "vllm", l.Reservations[0].ServiceName)
 }

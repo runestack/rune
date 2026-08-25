@@ -41,10 +41,20 @@ type Placement struct {
 	OtherNamespaces []string
 }
 
-// usable is what a device has left for new claims, net of the system
-// reserve and everything already requested on it.
-func usable(ledger *types.NodeDeviceLedger, dev types.GPUDevice) int64 {
-	free := dev.VRAMBytes - ledger.ReservedBytes(dev.UUID) - ledger.RequestedBytes(dev.UUID)
+// usable is what a device has left for a new claim, net of everything
+// already requested on it and of the system reserve AS IT WILL BE once
+// the claim lands.
+//
+// incoming is how many reservations the pending decision will add. It
+// matters because the reserve has a per-instance term for CUDA context,
+// so a decision made against the CURRENT reserve is short by one
+// instance's worth of context — the request is checked against a reserve
+// that does not yet include itself, and overshoots by exactly that much
+// in the overcommit direction, invisibly.
+func usable(ledger *types.NodeDeviceLedger, dev types.GPUDevice, incoming int) int64 {
+	free := dev.VRAMBytes -
+		ledger.ReservedBytesWith(dev.UUID, incoming) -
+		ledger.RequestedBytes(dev.UUID)
 	if free < 0 {
 		return 0
 	}
@@ -128,7 +138,7 @@ func ChooseDevices(devices []types.GPUDevice, ledger *types.NodeDeviceLedger, na
 			return Placement{}, &AdmissionError{
 				Reason: types.GPUReasonNoCapacity,
 				Message: fmt.Sprintf("service asks for %d matching GPUs; no %d free devices share a product "+
-					"(set resources.gpu.allowHeterogeneous to span different cards)", want, want),
+					"and memory size (set resources.gpu.allowHeterogeneous to span different cards)", want, want),
 			}
 		}
 		cands = matched
@@ -167,11 +177,11 @@ func rankCandidates(devices []types.GPUDevice, ledger *types.NodeDeviceLedger, n
 		if !req.SharesDevice() && len(held) > 0 {
 			continue
 		}
-		if req.SharesDevice() && usable(ledger, dev) < need {
+		if req.SharesDevice() && usable(ledger, dev, 1) < need {
 			continue
 		}
 
-		c := candidate{dev: dev, free: usable(ledger, dev)}
+		c := candidate{dev: dev, free: usable(ledger, dev, 1)}
 		var others []string
 		for _, r := range held {
 			if r.Namespace != namespace {
@@ -204,22 +214,31 @@ func rankCandidates(devices []types.GPUDevice, ledger *types.NodeDeviceLedger, n
 	return out
 }
 
-// sameProduct returns the first want candidates that share a product,
+// sameProduct returns the first want candidates that match each other,
 // preserving rank order, or nil.
+//
+// Matching is product AND VRAM capacity. Two cards can report the same
+// product string with different memory — an A100 80GB and an A100 40GB —
+// and tensor parallelism across them runs at the smaller card's ceiling
+// with no error naming either. Grouping on the name alone would admit
+// exactly the pairing this check exists to refuse.
 func sameProduct(cands []candidate, want int) []candidate {
+	key := func(c candidate) string {
+		return fmt.Sprintf("%s/%d", c.dev.Product, c.dev.VRAMBytes)
+	}
 	byProduct := map[string][]candidate{}
 	for _, c := range cands {
-		byProduct[c.dev.Product] = append(byProduct[c.dev.Product], c)
+		byProduct[key(c)] = append(byProduct[key(c)], c)
 	}
 	// Deterministic: consider products in the order their best-ranked
 	// candidate appears.
 	seen := map[string]bool{}
 	for _, c := range cands {
-		if seen[c.dev.Product] {
+		if seen[key(c)] {
 			continue
 		}
-		seen[c.dev.Product] = true
-		if group := byProduct[c.dev.Product]; len(group) >= want {
+		seen[key(c)] = true
+		if group := byProduct[key(c)]; len(group) >= want {
 			return group[:want]
 		}
 	}
@@ -294,7 +313,7 @@ func insufficientCapacity(devices []types.GPUDevice, ledger *types.NodeDeviceLed
 			who = append(who, fmt.Sprintf("%s/%s %s", r.Namespace, r.ServiceName, humanBytes(r.VRAMBytes)))
 		}
 		fmt.Fprintf(&b, "\n  %s: %s free — held by %s",
-			dev.UUID, humanBytes(usable(ledger, dev)), strings.Join(who, ", "))
+			dev.UUID, humanBytes(usable(ledger, dev, 0)), strings.Join(who, ", "))
 	}
 	return &AdmissionError{Reason: types.GPUReasonNoCapacity, Message: b.String()}
 }

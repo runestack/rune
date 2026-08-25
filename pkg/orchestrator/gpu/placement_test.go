@@ -1,6 +1,8 @@
 package gpu_test
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -24,19 +26,42 @@ func res(uuid, ns, svc string, vram int64, whole bool) types.GPURes {
 
 // Best-fit: pack the fullest device that still fits, so roomier cards
 // stay available for larger requests.
+//
+// BOTH candidates must be in the same tier, or the tier comparison
+// decides and the best-fit comparator is never reached — which is how an
+// earlier version of this test passed with best-fit inverted to
+// worst-fit.
 func TestChooseDevices_BestFitPacksTheFullestThatFits(t *testing.T) {
 	devices := []types.GPUDevice{
-		devP("GPU-empty", "L40S", gi48),
-		devP("GPU-half", "L40S", gi48),
+		devP("GPU-roomy", "L40S", gi48),
+		devP("GPU-tight", "L40S", gi48),
 	}
+	// Same tier (both hold only the requesting namespace), different fill.
 	ledger := &types.NodeDeviceLedger{Reservations: []types.GPURes{
-		res("GPU-half", "prod", "tei", 20<<30, false),
+		res("GPU-roomy", "prod", "a", 5<<30, false),
+		res("GPU-tight", "prod", "b", 30<<30, false),
 	}}
 
 	p, err := gpu.ChooseDevices(devices, ledger, "prod", types.GPURequest{VRAM: "10Gi"})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"GPU-half"}, p.DeviceUUIDs,
-		"the fuller card is chosen so the empty one stays whole")
+	assert.Equal(t, []string{"GPU-tight"}, p.DeviceUUIDs,
+		"the fuller card is chosen so the roomier one stays available for a larger request")
+}
+
+// Best-fit must not choose a card the request does not fit on.
+func TestChooseDevices_BestFitSkipsTooSmall(t *testing.T) {
+	devices := []types.GPUDevice{
+		devP("GPU-full", "L40S", gi48),
+		devP("GPU-roomy", "L40S", gi48),
+	}
+	ledger := &types.NodeDeviceLedger{Reservations: []types.GPURes{
+		res("GPU-full", "prod", "a", 45<<30, false),
+		res("GPU-roomy", "prod", "b", 5<<30, false),
+	}}
+
+	p, err := gpu.ChooseDevices(devices, ledger, "prod", types.GPURequest{VRAM: "10Gi"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"GPU-roomy"}, p.DeviceUUIDs)
 }
 
 // The tie-break that outranks best-fit. Plain best-fit prefers the
@@ -119,6 +144,24 @@ func TestChooseDevices_WholeDeviceNeedsAnEmptyCard(t *testing.T) {
 	assert.Equal(t, []string{"GPU-2"}, p.DeviceUUIDs, "a whole-device request cannot join a shared card")
 }
 
+// Same product string, different memory: tensor parallelism across them
+// runs at the smaller card's ceiling with no error naming either, so the
+// match is on product AND capacity.
+func TestChooseDevices_MultiDeviceRefusesSameProductDifferentVRAM(t *testing.T) {
+	devices := []types.GPUDevice{
+		devP("GPU-80", "NVIDIA A100", 80<<30),
+		devP("GPU-40", "NVIDIA A100", 40<<30),
+	}
+	_, err := gpu.ChooseDevices(devices, &types.NodeDeviceLedger{}, "prod", types.GPURequest{Count: 2})
+	require.Error(t, err, "an A100 80GB and an A100 40GB are not a matched pair")
+	assert.Contains(t, err.Error(), "memory size")
+
+	p, err := gpu.ChooseDevices(devices, &types.NodeDeviceLedger{}, "prod",
+		types.GPURequest{Count: 2, AllowHeterogeneous: true})
+	require.NoError(t, err)
+	assert.Len(t, p.DeviceUUIDs, 2)
+}
+
 func TestChooseDevices_MultiDeviceRefusesMismatchedProducts(t *testing.T) {
 	devices := []types.GPUDevice{devP("GPU-1", "L40S", gi48), devP("GPU-2", "A100", gi48)}
 
@@ -194,4 +237,43 @@ func TestRequestedBytes_IgnoresWholeDeviceHolders(t *testing.T) {
 	assert.EqualValues(t, 0, ledger.RequestedBytes("GPU-1"))
 	assert.True(t, ledger.HasWholeDeviceHolder("GPU-1"),
 		"the exclusion has to come from the flag, not from the byte count")
+}
+
+// The reserve charged at admission must include the CUDA context of the
+// instance being admitted. Checking against the reserve as it stands
+// BEFORE the claim lands is checking against a number too generous by
+// exactly one context — and it fails in the overcommit direction, which
+// is invisible.
+func TestChooseDevices_ChargesTheIncomingInstancesContext(t *testing.T) {
+	devices := []types.GPUDevice{devP("GPU-1", "L40S", gi48)}
+	ledger := &types.NodeDeviceLedger{}
+
+	// Everything the card has, less only the flat floor: this must NOT
+	// fit, because the request's own context is also withheld.
+	tooBig := int64(gi48) - types.DefaultReservedVRAMFloor
+	_, err := gpu.ChooseDevices(devices, ledger, "prod",
+		types.GPURequest{VRAM: fmt.Sprintf("%d", tooBig)})
+	require.Error(t, err, "a request may not consume the context reserve it creates")
+
+	// One context smaller fits exactly.
+	justRight := tooBig - types.DefaultReservedVRAMPerInstance
+	p, err := gpu.ChooseDevices(devices, ledger, "prod",
+		types.GPURequest{VRAM: fmt.Sprintf("%d", justRight)})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"GPU-1"}, p.DeviceUUIDs)
+}
+
+// And the same, end to end: what is admitted must satisfy the invariant
+// against the state that RESULTS from admitting it.
+func TestReserve_InvariantHoldsAtTheMargin(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
+	want := int64(gi48) - types.DefaultReservedVRAMFloor - types.DefaultReservedVRAMPerInstance
+
+	_, err := adm.Reserve(context.Background(), node,
+		req("prod", "big", "i-1", types.GPURequest{VRAM: fmt.Sprintf("%d", want)}))
+	require.NoError(t, err)
+
+	l := ledgerOf(t, st)
+	assert.LessOrEqual(t, l.RequestedBytes("GPU-1"), int64(gi48)-l.ReservedBytes("GPU-1"),
+		"the admitted claim must fit the post-admission reserve, not the pre-admission one")
 }
