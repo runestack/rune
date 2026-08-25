@@ -216,3 +216,40 @@ func TestListEvents_NodeIsClusterScoped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, resp.Events, "a non-node kind still honours the caller's namespace")
 }
+
+// The node record describes the machine, not only its accelerators. A
+// node with no GPUs still has a size, and `describe node` reporting
+// devices while saying nothing about cores or memory reads as an
+// oversight.
+func TestDescribeNode_ShowsCapacity(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{
+		ID: "node-1", Address: "127.0.0.1",
+		Resources: types.NodeResources{CPU: 10000, Memory: 16 << 30},
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+
+	var got string
+	for _, kv := range resp.Result.Identity {
+		if kv.Key == "Capacity" {
+			got = kv.Value
+		}
+	}
+	assert.Contains(t, got, "10 CPU")
+	assert.Contains(t, got, "memory")
+}
+
+// Undetectable capacity is omitted, not rendered as zero: "0 CPU" would
+// be a confident wrong answer where absence is the honest one.
+func TestDescribeNode_OmitsUnknownCapacity(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{ID: "node-1", Address: "127.0.0.1"})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+	for _, kv := range resp.Result.Identity {
+		assert.NotEqual(t, "Capacity", kv.Key, "an undetectable capacity must be absent, not zero")
+	}
+}

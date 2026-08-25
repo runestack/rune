@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/events"
+	"github.com/runestack/rune/pkg/hostcapacity"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
@@ -177,10 +178,20 @@ func (s *Subsystem) probeAndWrite(ctx context.Context) {
 
 	probedAt := time.Now()
 	node := &types.Node{
-		ID:              s.cfg.NodeID,
-		Name:            s.cfg.NodeID,
-		Address:         LocalNodeAddress,
-		Labels:          copyLabels(s.cfg.Labels),
+		ID:      s.cfg.NodeID,
+		Name:    s.cfg.NodeID,
+		Address: LocalNodeAddress,
+		Labels:  copyLabels(s.cfg.Labels),
+		// CPU and memory alongside the devices, from the same source the
+		// health service reports pressure against. Without this the
+		// record describes a machine's accelerators and not its size,
+		// which reads as an oversight in `describe node` and is one:
+		// anything that ever reasons about node capacity needs a number
+		// here to reason about.
+		Resources: types.NodeResources{
+			CPU:    hostcapacity.MillicoresFromCores(hostcapacity.CPUCores()),
+			Memory: hostcapacity.MemoryBytes(),
+		},
 		Devices:         devices,
 		DevicesProbedAt: &probedAt,
 	}

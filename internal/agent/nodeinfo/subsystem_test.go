@@ -10,6 +10,7 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/runestack/rune/pkg/events"
+	"github.com/runestack/rune/pkg/hostcapacity"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
@@ -281,5 +282,24 @@ func TestSubsystem_NilEventLogIsSafe(t *testing.T) {
 	waitReady(t, sub, 5*time.Second)
 	_, err := repo.Get(ctx, "node-8f6a12cd")
 	require.NoError(t, err)
+	require.NoError(t, sub.Stop(ctx))
+}
+
+// The record carries the machine's size, from the same source the health
+// service reports pressure against — two numbers that disagree would have
+// a node reporting 80% of one and scheduling against the other.
+func TestSubsystem_RecordsNodeCapacity(t *testing.T) {
+	sub, repo := newTestSubsystem(t, Config{})
+	ctx := context.Background()
+	require.NoError(t, sub.Start(ctx))
+	waitReady(t, sub, 5*time.Second)
+
+	node, err := repo.Get(ctx, "node-8f6a12cd")
+	require.NoError(t, err)
+	assert.Greater(t, node.Resources.CPU, int64(0), "a machine running runed has CPU")
+	assert.Greater(t, node.Resources.Memory, int64(0), "and memory")
+	assert.Equal(t, hostcapacity.MillicoresFromCores(hostcapacity.CPUCores()), node.Resources.CPU,
+		"the record and the health service must not disagree about the machine's size")
+
 	require.NoError(t, sub.Stop(ctx))
 }

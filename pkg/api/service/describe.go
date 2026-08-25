@@ -476,6 +476,9 @@ func (s *DescribeService) describeNode(ctx context.Context, name string) (*gener
 		kv("ID", node.ID),
 		kv("Address", node.Address),
 	}
+	if cap := nodeCapacityLine(node); cap != "" {
+		res.Identity = append(res.Identity, kv("Capacity", cap))
+	}
 	res.Timestamps = timestampKVs(node.CreatedAt, nil, time.Time{})
 
 	if len(node.Labels) > 0 {
@@ -520,6 +523,19 @@ func (s *DescribeService) resolveNode(ctx context.Context, repo *repos.NodeRepo,
 		return nodes[0], nil
 	}
 	return nil, fmt.Errorf("node %q: %w", name, errDescribeNotFound)
+}
+
+// nodeCapacityLine renders the node's CPU and memory, or "" when the
+// agent could not determine them — an absent line beats a confident zero.
+func nodeCapacityLine(node *types.Node) string {
+	var parts []string
+	if node.Resources.CPU > 0 {
+		parts = append(parts, fmt.Sprintf("%.3g CPU", float64(node.Resources.CPU)/1000))
+	}
+	if node.Resources.Memory > 0 {
+		parts = append(parts, types.FormatMemory(node.Resources.Memory)+" memory")
+	}
+	return strings.Join(parts, ", ")
 }
 
 // nodeDevicesSection renders the GPU block, or nil when this node has

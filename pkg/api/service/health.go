@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"sort"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/hostcapacity"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
@@ -87,101 +87,12 @@ func (s *HealthService) detectNodeCapacity() (float64, int64, error) {
 	return cpu, mem, nil
 }
 
-func (s *HealthService) detectCPUCores() float64 {
-	if quota, period, ok := s.readCgroupCPUMax("/sys/fs/cgroup/cpu.max"); ok {
-		if quota > 0 && period > 0 {
-			eff := float64(quota) / float64(period)
-			if eff > 0 {
-				return eff
-			}
-		}
-	}
-	return float64(runtime.NumCPU())
-}
+// detectCPUCores and detectMemoryBytes delegate to pkg/hostcapacity so
+// this service and the agent's node record cannot disagree about how big
+// the machine is.
+func (s *HealthService) detectCPUCores() float64 { return hostcapacity.CPUCores() }
 
-func (s *HealthService) detectMemoryBytes() int64 {
-	if v, ok := s.readCgroupMemoryMax("/sys/fs/cgroup/memory.max"); ok && v > 0 && v < (1<<60) {
-		return v
-	}
-	if v, ok := s.readProcMeminfoTotal("/proc/meminfo"); ok {
-		return v
-	}
-	if v, ok := s.readSysctlMemsize(); ok {
-		return v
-	}
-	return 0
-}
-
-func (s *HealthService) readCgroupCPUMax(path string) (quota int64, period int64, ok bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, 0, false
-	}
-	parts := strings.Fields(string(data))
-	if len(parts) != 2 {
-		return 0, 0, false
-	}
-	if parts[0] == "max" {
-		p, _ := strconv.ParseInt(parts[1], 10, 64)
-		return 0, p, true
-	}
-	q, err1 := strconv.ParseInt(parts[0], 10, 64)
-	p, err2 := strconv.ParseInt(parts[1], 10, 64)
-	if err1 != nil || err2 != nil {
-		return 0, 0, false
-	}
-	return q, p, true
-}
-
-func (s *HealthService) readCgroupMemoryMax(path string) (int64, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	v := strings.TrimSpace(string(data))
-	if v == "max" {
-		return 0, false
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return n, true
-}
-
-func (s *HealthService) readProcMeminfoTotal(path string) (int64, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "MemTotal:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
-					return kb * 1024, true
-				}
-			}
-		}
-	}
-	return 0, false
-}
-
-func (s *HealthService) readSysctlMemsize() (int64, bool) {
-	if runtime.GOOS != "darwin" {
-		return 0, false
-	}
-	out, err := exec.Command("sysctl", "-n", "hw.memsize").CombinedOutput()
-	if err != nil {
-		return 0, false
-	}
-	v := strings.TrimSpace(string(out))
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return n, true
-}
+func (s *HealthService) detectMemoryBytes() int64 { return hostcapacity.MemoryBytes() }
 
 // detectNodeUsage returns live CPU usage as a percentage of capacity
 // (-1 when it can't be sampled, e.g. macOS) and memory used in bytes
