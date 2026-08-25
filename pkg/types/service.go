@@ -516,6 +516,15 @@ const (
 	// "Rollout" and "surge" stay internal vocabulary.
 	ServiceReasonUpdating      = "Updating"      // a rolling update is in progress
 	ServiceReasonUpdateStalled = "UpdateStalled" // no progress within the stall deadline
+
+	// GPU admission. Rune-shaped like the rest of this block, not
+	// borrowed from Kubernetes Pod conditions. NoGpuCapacity rather than
+	// plain Unplaceable because the remedy differs enough to be worth
+	// scripting against separately: free VRAM, versus fix a selector.
+	GPUReasonNoCapacity     = "NoGpuCapacity"     // no device has room for the request
+	GPUReasonToolkitMissing = "GpuToolkitMissing" // GPUs present, container runtime not configured
+	GPUReasonDeviceMissing  = "GpuDeviceMissing"  // an assigned device is gone
+	GPUReasonOverCommitted  = "GpuOverCommitted"  // an assignment no longer fits
 )
 
 // DeriveServiceReason inspects an instance's status and message and

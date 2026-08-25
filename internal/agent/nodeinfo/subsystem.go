@@ -57,6 +57,13 @@ type Config struct {
 	// Repo persists the node record. Required.
 	Repo *repos.NodeRepo
 
+	// Ledger, when set, gets an empty row created alongside the node
+	// record. The orchestrator's reservation CAS reads-modifies-writes an
+	// existing key and fails not-found on an absent one, so without this
+	// the first GPU reservation on a box fails with a raw store error
+	// instead of an admission decision. Optional and nil-safe.
+	Ledger *repos.NodeLedgerRepo
+
 	// NodeID is this machine's identity: the same ID Volume.BoundNode and
 	// the observability stream label use. Required.
 	NodeID string
@@ -213,6 +220,14 @@ func (s *Subsystem) probeAndWrite(ctx context.Context) {
 		s.log.Info("device inventory probed",
 			log.Str("provider", s.cfg.Provider.Name()),
 			log.Int("devices", len(devices)))
+	}
+
+	// Before the record, so nothing can observe an inventory without a
+	// ledger to reserve against.
+	if s.cfg.Ledger != nil {
+		if err := s.cfg.Ledger.EnsureExists(ctx, s.cfg.NodeID); err != nil {
+			s.log.Warn("failed to create node device ledger", log.Err(err))
+		}
 	}
 
 	if err := s.cfg.Repo.Upsert(ctx, node); err != nil {
