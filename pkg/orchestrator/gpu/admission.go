@@ -11,6 +11,14 @@ import (
 )
 
 // Admitter places GPU requests against a node's ledger.
+//
+// "Admission" here is about CAPACITY — can the hardware hold this? The
+// orchestrator has a second gate also called admission (its `admission`
+// field, an authz.Gate) which is about AUTHORIZATION — may this caller
+// ask for it? Both refuse a cast and both are reached from
+// CreateService. They compose rather than overlap: a caller may be
+// entitled to something the devices cannot hold, and the devices may
+// have room for something the caller may not have.
 type Admitter struct {
 	store store.Store
 }

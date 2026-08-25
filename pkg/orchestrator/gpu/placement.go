@@ -8,6 +8,14 @@
 //
 // and a whole-device holder is the only holder on its device.
 //
+// Where inventory comes from: this package consumes the device list on
+// the node record; the agent probes it (internal/agent/nodeinfo). CPU and
+// memory take a different route — pkg/hostcapacity measures them as
+// scalars onto the same record. The split follows the record's own:
+// capacity you measure, devices you enumerate, and each device has a UUID
+// that reservations are keyed on. It is also a failure-model split —
+// reading a core count cannot hang, and asking a driver can.
+//
 // Admission is on REQUESTS, not on measured free memory. Serving engines
 // pre-allocate — vLLM grabs 90% of the card at startup regardless of load
 // — so "used" describes the engine's arena, not its need. Measuring would
