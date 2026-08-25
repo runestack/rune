@@ -49,6 +49,29 @@ func TestServiceRequirements(t *testing.T) {
 			InitSteps: []types.InitStep{{Name: "a"}, {Name: "format", SecurityContext: unconfined("Unconfined")}},
 		}, true},
 		{"plain init steps", &types.Service{InitSteps: []types.InitStep{{Name: "a"}, {Name: "b"}}}, false},
+
+		// capAdd reaches hostConfig.CapAdd verbatim, so one entry can buy
+		// most of what privileged does. It sat beside two gated fields
+		// and was not gated itself.
+		{"capAdd main", &types.Service{
+			SecurityContext: &types.SecurityContext{CapAdd: []string{"SYS_ADMIN"}},
+		}, true},
+		// Any capability, not a curated dangerous-list: the dangerous set
+		// is kernel-dependent and a list wrong in the permissive
+		// direction is worse than none.
+		{"capAdd main, innocuous capability", &types.Service{
+			SecurityContext: &types.SecurityContext{CapAdd: []string{"NET_BIND_SERVICE"}},
+		}, true},
+		{"capAdd init step", &types.Service{
+			InitSteps: []types.InitStep{{Name: "a"}, {Name: "format", SecurityContext: &types.SecurityContext{CapAdd: []string{"SYS_ADMIN"}}}},
+		}, true},
+		// Dropping capabilities only ever reduces privilege.
+		{"capDrop alone", &types.Service{
+			SecurityContext: &types.SecurityContext{CapDrop: []string{"NET_RAW"}},
+		}, false},
+		{"empty capAdd slice", &types.Service{
+			SecurityContext: &types.SecurityContext{CapAdd: []string{}},
+		}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -151,5 +174,34 @@ func TestSystemBypass(t *testing.T) {
 	}
 	if IsSystem(context.Background()) {
 		t.Fatal("plain context must not read as system")
+	}
+}
+
+// End-to-end on the choke point both entry points share: a caller without
+// the privileged verb must be DENIED a capAdd payload, not merely flagged.
+// The predicate flipping is not the property that matters; the denial is.
+func TestGateDeniesCapAddWithoutVerb(t *testing.T) {
+	svc := &types.Service{
+		Name:            "api",
+		SecurityContext: &types.SecurityContext{CapAdd: []string{"SYS_ADMIN"}},
+	}
+
+	auth := &stubAuth{allow: map[string]bool{}}
+	gate := NewGate(auth)
+	ctx := authctx.WithSubject(context.Background(), "user-1")
+
+	err := gate.AdmitService(ctx, svc)
+	if err == nil {
+		t.Fatal("capAdd was admitted without the services.privileged verb; " +
+			"capAdd reaches hostConfig.CapAdd verbatim, so this is a privilege escalation")
+	}
+	if !IsDenied(err) {
+		t.Fatalf("want a denial, got %v", err)
+	}
+
+	// And granted, it passes.
+	auth.allow["services:privileged"] = true
+	if err := gate.AdmitService(ctx, svc); err != nil {
+		t.Fatalf("capAdd denied to a caller holding services.privileged: %v", err)
 	}
 }

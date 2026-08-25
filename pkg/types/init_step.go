@@ -206,6 +206,18 @@ func (sc *SecurityContext) RequiresPrivilegedGate() bool {
 	if sc.SeccompProfile != nil && sc.SeccompProfile.Type.Canonical() == SeccompProfileUnconfined {
 		return true
 	}
+	// Any added capability. CapAdd is free-form and unvalidated, and the
+	// runner appends it verbatim to the container's HostConfig, so a
+	// single entry like SYS_ADMIN buys most of what privileged does —
+	// while the two fields beside it were gated and this one was not.
+	//
+	// Not a filter on "dangerous" capabilities: the dangerous set is
+	// kernel-version dependent and grows, and a list that is wrong in the
+	// permissive direction is worse than no list. Adding any capability
+	// is the operator decision the gate exists to authorize.
+	if len(sc.CapAdd) > 0 {
+		return true
+	}
 	return false
 }
 
