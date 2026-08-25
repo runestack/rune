@@ -476,11 +476,18 @@ func (s *DescribeService) describeNode(ctx context.Context, name string) (*gener
 		kv("ID", node.ID),
 		kv("Address", node.Address),
 	}
-	if cap := nodeCapacityLine(node); cap != "" {
-		res.Identity = append(res.Identity, kv("Capacity", cap))
+	if size := nodeCapacityLine(node); size != "" {
+		res.Identity = append(res.Identity, kv("Capacity", size))
 	}
-	if alloc := nodeAllocatableLine(node); alloc != "" {
-		res.Identity = append(res.Identity, kv("Allocatable", alloc))
+	// "For services", not "Allocatable". The second is kubectl's word for
+	// this line, and it is an adjective used as a noun that means nothing
+	// to someone who has not run a cluster — the audience this project
+	// sends elsewhere. The parenthetical is what stops the number needing
+	// a doc page: without it the reader's first question, where did the
+	// rest go, has no answer anywhere in the repo.
+	if offered := nodeAllocatableLine(node); offered != "" {
+		res.Identity = append(res.Identity,
+			kv("For services", offered+"  (the rest is held for the OS and Rune)"))
 	}
 	res.Timestamps = timestampKVs(node.CreatedAt, nil, time.Time{})
 
@@ -533,12 +540,24 @@ func (s *DescribeService) resolveNode(ctx context.Context, repo *repos.NodeRepo,
 func nodeCapacityLine(node *types.Node) string {
 	var parts []string
 	if node.Resources.CPU > 0 {
-		parts = append(parts, fmt.Sprintf("%.3g CPU", float64(node.Resources.CPU)/1000))
+		parts = append(parts, formatCores(node.Resources.CPU))
 	}
 	if node.Resources.Memory > 0 {
 		parts = append(parts, types.FormatMemory(node.Resources.Memory)+" memory")
 	}
 	return strings.Join(parts, ", ")
+}
+
+// formatCores renders millicores as cores. Not %.3g: three significant
+// figures render a 128-core machine's capacity and its smaller offer as
+// the same "128", so the pair stops showing the difference it exists to
+// show — and does so on the largest machines, where the reserve is
+// biggest.
+func formatCores(millicores int64) string {
+	if millicores%1000 == 0 {
+		return fmt.Sprintf("%d CPU", millicores/1000)
+	}
+	return fmt.Sprintf("%.1f CPU", float64(millicores)/1000)
 }
 
 // nodeAllocatableLine renders what the node offers workloads, which is
@@ -548,7 +567,7 @@ func nodeCapacityLine(node *types.Node) string {
 func nodeAllocatableLine(node *types.Node) string {
 	var parts []string
 	if node.Resources.AllocatableCPU > 0 {
-		parts = append(parts, fmt.Sprintf("%.3g CPU", float64(node.Resources.AllocatableCPU)/1000))
+		parts = append(parts, formatCores(node.Resources.AllocatableCPU))
 	}
 	if node.Resources.AllocatableMemory > 0 {
 		parts = append(parts, types.FormatMemory(node.Resources.AllocatableMemory)+" memory")

@@ -262,8 +262,8 @@ func TestDescribeNode_ShowsAllocatableBesideCapacity(t *testing.T) {
 		got[kv.Key] = kv.Value
 	}
 	require.Contains(t, got, "Capacity")
-	require.Contains(t, got, "Allocatable")
-	assert.NotEqual(t, got["Capacity"], got["Allocatable"],
+	require.Contains(t, got, "For services")
+	assert.NotEqual(t, got["Capacity"], got["For services"],
 		"the two differ by the node's own reserve; showing one number would hide it")
 }
 
@@ -277,5 +277,34 @@ func TestDescribeNode_OmitsUnknownCapacity(t *testing.T) {
 	require.NoError(t, err)
 	for _, kv := range resp.Result.Identity {
 		assert.NotEqual(t, "Capacity", kv.Key, "an undetectable capacity must be absent, not zero")
+		assert.NotEqual(t, "For services", kv.Key)
 	}
+}
+
+// The two lines must stay distinguishable on a large machine — which is
+// where the reserve is biggest and three significant figures would
+// collapse 128 and 127.8 into the same "128".
+func TestDescribeNode_CapacityAndOfferStayDistinctOnBigNodes(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{
+		ID: "node-1", Address: "127.0.0.1",
+		Resources: types.NodeResources{
+			CPU: 128_000, Memory: 512 << 30,
+			AllocatableCPU: 127_800, AllocatableMemory: 460 << 30,
+		},
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, kv := range resp.Result.Identity {
+		got[kv.Key] = kv.Value
+	}
+	assert.Contains(t, got["Capacity"], "128 CPU")
+	assert.Contains(t, got["For services"], "127.8 CPU",
+		"the pair exists to show the reserve; it must not round it away")
+
+	// And the offer explains itself, so the number never needs a doc page.
+	assert.Contains(t, got["For services"], "held for the OS and Rune")
 }

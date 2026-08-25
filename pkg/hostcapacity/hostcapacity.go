@@ -70,10 +70,17 @@ func MemoryBytes() int64 {
 // lands on a 24GB box and the OOM killer picks the workload rather than
 // the cause.
 //
-// Memory: a proportional reserve with a floor, because the absolute
-// overhead of a machine does not scale linearly but is never negligible.
-// 10% on a 24GB box is 2.4GB; on an 8GB box 10% is under the floor, so
-// the floor takes over.
+// Memory: a proportional reserve, with a floor that is itself capped
+// against the machine. The absolute overhead of a host does not scale
+// linearly, so small boxes need more than 10% — but an uncapped 1Gi floor
+// takes 54% of a 2GB droplet and ALL of a 1GB one, and those are the
+// boxes Rune is for. The cap keeps the floor from exceeding an eighth of
+// the machine:
+//
+//	 1GB  → 125Mi   (12.5%, was 100% and left nothing)
+//	 2GB  → 250Mi   (12.5%, was 54%)
+//	 8GB  → 1Gi     (12.5%, the floor)
+//	24GB  → 2.4GB   (10%, the fraction takes over)
 //
 // CPU is deliberately reserved far more thinly. It is compressible —
 // contention makes everything slower rather than killing anything — so an
@@ -91,6 +98,10 @@ const (
 	// percentage of total.
 	ReservedMemoryFraction = 10
 
+	// ReservedMemoryFloorDivisor caps the floor at 1/N of the machine, so
+	// a small box is not mostly reserve.
+	ReservedMemoryFloorDivisor int64 = 8
+
 	// ReservedMillicores is held back for the node's own processes.
 	ReservedMillicores int64 = 200
 )
@@ -101,9 +112,20 @@ func ReservedMemory(total int64) int64 {
 	if total <= 0 {
 		return 0
 	}
-	byFraction := total * ReservedMemoryFraction / 100
-	if byFraction < ReservedMemoryFloor {
-		byFraction = ReservedMemoryFloor
+	// Divide before multiplying: MemoryBytes admits values up to 1<<60,
+	// and total*10 overflows int64 well before that.
+	byFraction := total / 100 * ReservedMemoryFraction
+
+	// The floor, capped against the machine so it cannot swallow a small
+	// one. Without the cap a 1GB box reserves everything and reports zero
+	// allocatable — which the contract reads as "unknown", so the surfaces
+	// go silent exactly where a request is least likely to fit.
+	floor := ReservedMemoryFloor
+	if maxFloor := total / ReservedMemoryFloorDivisor; floor > maxFloor {
+		floor = maxFloor
+	}
+	if byFraction < floor {
+		byFraction = floor
 	}
 	if byFraction > total {
 		return total

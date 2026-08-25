@@ -90,8 +90,9 @@ func TestReservedMemory(t *testing.T) {
 	}{
 		// 10% of 24GB is 2.4GB, above the floor.
 		{"large node uses the fraction", 24_000_000_000, 2_400_000_000},
-		// 10% of 8GB is 800MB, under the 1Gi floor.
-		{"small node uses the floor", 8_000_000_000, ReservedMemoryFloor},
+		// 10% of 8GB is 800MB, under the floor — but the floor is itself
+		// capped at an eighth of the machine, so the cap is what binds.
+		{"small node uses the capped floor", 8_000_000_000, 8_000_000_000 / 8},
 		{"zero total reserves nothing", 0, 0},
 	}
 	for _, tt := range tests {
@@ -116,12 +117,17 @@ func TestAllocatableMemory_LeavesHeadroom(t *testing.T) {
 		"a request for the node's advertised size must not fit its allocatable")
 }
 
-// A machine too small to cover its own reserve offers nothing — never a
-// negative budget, which arithmetic downstream would read as room.
+// Never a negative budget, which arithmetic downstream would read as
+// room. Zero only when there is genuinely nothing to report.
 func TestAllocatable_NeverNegative(t *testing.T) {
-	assert.EqualValues(t, 0, AllocatableMemory(100))
+	for _, total := range []int64{0, 1, 100, 1 << 20, 1 << 30, 1 << 59} {
+		assert.GreaterOrEqual(t, AllocatableMemory(total), int64(0),
+			"total=%d produced a negative budget", total)
+		assert.LessOrEqual(t, AllocatableMemory(total), total,
+			"total=%d offered more than it has", total)
+	}
 	assert.EqualValues(t, 0, AllocatableMemory(0))
-	assert.EqualValues(t, 0, AllocatableMillicores(100))
+	assert.EqualValues(t, 0, AllocatableMillicores(100), "a machine smaller than the CPU reserve offers no CPU")
 	assert.EqualValues(t, 0, AllocatableMillicores(0))
 }
 
@@ -160,4 +166,50 @@ func TestAllocatable_TwentyFourGiOnATwentyFourGBPool(t *testing.T) {
 	// to name.
 	assert.Greater(t, AllocatableMemory(big), int64(20_000_000_000),
 		"a 24GB node should still offer roughly 21GB, not be written off")
+}
+
+// The floor is capped against the machine. Uncapped, a 1Gi box reserves
+// everything and reports zero allocatable — which the contract reads as
+// "unknown", so the surfaces go silent exactly where a request is least
+// likely to fit. These are the boxes Rune is for.
+func TestReservedMemory_FloorIsCappedOnSmallMachines(t *testing.T) {
+	tests := []struct {
+		name   string
+		total  int64
+		maxPct float64
+	}{
+		{"1GB droplet", 1_000_000_000, 13},
+		{"2GB droplet", 2_000_000_000, 13},
+		{"4GB droplet", 4_000_000_000, 13},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := ReservedMemory(tt.total)
+			pct := float64(r) / float64(tt.total) * 100
+			assert.Less(t, pct, tt.maxPct, "reserving %.1f%% of a small box is not a reserve, it is a tax", pct)
+			assert.Greater(t, AllocatableMemory(tt.total), int64(0),
+				"a machine Rune targets must offer something, or the surfaces read as 'unknown'")
+		})
+	}
+}
+
+// Above the cap the proportional term takes over unchanged.
+func TestReservedMemory_FractionDominatesOnLargeMachines(t *testing.T) {
+	const total int64 = 24_000_000_000
+	assert.Equal(t, total/100*ReservedMemoryFraction, ReservedMemory(total))
+}
+
+// MemoryBytes admits values up to 1<<60, and total*10 overflows int64
+// long before that — which would collapse the reserve to the floor.
+func TestReservedMemory_DoesNotOverflow(t *testing.T) {
+	// The value matters: at 1<<59 the multiply still fits, so a test using
+	// it passes against the buggy form. This is the top of the range
+	// MemoryBytes admits.
+	const huge = int64(1)<<60 - 1
+	r := ReservedMemory(huge)
+	assert.Greater(t, r, ReservedMemoryFloor,
+		"an overflowed fraction goes negative and lets the floor win")
+	assert.Less(t, r, huge)
+	assert.InDelta(t, float64(huge)/10, float64(r), float64(huge)/100,
+		"the fraction must still apply at the top of the admitted range")
 }
