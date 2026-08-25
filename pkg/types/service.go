@@ -525,6 +525,12 @@ const (
 	GPUReasonToolkitMissing = "GpuToolkitMissing" // GPUs present, container runtime not configured
 	GPUReasonDeviceMissing  = "GpuDeviceMissing"  // an assigned device is gone
 	GPUReasonOverCommitted  = "GpuOverCommitted"  // an assignment no longer fits
+
+	// GPUReasonInventoryUnknown is the one RETRYABLE slug in this family:
+	// the node has not reported its devices yet. Callers branch on it, so
+	// it belongs in the vocabulary beside the refusals rather than as a
+	// literal somewhere.
+	GPUReasonInventoryUnknown = "GpuInventoryUnknown"
 )
 
 // DeriveServiceReason inspects an instance's status and message and

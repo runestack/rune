@@ -15,9 +15,9 @@ import (
 // "Admission" here is about CAPACITY — can the hardware hold this? The
 // orchestrator has a second gate also called admission (its `admission`
 // field, an authz.Gate) which is about AUTHORIZATION — may this caller
-// ask for it? Both refuse a cast and both are reached from
-// CreateService. They compose rather than overlap: a caller may be
-// entitled to something the devices cannot hold, and the devices may
+// ask for it? That one runs on CreateService today; this one is not yet
+// wired to anything. They will compose rather than overlap: a caller may
+// be entitled to something the devices cannot hold, and the devices may
 // have room for something the caller may not have.
 type Admitter struct {
 	store store.Store
@@ -91,10 +91,10 @@ func (a *Admitter) Reserve(ctx context.Context, node *types.Node, req Request) (
 // problem that does not exist.
 func checkInventory(node *types.Node, nodeID string) error {
 	if node == nil {
-		return ErrInventoryUnknown
+		return ErrInventoryUnknown()
 	}
 	if node.DevicesProbedAt == nil {
-		return ErrInventoryUnknown
+		return ErrInventoryUnknown()
 	}
 	// The ledger is keyed by nodeID and the devices come from node. If
 	// they disagree, the claim is recorded against one machine's capacity
@@ -138,13 +138,13 @@ func (a *Admitter) updateLedger(ctx context.Context, nodeID string, ledger *type
 	if err == nil || !store.IsNotFoundError(err) {
 		return err
 	}
-	if cerr := a.store.Create(ctx, types.ResourceTypeNodeLedger, "", nodeID,
-		&types.NodeDeviceLedger{NodeID: nodeID, Reservations: []types.GPURes{}}); cerr != nil {
-		// Lost a race to create it — the retry below picks up the winner.
-		if !store.IsAlreadyExistsError(cerr) {
-			return cerr
-		}
-	}
+	// A lost create race does NOT necessarily surface as already-exists:
+	// Create enrols its existence check in the transaction's read set, so
+	// concurrent creators lose on COMMIT with a badger conflict instead.
+	// Either way the winner's row is what we want, so the create's error
+	// is not interesting — only the retry's is.
+	_ = a.store.Create(ctx, types.ResourceTypeNodeLedger, "", nodeID,
+		&types.NodeDeviceLedger{NodeID: nodeID, Reservations: []types.GPURes{}})
 	return a.store.UpdateFunc(ctx, types.ResourceTypeNodeLedger, "", nodeID, ledger, mutate)
 }
 
@@ -185,17 +185,24 @@ func (a *Admitter) ReleaseService(ctx context.Context, nodeID, namespace, servic
 // BindInstance fills in the instance ID on reservations written before
 // the instance record existed — exactly ONE row per named device.
 //
-// One per device is the whole contract, and getting it wrong is silent
-// ledger corruption rather than an error. A scale-2 service sharing one
-// card has two unbound rows for the same (namespace, service, device); a
-// bind that stamped every match would put one instance's ID on both, and
-// releasing that instance would then drop the OTHER instance's
-// reservation too. The card would read as free while an engine was still
-// holding its memory on it.
+// One per device is the contract, and getting it wrong is silent ledger
+// corruption rather than an error. A scale-2 service sharing one card has
+// two unbound rows for the same (namespace, service, device); a bind that
+// stamped every match would put one instance's ID on both, and releasing
+// that instance would drop the other's reservation too — the card reading
+// as free while an engine still holds memory on it.
 //
-// It is an error, not a no-op, when a device has no unbound row to bind:
-// the caller believes it holds a reservation there, and silence would let
-// that belief stand.
+// IDEMPOTENT, and that is not a nicety. A row already bound to THIS
+// instance satisfies its device. Without that, a second call for the same
+// instance — a retried reconcile, a store error after the commit landed,
+// any level-triggered step that re-derives its work — skips its own row,
+// finds a SIBLING's unbound row, and stamps itself onto that instead.
+// Re-running would be worse than failing.
+//
+// ALL-OR-NOTHING. If any named device has no row to bind, nothing is
+// written and the call errors. A partial commit would leave the caller
+// with a half-bound instance and no safe way to retry, since retrying is
+// what steals the sibling.
 func (a *Admitter) BindInstance(ctx context.Context, nodeID, namespace, service, instanceID string, devices []string) error {
 	if instanceID == "" {
 		return fmt.Errorf("gpu: bind requires an instance ID")
@@ -203,36 +210,62 @@ func (a *Admitter) BindInstance(ctx context.Context, nodeID, namespace, service,
 	if len(devices) == 0 {
 		return fmt.Errorf("gpu: bind requires at least one device")
 	}
+	// A device may appear once: two rows on one card belong to two
+	// instances, bound by two calls. A repeat here is a caller bug that
+	// would otherwise bind a sibling's row.
+	seen := map[string]bool{}
+	for _, d := range devices {
+		if seen[d] {
+			return fmt.Errorf("gpu: device %s named twice in one bind", d)
+		}
+		seen[d] = true
+	}
 
-	var unbound []string
+	var unmatched []string
 	err := a.mutate(ctx, nodeID, func(l *types.NodeDeviceLedger) bool {
-		unbound = nil
-		changed := false
+		unmatched = nil
+		// Resolve every device before writing anything.
+		targets := make([]int, 0, len(devices))
 		for _, want := range devices {
-			bound := false
+			idx := -1
 			for i := range l.Reservations {
 				r := &l.Reservations[i]
-				if r.DeviceUUID != want || r.InstanceID != "" ||
-					r.Holder != types.GPUResHolderInstance ||
+				if r.DeviceUUID != want || r.Holder != types.GPUResHolderInstance ||
 					r.Namespace != namespace || r.ServiceName != service {
 					continue
 				}
-				r.InstanceID = instanceID
-				changed, bound = true, true
-				break // exactly one row per device
+				if r.InstanceID == instanceID {
+					// Already ours: this device is satisfied, and we must
+					// not go looking for another row to claim.
+					idx = -2
+					break
+				}
+				if r.InstanceID == "" && idx == -1 {
+					idx = i
+				}
 			}
-			if !bound {
-				unbound = append(unbound, want)
+			switch idx {
+			case -1:
+				unmatched = append(unmatched, want)
+			case -2: // already bound to this instance
+			default:
+				targets = append(targets, idx)
 			}
 		}
-		return changed
+		if len(unmatched) > 0 || len(targets) == 0 {
+			return false
+		}
+		for _, i := range targets {
+			l.Reservations[i].InstanceID = instanceID
+		}
+		return true
 	})
 	if err != nil {
 		return err
 	}
-	if len(unbound) > 0 {
+	if len(unmatched) > 0 {
 		return fmt.Errorf("gpu: no unbound reservation for %s/%s on device(s) %s",
-			namespace, service, strings.Join(unbound, ", "))
+			namespace, service, strings.Join(unmatched, ", "))
 	}
 	return nil
 }
@@ -246,8 +279,12 @@ func (a *Admitter) BindInstance(ctx context.Context, nodeID, namespace, service,
 // that should not get them — and doubles the writes on a record that is
 // already the one hot key every GPU transition on the node contends for.
 func (a *Admitter) ReserveReplacing(ctx context.Context, node *types.Node, releaseInstanceID string, req Request) (Placement, error) {
-	if node == nil {
-		return Placement{}, ErrInventoryUnknown
+	// The same guard Reserve uses, and for a sharper reason here: this is
+	// the rolling-update path, so the restart window it protects — the
+	// agent starting after the control plane — is exactly when a rollout
+	// in flight arrives.
+	if err := checkInventory(node, req.NodeID); err != nil {
+		return Placement{}, err
 	}
 	if req.Holder == "" {
 		req.Holder = types.GPUResHolderInstance
@@ -283,8 +320,11 @@ func (a *Admitter) ReserveReplacing(ctx context.Context, node *types.Node, relea
 // that every GPU transition on the node contends for, and every write
 // also appends an unpruned version-history row.
 func (a *Admitter) mutate(ctx context.Context, nodeID string, fn func(*types.NodeDeviceLedger) bool) error {
+	// NOT updateLedger: releasing against a node with no ledger must not
+	// conjure one. There is nothing to release, and creating a row for
+	// any node ID a caller names grows the orphan set from both ends.
 	var ledger types.NodeDeviceLedger
-	return a.updateLedger(ctx, nodeID, &ledger, func() error {
+	err := a.store.UpdateFunc(ctx, types.ResourceTypeNodeLedger, "", nodeID, &ledger, func() error {
 		if !fn(&ledger) {
 			return store.ErrSkipUpdate
 		}
@@ -292,6 +332,10 @@ func (a *Admitter) mutate(ctx context.Context, nodeID string, fn func(*types.Nod
 		ledger.UpdatedAt = time.Now().UTC()
 		return nil
 	})
+	if err != nil && store.IsNotFoundError(err) {
+		return nil // no ledger, nothing held, nothing to release
+	}
+	return err
 }
 
 // CanFit reports whether req could be placed right now. ADVISORY ONLY —
@@ -316,9 +360,15 @@ func CanFit(node *types.Node, ledger *types.NodeDeviceLedger, namespace string, 
 // ErrInventoryUnknown means the node has not reported its devices yet.
 // It is RETRYABLE and must never be surfaced as a capacity refusal: it is
 // a statement about what is known, not about what exists.
-var ErrInventoryUnknown = &AdmissionError{
-	Reason:  "GpuInventoryUnknown",
-	Message: "waiting for this node's device inventory",
+//
+// A function rather than a package-level value: an exported *AdmissionError
+// is mutable, and one caller writing through it would change the error
+// every other caller sees.
+func ErrInventoryUnknown() error {
+	return &AdmissionError{
+		Reason:  types.GPUReasonInventoryUnknown,
+		Message: "waiting for this node's device inventory",
+	}
 }
 
 func vramBytes(req types.GPURequest) int64 {

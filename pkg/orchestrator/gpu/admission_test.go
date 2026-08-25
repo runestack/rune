@@ -476,3 +476,156 @@ func TestRelease_IdleHoldSurvivesEvenWithAnInstanceID(t *testing.T) {
 	assert.Equal(t, types.GPUResHolderIdle, l.Reservations[0].Holder)
 	assert.Equal(t, "vllm", l.Reservations[0].ServiceName)
 }
+
+// Re-running a bind must be a no-op, not a theft.
+//
+// A row already bound to THIS instance satisfies its device. Without
+// that, the second call skips its own row, finds a sibling's unbound one,
+// and stamps itself onto that — so a retried reconcile silently takes
+// another instance's reservation, and releasing this instance then frees
+// memory the sibling is still using.
+func TestBindInstance_IsIdempotent(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		_, err := adm.Reserve(ctx, node, req("prod", "llm", "", types.GPURequest{VRAM: "20Gi"}))
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, adm.BindInstance(ctx, "node-1", "prod", "llm", "i-1", []string{"GPU-1"}))
+	require.NoError(t, adm.BindInstance(ctx, "node-1", "prod", "llm", "i-1", []string{"GPU-1"}),
+		"a repeat bind for the same instance must succeed without claiming anything more")
+
+	got := map[string]int{}
+	for _, r := range ledgerOf(t, st).Reservations {
+		got[r.InstanceID]++
+	}
+	assert.Equal(t, map[string]int{"i-1": 1, "": 1}, got,
+		"the sibling's row must still be unbound and available to it")
+
+	require.NoError(t, adm.BindInstance(ctx, "node-1", "prod", "llm", "i-2", []string{"GPU-1"}))
+	require.NoError(t, adm.Release(ctx, "node-1", "i-1"))
+
+	l := ledgerOf(t, st)
+	require.Len(t, l.Reservations, 1)
+	assert.Equal(t, "i-2", l.Reservations[0].InstanceID)
+	assert.EqualValues(t, 20<<30, l.RequestedBytes("GPU-1"),
+		"releasing i-1 must leave i-2's memory accounted for")
+}
+
+// All-or-nothing: a bind naming a device with no row writes nothing.
+// A partial commit would leave a half-bound instance whose only recovery
+// is a retry, and retrying is what steals the sibling.
+func TestBindInstance_PartialMatchWritesNothing(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48), dev("GPU-2", gi48))
+	ctx := context.Background()
+	_, err := adm.Reserve(ctx, node, req("prod", "llm", "", types.GPURequest{VRAM: "20Gi"}))
+	require.NoError(t, err)
+
+	err = adm.BindInstance(ctx, "node-1", "prod", "llm", "i-1", []string{"GPU-1", "GPU-2"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GPU-2")
+
+	for _, r := range ledgerOf(t, st).Reservations {
+		assert.Empty(t, r.InstanceID, "a failed bind must not have written a partial result")
+	}
+}
+
+// Two rows on one card belong to two instances, bound by two calls. A
+// device named twice in one call would otherwise claim a sibling's row.
+func TestBindInstance_RejectsDuplicateDevice(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		_, err := adm.Reserve(ctx, node, req("prod", "llm", "", types.GPURequest{VRAM: "20Gi"}))
+		require.NoError(t, err)
+	}
+
+	err := adm.BindInstance(ctx, "node-1", "prod", "llm", "i-1", []string{"GPU-1", "GPU-1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "twice")
+	for _, r := range ledgerOf(t, st).Reservations {
+		assert.Empty(t, r.InstanceID)
+	}
+}
+
+// ReserveReplacing is the rolling-update path, so the window where the
+// agent has not reported yet is exactly when a rollout in flight hits it.
+// A terminal capacity refusal there writes an hour-long tombstone for a
+// problem that does not exist.
+func TestReserveReplacing_UnprobedInventoryIsRetryable(t *testing.T) {
+	adm, _, _ := newAdmitter(t, dev("GPU-1", gi48))
+	unprobed := &types.Node{ID: "node-1", Address: "127.0.0.1"} // DevicesProbedAt nil
+
+	_, err := adm.ReserveReplacing(context.Background(), unprobed, "old",
+		req("prod", "vllm", "new", types.GPURequest{}))
+	require.Error(t, err)
+	assert.NotEqual(t, types.GPUReasonNoCapacity, gpu.ReasonOf(err))
+	assert.Equal(t, types.GPUReasonInventoryUnknown, gpu.ReasonOf(err))
+}
+
+func TestReserveReplacing_RefusesMismatchedNodeAndLedger(t *testing.T) {
+	adm, node, _ := newAdmitter(t, dev("GPU-1", gi48))
+	r := req("prod", "vllm", "new", types.GPURequest{})
+	r.NodeID = "some-other-node"
+
+	_, err := adm.ReserveReplacing(context.Background(), node, "old", r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "node mismatch",
+		"choosing against one node's devices and writing another's ledger is silent corruption")
+}
+
+// Releasing against a node with no ledger must not conjure one: there is
+// nothing held, and creating a row for any node ID a caller names grows
+// the orphan set.
+func TestRelease_UnknownNodeCreatesNoLedger(t *testing.T) {
+	adm, _, st := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+
+	require.NoError(t, adm.Release(ctx, "a-node-that-does-not-exist", "i-1"))
+
+	_, err := repos.NewNodeLedgerRepo(st).Get(ctx, "a-node-that-does-not-exist")
+	require.Error(t, err, "no ledger should have been created for a node that has none")
+}
+
+// The first reservation on a box races its own ledger creation. Every
+// caller must get an admission answer, never a raw store conflict.
+func TestReserve_ConcurrentFirstReservationsAllGetAdmissionAnswers(t *testing.T) {
+	st := store.NewBadgerStore(log.NewTestLogger())
+	require.NoError(t, st.Open(t.TempDir()))
+	t.Cleanup(func() { _ = st.Close() })
+
+	probed := nowPtr()
+	node := &types.Node{ID: "node-1", Address: "127.0.0.1",
+		Devices: []types.GPUDevice{dev("GPU-1", gi48)}, DevicesProbedAt: probed}
+	adm := gpu.NewAdmitter(st)
+
+	const workers = 16
+	var (
+		wg  sync.WaitGroup
+		mu  sync.Mutex
+		raw []string
+		okN int
+	)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := adm.Reserve(context.Background(), node,
+				req("prod", fmt.Sprintf("s%d", i), fmt.Sprintf("i-%d", i),
+					types.GPURequest{VRAM: "1Gi"}))
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				okN++
+			case gpu.ReasonOf(err) == "":
+				raw = append(raw, err.Error())
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	assert.Empty(t, raw, "every refusal must carry an admission reason, not a raw store error")
+	assert.Greater(t, okN, 0)
+}

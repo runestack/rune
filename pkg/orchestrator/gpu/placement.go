@@ -89,11 +89,14 @@ type candidate struct {
 // best-fit prefers the fullest card that fits, which is by construction
 // the one with the most neighbours — so the default policy would actively
 // maximise cross-tenant sharing, on hardware that gives no memory
-// isolation between co-tenants. The cost is worse packing: a box with two
-// half-full cards from two namespaces will refuse a request that plain
-// best-fit would have placed. That is the trade, and the refusal message
-// names the holders so an operator can see it is a tenancy boundary
-// rather than an arithmetic one.
+// isolation between co-tenants.
+//
+// It costs fragmentation, NOT placements. The ranking is a comparator
+// over a candidate set that is the same either way, so it can never turn
+// a placement into a refusal — it only changes which card is chosen. What
+// it does cost is that empty cards get consumed ahead of fuller foreign
+// ones, so a box ends up with more partly-used cards and fewer whole ones
+// than plain best-fit would leave. Large future requests pay for it.
 //
 // There is no same-device affinity for a replacement instance. During a
 // rolling update the old instance still holds its reservation, so its

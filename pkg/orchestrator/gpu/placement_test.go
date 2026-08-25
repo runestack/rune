@@ -113,10 +113,11 @@ func TestChooseDevices_ForeignCardIsFlagged(t *testing.T) {
 	assert.Equal(t, []string{"staging"}, p.OtherNamespaces)
 }
 
-// The documented cost of that tie-break, pinned so it is a known trade
-// rather than a surprise: two half-full cards from two namespaces refuse
-// a request plain best-fit would have placed.
-func TestChooseDevices_TieBreakCostsPacking(t *testing.T) {
+// The tie-break cannot refuse a placement — it is a comparator over a
+// candidate set that is the same either way. Pinned because the comment
+// used to claim otherwise, and a stated cost that cannot occur sends the
+// next reader looking for a bug.
+func TestChooseDevices_TieBreakNeverRefusesAPlacement(t *testing.T) {
 	devices := []types.GPUDevice{
 		devP("GPU-1", "L40S", gi24),
 		devP("GPU-2", "L40S", gi24),
@@ -126,11 +127,28 @@ func TestChooseDevices_TieBreakCostsPacking(t *testing.T) {
 		res("GPU-2", "b", "y", 12<<30, false),
 	}}
 
-	// It still places — into tier 3 — and says so.
+	p, err := gpu.ChooseDevices(devices, ledger, "prod", types.GPURequest{VRAM: "5Gi"})
+	require.NoError(t, err, "every candidate is foreign, but foreign is a rank, not a filter")
+	assert.True(t, p.CrossNamespace)
+	assert.Len(t, p.OtherNamespaces, 1)
+}
+
+// The cost it does have: an empty card is consumed ahead of a foreign one
+// that would also have fit, so the box keeps fewer whole devices.
+func TestChooseDevices_TieBreakFragmentsRatherThanRefuses(t *testing.T) {
+	devices := []types.GPUDevice{
+		devP("GPU-foreign", "L40S", gi48),
+		devP("GPU-empty", "L40S", gi48),
+	}
+	ledger := &types.NodeDeviceLedger{Reservations: []types.GPURes{
+		res("GPU-foreign", "staging", "other", 30<<30, false),
+	}}
+
 	p, err := gpu.ChooseDevices(devices, ledger, "prod", types.GPURequest{VRAM: "5Gi"})
 	require.NoError(t, err)
-	assert.True(t, p.CrossNamespace, "the only option was another namespace's card")
-	assert.Len(t, p.OtherNamespaces, 1)
+	assert.Equal(t, []string{"GPU-empty"}, p.DeviceUUIDs,
+		"the empty card is spent even though the foreign one had room — "+
+			"that is the trade, and it is fragmentation rather than refusal")
 }
 
 func TestChooseDevices_WholeDeviceNeedsAnEmptyCard(t *testing.T) {
