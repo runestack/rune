@@ -49,6 +49,11 @@ type Request struct {
 // The mutate is a pure function of (ledger, req) and writes nothing
 // outside the target, which is what the store requires of a callback it
 // may invoke more than once.
+//
+// NOT SAFE TO RE-RUN for the same instance: a second call appends a
+// second row. BindInstance next door IS idempotent, and the asymmetry is
+// a trap for a level-triggered caller that learns the habit there and
+// carries it here. Callers must reserve once and remember they did.
 func (a *Admitter) Reserve(ctx context.Context, node *types.Node, req Request) (Placement, error) {
 	if err := checkInventory(node, req.NodeID); err != nil {
 		return Placement{}, err
@@ -221,7 +226,13 @@ func (a *Admitter) BindInstance(ctx context.Context, nodeID, namespace, service,
 		seen[d] = true
 	}
 
-	var unmatched []string
+	// Seeded with every device, not nil. `mutate` maps a missing ledger to
+	// success — right for a release, where "no ledger" and "no matching
+	// row" are the same answer — but that means the closure below never
+	// runs, and a nil `unmatched` would report a bind that bound nothing
+	// as a success. Bind is a positive claim; absence has to read as
+	// "nothing matched".
+	unmatched := append([]string(nil), devices...)
 	err := a.mutate(ctx, nodeID, func(l *types.NodeDeviceLedger) bool {
 		unmatched = nil
 		// Resolve every device before writing anything.

@@ -629,3 +629,34 @@ func TestReserve_ConcurrentFirstReservationsAllGetAdmissionAnswers(t *testing.T)
 	assert.Empty(t, raw, "every refusal must carry an admission reason, not a raw store error")
 	assert.Greater(t, okN, 0)
 }
+
+// A bind against a node with no ledger must fail, not silently succeed.
+//
+// `mutate` maps a missing ledger to success, which is right for a release
+// — "no ledger" and "no matching row" are the same answer there. For a
+// bind it means the closure never runs, so the all-or-nothing check has
+// nothing to report on and the caller is told it holds a reservation it
+// does not. The row it meant to bind then leaks: Release never matches an
+// empty instance ID, so the VRAM is held by nobody.
+func TestBindInstance_NoLedgerIsAnError(t *testing.T) {
+	st := store.NewBadgerStore(log.NewTestLogger())
+	require.NoError(t, st.Open(t.TempDir()))
+	t.Cleanup(func() { _ = st.Close() })
+
+	err := gpu.NewAdmitter(st).BindInstance(context.Background(),
+		"node-1", "prod", "llm", "i-1", []string{"GPU-1"})
+	require.Error(t, err, "binding against a node with no ledger must not report success")
+	assert.Contains(t, err.Error(), "GPU-1")
+}
+
+// The same shape, reached by naming the wrong node: the ledger exists,
+// just not that one.
+func TestBindInstance_WrongNodeIsAnError(t *testing.T) {
+	adm, node, _ := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+	_, err := adm.Reserve(ctx, node, req("prod", "llm", "", types.GPURequest{VRAM: "20Gi"}))
+	require.NoError(t, err)
+
+	err = adm.BindInstance(ctx, "typo-node", "prod", "llm", "i-1", []string{"GPU-1"})
+	require.Error(t, err, "the real reservation is on node-1; this must not read as bound")
+}
