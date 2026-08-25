@@ -352,9 +352,16 @@ type NodeResources struct {
 	// could not be sampled (e.g. macOS / unsupported runtime).
 	CpuUsedPercent float64 `protobuf:"fixed64,3,opt,name=cpu_used_percent,json=cpuUsedPercent,proto3" json:"cpu_used_percent,omitempty"`
 	// Live memory used in bytes (working set). 0 when unavailable.
-	MemUsedBytes  int64 `protobuf:"varint,4,opt,name=mem_used_bytes,json=memUsedBytes,proto3" json:"mem_used_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	MemUsedBytes int64 `protobuf:"varint,4,opt,name=mem_used_bytes,json=memUsedBytes,proto3" json:"mem_used_bytes,omitempty"`
+	// What the node can actually offer workloads, net of the reserve it
+	// keeps for the kernel, runed and the agent. Distinct from capacity
+	// above, and the number a placement decision wants: a request that
+	// fits capacity but not allocatable would land on a node with no
+	// headroom. 0 means unknown, not "none available".
+	AllocatableCpuCores float64 `protobuf:"fixed64,5,opt,name=allocatable_cpu_cores,json=allocatableCpuCores,proto3" json:"allocatable_cpu_cores,omitempty"`
+	AllocatableMemBytes int64   `protobuf:"varint,6,opt,name=allocatable_mem_bytes,json=allocatableMemBytes,proto3" json:"allocatable_mem_bytes,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *NodeResources) Reset() {
@@ -411,6 +418,20 @@ func (x *NodeResources) GetCpuUsedPercent() float64 {
 func (x *NodeResources) GetMemUsedBytes() int64 {
 	if x != nil {
 		return x.MemUsedBytes
+	}
+	return 0
+}
+
+func (x *NodeResources) GetAllocatableCpuCores() float64 {
+	if x != nil {
+		return x.AllocatableCpuCores
+	}
+	return 0
+}
+
+func (x *NodeResources) GetAllocatableMemBytes() int64 {
+	if x != nil {
+		return x.AllocatableMemBytes
 	}
 	return 0
 }
@@ -692,12 +713,14 @@ const file_pkg_api_proto_health_proto_rawDesc = "" +
 	"\amessage\x18\x06 \x01(\tR\amessage\x12\x1c\n" +
 	"\ttimestamp\x18\a \x01(\tR\ttimestamp\x12@\n" +
 	"\rcheck_results\x18\b \x03(\v2\x1b.rune.api.HealthCheckResultR\fcheckResults\x125\n" +
-	"\tresources\x18\t \x01(\v2\x17.rune.api.NodeResourcesR\tresources\"\xa4\x01\n" +
+	"\tresources\x18\t \x01(\v2\x17.rune.api.NodeResourcesR\tresources\"\x8c\x02\n" +
 	"\rNodeResources\x12\x1b\n" +
 	"\tcpu_cores\x18\x01 \x01(\x01R\bcpuCores\x12&\n" +
 	"\x0fmem_total_bytes\x18\x02 \x01(\x03R\rmemTotalBytes\x12(\n" +
 	"\x10cpu_used_percent\x18\x03 \x01(\x01R\x0ecpuUsedPercent\x12$\n" +
-	"\x0emem_used_bytes\x18\x04 \x01(\x03R\fmemUsedBytes\"\x92\x01\n" +
+	"\x0emem_used_bytes\x18\x04 \x01(\x03R\fmemUsedBytes\x122\n" +
+	"\x15allocatable_cpu_cores\x18\x05 \x01(\x01R\x13allocatableCpuCores\x122\n" +
+	"\x15allocatable_mem_bytes\x18\x06 \x01(\x03R\x13allocatableMemBytes\"\x92\x01\n" +
 	"\x10GetHealthRequest\x12%\n" +
 	"\x0ecomponent_type\x18\x01 \x01(\tR\rcomponentType\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +

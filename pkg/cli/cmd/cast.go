@@ -203,7 +203,8 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 		printCastBanner([]string{rc.source.Location}, opts.detach)
 		renderPlanBlock(os.Stdout, rc.releaseName, rendered.namespace, 0, plan)
 		fmt.Println()
-		printUpdateWarnings(os.Stdout, rendered.updateWarnings())
+		printUpdateWarnings(os.Stdout, append(rendered.updateWarnings(),
+			rendered.capacityWarnings(fetchNodeAllocatable(apiClient))...))
 		fmt.Println(format.Dim("dry-run: nothing was applied. Re-run without --dry-run to apply."))
 		return nil
 	}
@@ -222,7 +223,8 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 		fmt.Println()
 		// Under the plan and above the confirm prompt: the last place an
 		// operator is still deciding.
-		printUpdateWarnings(os.Stdout, rendered.updateWarnings())
+		printUpdateWarnings(os.Stdout, append(rendered.updateWarnings(),
+			rendered.capacityWarnings(fetchNodeAllocatable(apiClient))...))
 	}
 	if !plan.Applyable {
 		return fmt.Errorf("plan has unresolved ownership conflicts; pass --adopt to take ownership")

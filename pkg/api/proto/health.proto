@@ -87,6 +87,13 @@ message NodeResources {
   double cpu_used_percent = 3;
   // Live memory used in bytes (working set). 0 when unavailable.
   int64 mem_used_bytes = 4;
+  // What the node can actually offer workloads, net of the reserve it
+  // keeps for the kernel, runed and the agent. Distinct from capacity
+  // above, and the number a placement decision wants: a request that
+  // fits capacity but not allocatable would land on a node with no
+  // headroom. 0 means unknown, not "none available".
+  double allocatable_cpu_cores = 5;
+  int64 allocatable_mem_bytes = 6;
 }
 
 // GetHealthRequest requests health information.
