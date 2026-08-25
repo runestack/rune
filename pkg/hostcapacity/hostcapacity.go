@@ -60,6 +60,76 @@ func MemoryBytes() int64 {
 	return 0
 }
 
+// System reserve: what a node keeps for itself and never offers to
+// workloads.
+//
+// This is the same argument RUNE-301 D21 makes for GPU memory, one level
+// up. A machine's total memory is not schedulable memory: the kernel, the
+// page cache, runed and the agent all live in it, and none of them
+// appears in any request. Placing against the total is how a 24GB service
+// lands on a 24GB box and the OOM killer picks the workload rather than
+// the cause.
+//
+// Memory: a proportional reserve with a floor, because the absolute
+// overhead of a machine does not scale linearly but is never negligible.
+// 10% on a 24GB box is 2.4GB; on an 8GB box 10% is under the floor, so
+// the floor takes over.
+//
+// CPU is deliberately reserved far more thinly. It is compressible —
+// contention makes everything slower rather than killing anything — so an
+// over-generous CPU reserve costs real capacity to prevent a harm that
+// does not occur.
+//
+// THESE DEFAULTS ARE A STARTING POINT, not a settled decision. Whatever
+// ends up scheduling across nodes owns the number, and should ratify or
+// replace it against real workloads.
+const (
+	// ReservedMemoryFloor is the minimum held back on any node.
+	ReservedMemoryFloor int64 = 1 << 30 // 1Gi
+
+	// ReservedMemoryFraction is held back above the floor, as a
+	// percentage of total.
+	ReservedMemoryFraction = 10
+
+	// ReservedMillicores is held back for the node's own processes.
+	ReservedMillicores int64 = 200
+)
+
+// ReservedMemory is the memory withheld from workloads on a node of the
+// given total size.
+func ReservedMemory(total int64) int64 {
+	if total <= 0 {
+		return 0
+	}
+	byFraction := total * ReservedMemoryFraction / 100
+	if byFraction < ReservedMemoryFloor {
+		byFraction = ReservedMemoryFloor
+	}
+	if byFraction > total {
+		return total
+	}
+	return byFraction
+}
+
+// AllocatableMemory is what a node can actually offer to workloads.
+// Never negative: a machine too small to cover its own reserve offers
+// nothing rather than a negative budget that arithmetic downstream would
+// read as room.
+func AllocatableMemory(total int64) int64 {
+	if v := total - ReservedMemory(total); v > 0 {
+		return v
+	}
+	return 0
+}
+
+// AllocatableMillicores is the CPU a node can offer to workloads.
+func AllocatableMillicores(totalMillicores int64) int64 {
+	if v := totalMillicores - ReservedMillicores; v > 0 {
+		return v
+	}
+	return 0
+}
+
 // MillicoresFromCores converts a core count to the millicore unit the
 // rest of the tree uses for CPU (1000m = 1 core).
 func MillicoresFromCores(cores float64) int64 {

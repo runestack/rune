@@ -79,3 +79,85 @@ func TestMillicoresFromCores(t *testing.T) {
 	assert.EqualValues(t, 0, MillicoresFromCores(0))
 	assert.EqualValues(t, 0, MillicoresFromCores(-1), "a negative core count is not a negative limit")
 }
+
+// The reserve is proportional above a floor: absolute machine overhead
+// does not scale linearly, but it is never negligible.
+func TestReservedMemory(t *testing.T) {
+	tests := []struct {
+		name  string
+		total int64
+		want  int64
+	}{
+		// 10% of 24GB is 2.4GB, above the floor.
+		{"large node uses the fraction", 24_000_000_000, 2_400_000_000},
+		// 10% of 8GB is 800MB, under the 1Gi floor.
+		{"small node uses the floor", 8_000_000_000, ReservedMemoryFloor},
+		{"zero total reserves nothing", 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ReservedMemory(tt.total))
+		})
+	}
+}
+
+// The number that matters: a node cannot offer everything it has, so a
+// request for the machine's whole size must not fit it.
+func TestAllocatableMemory_LeavesHeadroom(t *testing.T) {
+	const total = 24_000_000_000 // a nominal 24GB node
+	alloc := AllocatableMemory(total)
+
+	assert.Less(t, alloc, int64(total), "a node cannot offer its own kernel's memory")
+	assert.Equal(t, total-ReservedMemory(total), alloc)
+
+	// The case that motivated this: requesting the advertised size must
+	// not fit, or the OOM killer arbitrates instead of the scheduler.
+	assert.Less(t, alloc, int64(total),
+		"a request for the node's advertised size must not fit its allocatable")
+}
+
+// A machine too small to cover its own reserve offers nothing — never a
+// negative budget, which arithmetic downstream would read as room.
+func TestAllocatable_NeverNegative(t *testing.T) {
+	assert.EqualValues(t, 0, AllocatableMemory(100))
+	assert.EqualValues(t, 0, AllocatableMemory(0))
+	assert.EqualValues(t, 0, AllocatableMillicores(100))
+	assert.EqualValues(t, 0, AllocatableMillicores(0))
+}
+
+// CPU is compressible, so it is reserved thinly: an over-generous CPU
+// reserve costs real capacity to prevent a harm that does not occur.
+func TestAllocatableMillicores(t *testing.T) {
+	assert.EqualValues(t, 8000-ReservedMillicores, AllocatableMillicores(8000))
+	assert.Less(t, ReservedMillicores, int64(1000), "reserving a whole core would be too much")
+}
+
+// The scenario this whole distinction exists for: a pool of nominal 24GB
+// and 8GB nodes, and a service asking for 24Gi.
+//
+// Against TOTAL, the 24GB node looks like it might take it. Against
+// ALLOCATABLE it plainly cannot, and neither can anything else — which is
+// the honest answer, delivered by a scheduler rather than by the OOM
+// killer at 3am.
+func TestAllocatable_TwentyFourGiOnATwentyFourGBPool(t *testing.T) {
+	const (
+		big   = 24_000_000_000 // s-8vcpu-24gb
+		small = 8_000_000_000  // s-4vcpu-8gb
+		want  = 24 << 30       // "24Gi" as ParseMemory reads it
+	)
+
+	// 24Gi is already larger than a nominal 24GB node's TOTAL — decimal
+	// GB versus binary Gi, before any reserve enters into it.
+	assert.Greater(t, int64(want), int64(big),
+		"24Gi is 25.8GB: it does not fit a 24GB node even ignoring overhead")
+
+	for _, total := range []int64{big, small} {
+		assert.Less(t, AllocatableMemory(total), int64(want),
+			"no node in this pool can offer 24Gi")
+	}
+
+	// What the big node CAN offer, so the error message has a real number
+	// to name.
+	assert.Greater(t, AllocatableMemory(big), int64(20_000_000_000),
+		"a 24GB node should still offer roughly 21GB, not be written off")
+}

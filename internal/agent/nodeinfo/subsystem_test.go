@@ -301,5 +301,13 @@ func TestSubsystem_RecordsNodeCapacity(t *testing.T) {
 	assert.Equal(t, hostcapacity.MillicoresFromCores(hostcapacity.CPUCores()), node.Resources.CPU,
 		"the record and the health service must not disagree about the machine's size")
 
+	// Allocatable is the number anything deciding placement wants, and it
+	// must be strictly less than total — a node cannot offer its own
+	// kernel's memory.
+	assert.Greater(t, node.Resources.AllocatableMemory, int64(0))
+	assert.Less(t, node.Resources.AllocatableMemory, node.Resources.Memory,
+		"placing against total is how a request for the whole box gets placed on it")
+	assert.Less(t, node.Resources.AllocatableCPU, node.Resources.CPU)
+
 	require.NoError(t, sub.Stop(ctx))
 }

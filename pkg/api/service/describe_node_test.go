@@ -241,6 +241,32 @@ func TestDescribeNode_ShowsCapacity(t *testing.T) {
 	assert.Contains(t, got, "memory")
 }
 
+// Capacity and allocatable are shown side by side. An operator comparing
+// a 24Gi request against a node advertised as 24GB needs to see why it
+// does not fit, and "Capacity" alone does not tell them.
+func TestDescribeNode_ShowsAllocatableBesideCapacity(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{
+		ID: "node-1", Address: "127.0.0.1",
+		Resources: types.NodeResources{
+			CPU: 8000, Memory: 24_000_000_000,
+			AllocatableCPU: 7800, AllocatableMemory: 21_600_000_000,
+		},
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, kv := range resp.Result.Identity {
+		got[kv.Key] = kv.Value
+	}
+	require.Contains(t, got, "Capacity")
+	require.Contains(t, got, "Allocatable")
+	assert.NotEqual(t, got["Capacity"], got["Allocatable"],
+		"the two differ by the node's own reserve; showing one number would hide it")
+}
+
 // Undetectable capacity is omitted, not rendered as zero: "0 CPU" would
 // be a confident wrong answer where absence is the honest one.
 func TestDescribeNode_OmitsUnknownCapacity(t *testing.T) {

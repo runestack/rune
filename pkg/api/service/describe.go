@@ -479,6 +479,9 @@ func (s *DescribeService) describeNode(ctx context.Context, name string) (*gener
 	if cap := nodeCapacityLine(node); cap != "" {
 		res.Identity = append(res.Identity, kv("Capacity", cap))
 	}
+	if alloc := nodeAllocatableLine(node); alloc != "" {
+		res.Identity = append(res.Identity, kv("Allocatable", alloc))
+	}
 	res.Timestamps = timestampKVs(node.CreatedAt, nil, time.Time{})
 
 	if len(node.Labels) > 0 {
@@ -534,6 +537,21 @@ func nodeCapacityLine(node *types.Node) string {
 	}
 	if node.Resources.Memory > 0 {
 		parts = append(parts, types.FormatMemory(node.Resources.Memory)+" memory")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// nodeAllocatableLine renders what the node offers workloads, which is
+// the number that decides whether a service fits. Shown beside capacity
+// rather than instead of it: an operator comparing a request against the
+// machine's advertised size needs to see why the two differ.
+func nodeAllocatableLine(node *types.Node) string {
+	var parts []string
+	if node.Resources.AllocatableCPU > 0 {
+		parts = append(parts, fmt.Sprintf("%.3g CPU", float64(node.Resources.AllocatableCPU)/1000))
+	}
+	if node.Resources.AllocatableMemory > 0 {
+		parts = append(parts, types.FormatMemory(node.Resources.AllocatableMemory)+" memory")
 	}
 	return strings.Join(parts, ", ")
 }

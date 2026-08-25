@@ -112,13 +112,27 @@ const (
 	NodeStatusDraining NodeStatus = "Draining"
 )
 
-// NodeResources represents the resources available on a node.
+// NodeResources represents the resources a node has and the portion of
+// them it can offer to workloads.
+//
+// The two are not the same number and placing against the wrong one is a
+// silent overcommit: total includes the kernel, the page cache, runed and
+// the agent, none of which appears in any request. Anything deciding
+// whether a workload fits wants Allocatable.
 type NodeResources struct {
-	// Available CPU in millicores (1000m = 1 CPU)
+	// CPU is total CPU in millicores (1000m = 1 CPU).
 	CPU int64 `json:"cpu" yaml:"cpu"`
 
-	// Available memory in bytes
+	// Memory is total memory in bytes.
 	Memory int64 `json:"memory" yaml:"memory"`
+
+	// AllocatableCPU is CPU offered to workloads, net of the node's own
+	// reserve. Zero means unknown, not "none available".
+	AllocatableCPU int64 `json:"allocatableCpu" yaml:"allocatableCpu"`
+
+	// AllocatableMemory is memory offered to workloads, net of the
+	// node's own reserve. Zero means unknown, not "none available".
+	AllocatableMemory int64 `json:"allocatableMemory" yaml:"allocatableMemory"`
 }
 
 // Validate validates the node configuration.
