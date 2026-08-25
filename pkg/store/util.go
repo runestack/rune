@@ -108,6 +108,10 @@ func resetTarget(target interface{}) {
 // This is useful for converting between different types that share the same JSON structure.
 // The function handles the conversion by first marshaling the source to JSON and then
 // unmarshaling into the target type.
+//
+// target is DECODED INTO, not replaced — same caveat as Store.Get. Pass a
+// fresh value; a reused one keeps whatever source omits. Call resetTarget
+// first if the caller cannot guarantee that.
 func UnmarshalResource(source interface{}, target interface{}) error {
 	// Marshal the source to JSON
 	jsonData, err := json.Marshal(source)

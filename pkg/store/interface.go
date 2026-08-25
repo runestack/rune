@@ -30,12 +30,21 @@ type Store interface {
 	CreateResource(ctx context.Context, resourceType types.ResourceType, resource interface{}) error
 
 	// Get retrieves a resource by type, namespace, and name.
+	//
+	// resource is DECODED INTO, not replaced: json.Unmarshal never zeroes
+	// its destination, so anything the caller left on it that the stored
+	// row omits survives — an absent `omitempty` scalar keeps its old
+	// value, a non-nil map merges, a non-nil pointer is written through,
+	// and a longer slice keeps its tail. Pass a fresh value. This is the
+	// opposite of UpdateFunc below, which zeroes its target; the two look
+	// alike at the call site and do not behave alike.
 	Get(ctx context.Context, resourceType types.ResourceType, namespace string, name string, resource interface{}) error
 
 	// GetInstanceByID retrieves an instance by namespace and instanceID.
 	GetInstanceByID(ctx context.Context, namespace string, instanceID string) (*types.Instance, error)
 
 	// List retrieves all resources of a given type in a namespace.
+	// Decoded into rather than replaced — same caveat as Get.
 	List(ctx context.Context, resourceType types.ResourceType, namespace string, resource interface{}) error
 
 	// ListAll retrieves all resources of a given type in all namespaces.
