@@ -132,9 +132,15 @@ type orchestrator struct {
 	runnerManager manager.IRunnerManager
 
 	// Admission gate for payload-shaped authorization (e.g. the
-	// services.privileged verb). Nil means no enforcement — the shape
-	// used by in-process tests and by servers with auth disabled. See
-	// SetAdmission.
+	// services.privileged verb) — may this CALLER ask for this? Nil
+	// means no enforcement: the shape used by in-process tests and by
+	// servers with auth disabled. See SetAdmission.
+	//
+	// Not to be confused with GPU capacity admission
+	// (pkg/orchestrator/gpu), which asks whether the HARDWARE can hold
+	// it. Both refuse a cast and both are reached from CreateService, so
+	// the axis is worth stating: this one is about the subject, that one
+	// about the device.
 	admission *authz.Gate
 
 	// Context for background operations

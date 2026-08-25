@@ -101,6 +101,7 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 		}
 		niSub, niErr := nodeinfo.New(nodeinfo.Config{
 			Repo:     repos.NewNodeRepo(stateStore),
+			Ledger:   repos.NewNodeLedgerRepo(stateStore),
 			NodeID:   a.Identity().NodeID,
 			Labels:   a.Identity().Labels,
 			Provider: gpuProvider,

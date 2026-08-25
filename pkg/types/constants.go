@@ -76,6 +76,12 @@ const (
 	// Rows live under an empty-namespace key, the same pattern
 	// StorageClass uses.
 	ResourceTypeNode ResourceType = "node"
+
+	// ResourceTypeNodeLedger represents a cluster-scoped, per-node record
+	// of who has claimed that node's GPU capacity. Separate from the node
+	// record because it has a different writer: the agent reports what
+	// hardware exists, the orchestrator records what is claimed.
+	ResourceTypeNodeLedger ResourceType = "node_ledger"
 )
 
 // LocalNodeIDFallback is the Instance.NodeID written when no agent
