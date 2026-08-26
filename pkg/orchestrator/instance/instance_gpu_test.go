@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -189,8 +190,8 @@ func (s createBlockedStore) Create(ctx context.Context, rt types.ResourceType, n
 
 // The reservation is taken before the instance record is written, so a
 // failed write leaves a row nothing will ever release: no instance to
-// fail, to stop, or to match against. The card would be held until the
-// node restarts.
+// fail, to stop, or to match against. The ledger is a stored record, so
+// the leak outlives a restart of the node.
 func TestCreateInstance_StoreFailureDoesNotLeakTheReservation(t *testing.T) {
 	st := store.NewBadgerStore(log.NewTestLogger())
 	require.NoError(t, st.Open(t.TempDir()))
@@ -235,9 +236,9 @@ func TestCreateInstance_SharedDeviceAccumulates(t *testing.T) {
 	require.Error(t, err, "40Gi held plus the system reserve leaves under 8Gi on a 48Gi card")
 }
 
-// With no admitter wired — embedded use, and every install before this
-// existed — a GPU service is created exactly as before, reserving
-// nothing. The feature has to be absent, not merely inert.
+// With no admitter wired — embedded use, and any caller with no node
+// inventory behind it — a GPU service is created reserving nothing. The
+// feature has to be absent, not merely inert.
 func TestCreateInstance_NoAdmitterIsUnchanged(t *testing.T) {
 	st := store.NewBadgerStore(log.NewTestLogger())
 	require.NoError(t, st.Open(t.TempDir()))
@@ -280,6 +281,93 @@ func TestCreateInstance_UnprobedInventoryIsNotACapacityRefusal(t *testing.T) {
 	svc := gpuService(t, st, "vllm", &types.GPURequest{})
 	_, err := c.CreateInstance(ctx, svc, "vllm-0", 0)
 	require.Error(t, err)
-	assert.NotEqual(t, types.GPUReasonNoCapacity, gpu.ReasonOf(err),
-		"never a capacity refusal: that is a claim about capacity the node has not made")
+	assert.Equal(t, types.GPUReasonInventoryUnknown, gpu.ReasonOf(err),
+		"retryable, and never a capacity refusal: that is a claim about capacity the node has not made")
+}
+
+// Retire, scale-down, repair and recreate all end at DeleteInstance, and
+// none of them passes through Stopped or Failed. A dipping rolling update
+// on a one-card node is the shape that breaks: the retired replica has to
+// give the card up before its replacement is admitted, and the record it
+// leaves behind is Deleted, which nothing ever transitions out of.
+func TestDeleteInstance_ReleasesSoTheRollingReplacementFits(t *testing.T) {
+	ctx, c, st := gpuController(t, gpuDev("GPU-1", 48<<30))
+	svc := gpuService(t, st, "vllm", &types.GPURequest{})
+
+	old, err := c.CreateInstance(ctx, svc, "vllm-0", 0)
+	require.NoError(t, err)
+	require.Len(t, ledger(t, st).Reservations, 1)
+
+	require.NoError(t, c.DeleteInstance(ctx, old))
+	assert.Empty(t, ledger(t, st).Reservations, "a Deleted instance holds nothing")
+
+	replacement, err := c.CreateInstance(ctx, svc, "vllm-0", 0)
+	require.NoError(t, err, "the retired replica must not block the one replacing it")
+	assert.Equal(t, []string{"GPU-1"}, replacement.GPUAssignments)
+}
+
+// Stop then delete is how the service-deletion cascade tears an instance
+// down. The second release must not take a card that has since been
+// handed to somebody else.
+func TestStopThenDelete_ReleasesOnce(t *testing.T) {
+	ctx, c, st := gpuController(t, gpuDev("GPU-1", 48<<30))
+	svc := gpuService(t, st, "vllm", &types.GPURequest{})
+
+	first, err := c.CreateInstance(ctx, svc, "vllm-0", 0)
+	require.NoError(t, err)
+	require.NoError(t, c.StopInstance(ctx, first))
+
+	next, err := c.CreateInstance(ctx, svc, "vllm-1", 1)
+	require.NoError(t, err)
+
+	require.NoError(t, c.DeleteInstance(ctx, first))
+
+	rows := ledger(t, st).Reservations
+	require.Len(t, rows, 1, "the delete must not reach into the card its successor now holds")
+	assert.Equal(t, next.ID, rows[0].InstanceID)
+}
+
+// Two reconcile workers admit concurrently; the controller they share
+// must not be written to while they do.
+func TestCreateInstance_ConcurrentAdmissionIsRaceFree(t *testing.T) {
+	ctx, c, st := gpuController(t, gpuDev("GPU-1", 48<<30), gpuDev("GPU-2", 48<<30))
+	a := gpuService(t, st, "vllm", &types.GPURequest{})
+	b := gpuService(t, st, "tei", &types.GPURequest{})
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, svc := range []*types.Service{a, b} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = c.CreateInstance(ctx, svc, svc.Name+"-0", 0)
+		}()
+	}
+	wg.Wait()
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+	assert.Len(t, ledger(t, st).Reservations, 2)
+}
+
+// The other spelling of the same startup window: the agent has not
+// written the node record at all yet. It has to refuse the same way a
+// record with no probe stamp does, or the two halves of one state get
+// different reasons and only one of them reads as retryable.
+func TestCreateInstance_MissingNodeRecordIsAlsoRetryable(t *testing.T) {
+	st := store.NewBadgerStore(log.NewTestLogger())
+	require.NoError(t, st.Open(t.TempDir()))
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	testRunner := runner.NewTestRunner()
+	mgr := manager.NewTestRunnerManager(nil)
+	mgr.SetDockerRunner(testRunner)
+	mgr.SetProcessRunner(testRunner)
+	c := NewController(st, mgr, log.NewTestLogger(),
+		WithNodeID(testNodeID), WithGPUAdmitter(gpu.NewAdmitter(st)))
+
+	svc := gpuService(t, st, "vllm", &types.GPURequest{})
+	_, err := c.CreateInstance(ctx, svc, "vllm-0", 0)
+	require.Error(t, err)
+	assert.Equal(t, types.GPUReasonInventoryUnknown, gpu.ReasonOf(err))
 }

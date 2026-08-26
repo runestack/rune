@@ -86,8 +86,7 @@ type Controller struct {
 	// what every caller with no GPU workload gets.
 	gpu *gpu.Admitter
 
-	// nodes reads this node's inventory record; derived lazily from the
-	// store so tests that construct a bare controller need not wire it.
+	// nodes reads this node's inventory record.
 	nodes *repos.NodeRepo
 
 	// mountRes, when set, lets resolveVolumeMount consult the
@@ -160,10 +159,9 @@ func WithNodeID(nodeID string) Option {
 	return func(c *Controller) { c.nodeID = nodeID }
 }
 
-// WithGPUAdmitter wires device admission. Nil leaves GPU accounting off,
-// so a service asking for a GPU is created without a reservation — which
-// is what in-process tests and embedded callers want, and what every
-// installation had before this existed.
+// WithGPUAdmitter wires device admission. Nil leaves GPU accounting off:
+// a service asking for a GPU is created without a reservation, which is
+// what a controller with no node inventory behind it must do.
 func WithGPUAdmitter(a *gpu.Admitter) Option {
 	return func(c *Controller) { c.gpu = a }
 }
@@ -190,6 +188,7 @@ func NewController(store store.Store, runnerManager manager.IRunnerManager, logg
 		runnerManager: runnerManager,
 		logger:        logger.WithComponent("instance-controller"),
 		env:           newEnvResolver(secretRepo, configRepo),
+		nodes:         repos.NewNodeRepo(store),
 		lastPublished: map[string]string{},
 	}
 	// The binder reads mountResolver and nodeID through the controller at

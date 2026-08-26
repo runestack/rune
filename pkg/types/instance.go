@@ -57,7 +57,7 @@ type Instance struct {
 	// A DENORMALISED CACHE for the runner, not the source of truth. The
 	// node's device ledger is authoritative — this copy exists so the
 	// runner can scope the container without reading it. When the two
-	// disagree, the ledger wins and the reclaim sweep repairs this.
+	// disagree the ledger wins; nothing reconciles the copy back yet.
 	GPUAssignments []string `json:"gpuAssignments,omitempty" yaml:"gpuAssignments,omitempty"`
 
 	// IP address assigned to this instance

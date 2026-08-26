@@ -6,7 +6,7 @@ import (
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/gpu"
-	"github.com/runestack/rune/pkg/store/repos"
+	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -19,13 +19,9 @@ import (
 // to clean up for a decision Rune already made.
 //
 // The instance's UUID is minted before any of this, so the reservation
-// carries it from the start and needs no later binding. That matters for
-// the crash window: a reservation written with its instance ID is
-// reclaimable by the ordinary release path, where an instance-free one
-// would wait for the sweep.
-//
-// A service with no gpu request does nothing here at all — no store read,
-// no write, no error path.
+// carries its owner from the moment it is written and needs no later
+// binding step. A crash between this and the store write still strands
+// the row — nothing reclaims those yet.
 func (c *Controller) reserveGPU(ctx context.Context, service *types.Service, instance *types.Instance) error {
 	if service.Resources.GPU == nil || c.gpu == nil {
 		return nil
@@ -33,10 +29,14 @@ func (c *Controller) reserveGPU(ctx context.Context, service *types.Service, ins
 
 	node, err := c.nodeRecord(ctx)
 	if err != nil {
-		// Not "this node has no GPUs" — the node record is written by the
-		// agent, which starts after the control plane, so this is the
-		// window where the answer is not known yet. Returning it as a
-		// capacity refusal would blame the driver on every restart.
+		// No record yet is the same state as a record with no probe stamp,
+		// and has to carry the same retryable reason: the agent writes it
+		// and starts after the control plane, so every restart passes
+		// through this window. A capacity refusal here would blame the
+		// driver for a race with startup.
+		if store.IsNotFoundError(err) {
+			return gpu.ErrInventoryUnknown()
+		}
 		return fmt.Errorf("gpu: %w", err)
 	}
 
@@ -67,22 +67,26 @@ func (c *Controller) reserveGPU(ctx context.Context, service *types.Service, ins
 	return nil
 }
 
-// releaseGPU drops an instance's reservations.
+// releaseGPU drops an instance's reservations. Called at every status
+// transition an instance does not come back from, including Deleted —
+// see Admitter.Release for why release follows the status rather than the
+// removal of the record.
 //
-// Driven by the TERMINAL STATUS transition, never by record deletion. A
-// Failed instance is deliberately kept as its own tombstone for up to an
-// hour; releasing on deletion would let a crash-looping engine hold its
-// VRAM for that hour and block the replacement that would have fixed it.
-//
-// Best-effort by design: the caller is in the middle of writing a
-// tombstone or stopping a container, and failing that because a ledger
-// write failed would trade a leaked reservation for a stuck instance.
-// The reclaim sweep is what catches whatever this misses.
+// Best-effort: the caller is mid-way through a tombstone write or a
+// container teardown, and failing that over a ledger write would trade a
+// leaked reservation for a stuck instance. Nothing sweeps up what this
+// misses, so the Warn below is the only signal an operator gets.
 func (c *Controller) releaseGPU(ctx context.Context, instance *types.Instance) {
 	if c.gpu == nil || len(instance.GPUAssignments) == 0 {
 		return
 	}
-	if err := c.gpu.Release(ctx, c.NodeID(), instance.ID); err != nil {
+	// The instance's own node, not this controller's: the two are the same
+	// today, and this is what keeps being true when they stop being.
+	nodeID := instance.NodeID
+	if nodeID == "" {
+		nodeID = c.NodeID()
+	}
+	if err := c.gpu.Release(ctx, nodeID, instance.ID); err != nil {
 		c.logger.Warn("Failed to release GPU reservation",
 			log.Str("instance", instance.ID),
 			log.Any("devices", instance.GPUAssignments),
@@ -96,8 +100,5 @@ func (c *Controller) releaseGPU(ctx context.Context, instance *types.Instance) {
 
 // nodeRecord reads this node's inventory.
 func (c *Controller) nodeRecord(ctx context.Context) (*types.Node, error) {
-	if c.nodes == nil {
-		c.nodes = repos.NewNodeRepo(c.store)
-	}
 	return c.nodes.Get(ctx, c.NodeID())
 }

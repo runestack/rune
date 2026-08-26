@@ -722,6 +722,12 @@ func (c *Controller) DeleteInstance(ctx context.Context, instance *types.Instanc
 
 	}
 
+	// Deleted is terminal and unreachable from the status transitions that
+	// release: a retired or scaled-down replica goes straight here without
+	// ever being Stopped or Failed, and the record is later hard-removed.
+	// Without this the card is held by an instance that no longer exists.
+	c.releaseGPU(ctx, instance)
+
 	// Networking data plane (RUNE-063): drop this instance from the
 	// service's published endpoint set and from the local identity
 	// table.
