@@ -11,6 +11,7 @@ import (
 
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator/gpu"
 	"github.com/runestack/rune/pkg/orchestrator/health"
 	instancectl "github.com/runestack/rune/pkg/orchestrator/instance"
 	"github.com/runestack/rune/pkg/orchestrator/reconciler"
@@ -27,6 +28,10 @@ type Controller interface {
 	// SetEventLog wires the persisted event log so the reconciler can record
 	// the update lifecycle. Nil-safe; call once at startup.
 	SetEventLog(eventLog events.EventLog)
+
+	// SetGPUAdmitter wires device admission so the reconciler can
+	// reconcile the node ledgers against the instances holding them.
+	SetGPUAdmitter(admitter *gpu.Admitter)
 	GetServiceStatus(ctx context.Context, namespace, name string) (*types.ServiceStatusInfo, error)
 	UpdateServiceStatus(ctx context.Context, service *types.Service, status types.ServiceStatus) error
 	GetServiceLogs(ctx context.Context, namespace, name string, opts types.LogOptions) (io.ReadCloser, error)
@@ -113,6 +118,14 @@ func NewController(
 func (sc *serviceController) SetEventLog(eventLog events.EventLog) {
 	if sc.rec != nil {
 		sc.rec.SetEventLog(eventLog)
+	}
+}
+
+// SetGPUAdmitter forwards device admission to the reconciler, which runs
+// the ledger sweep on its GC tick. Nil-safe; call once at startup.
+func (sc *serviceController) SetGPUAdmitter(admitter *gpu.Admitter) {
+	if sc.rec != nil {
+		sc.rec.SetGPUAdmitter(admitter)
 	}
 }
 

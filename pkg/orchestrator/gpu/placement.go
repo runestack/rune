@@ -69,6 +69,42 @@ func usable(ledger *types.NodeDeviceLedger, dev types.GPUDevice, incoming int) i
 	return free
 }
 
+// deviceAccepts reports whether dev can take req alongside what the
+// ledger already records against it. A whole-device holder excludes
+// everyone, and a whole-device request excludes everyone already there.
+//
+// Shared with the reclaim path, which checks named devices rather than
+// ranking them: both have to answer "does this fit" the same way, or a
+// re-reservation could land where a fresh one would have been refused.
+func deviceAccepts(ledger *types.NodeDeviceLedger, dev types.GPUDevice, req types.GPURequest, need int64) bool {
+	if ledger.HasWholeDeviceHolder(dev.UUID) {
+		return false
+	}
+	if !req.SharesDevice() && len(ledger.FindReservations(dev.UUID)) > 0 {
+		return false
+	}
+	if req.SharesDevice() && usable(ledger, dev, 1) < need {
+		return false
+	}
+	return true
+}
+
+// requestedBytes is the VRAM a shared request asks for. Zero for a
+// whole-device request, which is counted in cards rather than bytes.
+func requestedBytes(req types.GPURequest) (int64, error) {
+	if !req.SharesDevice() {
+		return 0, nil
+	}
+	parsed, err := types.ParseMemory(req.VRAM)
+	if err != nil {
+		return 0, &AdmissionError{
+			Reason:  types.GPUReasonNoCapacity,
+			Message: fmt.Sprintf("unparseable vram request %q: %v", req.VRAM, err),
+		}
+	}
+	return parsed, nil
+}
+
 // candidate is a device under consideration, carrying what the ranking
 // needs so the sort stays a pure comparison.
 type candidate struct {
@@ -123,16 +159,9 @@ func ChooseDevices(devices []types.GPUDevice, ledger *types.NodeDeviceLedger, na
 		}
 	}
 
-	var need int64
-	if req.SharesDevice() {
-		parsed, err := types.ParseMemory(req.VRAM)
-		if err != nil {
-			return Placement{}, &AdmissionError{
-				Reason:  types.GPUReasonNoCapacity,
-				Message: fmt.Sprintf("unparseable vram request %q: %v", req.VRAM, err),
-			}
-		}
-		need = parsed
+	need, err := requestedBytes(req)
+	if err != nil {
+		return Placement{}, err
 	}
 
 	cands := rankCandidates(live, ledger, namespace, req, need)
@@ -180,15 +209,7 @@ func rankCandidates(devices []types.GPUDevice, ledger *types.NodeDeviceLedger, n
 	for _, dev := range devices {
 		held := ledger.FindReservations(dev.UUID)
 
-		// A whole-device holder excludes everyone, and a whole-device
-		// request excludes everyone already there.
-		if ledger.HasWholeDeviceHolder(dev.UUID) {
-			continue
-		}
-		if !req.SharesDevice() && len(held) > 0 {
-			continue
-		}
-		if req.SharesDevice() && usable(ledger, dev, 1) < need {
+		if !deviceAccepts(ledger, dev, req, need) {
 			continue
 		}
 
