@@ -67,19 +67,22 @@ func (a *Admitter) ReclaimOrphans(ctx context.Context, nodeID string, held map[s
 // at the new number. And unlike the release path this WILL create the
 // node's ledger if it is absent, because there is a live claim to record
 // and refusing to write it would leave the card reading free.
-func (a *Admitter) AdoptAssignment(ctx context.Context, node *types.Node, req Request, devices []string) error {
+// Returns the devices it actually claimed, which is empty when they were
+// all covered already — the caller must not announce a repair it did not
+// make.
+func (a *Admitter) AdoptAssignment(ctx context.Context, node *types.Node, req Request, devices []string) ([]string, error) {
 	if err := checkInventory(node, req.NodeID); err != nil {
-		return err
+		return nil, err
 	}
 	if len(devices) == 0 {
-		return fmt.Errorf("gpu: adopt needs at least one device")
+		return nil, fmt.Errorf("gpu: adopt needs at least one device")
 	}
 	if req.Holder == "" {
 		req.Holder = types.GPUResHolderInstance
 	}
 	need, err := requestedBytes(req.GPU)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	present := make(map[string]types.GPUDevice, len(node.Devices))
@@ -87,8 +90,15 @@ func (a *Admitter) AdoptAssignment(ctx context.Context, node *types.Node, req Re
 		present[d.UUID] = d
 	}
 
-	var ledger types.NodeDeviceLedger
-	return a.updateLedger(ctx, req.NodeID, &ledger, func() error {
+	var (
+		ledger  types.NodeDeviceLedger
+		claimed []string
+	)
+	err = a.updateLedger(ctx, req.NodeID, &ledger, func() error {
+		// Reset per attempt: the CAS re-runs this against a freshly read
+		// ledger, and a carried-over list would report claims the winning
+		// attempt never wrote.
+		claimed = nil
 		// IDEMPOTENT, and not as a nicety: the caller decides what is
 		// missing from a snapshot read outside this transaction, so by the
 		// time we commit some of it may be covered. Appending a second row
@@ -119,8 +129,13 @@ func (a *Admitter) AdoptAssignment(ctx context.Context, node *types.Node, req Re
 			}
 		}
 		appendReservations(&ledger, Placement{DeviceUUIDs: wanted}, req)
+		claimed = wanted
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
 }
 
 // unheldBy is the subset of devices that instanceID does not already

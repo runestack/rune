@@ -468,3 +468,64 @@ func TestReclaim_EmitsANodeScopedEvent(t *testing.T) {
 	assert.Contains(t, got.Message, "GPU-1")
 	assert.Contains(t, got.Message, "default/vllm")
 }
+
+// Every declared instance status, pinned by name.
+//
+// statusStillHoldsGPU falls through to "holds" for anything it does not
+// name, which is the safe direction and a silent one: nothing in the
+// build notices a new status landing there. The tree already has the
+// shape of that bug — the design's release rule names Succeeded, which no
+// instance can currently be, and the day one can it would arrive here
+// holding its card forever with a green suite.
+//
+// So: adding an InstanceStatus without deciding this fails the build.
+func TestStatusStillHoldsGPU_CoversEveryDeclaredStatus(t *testing.T) {
+	failedAt := time.Now()
+	expected := map[types.InstanceStatus]bool{
+		// Released on the way in — the transition calls releaseGPU.
+		types.InstanceStatusStopped: false,
+		types.InstanceStatusDeleted: false,
+
+		// Still holds: a container is running, or a retry needs the row.
+		types.InstanceStatusPending:     true,
+		types.InstanceStatusRunning:     true,
+		types.InstanceStatusStalled:     true,
+		types.InstanceStatusCreated:     true,
+		types.InstanceStatusStarting:    true,
+		types.InstanceStatusExited:      true,
+		types.InstanceStatusUnknown:     true,
+		types.InstanceStatusTerminating: true,
+
+		// Failed splits on FailedAt, so it is asserted below instead.
+		types.InstanceStatusFailed: true,
+	}
+
+	declared := []types.InstanceStatus{
+		types.InstanceStatusPending, types.InstanceStatusRunning,
+		types.InstanceStatusStopped, types.InstanceStatusFailed,
+		types.InstanceStatusDeleted, types.InstanceStatusTerminating,
+		types.InstanceStatusStalled, types.InstanceStatusCreated,
+		types.InstanceStatusStarting, types.InstanceStatusExited,
+		types.InstanceStatusUnknown,
+	}
+	require.Len(t, expected, len(declared),
+		"a status was added or removed; decide whether it still holds its card")
+
+	for _, status := range declared {
+		want, named := expected[status]
+		require.True(t, named, "undecided status %q", status)
+		assert.Equal(t, want, statusStillHoldsGPU(&types.Instance{Status: status}),
+			"status %q", status)
+	}
+
+	// Terminating in particular: the container is live for the whole
+	// drain, and the release comes after the Stopped or Deleted write.
+	assert.True(t, statusStillHoldsGPU(&types.Instance{Status: types.InstanceStatusTerminating}))
+
+	// The split inside Failed — a tombstone has released, a create still
+	// retrying has not.
+	assert.False(t, statusStillHoldsGPU(&types.Instance{
+		Status: types.InstanceStatusFailed, FailedAt: &failedAt}))
+	assert.True(t, statusStillHoldsGPU(&types.Instance{
+		Status: types.InstanceStatusFailed}))
+}

@@ -25,8 +25,13 @@ func TestAdoptAssignment_SecondCallAddsNoSecondRow(t *testing.T) {
 	ctx := context.Background()
 	r := req("default", "vllm", "inst-1", types.GPURequest{VRAM: "20Gi"})
 
-	require.NoError(t, adm.AdoptAssignment(ctx, node, r, []string{"GPU-1"}))
-	require.NoError(t, adm.AdoptAssignment(ctx, node, r, []string{"GPU-1"}))
+	claimed, err := adm.AdoptAssignment(ctx, node, r, []string{"GPU-1"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"GPU-1"}, claimed)
+
+	claimed, err = adm.AdoptAssignment(ctx, node, r, []string{"GPU-1"})
+	require.NoError(t, err)
+	assert.Empty(t, claimed, "a call that wrote nothing must not report a repair")
 
 	rows := ledgerOf(t, st).Reservations
 	require.Len(t, rows, 1)
@@ -40,9 +45,11 @@ func TestAdoptAssignment_TakesEveryDeviceTheInstanceHolds(t *testing.T) {
 	adm, node, st := newAdmitter(t, dev("GPU-1", gi48), dev("GPU-2", gi48))
 	ctx := context.Background()
 
-	require.NoError(t, adm.AdoptAssignment(ctx, node,
+	claimed, err := adm.AdoptAssignment(ctx, node,
 		req("default", "vllm", "inst-1", types.GPURequest{Count: 2}),
-		[]string{"GPU-1", "GPU-2"}))
+		[]string{"GPU-1", "GPU-2"})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"GPU-1", "GPU-2"}, claimed)
 
 	rows := ledgerOf(t, st).Reservations
 	require.Len(t, rows, 2)
@@ -61,8 +68,11 @@ func TestAdoptAssignment_TakesOnlyTheUncoveredDevices(t *testing.T) {
 	ctx := context.Background()
 	r := req("default", "vllm", "inst-1", types.GPURequest{Count: 2})
 
-	require.NoError(t, adm.AdoptAssignment(ctx, node, r, []string{"GPU-1"}))
-	require.NoError(t, adm.AdoptAssignment(ctx, node, r, []string{"GPU-1", "GPU-2"}))
+	_, err := adm.AdoptAssignment(ctx, node, r, []string{"GPU-1"})
+	require.NoError(t, err)
+	claimed, err := adm.AdoptAssignment(ctx, node, r, []string{"GPU-1", "GPU-2"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"GPU-2"}, claimed, "only the gap is claimed")
 
 	rows := ledgerOf(t, st).Reservations
 	require.Len(t, rows, 2)
@@ -77,7 +87,7 @@ func TestAdoptAssignment_RefusesADeviceTheNodeNoLongerReports(t *testing.T) {
 	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
 	ctx := context.Background()
 
-	err := adm.AdoptAssignment(ctx, node,
+	_, err := adm.AdoptAssignment(ctx, node,
 		req("default", "vllm", "inst-1", types.GPURequest{}), []string{"GPU-9"})
 
 	require.Error(t, err)
@@ -92,7 +102,7 @@ func TestAdoptAssignment_RefusesAMissingDevice(t *testing.T) {
 	node.Devices[0].Missing = true
 	ctx := context.Background()
 
-	err := adm.AdoptAssignment(ctx, node,
+	_, err := adm.AdoptAssignment(ctx, node,
 		req("default", "vllm", "inst-1", types.GPURequest{}), []string{"GPU-1"})
 
 	require.Error(t, err)
@@ -118,7 +128,7 @@ func TestAdoptAssignment_WritesNothingWhenOneDeviceIsRefused(t *testing.T) {
 		free = "GPU-A"
 	}
 
-	err = adm.AdoptAssignment(ctx, node,
+	_, err = adm.AdoptAssignment(ctx, node,
 		req("default", "vllm", "inst-1", types.GPURequest{Count: 2}),
 		[]string{free, taken})
 
@@ -136,9 +146,11 @@ func TestAdoptAssignment_RefusesToCountADeviceTwice(t *testing.T) {
 	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
 	ctx := context.Background()
 
-	require.NoError(t, adm.AdoptAssignment(ctx, node,
+	claimed, err := adm.AdoptAssignment(ctx, node,
 		req("default", "vllm", "inst-1", types.GPURequest{VRAM: "10Gi"}),
-		[]string{"GPU-1", "GPU-1"}))
+		[]string{"GPU-1", "GPU-1"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"GPU-1"}, claimed)
 
 	rows := ledgerOf(t, st).Reservations
 	require.Len(t, rows, 1)

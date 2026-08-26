@@ -45,7 +45,7 @@ func (r *Reconciler) reclaimGPUReservations(ctx context.Context, instances []typ
 
 	held := make(map[string]bool, len(instances))
 	for i := range instances {
-		if holdsAReservation(&instances[i]) {
+		if statusStillHoldsGPU(&instances[i]) {
 			held[instances[i].ID] = true
 		}
 	}
@@ -108,7 +108,7 @@ func (r *Reconciler) adoptOrphanedAssignments(ctx context.Context, instances []t
 		// names the card it used to be on. Re-reserving from that record
 		// would book a card to something that gave it up, permanently:
 		// the release already happened and will not happen again.
-		if len(inst.GPUAssignments) == 0 || inst.NodeID == "" || !holdsAReservation(inst) {
+		if len(inst.GPUAssignments) == 0 || inst.NodeID == "" || !statusStillHoldsGPU(inst) {
 			continue
 		}
 		missing := unreservedDevices(byNode[inst.NodeID], inst)
@@ -119,17 +119,27 @@ func (r *Reconciler) adoptOrphanedAssignments(ctx context.Context, instances []t
 	}
 }
 
-// holdsAReservation reports whether an instance should still own rows in
-// the ledger. It mirrors the release rule exactly, and both sweep
-// directions read it, so they cannot drift into disagreeing about who
-// owns a card.
+// statusStillHoldsGPU reports whether reaching this status has already
+// released the instance's devices. It is a claim about TRANSITIONS, not
+// about the ledger: it cannot know whether a best-effort release
+// actually landed, only whether one was attempted. Both sweep directions
+// read it, so they cannot drift into disagreeing about who owns a card.
 //
 // FailedAt is the discriminator inside Failed, and it is not incidental:
 // the health-restart path sets it and releases, while a create that ran
 // out of retries deliberately leaves it unset because its retry does not
 // re-reserve and needs the row kept. Stalled is that same case with the
 // retries spent.
-func holdsAReservation(inst *types.Instance) bool {
+//
+// A status not named here holds, which is the safe direction — a leak is
+// repaired by the next transition; a card handed to two engines is not.
+// Safe but silent, so every declared status is pinned by name in the
+// tests rather than left to this default.
+//
+// Not the same question as sync.go's scale-slot filter, which keeps
+// Stopped because a stopped instance still occupies its slot. It does not
+// still hold its card.
+func statusStillHoldsGPU(inst *types.Instance) bool {
 	switch inst.Status {
 	case types.InstanceStatusDeleted, types.InstanceStatusStopped:
 		return false
@@ -187,7 +197,7 @@ func (r *Reconciler) adoptInstanceDevices(ctx context.Context, inst *types.Insta
 		return
 	}
 
-	err = r.gpu.AdoptAssignment(ctx, node, gpu.Request{
+	adopted, err := r.gpu.AdoptAssignment(ctx, node, gpu.Request{
 		NodeID:      inst.NodeID,
 		Namespace:   inst.Namespace,
 		ServiceName: inst.ServiceName,
@@ -196,11 +206,16 @@ func (r *Reconciler) adoptInstanceDevices(ctx context.Context, inst *types.Insta
 	}, devices)
 	if err == nil {
 		r.clearGPUFlag(ctx, inst)
+		if len(adopted) == 0 {
+			// The snapshot was stale and the rows already existed. Saying
+			// so would report a repair that did not happen.
+			return
+		}
 		msg := fmt.Sprintf("re-reserved %v for %s: the instance was running on them with no reservation",
-			devices, inst.Name)
+			adopted, inst.Name)
 		r.logger.Info("Adopted GPU assignment with no reservation",
 			log.Str("instance", inst.ID),
-			log.Any("devices", devices))
+			log.Any("devices", adopted))
 		r.emitNode(ctx, inst.NodeID, types.EventLevelInfo, eventGpuReservationAdopted, msg)
 		return
 	}
@@ -234,7 +249,7 @@ func (r *Reconciler) flagInstance(ctx context.Context, inst *types.Instance, rea
 		fresh.UpdatedAt = time.Now()
 		return nil
 	})
-	if err != nil {
+	if err != nil && !store.IsNotFoundError(err) {
 		r.logger.Warn("Could not flag instance",
 			log.Str("instance", inst.ID), log.Err(err))
 	}
@@ -258,7 +273,7 @@ func (r *Reconciler) clearGPUFlag(ctx context.Context, inst *types.Instance) {
 		}
 		return store.ErrSkipUpdate
 	})
-	if err != nil {
+	if err != nil && !store.IsNotFoundError(err) {
 		r.logger.Warn("Could not clear GPU flag",
 			log.Str("instance", inst.ID), log.Err(err))
 	}
