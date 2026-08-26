@@ -11,6 +11,7 @@ import (
 	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator/gpu"
 	"github.com/runestack/rune/pkg/orchestrator/health"
 	instancectl "github.com/runestack/rune/pkg/orchestrator/instance"
 	"github.com/runestack/rune/pkg/orchestrator/scaling"
@@ -251,6 +252,11 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	}
 	if options.NodeID != "" {
 		icOpts = append(icOpts, instancectl.WithNodeID(options.NodeID))
+		// GPU admission needs a node identity to key the ledger by, so it
+		// is wired with it rather than separately: without one there is no
+		// ledger to reserve against, and an admitter that cannot find its
+		// ledger refuses every GPU workload.
+		icOpts = append(icOpts, instancectl.WithGPUAdmitter(gpu.NewAdmitter(options.Store)))
 	}
 	instanceController := instancectl.NewController(
 		options.Store,

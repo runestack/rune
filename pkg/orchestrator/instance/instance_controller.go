@@ -8,6 +8,7 @@ import (
 
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator/gpu"
 	"github.com/runestack/rune/pkg/orchestrator/wiring"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/store"
@@ -80,6 +81,14 @@ type Controller struct {
 	// types.LocalNodeIDFallback.
 	nodeID string
 
+	// gpu, when set, admits and releases device reservations around the
+	// instance lifecycle. Nil disables GPU accounting entirely, which is
+	// what every caller with no GPU workload gets.
+	gpu *gpu.Admitter
+
+	// nodes reads this node's inventory record.
+	nodes *repos.NodeRepo
+
 	// mountRes, when set, lets resolveVolumeMount consult the
 	// agent-side volumes Subsystem (RUNE-069 Slice 4) for the per-node
 	// mount target before falling back to Volume.Handle. The fallback
@@ -150,6 +159,13 @@ func WithNodeID(nodeID string) Option {
 	return func(c *Controller) { c.nodeID = nodeID }
 }
 
+// WithGPUAdmitter wires device admission. Nil leaves GPU accounting off:
+// a service asking for a GPU is created without a reservation, which is
+// what a controller with no node inventory behind it must do.
+func WithGPUAdmitter(a *gpu.Admitter) Option {
+	return func(c *Controller) { c.gpu = a }
+}
+
 // NodeID returns the identity of the node this controller places
 // instances on, or types.LocalNodeIDFallback when none was wired.
 func (c *Controller) NodeID() string {
@@ -172,6 +188,7 @@ func NewController(store store.Store, runnerManager manager.IRunnerManager, logg
 		runnerManager: runnerManager,
 		logger:        logger.WithComponent("instance-controller"),
 		env:           newEnvResolver(secretRepo, configRepo),
+		nodes:         repos.NewNodeRepo(store),
 		lastPublished: map[string]string{},
 	}
 	// The binder reads mountResolver and nodeID through the controller at

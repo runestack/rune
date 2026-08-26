@@ -134,8 +134,21 @@ func (c *Controller) CreateInstance(ctx context.Context, service *types.Service,
 			log.Int64("template_generation", service.Metadata.TemplateGeneration))
 	}
 
+	// Claim device capacity BEFORE the record exists. The reservation is
+	// the admission check, and an instance record that cannot be placed is
+	// a tombstone the operator has to clear for a decision Rune already
+	// made. No-op for a service with no gpu request.
+	if err := c.reserveGPU(ctx, service, instance); err != nil {
+		return nil, err
+	}
+
 	// Save instance to store
 	if err := c.store.Create(ctx, types.ResourceTypeInstance, service.Namespace, instance.ID, instance); err != nil {
+		// The reservation is already written and the record it belongs to
+		// never will be, so hand it back rather than leaving the sweep to
+		// find it a GC tick later — on a full device that tick is the
+		// difference between the retry fitting and not.
+		c.releaseGPU(ctx, instance)
 		return nil, fmt.Errorf("failed to create instance in store: %w", err)
 	}
 
@@ -583,6 +596,13 @@ func (c *Controller) StopInstance(ctx context.Context, instance *types.Instance)
 	instance.StatusMessage = "Stopped by user"
 	instance.UpdatedAt = now
 
+	// Terminal status is the release point, and it is here rather than one
+	// step earlier at the Terminating flip on purpose: the engine holds its
+	// weights in VRAM for the whole drain window, so admitting a
+	// replacement against those bytes is the overcommit the ledger exists
+	// to prevent.
+	c.releaseGPU(ctx, instance)
+
 	c.logger.Info("Instance stopped successfully",
 		log.Str("instance", instance.ID))
 	c.republishServiceByInstance(ctx, instance)
@@ -701,6 +721,20 @@ func (c *Controller) DeleteInstance(ctx context.Context, instance *types.Instanc
 			log.Json("instance", instance.ID))
 
 	}
+
+	// Deleted is terminal and unreachable from the status transitions that
+	// release: a retired or scaled-down replica goes straight here without
+	// ever being Stopped or Failed, and the record is later hard-removed.
+	// Without this the card is held by an instance that no longer exists.
+	//
+	// Unconditional, including when the stop above failed and the container
+	// is still holding its weights — the opposite of the choice StopInstance
+	// makes at its own release. The difference is what happens if we are
+	// wrong: there the overcommit lasts the drain window and the record
+	// survives to release later, here there is no later, and the orphan reap
+	// is what clears the container. A transient overcommit beats a permanent
+	// leak.
+	c.releaseGPU(ctx, instance)
 
 	// Networking data plane (RUNE-063): drop this instance from the
 	// service's published endpoint set and from the local identity
