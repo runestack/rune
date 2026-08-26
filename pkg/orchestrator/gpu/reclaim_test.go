@@ -32,6 +32,27 @@ func TestAdoptAssignment_SecondCallAddsNoSecondRow(t *testing.T) {
 	assert.EqualValues(t, 20<<30, ledgerOf(t, st).RequestedBytes("GPU-1"))
 }
 
+// A tensor-parallel instance holds several cards, and the ledger lost
+// all of them. Adopting one and calling it done leaves the rest reading
+// free while the engine has memory on them.
+func TestAdoptAssignment_TakesEveryDeviceTheInstanceHolds(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48), dev("GPU-2", gi48))
+	ctx := context.Background()
+
+	require.NoError(t, adm.AdoptAssignment(ctx, node,
+		req("default", "vllm", "inst-1", types.GPURequest{Count: 2}),
+		[]string{"GPU-1", "GPU-2"}))
+
+	rows := ledgerOf(t, st).Reservations
+	require.Len(t, rows, 2)
+	assert.ElementsMatch(t, []string{"GPU-1", "GPU-2"},
+		[]string{rows[0].DeviceUUID, rows[1].DeviceUUID})
+	for _, r := range rows {
+		assert.Equal(t, "inst-1", r.InstanceID)
+		assert.True(t, r.WholeDevice)
+	}
+}
+
 // A partly-covered assignment adopts only the gap. Re-taking the device
 // it already holds would count that one twice.
 func TestAdoptAssignment_TakesOnlyTheUncoveredDevices(t *testing.T) {
