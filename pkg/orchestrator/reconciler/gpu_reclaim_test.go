@@ -271,3 +271,56 @@ func TestGarbageCollection_RunsTheGPUSweep(t *testing.T) {
 	require.NoError(t, rec.runGarbageCollection(ctx))
 	assert.Empty(t, rows(t, st))
 }
+
+// The ghost-device state: the instance is running on a card the node has
+// stopped reporting. There is nothing to re-reserve against, and the
+// instance still must not be killed for it.
+func TestAdopt_FlagsAnInstanceRunningOnAVanishedDevice(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	svc := &types.Service{
+		Name: "vllm", Namespace: "default", Scale: 1,
+		Resources: types.Resources{GPU: &types.GPURequest{}},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+
+	inst := types.Instance{
+		ID: "live-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+		GPUAssignments: []string{"GPU-GONE"},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst})
+
+	assert.Empty(t, rows(t, st), "capacity is never claimed against hardware the node does not report")
+	var stored types.Instance
+	require.NoError(t, st.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &stored))
+	assert.Equal(t, types.InstanceStatusRunning, stored.Status)
+	assert.Equal(t, types.GPUReasonDeviceMissing, stored.StatusReason)
+}
+
+// A reclaimed card is the operator's only notice that something held one
+// it should not have. Node-scoped, because the ledger is.
+func TestReclaim_EmitsANodeScopedEvent(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	eventLog := &recordingEventLog{}
+	rec.SetEventLog(eventLog)
+	writeRow(t, st, types.GPURes{
+		DeviceUUID: "GPU-1", Namespace: "default", ServiceName: "vllm",
+		InstanceID: "ghost", WholeDevice: true,
+		Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
+	})
+
+	rec.reclaimGPUReservations(ctx, nil)
+
+	eventLog.mu.Lock()
+	defer eventLog.mu.Unlock()
+	require.Len(t, eventLog.events, 1)
+	got := eventLog.events[0]
+	assert.Equal(t, eventGpuReservationReclaimed, got.Reason)
+	assert.Equal(t, "Node", got.Kind)
+	assert.Equal(t, sweepNodeID, got.Name)
+	assert.Empty(t, got.Namespace, "the ledger is cluster-scoped, like the node record")
+	assert.Contains(t, got.Message, "GPU-1")
+	assert.Contains(t, got.Message, "default/vllm")
+}
