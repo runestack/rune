@@ -478,7 +478,10 @@ func TestReclaim_EmitsANodeScopedEvent(t *testing.T) {
 // instance can currently be, and the day one can it would arrive here
 // holding its card forever with a green suite.
 //
-// So: adding an InstanceStatus without deciding this fails the build.
+// The list comes from types.AllInstanceStatuses, which sits beside the
+// constants: a status added there without a ruling here fails this test,
+// and a status added without touching that list is an omission visible in
+// the same file the author is already editing.
 func TestStatusStillHoldsGPU_CoversEveryDeclaredStatus(t *testing.T) {
 	failedAt := time.Now()
 	expected := map[types.InstanceStatus]bool{
@@ -500,14 +503,7 @@ func TestStatusStillHoldsGPU_CoversEveryDeclaredStatus(t *testing.T) {
 		types.InstanceStatusFailed: true,
 	}
 
-	declared := []types.InstanceStatus{
-		types.InstanceStatusPending, types.InstanceStatusRunning,
-		types.InstanceStatusStopped, types.InstanceStatusFailed,
-		types.InstanceStatusDeleted, types.InstanceStatusTerminating,
-		types.InstanceStatusStalled, types.InstanceStatusCreated,
-		types.InstanceStatusStarting, types.InstanceStatusExited,
-		types.InstanceStatusUnknown,
-	}
+	declared := types.AllInstanceStatuses()
 	require.Len(t, expected, len(declared),
 		"a status was added or removed; decide whether it still holds its card")
 

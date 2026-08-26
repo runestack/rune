@@ -3,6 +3,7 @@ package gpu
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -123,11 +124,25 @@ func (a *Admitter) AdoptAssignment(ctx context.Context, node *types.Node, req Re
 				}
 			}
 			if !deviceAccepts(&ledger, dev, req.GPU, need) {
+				// Two different refusals wear the same reason. A card with
+				// other workloads on it is a packing problem the operator
+				// can act on; an empty one that still will not fit means
+				// the request outgrew the card, and telling them to free
+				// VRAM there would send them after memory nobody is using.
+				if who := holdersOf(&ledger, uuid); who != "" {
+					return &AdmissionError{
+						Reason: types.GPUReasonOverCommitted,
+						Message: fmt.Sprintf("%s/%s is still running on %s, but that card is now held by %s — "+
+							"it keeps serving; free VRAM on that card, or `rune restart %s` to place it elsewhere",
+							req.Namespace, req.ServiceName, uuid, who, req.ServiceName),
+					}
+				}
 				return &AdmissionError{
 					Reason: types.GPUReasonOverCommitted,
-					Message: fmt.Sprintf("%s/%s is still running on %s, but that card is now fully booked by %s — "+
-						"it keeps serving; free VRAM on that card, or `rune restart %s` to place it elsewhere",
-						req.Namespace, req.ServiceName, uuid, holdersOf(&ledger, uuid, req.InstanceID), req.ServiceName),
+					Message: fmt.Sprintf("%s/%s is still running on %s, but its request no longer fits there: "+
+						"%s asked for, %s usable of %s — it keeps serving, and nothing else is on the card to free",
+						req.Namespace, req.ServiceName, uuid,
+						humanBytes(need), humanBytes(usable(&ledger, dev, 1)), humanBytes(dev.VRAMBytes)),
 				}
 			}
 		}
@@ -169,22 +184,43 @@ func unheldBy(l *types.NodeDeviceLedger, instanceID string, devices []string) []
 //
 // The message has to carry this because nothing renders a ledger: an
 // operator told their card is full has no command that shows what is on
-// it. Excludes the instance being adopted, which is the one holder they
-// already know about.
-func holdersOf(l *types.NodeDeviceLedger, uuid, exceptInstance string) string {
-	var who []string
+// it. That makes this string the whole diagnosis surface, so it counts
+// repeats rather than deduping them — two instances of one service at
+// 20Gi are 40Gi, and rendering them as one 20Gi row leaves an operator
+// unable to make the arithmetic add up.
+//
+// Empty means nothing else is on the card, which is a different refusal
+// and gets a different sentence from the caller.
+func holdersOf(l *types.NodeDeviceLedger, uuid string) string {
+	type holder struct {
+		label string
+		n     int
+	}
+	var order []string
+	seen := map[string]*holder{}
 	for _, r := range l.Reservations {
-		if r.DeviceUUID != uuid || r.InstanceID == exceptInstance {
+		if r.DeviceUUID != uuid {
 			continue
 		}
-		if r.WholeDevice {
-			who = append(who, fmt.Sprintf("%s/%s (whole card)", r.Namespace, r.ServiceName))
+		label := fmt.Sprintf("%s/%s (whole card)", r.Namespace, r.ServiceName)
+		if !r.WholeDevice {
+			label = fmt.Sprintf("%s/%s %s", r.Namespace, r.ServiceName, humanBytes(r.VRAMBytes))
+		}
+		if h, ok := seen[label]; ok {
+			h.n++
 			continue
 		}
-		who = append(who, fmt.Sprintf("%s/%s %s", r.Namespace, r.ServiceName, humanBytes(r.VRAMBytes)))
+		seen[label] = &holder{label: label, n: 1}
+		order = append(order, label)
 	}
-	if len(who) == 0 {
-		return "its own reservations"
+	sort.Strings(order)
+	who := make([]string, 0, len(order))
+	for _, label := range order {
+		if h := seen[label]; h.n > 1 {
+			who = append(who, fmt.Sprintf("%s ×%d", label, h.n))
+			continue
+		}
+		who = append(who, label)
 	}
-	return strings.Join(dedupeSorted(who), ", ")
+	return strings.Join(who, ", ")
 }

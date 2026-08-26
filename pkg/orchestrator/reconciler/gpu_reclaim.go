@@ -157,8 +157,8 @@ func statusStillHoldsGPU(inst *types.Instance) bool {
 // Deliberately NOT the same question as statusStillHoldsGPU, whose
 // default is "still holds". That default is the safe one for reclaim,
 // where being wrong leaks a card the next transition frees. Writing a
-// claim is the opposite: Exited and Unknown read as dead everywhere else
-// (classifyRecorded calls both a failed state) and no transition out of
+// claim is the opposite: Exited and Unknown are treated as a failed state
+// wherever else the tree classifies an instance, and no transition out of
 // them releases, so a claim written for one is permanent and false.
 func canAdoptDevices(inst *types.Instance) bool {
 	if !statusStillHoldsGPU(inst) {

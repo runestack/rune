@@ -196,3 +196,44 @@ func TestReclaimOrphans_AbsentLedgerIsNotCreated(t *testing.T) {
 	err = st.Get(ctx, types.ResourceTypeNodeLedger, "", "node-never-seen", &ledger)
 	assert.Error(t, err, "reclaiming against an unknown node must not write a ledger for it")
 }
+
+// The refusal message is the only place a ledger is rendered anywhere in
+// Rune, so an operator has to be able to make its arithmetic add up. Two
+// instances of one service at 20Gi are 40Gi; showing one 20Gi row as the
+// reason for refusing 20Gi on a 48Gi card is unexplainable.
+func TestAdoptAssignment_RefusalCountsRepeatedHolders(t *testing.T) {
+	adm, node, st := newAdmitter(t, dev("GPU-1", gi48))
+	ctx := context.Background()
+	for _, id := range []string{"tei-1", "tei-2"} {
+		_, err := adm.Reserve(ctx, node, req("other", "tei", id, types.GPURequest{VRAM: "20Gi"}))
+		require.NoError(t, err)
+	}
+	require.Len(t, ledgerOf(t, st).Reservations, 2)
+
+	_, err := adm.AdoptAssignment(ctx, node,
+		req("default", "vllm", "inst-1", types.GPURequest{VRAM: "20Gi"}),
+		[]string{"GPU-1"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "other/tei 20Gi ×2",
+		"both holders have to appear, or the numbers do not add up")
+}
+
+// A card nobody is on can still refuse: the system reserve holds back a
+// floor plus a per-instance CUDA context. Telling the operator to free
+// VRAM there sends them after memory nobody is using.
+func TestAdoptAssignment_RefusalOnAnEmptyCardDoesNotBlameHolders(t *testing.T) {
+	// 2Gi card, and the reserve takes 512Mi + 400Mi of it.
+	adm, node, _ := newAdmitter(t, dev("GPU-1", 2<<30))
+	ctx := context.Background()
+
+	_, err := adm.AdoptAssignment(ctx, node,
+		req("default", "vllm", "inst-1", types.GPURequest{VRAM: "2Gi"}),
+		[]string{"GPU-1"})
+
+	require.Error(t, err)
+	assert.Equal(t, types.GPUReasonOverCommitted, gpu.ReasonOf(err))
+	assert.Contains(t, err.Error(), "nothing else is on the card to free")
+	assert.NotContains(t, err.Error(), "held by",
+		"there is no holder to name")
+}

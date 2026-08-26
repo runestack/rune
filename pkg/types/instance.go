@@ -382,6 +382,24 @@ const (
 	InstanceStatusUnknown  InstanceStatus = "Unknown"
 )
 
+// AllInstanceStatuses is every declared status, for exhaustiveness checks.
+//
+// Lives here rather than in the tests that iterate it: a status added
+// without a matching entry is an omission the reader has to notice, and
+// they will only notice it in the file they are already editing. The GPU
+// reclaim sweep decides whether an instance still owns its devices from
+// its status alone, so a status nobody ruled on defaults silently.
+func AllInstanceStatuses() []InstanceStatus {
+	return []InstanceStatus{
+		InstanceStatusPending, InstanceStatusRunning,
+		InstanceStatusStopped, InstanceStatusFailed,
+		InstanceStatusDeleted, InstanceStatusTerminating,
+		InstanceStatusStalled, InstanceStatusCreated,
+		InstanceStatusStarting, InstanceStatusExited,
+		InstanceStatusUnknown,
+	}
+}
+
 // InstanceStatusInfo contains information about an instance's status
 type InstanceStatusInfo struct {
 	Status        InstanceStatus
