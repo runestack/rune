@@ -50,6 +50,16 @@ type Instance struct {
 	// ID of the node running this instance
 	NodeID string `json:"nodeId" yaml:"nodeId"`
 
+	// GPUAssignments are the device UUIDs this instance holds, in
+	// assignment order. UUIDs rather than indices: the driver renumbers
+	// indices across reboots, and both runners take UUIDs directly.
+	//
+	// A DENORMALISED CACHE for the runner, not the source of truth. The
+	// node's device ledger is authoritative — this copy exists so the
+	// runner can scope the container without reading it. When the two
+	// disagree, the ledger wins and the reclaim sweep repairs this.
+	GPUAssignments []string `json:"gpuAssignments,omitempty" yaml:"gpuAssignments,omitempty"`
+
 	// IP address assigned to this instance
 	IP string `json:"ip" yaml:"ip"`
 

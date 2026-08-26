@@ -8,6 +8,7 @@ import (
 
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator/gpu"
 	"github.com/runestack/rune/pkg/orchestrator/wiring"
 	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/store"
@@ -80,6 +81,15 @@ type Controller struct {
 	// types.LocalNodeIDFallback.
 	nodeID string
 
+	// gpu, when set, admits and releases device reservations around the
+	// instance lifecycle. Nil disables GPU accounting entirely, which is
+	// what every caller with no GPU workload gets.
+	gpu *gpu.Admitter
+
+	// nodes reads this node's inventory record; derived lazily from the
+	// store so tests that construct a bare controller need not wire it.
+	nodes *repos.NodeRepo
+
 	// mountRes, when set, lets resolveVolumeMount consult the
 	// agent-side volumes Subsystem (RUNE-069 Slice 4) for the per-node
 	// mount target before falling back to Volume.Handle. The fallback
@@ -148,6 +158,14 @@ func WithEventLog(eventLog events.EventLog) Option {
 // CreateInstance on types.LocalNodeIDFallback.
 func WithNodeID(nodeID string) Option {
 	return func(c *Controller) { c.nodeID = nodeID }
+}
+
+// WithGPUAdmitter wires device admission. Nil leaves GPU accounting off,
+// so a service asking for a GPU is created without a reservation — which
+// is what in-process tests and embedded callers want, and what every
+// installation had before this existed.
+func WithGPUAdmitter(a *gpu.Admitter) Option {
+	return func(c *Controller) { c.gpu = a }
 }
 
 // NodeID returns the identity of the node this controller places

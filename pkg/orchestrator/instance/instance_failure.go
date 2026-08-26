@@ -61,6 +61,12 @@ func (c *Controller) markInstanceFailedInPlace(ctx context.Context, instance *ty
 	instance.FailedAt = &now
 	instance.FailureReason = string(restartReason)
 	instance.UpdatedAt = now
+	// Release on the terminal status, NOT when the record goes away. This
+	// record is deliberately kept as its own tombstone for up to an hour;
+	// waiting for the deletion would let a crash-looping engine hold its
+	// VRAM for that hour and block the replacement that would fix it.
+	c.releaseGPU(ctx, instance)
+
 	c.logger.Info("Marked instance Failed (tombstoned in-place)",
 		log.Str("instance", instance.ID),
 		log.Str("container_id", instance.ContainerID),
