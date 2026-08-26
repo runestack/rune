@@ -259,6 +259,10 @@ func (c *Controller) emit(level types.EventLevel, instance *types.Instance, reas
 // actually changes. Every reconciler status write should go through
 // here so `rune describe` always sees a populated reason and an
 // accurate "<status> for <duration>". Pass reason="" for Running.
+//
+// The single writer for status TRANSITIONS, not the single writer of
+// StatusReason: the GPU reclaim sweep annotates a Running instance
+// without moving its status, and goes around this on purpose.
 func applyInstanceStatus(instance *types.Instance, status types.InstanceStatus, reason, message string) {
 	now := time.Now()
 	if instance.Status != status || instance.LastTransitionAt == nil {

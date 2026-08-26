@@ -76,7 +76,13 @@ type Instance struct {
 	// Mirrors Service.StatusReason / Volume.StatusReason. Set by the
 	// reconciler on every status transition — including non-terminal
 	// states such as Pending while a precondition (volume, secret,
-	// image) is still unmet. Empty only when Status is Running.
+	// image) is still unmet.
+	//
+	// Usually empty when Status is Running, but not guaranteed: the GPU
+	// reclaim sweep sets it on a Running instance to report that its
+	// devices could not be re-reserved, deliberately without moving the
+	// status — the instance is serving and must not be stopped over
+	// bookkeeping. That write does NOT go through applyInstanceStatus.
 	// Vocabulary is the slug set produced by classifyCreateError
 	// (e.g. "VolumeNotReady", "StorageClassMissing", "SecretNotFound").
 	// On a Failed/Stalled instance this converges with FailureReason.

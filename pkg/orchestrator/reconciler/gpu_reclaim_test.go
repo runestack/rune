@@ -511,11 +511,38 @@ func TestStatusStillHoldsGPU_CoversEveryDeclaredStatus(t *testing.T) {
 	require.Len(t, expected, len(declared),
 		"a status was added or removed; decide whether it still holds its card")
 
+	// Adopt asks a different question and must never be looser: it writes
+	// a claim, where reclaim only declines to free one.
+	adoptable := map[types.InstanceStatus]bool{
+		types.InstanceStatusPending:     true,
+		types.InstanceStatusRunning:     true,
+		types.InstanceStatusStalled:     true,
+		types.InstanceStatusCreated:     true,
+		types.InstanceStatusStarting:    true,
+		types.InstanceStatusTerminating: true,
+		types.InstanceStatusFailed:      true, // FailedAt nil; the tombstone is asserted below
+		types.InstanceStatusExited:      false,
+		types.InstanceStatusUnknown:     false,
+		types.InstanceStatusStopped:     false,
+		types.InstanceStatusDeleted:     false,
+	}
+	require.Len(t, adoptable, len(declared),
+		"a status was added or removed; decide whether its assignment may be adopted")
+
 	for _, status := range declared {
 		want, named := expected[status]
 		require.True(t, named, "undecided status %q", status)
 		assert.Equal(t, want, statusStillHoldsGPU(&types.Instance{Status: status}),
 			"status %q", status)
+
+		wantAdopt, named := adoptable[status]
+		require.True(t, named, "undecided adopt for status %q", status)
+		assert.Equal(t, wantAdopt, canAdoptDevices(&types.Instance{Status: status}),
+			"adopt for status %q", status)
+		if !want {
+			assert.False(t, wantAdopt,
+				"a status that has released cannot be adopted for: %q", status)
+		}
 	}
 
 	// Terminating in particular: the container is live for the whole
@@ -528,4 +555,131 @@ func TestStatusStillHoldsGPU_CoversEveryDeclaredStatus(t *testing.T) {
 		Status: types.InstanceStatusFailed, FailedAt: &failedAt}))
 	assert.True(t, statusStillHoldsGPU(&types.Instance{
 		Status: types.InstanceStatusFailed}))
+}
+
+// Exited and Unknown read as dead everywhere else in the tree, and no
+// transition out of them releases. Adopting one books a card to a dead
+// container with nothing that will ever free it — the failure the shared
+// predicate's "safe" default causes when the direction is reversed.
+func TestAdopt_RefusesStatusesNothingWillEverRelease(t *testing.T) {
+	for _, status := range []types.InstanceStatus{
+		types.InstanceStatusExited,
+		types.InstanceStatusUnknown,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			ctx, rec, st := sweepFixture(t)
+			svc := &types.Service{
+				Name: "vllm", Namespace: "default", Scale: 1,
+				Resources: types.Resources{GPU: &types.GPURequest{}},
+			}
+			require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+			inst := types.Instance{
+				ID: "dead-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+				NodeID: sweepNodeID, Status: status, GPUAssignments: []string{"GPU-1"},
+			}
+			require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+			rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+			assert.Empty(t, rows(t, st), "nothing releases from %s, so nothing may claim for it", status)
+		})
+	}
+}
+
+// The startup window, where the agent has not reported devices yet. It is
+// retryable and not the instance's fault, so it must not leave a note on
+// a Running instance — the tick that succeeds would not think to clear a
+// reason it did not write.
+func TestAdopt_DoesNotFlagTheUnprobedWindow(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	// A node record with no probe stamp: runed up, agent not there yet.
+	require.NoError(t, repos.NewNodeRepo(st).Upsert(ctx, &types.Node{
+		ID: sweepNodeID, Address: "127.0.0.1",
+	}))
+	svc := &types.Service{
+		Name: "vllm", Namespace: "default", Scale: 1,
+		Resources: types.Resources{GPU: &types.GPURequest{}},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+	inst := types.Instance{
+		ID: "live-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+		GPUAssignments: []string{"GPU-1"},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+
+	var stored types.Instance
+	require.NoError(t, st.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &stored))
+	assert.Empty(t, stored.StatusReason, "a retryable hold is not news about the instance")
+}
+
+// A driver that stopped answering is not a card that left. The probe
+// stamps its timestamp even on failure and writes an empty device list,
+// so without this the sweep blames the hardware for a software fault.
+func TestAdopt_DoesNotBlameTheCardForAFailedProbe(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	probed := time.Now()
+	require.NoError(t, repos.NewNodeRepo(st).Upsert(ctx, &types.Node{
+		ID: sweepNodeID, Address: "127.0.0.1", DevicesProbedAt: &probed,
+		Devices: nil, DeviceProbeError: "nvidia-smi: command not found",
+	}))
+	svc := &types.Service{
+		Name: "vllm", Namespace: "default", Scale: 1,
+		Resources: types.Resources{GPU: &types.GPURequest{}},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+	inst := types.Instance{
+		ID: "live-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+		GPUAssignments: []string{"GPU-1"},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+
+	var stored types.Instance
+	require.NoError(t, st.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &stored))
+	assert.Empty(t, stored.StatusReason,
+		"an inventory the node could not read is not evidence that a card is gone")
+}
+
+// A standing refusal must not append a node event every tick. The node's
+// event window is finite, and two affected instances alternate messages
+// so nothing folds — the GPU warnings would evict everything else.
+func TestAdopt_StandingRefusalEmitsOneEvent(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	eventLog := &recordingEventLog{}
+	rec.SetEventLog(eventLog)
+	svc := &types.Service{
+		Name: "vllm", Namespace: "default", Scale: 1,
+		Resources: types.Resources{GPU: &types.GPURequest{}},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+	writeRow(t, st, types.GPURes{
+		DeviceUUID: "GPU-1", Namespace: "default", ServiceName: "other",
+		InstanceID: "other-1", WholeDevice: true,
+		Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
+	})
+	other := types.Instance{
+		ID: "other-1", Namespace: "default", ServiceName: "other",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+	}
+	inst := types.Instance{
+		ID: "live-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+		GPUAssignments: []string{"GPU-1"},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+	for i := 0; i < 4; i++ {
+		rec.reclaimGPUReservations(ctx, []types.Instance{other, inst}, time.Now())
+	}
+
+	eventLog.mu.Lock()
+	defer eventLog.mu.Unlock()
+	require.Len(t, eventLog.events, 1, "the refusal is news once, not every minute")
+	assert.Equal(t, types.GPUReasonOverCommitted, eventLog.events[0].Reason)
+	assert.Contains(t, eventLog.events[0].Message, "default/other",
+		"the operator has no command that renders a ledger, so the message names the holder")
 }

@@ -3,6 +3,7 @@ package gpu
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/runestack/rune/pkg/store"
@@ -116,15 +117,17 @@ func (a *Admitter) AdoptAssignment(ctx context.Context, node *types.Node, req Re
 				// against hardware the node no longer reports.
 				return &AdmissionError{
 					Reason: types.GPUReasonDeviceMissing,
-					Message: fmt.Sprintf("%s/%s is running on %s, which this node no longer reports",
+					Message: fmt.Sprintf("%s/%s is still running on %s, but this node no longer reports that card — "+
+						"it keeps serving; devices are probed once per runed start, so restart runed if the card is back",
 						req.Namespace, req.ServiceName, uuid),
 				}
 			}
 			if !deviceAccepts(&ledger, dev, req.GPU, need) {
 				return &AdmissionError{
 					Reason: types.GPUReasonOverCommitted,
-					Message: fmt.Sprintf("%s/%s is running on %s, which no longer has room for it",
-						req.Namespace, req.ServiceName, uuid),
+					Message: fmt.Sprintf("%s/%s is still running on %s, but that card is now fully booked by %s — "+
+						"it keeps serving; free VRAM on that card, or `rune restart %s` to place it elsewhere",
+						req.Namespace, req.ServiceName, uuid, holdersOf(&ledger, uuid, req.InstanceID), req.ServiceName),
 				}
 			}
 		}
@@ -160,4 +163,28 @@ func unheldBy(l *types.NodeDeviceLedger, instanceID string, devices []string) []
 		}
 	}
 	return out
+}
+
+// holdersOf names who else is on a device, for a refusal message.
+//
+// The message has to carry this because nothing renders a ledger: an
+// operator told their card is full has no command that shows what is on
+// it. Excludes the instance being adopted, which is the one holder they
+// already know about.
+func holdersOf(l *types.NodeDeviceLedger, uuid, exceptInstance string) string {
+	var who []string
+	for _, r := range l.Reservations {
+		if r.DeviceUUID != uuid || r.InstanceID == exceptInstance {
+			continue
+		}
+		if r.WholeDevice {
+			who = append(who, fmt.Sprintf("%s/%s (whole card)", r.Namespace, r.ServiceName))
+			continue
+		}
+		who = append(who, fmt.Sprintf("%s/%s %s", r.Namespace, r.ServiceName, humanBytes(r.VRAMBytes)))
+	}
+	if len(who) == 0 {
+		return "its own reservations"
+	}
+	return strings.Join(dedupeSorted(who), ", ")
 }

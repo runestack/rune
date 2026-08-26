@@ -5,6 +5,7 @@ package reconciler
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
@@ -69,7 +70,7 @@ func (r *Reconciler) reclaimGPUReservations(ctx context.Context, instances []typ
 			continue
 		}
 		for _, row := range dropped {
-			msg := fmt.Sprintf("reclaimed %s from %s/%s: the instance holding it no longer exists",
+			msg := fmt.Sprintf("freed %s: %s/%s no longer holds it",
 				row.DeviceUUID, row.Namespace, row.ServiceName)
 			r.logger.Info("Reclaimed orphaned GPU reservation",
 				log.Str("node", ledger.NodeID),
@@ -108,7 +109,7 @@ func (r *Reconciler) adoptOrphanedAssignments(ctx context.Context, instances []t
 		// names the card it used to be on. Re-reserving from that record
 		// would book a card to something that gave it up, permanently:
 		// the release already happened and will not happen again.
-		if len(inst.GPUAssignments) == 0 || inst.NodeID == "" || !statusStillHoldsGPU(inst) {
+		if len(inst.GPUAssignments) == 0 || inst.NodeID == "" || !canAdoptDevices(inst) {
 			continue
 		}
 		missing := unreservedDevices(byNode[inst.NodeID], inst)
@@ -150,6 +151,26 @@ func statusStillHoldsGPU(inst *types.Instance) bool {
 	}
 }
 
+// canAdoptDevices reports whether an instance's assignment may be written
+// back into the ledger.
+//
+// Deliberately NOT the same question as statusStillHoldsGPU, whose
+// default is "still holds". That default is the safe one for reclaim,
+// where being wrong leaks a card the next transition frees. Writing a
+// claim is the opposite: Exited and Unknown read as dead everywhere else
+// (classifyRecorded calls both a failed state) and no transition out of
+// them releases, so a claim written for one is permanent and false.
+func canAdoptDevices(inst *types.Instance) bool {
+	if !statusStillHoldsGPU(inst) {
+		return false
+	}
+	switch inst.Status {
+	case types.InstanceStatusExited, types.InstanceStatusUnknown:
+		return false
+	}
+	return true
+}
+
 // unreservedDevices are the instance's assigned devices that its own
 // reservations do not cover. Matching is by instance ID as well as
 // device: a row for the same card held by somebody else is not this
@@ -178,22 +199,39 @@ func (r *Reconciler) adoptInstanceDevices(ctx context.Context, inst *types.Insta
 	if err := r.store.Get(ctx, types.ResourceTypeService, inst.Namespace, inst.ServiceName, &service); err != nil {
 		// No service means this instance should not be running either;
 		// the orphan reap owns that, and guessing its request shape here
-		// would reserve the wrong amount.
-		r.logger.Debug("GPU adopt: skipping instance whose service is gone",
-			log.Str("instance", inst.ID), log.Err(err))
+		// would reserve the wrong amount. Loud rather than silent: until
+		// the reap runs, those devices read free while something holds
+		// memory on them.
+		r.logger.Warn("GPU: instance holds devices but its service is gone",
+			log.Str("instance", inst.ID),
+			log.Any("devices", devices), log.Err(err))
 		return
 	}
 	if service.Resources.GPU == nil {
-		// The assignment outlived the request that produced it — the spec
-		// dropped its gpu block while the instance kept running. Nothing
-		// to re-reserve; the next rollout replaces it.
+		// The spec dropped its gpu block while the instance kept running,
+		// so there is no request to re-reserve against. Said out loud
+		// because the resulting state is an invisible overcommit: those
+		// devices read free until the next rollout replaces the instance.
+		r.logger.Warn("GPU: instance holds devices its service no longer requests",
+			log.Str("instance", inst.ID),
+			log.Str("service", inst.Namespace+"/"+inst.ServiceName),
+			log.Any("devices", devices))
 		return
 	}
 
 	node, err := r.nodes.Get(ctx, inst.NodeID)
 	if err != nil {
-		r.logger.Warn("GPU adopt: could not read node inventory",
+		r.logger.Debug("GPU adopt: could not read node inventory",
 			log.Str("node", inst.NodeID), log.Err(err))
+		return
+	}
+	if node.DeviceProbeError != "" {
+		// The probe stamps DevicesProbedAt even when it fails, and writes
+		// an empty device list — so admission would refuse every device as
+		// missing and blame the hardware for a driver fault. An inventory
+		// this node could not read is not evidence that a card is gone.
+		r.logger.Debug("GPU adopt: skipping a node whose device probe failed",
+			log.Str("node", inst.NodeID), log.Str("error", node.DeviceProbeError))
 		return
 	}
 
@@ -211,8 +249,8 @@ func (r *Reconciler) adoptInstanceDevices(ctx context.Context, inst *types.Insta
 			// so would report a repair that did not happen.
 			return
 		}
-		msg := fmt.Sprintf("re-reserved %v for %s: the instance was running on them with no reservation",
-			adopted, inst.Name)
+		msg := fmt.Sprintf("re-reserved %s for %s/%s: it was running on them with nothing recorded",
+			strings.Join(adopted, ", "), inst.Namespace, inst.ServiceName)
 		r.logger.Info("Adopted GPU assignment with no reservation",
 			log.Str("instance", inst.ID),
 			log.Any("devices", adopted))
@@ -221,15 +259,20 @@ func (r *Reconciler) adoptInstanceDevices(ctx context.Context, inst *types.Insta
 	}
 
 	reason := gpu.ReasonOf(err)
-	if reason == "" {
-		// A store failure rather than a refusal — nothing to flag on the
-		// instance, and the next tick tries again.
-		r.logger.Error("GPU adopt failed",
+	if reason == "" || reason == types.GPUReasonInventoryUnknown {
+		// Either a store failure or the startup window before the agent
+		// has reported devices. Neither is the instance's problem, and
+		// flagging a retryable state leaves a note on a Running instance
+		// that the tick which succeeds will not think to clear.
+		r.logger.Debug("GPU adopt deferred",
 			log.Str("instance", inst.ID), log.Err(err))
 		return
 	}
-	r.flagInstance(ctx, inst, reason, err.Error())
-	r.emitNode(ctx, inst.NodeID, types.EventLevelWarn, reason, err.Error())
+	// Event only when the note actually changed. A refusal that stands
+	// repeats every tick, and a node's event window is fifty entries.
+	if r.flagInstance(ctx, inst, reason, err.Error()) {
+		r.emitNode(ctx, inst.NodeID, types.EventLevelWarn, reason, err.Error())
+	}
 }
 
 // flagInstance records why an instance's devices could not be re-reserved
@@ -238,21 +281,26 @@ func (r *Reconciler) adoptInstanceDevices(ctx context.Context, inst *types.Insta
 //
 // Writes only on a change. A refusal that stands repeats every tick, and
 // every write appends an unpruned version-history row.
-func (r *Reconciler) flagInstance(ctx context.Context, inst *types.Instance, reason, message string) {
+func (r *Reconciler) flagInstance(ctx context.Context, inst *types.Instance, reason, message string) bool {
+	wrote := false
 	var fresh types.Instance
 	err := r.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
+		wrote = false
 		if fresh.StatusReason == reason && fresh.StatusMessage == message {
 			return store.ErrSkipUpdate
 		}
 		fresh.StatusReason = reason
 		fresh.StatusMessage = message
 		fresh.UpdatedAt = time.Now()
+		wrote = true
 		return nil
 	})
 	if err != nil && !store.IsNotFoundError(err) {
 		r.logger.Warn("Could not flag instance",
 			log.Str("instance", inst.ID), log.Err(err))
+		return false
 	}
+	return wrote && err == nil
 }
 
 // clearGPUFlag removes a refusal note once the adoption it described has
@@ -265,7 +313,8 @@ func (r *Reconciler) clearGPUFlag(ctx context.Context, inst *types.Instance) {
 	var fresh types.Instance
 	err := r.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
 		switch fresh.StatusReason {
-		case types.GPUReasonOverCommitted, types.GPUReasonDeviceMissing:
+		case types.GPUReasonOverCommitted, types.GPUReasonDeviceMissing,
+			types.GPUReasonNoCapacity, types.GPUReasonInventoryUnknown:
 			fresh.StatusReason = ""
 			fresh.StatusMessage = ""
 			fresh.UpdatedAt = time.Now()
