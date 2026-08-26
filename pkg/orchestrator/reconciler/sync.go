@@ -134,6 +134,10 @@ func (r *Reconciler) getServiceInstances(ctx context.Context, service *types.Ser
 		// tombstones — they're transient Failed states from create/start
 		// errors that the reconciler still needs to act on (replace,
 		// surface in service status, etc.).
+		//
+		// Nearly statusStillHoldsGPU's list and deliberately not it: a
+		// stopped instance still occupies its scale slot, but it has
+		// already given up its card.
 		if instance.Status == types.InstanceStatusDeleted {
 			continue
 		}

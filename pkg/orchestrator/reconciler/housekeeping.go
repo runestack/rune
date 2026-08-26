@@ -92,6 +92,10 @@ func (r *Reconciler) cleanUpOrphanedInstances(ctx context.Context, orphanedInsta
 func (r *Reconciler) runGarbageCollection(ctx context.Context) error {
 	r.logger.Debug("Running garbage collection")
 
+	// Stamped before the read so the GPU sweep can date its grace window
+	// from the snapshot rather than from whenever it gets to run.
+	snapshotAt := time.Now()
+
 	// Get all instances
 	var instances []types.Instance
 	err := r.store.ListAll(ctx, types.ResourceTypeInstance, &instances)
@@ -104,6 +108,12 @@ func (r *Reconciler) runGarbageCollection(ctx context.Context) error {
 	// promoted to Deleted so the existing deleted-instance retention can
 	// keep cleaning them out of the store.
 	r.gcFailedInstances(ctx, instances)
+
+	// Before the deleted-instance pass below removes records: the sweep
+	// decides what is orphaned by whether a record exists, so a row whose
+	// instance is hard-deleted in the same tick must be judged against the
+	// record that is still there.
+	r.reclaimGPUReservations(ctx, instances, snapshotAt)
 
 	// Filter for deleted instances
 	for _, instance := range instances {

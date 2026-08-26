@@ -9,10 +9,12 @@ import (
 
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/orchestrator/gpu"
 	"github.com/runestack/rune/pkg/orchestrator/health"
 	instancectl "github.com/runestack/rune/pkg/orchestrator/instance"
 	"github.com/runestack/rune/pkg/orchestrator/queue"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -59,7 +61,17 @@ type Reconciler struct {
 	// lifecycle events go here — they are the only after-the-fact record of
 	// what a rolling update did, since Service.Update is cleared on
 	// completion (RUNE-042 §8.2).
-	events            events.EventLog
+	events events.EventLog
+
+	// gpu, when set, reconciles the node device ledgers on the GC tick.
+	// Nil leaves the sweep off, and with it every ledger read.
+	gpu *gpu.Admitter
+
+	// ledgers and nodes back the GPU sweep. Built up front rather than on
+	// first use: the GC tick and the reconcile workers share this struct.
+	ledgers *repos.NodeLedgerRepo
+	nodes   *repos.NodeRepo
+
 	reconcileInterval time.Duration
 	queue             *queue.Queue
 	mu                sync.Mutex
@@ -82,6 +94,8 @@ func New(
 		instanceController: instanceController,
 		healthController:   healthController,
 		logger:             logger.WithComponent("reconciler"),
+		ledgers:            repos.NewNodeLedgerRepo(store),
+		nodes:              repos.NewNodeRepo(store),
 		reconcileInterval:  30 * time.Second,
 		queue:              queue.New("service-reconcile", queue.DefaultRateLimiter()),
 		mu:                 sync.Mutex{},

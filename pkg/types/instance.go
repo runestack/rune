@@ -56,8 +56,13 @@ type Instance struct {
 	//
 	// A DENORMALISED CACHE for the runner, not the source of truth. The
 	// node's device ledger is authoritative — this copy exists so the
-	// runner can scope the container without reading it. When the two
-	// disagree the ledger wins; nothing reconciles the copy back yet.
+	// runner can scope the container without reading it.
+	//
+	// It OUTLIVES the reservation: releasing does not clear it, so a
+	// stopped instance still names the card it used to be on. Anything
+	// reading this as a live claim has to check the instance's status
+	// first — the reclaim sweep re-reserves from it, and only for
+	// statuses that have not already released.
 	GPUAssignments []string `json:"gpuAssignments,omitempty" yaml:"gpuAssignments,omitempty"`
 
 	// IP address assigned to this instance
@@ -71,7 +76,13 @@ type Instance struct {
 	// Mirrors Service.StatusReason / Volume.StatusReason. Set by the
 	// reconciler on every status transition — including non-terminal
 	// states such as Pending while a precondition (volume, secret,
-	// image) is still unmet. Empty only when Status is Running.
+	// image) is still unmet.
+	//
+	// Usually empty when Status is Running, but not guaranteed: the GPU
+	// reclaim sweep sets it on a Running instance to report that its
+	// devices could not be re-reserved, deliberately without moving the
+	// status — the instance is serving and must not be stopped over
+	// bookkeeping. That write does NOT go through applyInstanceStatus.
 	// Vocabulary is the slug set produced by classifyCreateError
 	// (e.g. "VolumeNotReady", "StorageClassMissing", "SecretNotFound").
 	// On a Failed/Stalled instance this converges with FailureReason.
@@ -370,6 +381,24 @@ const (
 	InstanceStatusExited   InstanceStatus = "Exited"
 	InstanceStatusUnknown  InstanceStatus = "Unknown"
 )
+
+// AllInstanceStatuses is every declared status, for exhaustiveness checks.
+//
+// Lives here rather than in the tests that iterate it: a status added
+// without a matching entry is an omission the reader has to notice, and
+// they will only notice it in the file they are already editing. The GPU
+// reclaim sweep decides whether an instance still owns its devices from
+// its status alone, so a status nobody ruled on defaults silently.
+func AllInstanceStatuses() []InstanceStatus {
+	return []InstanceStatus{
+		InstanceStatusPending, InstanceStatusRunning,
+		InstanceStatusStopped, InstanceStatusFailed,
+		InstanceStatusDeleted, InstanceStatusTerminating,
+		InstanceStatusStalled, InstanceStatusCreated,
+		InstanceStatusStarting, InstanceStatusExited,
+		InstanceStatusUnknown,
+	}
+}
 
 // InstanceStatusInfo contains information about an instance's status
 type InstanceStatusInfo struct {

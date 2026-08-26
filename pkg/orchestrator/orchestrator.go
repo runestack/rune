@@ -250,13 +250,18 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 	if options.EventLog != nil {
 		icOpts = append(icOpts, instancectl.WithEventLog(options.EventLog))
 	}
+	var gpuAdmitter *gpu.Admitter
 	if options.NodeID != "" {
 		icOpts = append(icOpts, instancectl.WithNodeID(options.NodeID))
 		// GPU admission needs a node identity to key the ledger by, so it
 		// is wired with it rather than separately: without one there is no
 		// ledger to reserve against, and an admitter that cannot find its
 		// ledger refuses every GPU workload.
-		icOpts = append(icOpts, instancectl.WithGPUAdmitter(gpu.NewAdmitter(options.Store)))
+		//
+		// Shared with the reconciler's ledger sweep: admission and reclaim
+		// are the same arithmetic.
+		gpuAdmitter = gpu.NewAdmitter(options.Store)
+		icOpts = append(icOpts, instancectl.WithGPUAdmitter(gpuAdmitter))
 	}
 	instanceController := instancectl.NewController(
 		options.Store,
@@ -312,6 +317,9 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		// this there is no after-the-fact record of what a rolling update
 		// did: Service.Update is cleared the moment it converges.
 		serviceController.SetEventLog(options.EventLog)
+	}
+	if gpuAdmitter != nil {
+		serviceController.SetGPUAdmitter(gpuAdmitter)
 	}
 
 	// SnapshotController owns the Snapshot CRUD reconciliation loop.
