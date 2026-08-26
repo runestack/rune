@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/hostcapacity"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
@@ -83,3 +84,37 @@ func TestGPUHealth_MixedProducts(t *testing.T) {
 	assert.Contains(t, comps[0].Message, "2×NVIDIA A100")
 	assert.Contains(t, comps[0].Message, "1×NVIDIA L40S")
 }
+
+// pkg/hostcapacity exists so this service and the agent's node record
+// cannot disagree about how big the machine is — a node reporting eighty
+// percent of one number while something schedules against another.
+//
+// That claim was unpinned: re-inlining detection into health.go, or
+// changing it, left every package green. This crosses the boundary, so
+// the two paths have to keep agreeing.
+func TestHealthCapacityMatchesHostCapacity(t *testing.T) {
+	svc := NewHealthService(store.NewTestStore(), nil, log.GetDefaultLogger())
+	resp, err := svc.GetHealth(context.Background(), &generated.GetHealthRequest{ComponentType: "node"})
+	require.NoError(t, err)
+	require.Len(t, resp.Components, 1)
+
+	got := resp.Components[0].GetResources()
+	require.NotNil(t, got)
+
+	assert.Equal(t, hostcapacity.CPUCores(), got.GetCpuCores(),
+		"the health service and pkg/hostcapacity must report one CPU number")
+	assert.Equal(t, hostcapacity.MemoryBytes(), got.GetMemTotalBytes(),
+		"and one memory number")
+}
+
+// NOTE: there is deliberately no third test comparing the node record to
+// the health service. One was written and deleted: it claimed to cross
+// into internal/agent/nodeinfo and did not — it re-derived the value from
+// hostcapacity inside the test, so mutating what the agent actually
+// writes left it green.
+//
+// The property is genuinely pinned, transitively and by two tests that
+// each cross a real boundary: the record equals hostcapacity
+// (internal/agent/nodeinfo/subsystem_test.go, TestSubsystem_RecordsNodeCapacity)
+// and the health service equals hostcapacity (above). If either drifts,
+// one of them fails.

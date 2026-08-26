@@ -216,3 +216,132 @@ func TestListEvents_NodeIsClusterScoped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, resp.Events, "a non-node kind still honours the caller's namespace")
 }
+
+// The node record describes the machine, not only its accelerators. A
+// node with no GPUs still has a size, and `describe node` reporting
+// devices while saying nothing about cores or memory reads as an
+// oversight.
+func TestDescribeNode_ShowsCapacity(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{
+		ID: "node-1", Address: "127.0.0.1",
+		Resources: types.NodeResources{CPU: 10000, Memory: 16 << 30},
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+
+	var got string
+	for _, kv := range resp.Result.Identity {
+		if kv.Key == "Capacity" {
+			got = kv.Value
+		}
+	}
+	assert.Contains(t, got, "10 CPU")
+	assert.Contains(t, got, "memory")
+}
+
+// Capacity and allocatable are shown side by side. An operator comparing
+// a 24Gi request against a node advertised as 24GB needs to see why it
+// does not fit, and "Capacity" alone does not tell them.
+func TestDescribeNode_ShowsAllocatableBesideCapacity(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{
+		ID: "node-1", Address: "127.0.0.1",
+		Resources: types.NodeResources{
+			CPU: 8000, Memory: 24_000_000_000,
+			AllocatableCPU: 7800, AllocatableMemory: 21_600_000_000,
+		},
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, kv := range resp.Result.Identity {
+		got[kv.Key] = kv.Value
+	}
+	require.Contains(t, got, "Capacity")
+	require.Contains(t, got, "For services")
+	// Compare the NUMBERS, not the rendered lines. The offer line always
+	// carries a trailing parenthetical, so the two strings differ however
+	// the numbers are computed — an assertion on the strings passes even
+	// if the offer is rendered from capacity.
+	assert.Contains(t, got["Capacity"], "22.4Gi", "24GB renders as 22.4Gi")
+	assert.Contains(t, got["For services"], "20.1Gi")
+	assert.NotContains(t, got["For services"], "22.4Gi",
+		"the offer must not be the capacity number wearing a different label")
+}
+
+// Undetectable capacity is omitted, not rendered as zero: "0 CPU" would
+// be a confident wrong answer where absence is the honest one.
+func TestDescribeNode_OmitsUnknownCapacity(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{ID: "node-1", Address: "127.0.0.1"})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+	for _, kv := range resp.Result.Identity {
+		assert.NotEqual(t, "Capacity", kv.Key, "an undetectable capacity must be absent, not zero")
+		assert.NotEqual(t, "For services", kv.Key)
+	}
+}
+
+// The two lines must stay distinguishable on a large machine — which is
+// where the reserve is biggest and three significant figures would
+// collapse 128 and 127.8 into the same "128".
+func TestDescribeNode_CapacityAndOfferStayDistinctOnBigNodes(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{
+		ID: "node-1", Address: "127.0.0.1",
+		Resources: types.NodeResources{
+			CPU: 128_000, Memory: 512 << 30,
+			AllocatableCPU: 127_800, AllocatableMemory: 460 << 30,
+		},
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, kv := range resp.Result.Identity {
+		got[kv.Key] = kv.Value
+	}
+	assert.Contains(t, got["Capacity"], "128 CPU")
+	assert.Contains(t, got["For services"], "127.8 CPU",
+		"the pair exists to show the reserve; it must not round it away")
+
+	// And the offer explains itself, so the number never needs a doc page.
+	// "allows for", not "held for": nothing enforces this number, and a
+	// word implying the memory is kept back would be the same false claim
+	// the cast warning was reverted for.
+	assert.Contains(t, got["For services"], "allows for the OS and Rune")
+	assert.NotContains(t, got["For services"], "held",
+		"the render must not imply an enforcement that does not exist")
+}
+
+// A sub-core offer must render in millicores. %.1f turns 50m into
+// "0.0 CPU" — a confident zero on a machine that does have CPU, which is
+// the thing the omit-when-unknown rule exists to avoid.
+func TestDescribeNode_SubCoreRendersInMillicores(t *testing.T) {
+	svc, st := newDescribeTestService(t)
+	putNode(t, st, &types.Node{
+		ID: "node-1", Address: "127.0.0.1",
+		Resources: types.NodeResources{
+			CPU: 200, Memory: 1 << 30,
+			AllocatableCPU: 175, AllocatableMemory: 900 << 20,
+		},
+	})
+
+	resp, err := svc.Describe(context.Background(), &generated.DescribeRequest{Kind: "node", Name: "node-1"})
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, kv := range resp.Result.Identity {
+		got[kv.Key] = kv.Value
+	}
+	assert.Contains(t, got["Capacity"], "200m CPU")
+	assert.Contains(t, got["For services"], "175m CPU")
+	assert.NotContains(t, got["For services"], "0.0 CPU",
+		"a machine with CPU must never render as having none")
+}

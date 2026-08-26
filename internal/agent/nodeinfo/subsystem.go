@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/events"
+	"github.com/runestack/rune/pkg/hostcapacity"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
@@ -184,10 +185,17 @@ func (s *Subsystem) probeAndWrite(ctx context.Context) {
 
 	probedAt := time.Now()
 	node := &types.Node{
-		ID:              s.cfg.NodeID,
-		Name:            s.cfg.NodeID,
-		Address:         LocalNodeAddress,
-		Labels:          copyLabels(s.cfg.Labels),
+		ID:      s.cfg.NodeID,
+		Name:    s.cfg.NodeID,
+		Address: LocalNodeAddress,
+		Labels:  copyLabels(s.cfg.Labels),
+		// CPU and memory alongside the devices, from the same source the
+		// health service reports pressure against. Without this the
+		// record describes a machine's accelerators and not its size,
+		// which reads as an oversight in `describe node` and is one:
+		// anything that ever reasons about node capacity needs a number
+		// here to reason about.
+		Resources:       nodeResources(),
 		Devices:         devices,
 		DevicesProbedAt: &probedAt,
 	}
@@ -336,4 +344,20 @@ func copyLabels(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// nodeResources records both what the machine has and what it can offer.
+// Both, not one: an operator reading `describe node` wants the machine's
+// size, and anything deciding whether a workload fits wants the part that
+// is actually on offer. Reporting only total is how a request for the
+// whole box gets placed on it.
+func nodeResources() types.NodeResources {
+	cpu := hostcapacity.MillicoresFromCores(hostcapacity.CPUCores())
+	mem := hostcapacity.MemoryBytes()
+	return types.NodeResources{
+		CPU:               cpu,
+		Memory:            mem,
+		AllocatableCPU:    hostcapacity.AllocatableMillicores(cpu),
+		AllocatableMemory: hostcapacity.AllocatableMemory(mem),
+	}
 }

@@ -476,6 +476,25 @@ func (s *DescribeService) describeNode(ctx context.Context, name string) (*gener
 		kv("ID", node.ID),
 		kv("Address", node.Address),
 	}
+	if size := nodeCapacityLine(node); size != "" {
+		res.Identity = append(res.Identity, kv("Capacity", size))
+	}
+	// "For services", not "Allocatable". The second is kubectl's word for
+	// this line, and it is an adjective used as a noun that means nothing
+	// to someone who has not run a cluster — the audience this project
+	// sends elsewhere. The parenthetical is what stops the number needing
+	// a doc page: without it the reader's first question, where did the
+	// rest go, has no answer anywhere in the repo.
+	//
+	// "allows for", not "is held for". Nothing enforces this yet — no
+	// admission path reads it — so a word implying the memory is being
+	// kept back would manufacture exactly the false safety this branch
+	// reverted a whole commit for asserting. It describes the
+	// subtraction, and claims nothing about what stops you exceeding it.
+	if offered := nodeAllocatableLine(node); offered != "" {
+		res.Identity = append(res.Identity,
+			kv("For services", offered+"  (the rest allows for the OS and Rune)"))
+	}
 	res.Timestamps = timestampKVs(node.CreatedAt, nil, time.Time{})
 
 	if len(node.Labels) > 0 {
@@ -520,6 +539,54 @@ func (s *DescribeService) resolveNode(ctx context.Context, repo *repos.NodeRepo,
 		return nodes[0], nil
 	}
 	return nil, fmt.Errorf("node %q: %w", name, errDescribeNotFound)
+}
+
+// nodeCapacityLine renders the node's CPU and memory, or "" when the
+// agent could not determine them — an absent line beats a confident zero.
+func nodeCapacityLine(node *types.Node) string {
+	var parts []string
+	if node.Resources.CPU > 0 {
+		parts = append(parts, formatCores(node.Resources.CPU))
+	}
+	if node.Resources.Memory > 0 {
+		parts = append(parts, types.FormatMemory(node.Resources.Memory)+" memory")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatCores renders millicores as cores. Not %.3g: three significant
+// figures render a 128-core machine's capacity and its smaller offer as
+// the same "128", so the pair stops showing the difference it exists to
+// show — and does so on the largest machines, where the reserve is
+// biggest.
+func formatCores(millicores int64) string {
+	// Under a core, use the millicore unit the runefile uses. %.1f would
+	// render 175m as "0.2 CPU" and 1m as "0.0 CPU" — a confident zero on
+	// a machine that does have CPU.
+	if millicores > 0 && millicores < 1000 {
+		return fmt.Sprintf("%dm CPU", millicores)
+	}
+	if millicores%1000 == 0 {
+		return fmt.Sprintf("%d CPU", millicores/1000)
+	}
+	return fmt.Sprintf("%.1f CPU", float64(millicores)/1000)
+}
+
+// nodeAllocatableLine renders what the node would offer workloads.
+// NOTHING DECIDES ANYTHING WITH IT YET — no admission path reads these
+// fields — so it is a number to compare a request against by eye, not a
+// limit. Shown beside capacity rather than instead of it: an operator
+// comparing a request against the machine's advertised size needs to see
+// why the two differ.
+func nodeAllocatableLine(node *types.Node) string {
+	var parts []string
+	if node.Resources.AllocatableCPU > 0 {
+		parts = append(parts, formatCores(node.Resources.AllocatableCPU))
+	}
+	if node.Resources.AllocatableMemory > 0 {
+		parts = append(parts, types.FormatMemory(node.Resources.AllocatableMemory)+" memory")
+	}
+	return strings.Join(parts, ", ")
 }
 
 // nodeDevicesSection renders the GPU block, or nil when this node has
