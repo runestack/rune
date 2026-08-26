@@ -20,8 +20,8 @@ import (
 //
 // The instance's UUID is minted before any of this, so the reservation
 // carries its owner from the moment it is written and needs no later
-// binding step. A crash between this and the store write still strands
-// the row — nothing reclaims those yet.
+// binding step. A crash between this and the store write strands the row
+// until the reclaim sweep frees it, one GC tick later.
 func (c *Controller) reserveGPU(ctx context.Context, service *types.Service, instance *types.Instance) error {
 	if service.Resources.GPU == nil || c.gpu == nil {
 		return nil
@@ -74,8 +74,8 @@ func (c *Controller) reserveGPU(ctx context.Context, service *types.Service, ins
 //
 // Best-effort: the caller is mid-way through a tombstone write or a
 // container teardown, and failing that over a ledger write would trade a
-// leaked reservation for a stuck instance. Nothing sweeps up what this
-// misses, so the Warn below is the only signal an operator gets.
+// leaked reservation for a stuck instance. The reclaim sweep frees what
+// this misses, once the record reaches a status that no longer holds.
 func (c *Controller) releaseGPU(ctx context.Context, instance *types.Instance) {
 	// Assumes an instance read from the store. One rebuilt from a runner
 	// listing carries no assignments — container labels do not hold device

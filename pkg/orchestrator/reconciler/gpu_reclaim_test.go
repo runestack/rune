@@ -72,7 +72,7 @@ func TestReclaim_FreesARowWhoseInstanceNeverExisted(t *testing.T) {
 		Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
 	})
 
-	rec.reclaimGPUReservations(ctx, nil)
+	rec.reclaimGPUReservations(ctx, nil, time.Now())
 	assert.Empty(t, rows(t, st))
 }
 
@@ -87,15 +87,14 @@ func TestReclaim_LeavesAFreshRowAlone(t *testing.T) {
 		Holder: types.GPUResHolderInstance, CreatedAt: time.Now().UTC(),
 	})
 
-	rec.reclaimGPUReservations(ctx, nil)
+	rec.reclaimGPUReservations(ctx, nil, time.Now())
 	assert.Len(t, rows(t, st), 1, "a create in flight must survive the tick it started on")
 }
 
-// The trap in the design's own wording. §8.6 says to reclaim rows with
-// "no non-terminal instance", and Failed is terminal — but a create that
-// ran out of retries holds its card DELIBERATELY, because the retry path
-// does not re-reserve. Reclaiming it hands the card to another service
-// while the retry still believes it owns one.
+// A create that ran out of retries holds its card DELIBERATELY: the
+// retry path does not re-reserve, so the row is what lets it succeed.
+// Reclaiming it because the status reads terminal hands the card to
+// another service while the retry still believes it owns one.
 func TestReclaim_LeavesRetryingAndStalledInstancesHoldingTheirCards(t *testing.T) {
 	for _, status := range []types.InstanceStatus{
 		types.InstanceStatusFailed,
@@ -113,7 +112,7 @@ func TestReclaim_LeavesRetryingAndStalledInstancesHoldingTheirCards(t *testing.T
 				Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
 			})
 
-			rec.reclaimGPUReservations(ctx, []types.Instance{inst})
+			rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
 			require.Len(t, rows(t, st), 1, "the retry has nothing to re-reserve with")
 			assert.Equal(t, inst.ID, rows(t, st)[0].InstanceID)
 		})
@@ -134,7 +133,7 @@ func TestReclaim_FreesARowWhoseInstanceIsDeleted(t *testing.T) {
 		Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
 	})
 
-	rec.reclaimGPUReservations(ctx, []types.Instance{inst})
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
 	assert.Empty(t, rows(t, st))
 }
 
@@ -149,9 +148,151 @@ func TestReclaim_NeverTouchesAnIdleHold(t *testing.T) {
 		Holder: types.GPUResHolderIdle, CreatedAt: aged(time.Hour),
 	})
 
-	rec.reclaimGPUReservations(ctx, nil)
+	rec.reclaimGPUReservations(ctx, nil, time.Now())
 	require.Len(t, rows(t, st), 1)
 	assert.Equal(t, types.GPUResHolderIdle, rows(t, st)[0].Holder)
+}
+
+// GPUAssignments outlives the reservation, so a record that has already
+// released still names its old card. Re-reserving from one of those books
+// a card to something that gave it up — and nothing releases it again,
+// because the release already happened.
+func TestAdopt_IgnoresRecordsThatAlreadyReleased(t *testing.T) {
+	failedAt := time.Now()
+	cases := []struct {
+		name  string
+		mutot func(*types.Instance)
+	}{
+		{"stopped by the operator", func(i *types.Instance) {
+			i.Status = types.InstanceStatusStopped
+		}},
+		{"health-restart tombstone", func(i *types.Instance) {
+			i.Status = types.InstanceStatusFailed
+			i.FailedAt = &failedAt
+		}},
+		{"deleted", func(i *types.Instance) {
+			i.Status = types.InstanceStatusDeleted
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, rec, st := sweepFixture(t)
+			svc := &types.Service{
+				Name: "vllm", Namespace: "default", Scale: 1,
+				Resources: types.Resources{GPU: &types.GPURequest{}},
+			}
+			require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+
+			inst := types.Instance{
+				ID: "released-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+				NodeID: sweepNodeID, GPUAssignments: []string{"GPU-1"},
+			}
+			tc.mutot(&inst)
+			require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+			rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+			assert.Empty(t, rows(t, st), "the card was given up; nothing may book it back")
+		})
+	}
+}
+
+// The same rule read from the other direction: a row left behind by a
+// release that failed is reclaimable as soon as its instance reaches a
+// status that no longer holds — not only once the record is Deleted.
+func TestReclaim_FreesARowLeftBehindByAFailedRelease(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	inst := types.Instance{
+		ID: "stopped-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+		NodeID: sweepNodeID, Status: types.InstanceStatusStopped,
+	}
+	writeRow(t, st, types.GPURes{
+		DeviceUUID: "GPU-1", Namespace: "default", ServiceName: "vllm",
+		InstanceID: inst.ID, WholeDevice: true,
+		Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
+	})
+
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+	assert.Empty(t, rows(t, st))
+}
+
+// A refusal that stands must not rewrite the record every minute: every
+// write appends an unpruned version-history row.
+func TestAdopt_RepeatedRefusalWritesTheInstanceOnce(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	svc := &types.Service{
+		Name: "vllm", Namespace: "default", Scale: 1,
+		Resources: types.Resources{GPU: &types.GPURequest{}},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+	writeRow(t, st, types.GPURes{
+		DeviceUUID: "GPU-1", Namespace: "default", ServiceName: "other",
+		InstanceID: "other-1", WholeDevice: true,
+		Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
+	})
+	other := types.Instance{
+		ID: "other-1", Namespace: "default", ServiceName: "other",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+	}
+	inst := types.Instance{
+		ID: "live-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+		GPUAssignments: []string{"GPU-1"},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+	rec.reclaimGPUReservations(ctx, []types.Instance{other, inst}, time.Now())
+	var first types.Instance
+	require.NoError(t, st.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &first))
+
+	for i := 0; i < 3; i++ {
+		rec.reclaimGPUReservations(ctx, []types.Instance{other, inst}, time.Now())
+	}
+	var last types.Instance
+	require.NoError(t, st.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &last))
+	assert.Equal(t, first.UpdatedAt, last.UpdatedAt, "a standing refusal is not news")
+}
+
+// And it stops being true when the card frees up. A stale reason feeds
+// the service-level summary and would outlive the problem it described.
+func TestAdopt_ClearsTheFlagOnceTheAdoptionSucceeds(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	svc := &types.Service{
+		Name: "vllm", Namespace: "default", Scale: 1,
+		Resources: types.Resources{GPU: &types.GPURequest{}},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+	inst := types.Instance{
+		ID: "live-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+		StatusReason: types.GPUReasonOverCommitted, StatusMessage: "no longer has room for it",
+		GPUAssignments: []string{"GPU-1"},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+
+	require.Len(t, rows(t, st), 1)
+	var stored types.Instance
+	require.NoError(t, st.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &stored))
+	assert.Empty(t, stored.StatusReason)
+	assert.Empty(t, stored.StatusMessage)
+}
+
+// The grace window dates from when the instance list was read. The passes
+// between can outlast it, and a row created after the snapshot would then
+// look old enough to reclaim and be absent from a list that predates it.
+func TestReclaim_GraceIsMeasuredFromTheSnapshotNotFromNow(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	writeRow(t, st, types.GPURes{
+		DeviceUUID: "GPU-1", Namespace: "default", ServiceName: "vllm",
+		InstanceID: "created-after-the-list", WholeDevice: true,
+		Holder: types.GPUResHolderInstance, CreatedAt: time.Now().UTC(),
+	})
+
+	// The list was read two ticks ago; the sweep is only running now.
+	rec.reclaimGPUReservations(ctx, nil, time.Now().Add(-2*gpuReclaimGrace))
+	assert.Len(t, rows(t, st), 1,
+		"a row written after the snapshot is not evidence about what the snapshot contained")
 }
 
 // The other direction: an instance running on a card the ledger does not
@@ -172,7 +313,7 @@ func TestAdopt_ReReservesADeviceTheLedgerLost(t *testing.T) {
 	}
 	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
 
-	rec.reclaimGPUReservations(ctx, []types.Instance{inst})
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
 
 	got := rows(t, st)
 	require.Len(t, got, 1)
@@ -197,8 +338,8 @@ func TestAdopt_IsIdempotentAcrossTicks(t *testing.T) {
 	}
 	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
 
-	rec.reclaimGPUReservations(ctx, []types.Instance{inst})
-	rec.reclaimGPUReservations(ctx, []types.Instance{inst})
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
 
 	got := rows(t, st)
 	require.Len(t, got, 1, "the second tick must not add a second row for the same card")
@@ -233,7 +374,7 @@ func TestAdopt_FlagsRatherThanKillsWhenTheCardIsFull(t *testing.T) {
 	}
 	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
 
-	rec.reclaimGPUReservations(ctx, []types.Instance{other, inst})
+	rec.reclaimGPUReservations(ctx, []types.Instance{other, inst}, time.Now())
 
 	assert.Len(t, rows(t, st), 1, "the overcommit must not be written into the ledger")
 
@@ -244,8 +385,8 @@ func TestAdopt_FlagsRatherThanKillsWhenTheCardIsFull(t *testing.T) {
 	assert.Equal(t, types.GPUReasonOverCommitted, stored.StatusReason)
 }
 
-// With no admitter wired the GC tick must not read a ledger at all — the
-// feature has to be absent on a box with no GPUs, not merely inert.
+// With no admitter wired the sweep does nothing at all — not "nothing it
+// can see", nothing.
 func TestReclaim_NoAdmitterDoesNothing(t *testing.T) {
 	ctx, rec, st := sweepFixture(t)
 	rec.SetGPUAdmitter(nil)
@@ -255,7 +396,7 @@ func TestReclaim_NoAdmitterDoesNothing(t *testing.T) {
 		Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
 	})
 
-	rec.reclaimGPUReservations(ctx, nil)
+	rec.reclaimGPUReservations(ctx, nil, time.Now())
 	assert.Len(t, rows(t, st), 1)
 }
 
@@ -290,7 +431,7 @@ func TestAdopt_FlagsAnInstanceRunningOnAVanishedDevice(t *testing.T) {
 	}
 	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
 
-	rec.reclaimGPUReservations(ctx, []types.Instance{inst})
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
 
 	assert.Empty(t, rows(t, st), "capacity is never claimed against hardware the node does not report")
 	var stored types.Instance
@@ -311,7 +452,7 @@ func TestReclaim_EmitsANodeScopedEvent(t *testing.T) {
 		Holder: types.GPUResHolderInstance, CreatedAt: aged(time.Hour),
 	})
 
-	rec.reclaimGPUReservations(ctx, nil)
+	rec.reclaimGPUReservations(ctx, nil, time.Now())
 
 	eventLog.mu.Lock()
 	defer eventLog.mu.Unlock()

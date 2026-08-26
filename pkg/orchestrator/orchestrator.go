@@ -258,10 +258,8 @@ func NewOrchestrator(options OrchestratorOptions) (Orchestrator, error) {
 		// ledger to reserve against, and an admitter that cannot find its
 		// ledger refuses every GPU workload.
 		//
-		// One admitter, shared with the reconciler's ledger sweep below.
-		// Two would be correct — it holds no state beyond the store — but
-		// one makes it obvious that admission and reclaim are the same
-		// arithmetic.
+		// Shared with the reconciler's ledger sweep: admission and reclaim
+		// are the same arithmetic.
 		gpuAdmitter = gpu.NewAdmitter(options.Store)
 		icOpts = append(icOpts, instancectl.WithGPUAdmitter(gpuAdmitter))
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/gpu"
+	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -25,9 +26,7 @@ const (
 // in flight.
 const gpuReclaimGrace = garbageCollectionInterval
 
-// SetGPUAdmitter wires device admission. Nil leaves the ledger sweep off,
-// which is what a control plane with no GPU nodes wants — it also means
-// no ledger reads on the GC tick.
+// SetGPUAdmitter wires device admission. Nil leaves the ledger sweep off.
 func (r *Reconciler) SetGPUAdmitter(a *gpu.Admitter) { r.gpu = a }
 
 // reclaimGPUReservations reconciles every node's ledger against the
@@ -39,17 +38,14 @@ func (r *Reconciler) SetGPUAdmitter(a *gpu.Admitter) { r.gpu = a }
 // it being prompt. Both directions are best-effort: a node whose ledger
 // cannot be read is logged and skipped, because one unreadable node must
 // not stop the others being repaired.
-func (r *Reconciler) reclaimGPUReservations(ctx context.Context, instances []types.Instance) {
+func (r *Reconciler) reclaimGPUReservations(ctx context.Context, instances []types.Instance, snapshotAt time.Time) {
 	if r.gpu == nil {
 		return
 	}
 
 	held := make(map[string]bool, len(instances))
 	for i := range instances {
-		// Deleted is the one status with nothing left to hold a card:
-		// every other state either still has a container or is a
-		// tombstone whose retry needs its reservation kept.
-		if instances[i].Status != types.InstanceStatusDeleted {
+		if holdsAReservation(&instances[i]) {
 			held[instances[i].ID] = true
 		}
 	}
@@ -60,7 +56,11 @@ func (r *Reconciler) reclaimGPUReservations(ctx context.Context, instances []typ
 		return
 	}
 
-	before := time.Now().UTC().Add(-gpuReclaimGrace)
+	// Measured from when the instance list was read, not from now: the
+	// passes between the two can take longer than the grace window, and a
+	// row created after the snapshot would then look both old enough to
+	// reclaim and absent from an instance list that predates it.
+	before := snapshotAt.UTC().Add(-gpuReclaimGrace)
 	for _, ledger := range ledgers {
 		dropped, err := r.gpu.ReclaimOrphans(ctx, ledger.NodeID, held, before)
 		if err != nil {
@@ -103,9 +103,12 @@ func (r *Reconciler) adoptOrphanedAssignments(ctx context.Context, instances []t
 
 	for i := range instances {
 		inst := &instances[i]
-		if len(inst.GPUAssignments) == 0 ||
-			inst.Status == types.InstanceStatusDeleted ||
-			inst.NodeID == "" {
+		// GPUAssignments outlives the reservation — releaseGPU does not
+		// clear it, so a stopped instance or a failed tombstone still
+		// names the card it used to be on. Re-reserving from that record
+		// would book a card to something that gave it up, permanently:
+		// the release already happened and will not happen again.
+		if len(inst.GPUAssignments) == 0 || inst.NodeID == "" || !holdsAReservation(inst) {
 			continue
 		}
 		missing := unreservedDevices(byNode[inst.NodeID], inst)
@@ -113,6 +116,27 @@ func (r *Reconciler) adoptOrphanedAssignments(ctx context.Context, instances []t
 			continue
 		}
 		r.adoptInstanceDevices(ctx, inst, missing)
+	}
+}
+
+// holdsAReservation reports whether an instance should still own rows in
+// the ledger. It mirrors the release rule exactly, and both sweep
+// directions read it, so they cannot drift into disagreeing about who
+// owns a card.
+//
+// FailedAt is the discriminator inside Failed, and it is not incidental:
+// the health-restart path sets it and releases, while a create that ran
+// out of retries deliberately leaves it unset because its retry does not
+// re-reserve and needs the row kept. Stalled is that same case with the
+// retries spent.
+func holdsAReservation(inst *types.Instance) bool {
+	switch inst.Status {
+	case types.InstanceStatusDeleted, types.InstanceStatusStopped:
+		return false
+	case types.InstanceStatusFailed:
+		return inst.FailedAt == nil
+	default:
+		return true
 	}
 }
 
@@ -171,6 +195,7 @@ func (r *Reconciler) adoptInstanceDevices(ctx context.Context, inst *types.Insta
 		GPU:         *service.Resources.GPU,
 	}, devices)
 	if err == nil {
+		r.clearGPUFlag(ctx, inst)
 		msg := fmt.Sprintf("re-reserved %v for %s: the instance was running on them with no reservation",
 			devices, inst.Name)
 		r.logger.Info("Adopted GPU assignment with no reservation",
@@ -195,9 +220,15 @@ func (r *Reconciler) adoptInstanceDevices(ctx context.Context, inst *types.Insta
 // flagInstance records why an instance's devices could not be re-reserved
 // WITHOUT touching its status. It stays exactly as running as it was —
 // this is a note for the operator, not a lifecycle transition.
+//
+// Writes only on a change. A refusal that stands repeats every tick, and
+// every write appends an unpruned version-history row.
 func (r *Reconciler) flagInstance(ctx context.Context, inst *types.Instance, reason, message string) {
 	var fresh types.Instance
 	err := r.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
+		if fresh.StatusReason == reason && fresh.StatusMessage == message {
+			return store.ErrSkipUpdate
+		}
 		fresh.StatusReason = reason
 		fresh.StatusMessage = message
 		fresh.UpdatedAt = time.Now()
@@ -205,6 +236,30 @@ func (r *Reconciler) flagInstance(ctx context.Context, inst *types.Instance, rea
 	})
 	if err != nil {
 		r.logger.Warn("Could not flag instance",
+			log.Str("instance", inst.ID), log.Err(err))
+	}
+}
+
+// clearGPUFlag removes a refusal note once the adoption it described has
+// succeeded. Without this the instance keeps reporting a reason that is
+// no longer true, and StatusReason feeds the service-level summary.
+//
+// Only clears reasons this sweep writes: another controller's note about
+// the same instance is not ours to drop.
+func (r *Reconciler) clearGPUFlag(ctx context.Context, inst *types.Instance) {
+	var fresh types.Instance
+	err := r.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
+		switch fresh.StatusReason {
+		case types.GPUReasonOverCommitted, types.GPUReasonDeviceMissing:
+			fresh.StatusReason = ""
+			fresh.StatusMessage = ""
+			fresh.UpdatedAt = time.Now()
+			return nil
+		}
+		return store.ErrSkipUpdate
+	})
+	if err != nil {
+		r.logger.Warn("Could not clear GPU flag",
 			log.Str("instance", inst.ID), log.Err(err))
 	}
 }

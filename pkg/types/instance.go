@@ -56,8 +56,13 @@ type Instance struct {
 	//
 	// A DENORMALISED CACHE for the runner, not the source of truth. The
 	// node's device ledger is authoritative — this copy exists so the
-	// runner can scope the container without reading it. When the two
-	// disagree the ledger wins; nothing reconciles the copy back yet.
+	// runner can scope the container without reading it.
+	//
+	// It OUTLIVES the reservation: releasing does not clear it, so a
+	// stopped instance still names the card it used to be on. Anything
+	// reading this as a live claim has to check the instance's status
+	// first — the reclaim sweep re-reserves from it, and only for
+	// statuses that have not already released.
 	GPUAssignments []string `json:"gpuAssignments,omitempty" yaml:"gpuAssignments,omitempty"`
 
 	// IP address assigned to this instance

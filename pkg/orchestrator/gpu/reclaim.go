@@ -61,6 +61,12 @@ func (a *Admitter) ReclaimOrphans(ctx context.Context, nodeID string, held map[s
 // Refuses rather than overcommits when they no longer have room. The
 // caller's move then is to flag the instance and leave it running — Rune
 // does not kill a healthy serving instance to tidy up its own books.
+//
+// Two limits worth knowing. The request comes from the service spec as
+// it reads NOW, so an instance still running an older spec is re-booked
+// at the new number. And unlike the release path this WILL create the
+// node's ledger if it is absent, because there is a live claim to record
+// and refusing to write it would leave the card reading free.
 func (a *Admitter) AdoptAssignment(ctx context.Context, node *types.Node, req Request, devices []string) error {
 	if err := checkInventory(node, req.NodeID); err != nil {
 		return err
@@ -129,6 +135,12 @@ func unheldBy(l *types.NodeDeviceLedger, instanceID string, devices []string) []
 	out := make([]string, 0, len(devices))
 	for _, uuid := range devices {
 		if !covered[uuid] {
+			// Marking it covered as we go dedupes the input. The check
+			// loop runs against the pre-append ledger, so a device named
+			// twice would pass it twice and be counted twice — and a
+			// record from a restored backup or operator surgery is
+			// exactly the input this path exists for.
+			covered[uuid] = true
 			out = append(out, uuid)
 		}
 	}
