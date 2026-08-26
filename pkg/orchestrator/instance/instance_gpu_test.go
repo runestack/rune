@@ -307,9 +307,9 @@ func TestDeleteInstance_ReleasesSoTheRollingReplacementFits(t *testing.T) {
 }
 
 // Stop then delete is how the service-deletion cascade tears an instance
-// down. The second release must not take a card that has since been
-// handed to somebody else.
-func TestStopThenDelete_ReleasesOnce(t *testing.T) {
+// down, so release runs twice for one instance. The second must not reach
+// into a card that has since been handed to somebody else.
+func TestStopThenDelete_DoesNotStealTheSuccessorsCard(t *testing.T) {
 	ctx, c, st := gpuController(t, gpuDev("GPU-1", 48<<30))
 	svc := gpuService(t, st, "vllm", &types.GPURequest{})
 

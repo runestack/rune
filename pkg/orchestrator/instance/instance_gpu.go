@@ -77,6 +77,10 @@ func (c *Controller) reserveGPU(ctx context.Context, service *types.Service, ins
 // leaked reservation for a stuck instance. Nothing sweeps up what this
 // misses, so the Warn below is the only signal an operator gets.
 func (c *Controller) releaseGPU(ctx context.Context, instance *types.Instance) {
+	// Assumes an instance read from the store. One rebuilt from a runner
+	// listing carries no assignments — container labels do not hold device
+	// UUIDs — so this returns before the Warn and frees nothing. Safe only
+	// because every such instance has already been through a release.
 	if c.gpu == nil || len(instance.GPUAssignments) == 0 {
 		return
 	}

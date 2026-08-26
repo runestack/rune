@@ -61,8 +61,8 @@ func (c *Controller) markInstanceFailedInPlace(ctx context.Context, instance *ty
 	instance.FailedAt = &now
 	instance.FailureReason = string(restartReason)
 	instance.UpdatedAt = now
-	// Released here rather than when this tombstone is finally swept, an
-	// hour from now, so the replacement can have the card.
+	// Released here rather than when this tombstone is finally swept, up to
+	// an hour from now, so the replacement can have the card.
 	c.releaseGPU(ctx, instance)
 
 	c.logger.Info("Marked instance Failed (tombstoned in-place)",
@@ -105,6 +105,13 @@ func (c *Controller) recordCreateFailure(ctx context.Context, instance *types.In
 		// Flip to Stalled when retries are exhausted so operators get a clear
 		// "stop waiting, take action" signal; while Stalled, NextCreateAttemptAt
 		// stays nil — the reconciler never auto-retries.
+		// Keeps any GPU reservation, and must: RetryCreateInstance does not
+		// re-reserve, so the held row is what lets an operator's restart
+		// succeed. Freeing it here would let another service take the card
+		// and turn that restart into a silent overcommit. The cost is that
+		// a Stalled instance holds its card until the service is deleted —
+		// it is never garbage-collected either, since the eviction sweep
+		// keys off FailedAt, which this branch deliberately leaves unset.
 		if fresh.CreateAttempts >= maxCreateAttempts {
 			applyInstanceStatus(&fresh, types.InstanceStatusStalled, reason, err.Error())
 			fresh.NextCreateAttemptAt = nil

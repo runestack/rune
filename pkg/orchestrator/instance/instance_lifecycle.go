@@ -726,6 +726,14 @@ func (c *Controller) DeleteInstance(ctx context.Context, instance *types.Instanc
 	// release: a retired or scaled-down replica goes straight here without
 	// ever being Stopped or Failed, and the record is later hard-removed.
 	// Without this the card is held by an instance that no longer exists.
+	//
+	// Unconditional, including when the stop above failed and the container
+	// is still holding its weights — the opposite of the choice StopInstance
+	// makes at its own release. The difference is what happens if we are
+	// wrong: there the overcommit lasts the drain window and the record
+	// survives to release later, here there is no later, and the orphan reap
+	// is what clears the container. A transient overcommit beats a permanent
+	// leak.
 	c.releaseGPU(ctx, instance)
 
 	// Networking data plane (RUNE-063): drop this instance from the
