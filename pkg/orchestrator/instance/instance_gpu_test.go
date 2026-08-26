@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -152,24 +153,71 @@ func TestStopInstance_Releases(t *testing.T) {
 	assert.Empty(t, ledger(t, st).Reservations)
 }
 
-// Releasing one instance must not free another's card.
+// One replica failing must not free its siblings' cards. Two replicas of
+// the SAME service, so releasing by service name rather than by instance
+// would look identical everywhere except here.
 func TestRelease_TakesOnlyItsOwnDevices(t *testing.T) {
 	ctx, c, st := gpuController(t, gpuDev("GPU-1", 48<<30), gpuDev("GPU-2", 48<<30))
-	a := gpuService(t, st, "vllm", &types.GPURequest{})
-	b := gpuService(t, st, "tei", &types.GPURequest{})
+	svc := gpuService(t, st, "vllm", &types.GPURequest{})
 
-	instA, err := c.CreateInstance(ctx, a, "vllm-0", 0)
+	first, err := c.CreateInstance(ctx, svc, "vllm-0", 0)
 	require.NoError(t, err)
-	instB, err := c.CreateInstance(ctx, b, "tei-0", 0)
+	second, err := c.CreateInstance(ctx, svc, "vllm-1", 1)
 	require.NoError(t, err)
 	require.Len(t, ledger(t, st).Reservations, 2)
 
-	require.NoError(t, c.markInstanceFailedInPlace(ctx, instA, RestartReasonFailure))
+	require.NoError(t, c.markInstanceFailedInPlace(ctx, first, RestartReasonFailure))
 
 	rows := ledger(t, st).Reservations
-	require.Len(t, rows, 1)
-	assert.Equal(t, instB.ID, rows[0].InstanceID)
-	assert.Equal(t, instB.GPUAssignments, []string{rows[0].DeviceUUID})
+	require.Len(t, rows, 1, "the surviving replica keeps its card")
+	assert.Equal(t, second.ID, rows[0].InstanceID)
+	assert.Equal(t, second.GPUAssignments, []string{rows[0].DeviceUUID})
+}
+
+// createBlockedStore refuses to write one resource type.
+type createBlockedStore struct {
+	store.Store
+	blocked types.ResourceType
+}
+
+func (s createBlockedStore) Create(ctx context.Context, rt types.ResourceType, ns, name string, res interface{}) error {
+	if rt == s.blocked {
+		return errors.New("no space left on device")
+	}
+	return s.Store.Create(ctx, rt, ns, name, res)
+}
+
+// The reservation is taken before the instance record is written, so a
+// failed write leaves a row nothing will ever release: no instance to
+// fail, to stop, or to match against. The card would be held until the
+// node restarts.
+func TestCreateInstance_StoreFailureDoesNotLeakTheReservation(t *testing.T) {
+	st := store.NewBadgerStore(log.NewTestLogger())
+	require.NoError(t, st.Open(t.TempDir()))
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	probed := time.Now()
+	require.NoError(t, repos.NewNodeRepo(st).Upsert(ctx, &types.Node{
+		ID: testNodeID, Address: "127.0.0.1",
+		Devices: []types.GPUDevice{gpuDev("GPU-1", 48<<30)}, DevicesProbedAt: &probed,
+	}))
+	require.NoError(t, repos.NewNodeLedgerRepo(st).EnsureExists(ctx, testNodeID))
+
+	testRunner := runner.NewTestRunner()
+	mgr := manager.NewTestRunnerManager(nil)
+	mgr.SetDockerRunner(testRunner)
+	mgr.SetProcessRunner(testRunner)
+
+	// The admitter keeps the real store: only the instance write fails.
+	c := NewController(createBlockedStore{Store: st, blocked: types.ResourceTypeInstance},
+		mgr, log.NewTestLogger(),
+		WithNodeID(testNodeID), WithGPUAdmitter(gpu.NewAdmitter(st)))
+
+	svc := gpuService(t, st, "vllm", &types.GPURequest{})
+	_, err := c.CreateInstance(ctx, svc, "vllm-0", 0)
+	require.Error(t, err)
+	assert.Empty(t, ledger(t, st).Reservations)
 }
 
 // Shared devices: two models on one card, summed against its capacity.
