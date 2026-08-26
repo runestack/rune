@@ -334,48 +334,6 @@ func TestInstanceRepo_ListByStatus(t *testing.T) {
 	}
 }
 
-func TestInstanceRepo_UpdateStatus(t *testing.T) {
-	ctx := context.Background()
-	testStore := store.NewTestStore()
-	repo := NewInstanceRepo(testStore)
-
-	// Create an instance first
-	instance := &types.Instance{
-		ID:          "test-instance-123",
-		Name:        "test-instance",
-		Namespace:   "default",
-		ServiceID:   "test-service-456",
-		ServiceName: "test-service",
-		NodeID:      "node-1",
-		Status:      types.InstanceStatusPending,
-		Runner:      types.RunnerTypeDocker,
-	}
-
-	err := repo.Create(ctx, instance)
-	if err != nil {
-		t.Fatalf("Failed to create instance: %v", err)
-	}
-
-	// Update status
-	err = repo.UpdateStatus(ctx, "instance:test-instance-123.default.rune", types.InstanceStatusRunning, "Instance is now running")
-	if err != nil {
-		t.Fatalf("Failed to update status: %v", err)
-	}
-
-	// Verify the status was updated
-	retrieved, err := repo.Get(ctx, "instance:test-instance-123.default.rune")
-	if err != nil {
-		t.Fatalf("Failed to get instance: %v", err)
-	}
-
-	if retrieved.Status != types.InstanceStatusRunning {
-		t.Fatalf("Expected status %s, got %s", types.InstanceStatusRunning, retrieved.Status)
-	}
-	if retrieved.StatusMessage != "Instance is now running" {
-		t.Fatalf("Expected status message 'Instance is now running', got '%s'", retrieved.StatusMessage)
-	}
-}
-
 func TestInstanceRepo_UpdateIP(t *testing.T) {
 	ctx := context.Background()
 	testStore := store.NewTestStore()

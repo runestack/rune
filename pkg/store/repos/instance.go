@@ -9,6 +9,15 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
+// InstanceRepo is CRUD over instance records.
+//
+// It deliberately has NO status setter. An instance's status is not just a
+// field: reaching Stopped, Failed or Deleted is what releases the
+// instance's GPU devices, and the reclaim sweep reads the status back as
+// its evidence that the release happened
+// (pkg/orchestrator/reconciler/gpu_reclaim.go). A write that skips the
+// transition would let the sweep free a card out from under a running
+// container. Go through the instance controller.
 type InstanceRepo struct {
 	base *BaseRepo[types.Instance]
 }
@@ -191,18 +200,6 @@ func (r *InstanceRepo) ListFailed(ctx context.Context, namespace string) ([]*typ
 	return r.ListByStatus(ctx, namespace, types.InstanceStatusFailed)
 }
 
-// UpdateStatus updates only the status of an instance
-func (r *InstanceRepo) UpdateStatus(ctx context.Context, ref string, status types.InstanceStatus, statusMessage string) error {
-	instance, err := r.Get(ctx, ref)
-	if err != nil {
-		return err
-	}
-	instance.Status = status
-	instance.StatusMessage = statusMessage
-	instance.UpdatedAt = time.Now()
-	return r.Update(ctx, ref, instance)
-}
-
 // UpdateIP updates only the IP address of an instance
 func (r *InstanceRepo) UpdateIP(ctx context.Context, ref string, ip string) error {
 	instance, err := r.Get(ctx, ref)
@@ -247,22 +244,6 @@ func (r *InstanceRepo) IncrementRestartCount(ctx context.Context, ref string) er
 	}
 	instance.Metadata.RestartCount++
 	instance.UpdatedAt = time.Now()
-	return r.Update(ctx, ref, instance)
-}
-
-// MarkForDeletion marks an instance for deletion
-func (r *InstanceRepo) MarkForDeletion(ctx context.Context, ref string) error {
-	instance, err := r.Get(ctx, ref)
-	if err != nil {
-		return err
-	}
-	instance.Status = types.InstanceStatusDeleted
-	now := time.Now()
-	instance.UpdatedAt = now
-	if instance.Metadata == nil {
-		instance.Metadata = &types.InstanceMetadata{}
-	}
-	instance.Metadata.DeletionTimestamp = &now
 	return r.Update(ctx, ref, instance)
 }
 
