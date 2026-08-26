@@ -283,14 +283,17 @@ func TestAdopt_ClearsTheFlagOnceTheAdoptionSucceeds(t *testing.T) {
 // look old enough to reclaim and be absent from a list that predates it.
 func TestReclaim_GraceIsMeasuredFromTheSnapshotNotFromNow(t *testing.T) {
 	ctx, rec, st := sweepFixture(t)
+	// Written after the snapshot, but long enough ago that a grace window
+	// dated from NOW would call it stale. That is the only shape the two
+	// readings disagree about.
 	writeRow(t, st, types.GPURes{
 		DeviceUUID: "GPU-1", Namespace: "default", ServiceName: "vllm",
 		InstanceID: "created-after-the-list", WholeDevice: true,
-		Holder: types.GPUResHolderInstance, CreatedAt: time.Now().UTC(),
+		Holder: types.GPUResHolderInstance, CreatedAt: aged(2 * gpuReclaimGrace),
 	})
 
-	// The list was read two ticks ago; the sweep is only running now.
-	rec.reclaimGPUReservations(ctx, nil, time.Now().Add(-2*gpuReclaimGrace))
+	// The list was read three ticks ago; the sweep is only running now.
+	rec.reclaimGPUReservations(ctx, nil, time.Now().Add(-3*gpuReclaimGrace))
 	assert.Len(t, rows(t, st), 1,
 		"a row written after the snapshot is not evidence about what the snapshot contained")
 }
