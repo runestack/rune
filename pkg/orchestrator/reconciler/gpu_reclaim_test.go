@@ -683,3 +683,66 @@ func TestAdopt_StandingRefusalEmitsOneEvent(t *testing.T) {
 	assert.Contains(t, eventLog.events[0].Message, "default/other",
 		"the operator has no command that renders a ledger, so the message names the holder")
 }
+
+// The clear has to cover every reason the flag can carry, not the two the
+// common path happens to write. A bad vram string refuses with
+// NoGpuCapacity; fixing the spec must take the note away with it. The
+// same clear also removes a stale InventoryUnknown left by an older build
+// that flagged the startup window.
+func TestAdopt_ClearsEveryReasonItCanWrite(t *testing.T) {
+	for _, stale := range []string{
+		types.GPUReasonNoCapacity,
+		types.GPUReasonInventoryUnknown,
+		types.GPUReasonOverCommitted,
+		types.GPUReasonDeviceMissing,
+	} {
+		t.Run(stale, func(t *testing.T) {
+			ctx, rec, st := sweepFixture(t)
+			svc := &types.Service{
+				Name: "vllm", Namespace: "default", Scale: 1,
+				Resources: types.Resources{GPU: &types.GPURequest{}},
+			}
+			require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+			inst := types.Instance{
+				ID: "live-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+				NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+				StatusReason: stale, StatusMessage: "left over",
+				GPUAssignments: []string{"GPU-1"},
+			}
+			require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+			rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+
+			require.Len(t, rows(t, st), 1, "the adoption itself must succeed")
+			var stored types.Instance
+			require.NoError(t, st.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &stored))
+			assert.Empty(t, stored.StatusReason, "%s survived a successful adoption", stale)
+			assert.Empty(t, stored.StatusMessage)
+		})
+	}
+}
+
+// An unparseable vram string is a refusal the operator has to fix in the
+// spec, not a retryable hold — so unlike the startup window it does get
+// flagged.
+func TestAdopt_FlagsAnUnparseableVRAMRequest(t *testing.T) {
+	ctx, rec, st := sweepFixture(t)
+	svc := &types.Service{
+		Name: "vllm", Namespace: "default", Scale: 1,
+		Resources: types.Resources{GPU: &types.GPURequest{VRAM: "twenty gigs"}},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc))
+	inst := types.Instance{
+		ID: "live-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+		NodeID: sweepNodeID, Status: types.InstanceStatusRunning,
+		GPUAssignments: []string{"GPU-1"},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &inst))
+
+	rec.reclaimGPUReservations(ctx, []types.Instance{inst}, time.Now())
+
+	var stored types.Instance
+	require.NoError(t, st.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &stored))
+	assert.Equal(t, types.GPUReasonNoCapacity, stored.StatusReason)
+	assert.Equal(t, types.InstanceStatusRunning, stored.Status)
+}
