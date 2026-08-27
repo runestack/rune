@@ -1,29 +1,21 @@
 # Complexity gate, run as a second pass by `make lint-complexity`.
 #
-# Separate from .golangci.yml because of `new-from-merge-base` below: that
-# setting filters *every* linter in the run down to changed lines, so folding
-# it into the main config would silently turn the whole-tree gofmt/govet/
-# staticcheck gate into a diff-only one. Two passes, two configs.
-#
-# gocognit rather than gocyclo because gocyclo counts branches without caring
-# how deeply they nest: methodToAction (pkg/api/server/utils.go) is a flat
-# switch that scores 67, the highest in the tree, and reads fine. gocognit
-# scores it 0 and still charges planUpdate 44 for its nesting.
+# Separate from .golangci.yml because `new-from-merge-base` below filters
+# *every* linter in the run down to changed lines: folding it into the main
+# config would quietly turn the whole-tree gate into a diff-only one.
 
 run:
   timeout: 5m
-  # Matches .golangci.yml. Test helpers nest as deep as anything in pkg/ and
-  # there is no reason to exempt them; it costs 26 more backlog entries, none
-  # of which the filter below can surface.
   tests: true
 
 linters:
   disable-all: true
   enable:
+    # Not gocyclo: it counts branches without caring how deeply they nest, and
+    # scores the flat switch in methodToAction 67, the highest in the tree.
     - gocognit
-    # One `//nolint:gocognit` silently defeats this whole file, so make the
-    # suppressions say which linter and why. It does not stop a bypass — it
-    # makes one visible in review, which is the most a lint can do here.
+    # One //nolint:gocognit defeats this file. This cannot stop that, only
+    # force it to name the linter and a reason, where review can see it.
     - nolintlint
 
 linters-settings:
@@ -37,25 +29,14 @@ issues:
   max-issues-per-linter: 0
   max-same-issues: 0
 
-  # Only judge what a branch adds. ~197 functions in the tree are already over
-  # the threshold (`make lint-complexity-report` lists them), so an unfiltered
-  # gate could never go green.
+  # ~197 functions are already over the threshold, so the gate can only judge
+  # what a branch adds until they are rewritten (`make lint-complexity-report`).
   #
-  # What this catches, measured rather than assumed: gocognit reports at the
-  # func declaration line and the filter keeps only issues on changed lines. A
-  # new function over the threshold fails. An existing one does not — not even
-  # when the branch is what pushed it over, because its declaration line did
-  # not move. It stops new complex *functions*, not new complexity.
-  #
-  # It also fires on a byte-identical move, since relocating a function makes
-  # its declaration line new. A decomposition PR that relocates an offender
-  # must rewrite it or suppress it in the same PR.
-  #
-  # This value only applies to a bare `golangci-lint run -c` — `make
-  # lint-complexity` always passes --new-from-merge-base, so that is where the
-  # base ref is actually chosen (COMPLEXITY_BASE, defaulting to origin/dev).
-  #
-  # Removing this line is the goal, and needs the backlog gone first.
+  # It catches less than it sounds like: gocognit reports at the func
+  # declaration line, so a new function fails and an existing one never does,
+  # even when this branch is what pushed it over. Relocating a function counts
+  # as new. Overridden by COMPLEXITY_BASE in the Makefile, which is where the
+  # base ref is chosen for every `make` path.
   new-from-merge-base: origin/dev
 
   exclude-dirs:

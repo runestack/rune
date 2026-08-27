@@ -181,8 +181,8 @@ check-coverage:
 		exit 1; \
 	fi
 
-## Lint the project. Complexity runs last so a single over-threshold function
-## does not hide every gofmt and staticcheck finding behind it.
+## Lint the project. Complexity runs last so one over-threshold function does
+## not hide every gofmt and staticcheck finding behind it.
 lint: lint-orderedlog-seam
 	@echo "Running linters..."
 	@golangci-lint run ./...
@@ -193,15 +193,12 @@ lint: lint-orderedlog-seam
 lint-orderedlog-seam:
 	@scripts/check_orderedlog_seam.sh
 
-## Complexity gate. A second pass because .golangci-complexity.yml filters to
-## changed lines, which would weaken the whole-tree pass if merged into it.
+## Complexity gate for code this branch adds. Needs the base ref fetched;
+## override it for a branch stacked on another: COMPLEXITY_BASE=origin/feat/x.
 ##
 ## `config verify` first: golangci-lint rejects an unknown linter loudly but
 ## accepts a misspelled *setting* silently, falling back to gocognit's default
-## of 30 — the one way this gate can weaken without anyone noticing.
-##
-## Needs the base ref fetched. Override it for a branch stacked on another
-## feature branch: `make lint-complexity COMPLEXITY_BASE=origin/feat/x`.
+## of 30 — the one way this gate weakens without anyone noticing.
 COMPLEXITY_BASE ?= origin/dev
 lint-complexity:
 	@echo "Checking complexity of new code..."
