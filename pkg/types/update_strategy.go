@@ -224,6 +224,9 @@ func surgeBlocker(svc *Service) string {
 			return "a hostPort"
 		}
 	}
+	if svc.Resources.GPU != nil && !svc.Resources.GPU.SharesDevice() {
+		return "a whole-device GPU claim"
+	}
 	return "an exclusive resource"
 }
 
@@ -359,6 +362,14 @@ func (s *Service) IsSurgeCapable() bool {
 		if s.Ports[i].HostPort != 0 {
 			return false
 		}
+	}
+	// A whole-device GPU claim is exclusive by definition: the replacement
+	// would be admitted against a card the outgoing instance still holds,
+	// and admission refuses before an instance record exists — so nothing
+	// carries the reason and the rollout retries until it stalls. A shared
+	// request can surge if the card has room, which admission decides.
+	if s.Resources.GPU != nil && !s.Resources.GPU.SharesDevice() {
+		return false
 	}
 	return true
 }
