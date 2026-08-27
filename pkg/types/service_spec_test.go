@@ -415,7 +415,11 @@ service:
 // which error a bad spec reports depends on that order. The slice in Validate
 // makes reordering a one-line, silent edit, so this walks a spec that violates
 // every check and repairs them one at a time: repairing check N must surface
-// check N+1, which pins every boundary rather than a sample of them.
+// check N+1, which pins every boundary in the slice.
+//
+// It pins rule order *within* a helper only where the spec violates more than
+// one of that helper's rules — drainSeconds and autoscale max below. The other
+// helpers are pinned at their first rule only.
 func TestServiceSpec_Validate_CheckOrder(t *testing.T) {
 	steps := []struct {
 		want   string
@@ -424,13 +428,15 @@ func TestServiceSpec_Validate_CheckOrder(t *testing.T) {
 		{"service name is required", func(s *ServiceSpec) { s.Name = "api" }},
 		{"service image is required", func(s *ServiceSpec) { s.Image = "repo/api" }},
 		{"service scale cannot be negative", func(s *ServiceSpec) { s.Scale = 1 }},
+		{"drainSeconds must be between", func(s *ServiceSpec) { s.DrainSeconds = nil }},
 		{"port name is required", func(s *ServiceSpec) { s.Ports[0].Name = "http" }},
 		{"invalid health check", func(s *ServiceSpec) { s.Health.Liveness = &Probe{Type: "http", Path: "/healthz", Port: 8080} }},
 		{"must specify exactly one of", func(s *ServiceSpec) { s.EnvFrom[0].Secret = "creds" }},
 		{"must specify 'from' peers", func(s *ServiceSpec) {
 			s.NetworkPolicy.Ingress[0].From = []NetworkPolicyPeer{{Service: "web"}}
 		}},
-		{"autoscale min cannot be negative", func(s *ServiceSpec) {
+		{"autoscale min cannot be negative", func(s *ServiceSpec) { s.Autoscale.Min = 1 }},
+		{"autoscale max cannot be less than min", func(s *ServiceSpec) {
 			s.Autoscale = &ServiceAutoscale{Enabled: true, Min: 1, Max: 3, Metric: "cpu", Target: "80"}
 		}},
 		{"must specify service, secret, or configmap", func(s *ServiceSpec) {
@@ -443,13 +449,15 @@ func TestServiceSpec_Validate_CheckOrder(t *testing.T) {
 		}},
 	}
 
+	overDrain := MaxDrainSeconds + 1
 	spec := ServiceSpec{
 		Scale:         -1,
+		DrainSeconds:  &overDrain,
 		Ports:         []ServicePort{{Port: 8080}},
 		Health:        &HealthCheck{Liveness: &Probe{Type: "http"}},
 		EnvFrom:       []EnvFromSourceSpec{{}},
 		NetworkPolicy: &ServiceNetworkPolicy{Ingress: []IngressRule{{}}},
-		Autoscale:     &ServiceAutoscale{Enabled: true, Min: -1},
+		Autoscale:     &ServiceAutoscale{Enabled: true, Min: -1, Max: -5},
 		Dependencies:  []ServiceDependency{{}},
 		Resources:     &Resources{CPU: ResourceLimit{Request: "-1"}},
 		Expose:        &ServiceExpose{},
