@@ -15,8 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The complexity gate diffs against the merge base with origin/dev;
-          # a shallow clone has no merge base and it silently checks nothing.
+          # The complexity gate needs a merge base. Without one, revgrep cannot
+          # filter and every pre-existing offender in the tree is reported, so
+          # a shallow clone fails the job with ~200 unrelated findings.
           fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -27,7 +28,8 @@ jobs:
       - name: Install tools
         run: make setup
       - name: Lint
-        run: make lint
+        # Judge a stacked branch against its own parent, not against dev.
+        run: make lint COMPLEXITY_BASE=origin/${{ github.base_ref || 'dev' }}
 
   test:
     name: Unit Tests

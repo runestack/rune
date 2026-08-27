@@ -5,48 +5,58 @@
 # it into the main config would silently turn the whole-tree gofmt/govet/
 # staticcheck gate into a diff-only one. Two passes, two configs.
 #
-# gocognit rather than gocyclo: gocyclo counts branches, so a flat
-# field-by-field converter like ServiceToProto scores 55 while a nested
-# reconciler loop scores 34, which is backwards. gocognit charges for nesting
-# and gives a long flat switch almost nothing, which matches what is actually
-# hard to read.
+# gocognit rather than gocyclo because gocyclo counts branches without caring
+# how deeply they nest: methodToAction (pkg/api/server/utils.go) is a flat
+# switch that scores 67, the highest in the tree, and reads fine. gocognit
+# scores it 0 and still charges planUpdate 44 for its nesting.
 
 run:
   timeout: 5m
-  tests: false
+  # Matches .golangci.yml. Test helpers nest as deep as anything in pkg/ and
+  # there is no reason to exempt them; it costs 26 more backlog entries, none
+  # of which the filter below can surface.
+  tests: true
 
 linters:
   disable-all: true
   enable:
     - gocognit
+    # One `//nolint:gocognit` silently defeats this whole file, so make the
+    # suppressions say which linter and why. It does not stop a bypass — it
+    # makes one visible in review, which is the most a lint can do here.
+    - nolintlint
 
 linters-settings:
   gocognit:
     min-complexity: 20
+  nolintlint:
+    require-specific: true
+    require-explanation: true
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
 
-  # TEMPORARY. The tree has ~170 functions over the threshold, so the gate can
-  # only apply to code a branch actually adds; merge-base rather than a plain
-  # rev so commits that landed on dev after you branched are not charged to you.
+  # Only judge what a branch adds. ~197 functions in the tree are already over
+  # the threshold (`make lint-complexity-report` lists them), so an unfiltered
+  # gate could never go green.
   #
-  # What this actually catches, verified rather than assumed: gocognit anchors
-  # its report at the func declaration line, and the new-code filter keeps only
-  # issues on changed lines. So a NEW function over the threshold fails, and an
-  # existing one does not — even if this branch edits its body, even if the edit
-  # is what pushed it over. It is a no-new-debt ratchet, not a ceiling.
+  # What this catches, measured rather than assumed: gocognit reports at the
+  # func declaration line and the filter keeps only issues on changed lines. A
+  # new function over the threshold fails. An existing one does not — not even
+  # when the branch is what pushed it over, because its declaration line did
+  # not move. It stops new complex *functions*, not new complexity.
   #
-  # Two ways to tighten once the backlog shrinks: add --whole-files, which
-  # flags every offender in any file the branch touches, or delete this line so
-  # the gate covers the tree. The second is the goal.
+  # It also fires on a byte-identical move, since relocating a function makes
+  # its declaration line new. A decomposition PR that relocates an offender
+  # must rewrite it or suppress it in the same PR.
   #
-  # `make lint-complexity-report` prints what is left.
+  # `make lint-complexity` overrides the base ref, so a branch stacked on
+  # another feature branch is judged against its own parent.
+  #
+  # Removing this line is the goal, and needs the backlog gone first.
   new-from-merge-base: origin/dev
 
   exclude-dirs:
     - vendor/
     - examples/
-  exclude-files:
-    - ".*\\.generated\\.go$"

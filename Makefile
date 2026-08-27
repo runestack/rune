@@ -1,4 +1,4 @@
-.PHONY: build test lint lint-orderedlog-seam clean setup dev generate proto proto-tools proto-ts ui docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
+.PHONY: build test lint lint-orderedlog-seam lint-complexity lint-complexity-report clean setup dev generate proto proto-tools proto-ts ui docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
 
 # Tools and paths
 GO ?= go
@@ -181,10 +181,12 @@ check-coverage:
 		exit 1; \
 	fi
 
-## Lint the project
-lint: lint-orderedlog-seam lint-complexity
+## Lint the project. Complexity runs last so a single over-threshold function
+## does not hide every gofmt and staticcheck finding behind it.
+lint: lint-orderedlog-seam
 	@echo "Running linters..."
 	@golangci-lint run ./...
+	@$(MAKE) --no-print-directory lint-complexity
 
 ## Enforce orderedlog seam (RUNE-039): no direct Badger writes to
 ## protected key prefixes outside pkg/store/orderedlog/.
@@ -193,14 +195,20 @@ lint-orderedlog-seam:
 
 ## Complexity gate. A second pass because .golangci-complexity.yml filters to
 ## changed lines, which would weaken the whole-tree pass if merged into it.
-## Needs origin/dev present: CI checks out with fetch-depth 0 for this.
+##
+## `config verify` first: golangci-lint rejects an unknown linter loudly but
+## accepts a misspelled *setting* silently, falling back to gocognit's default
+## of 30 — the one way this gate can weaken without anyone noticing.
+##
+## Needs the base ref fetched. Override it for a branch stacked on another
+## feature branch: `make lint-complexity COMPLEXITY_BASE=origin/feat/x`.
+COMPLEXITY_BASE ?= origin/dev
 lint-complexity:
 	@echo "Checking complexity of new code..."
-	@golangci-lint run -c .golangci-complexity.yml ./...
+	@golangci-lint config verify -c .golangci-complexity.yml
+	@golangci-lint run -c .golangci-complexity.yml --new-from-merge-base=$(COMPLEXITY_BASE) ./...
 
 ## What is left of the complexity backlog: same gate, whole tree, no filter.
-## Informational — never wired into `lint`, and it will report ~170 functions
-## until the rewrite is done.
 lint-complexity-report:
 	@golangci-lint run -c .golangci-complexity.yml --new-from-merge-base= ./... || true
 

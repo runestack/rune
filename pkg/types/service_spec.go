@@ -449,7 +449,6 @@ func (s *ServiceSpec) validateAutoscale() error {
 	return nil
 }
 
-// validateDependencies is independent of autoscale.
 func (s *ServiceSpec) validateDependencies() error {
 	for i, dep := range s.Dependencies {
 		if dep.Service == "" && dep.FQDN == "" && dep.Secret == "" && dep.Configmap == "" {
@@ -472,8 +471,8 @@ func (s *ServiceSpec) validateResources() error {
 	return s.validateGPU()
 }
 
-// validateResourcePair applies the three rules every request/limit pair shares:
-// each side parses, neither is negative, and request does not exceed limit.
+// validateResourcePair is generic because the two quantity parsers disagree on
+// return type: ParseCPU gives float64 cores, ParseMemory gives int64 bytes.
 func validateResourcePair[T int64 | float64](field, request, limit string, parse func(string) (T, error)) error {
 	req, err := parseResourceQuantity(field+".request", request, parse)
 	if err != nil {
@@ -490,9 +489,6 @@ func validateResourcePair[T int64 | float64](field, request, limit string, parse
 }
 
 func parseResourceQuantity[T int64 | float64](field, value string, parse func(string) (T, error)) (T, error) {
-	if value == "" {
-		return 0, nil
-	}
 	v, err := parse(value)
 	if err != nil {
 		return 0, NewValidationError("invalid " + field + ": " + err.Error())
@@ -510,11 +506,10 @@ func (s *ServiceSpec) validateExpose() error {
 	if s.Expose.Port == "" {
 		return NewValidationError("expose port is required")
 	}
-	resolved := s.resolveExposedPort()
+	resolved := s.portByNameOrNumber(s.Expose.Port)
 	if resolved == nil {
 		return NewValidationError("expose.port must reference a declared service port by name or number")
 	}
-	// Default protocol to tcp if empty
 	proto := strings.ToLower(strings.TrimSpace(resolved.Protocol))
 	if proto == "" {
 		proto = "tcp"
@@ -525,15 +520,16 @@ func (s *ServiceSpec) validateExpose() error {
 	return nil
 }
 
-// resolveExposedPort matches expose.port against the declared ports by name
-// first, then by number, and returns nil when neither matches.
-func (s *ServiceSpec) resolveExposedPort() *ServicePort {
+// portByNameOrNumber returns the first declared port whose name or number
+// matches ref, scanning in declaration order — so a numeric match on an earlier
+// port wins over a name match on a later one.
+func (s *ServiceSpec) portByNameOrNumber(ref string) *ServicePort {
 	for i := range s.Ports {
 		p := &s.Ports[i]
-		if p.Name == s.Expose.Port {
+		if p.Name == ref {
 			return p
 		}
-		if n, err := strconv.Atoi(s.Expose.Port); err == nil && n == p.Port {
+		if n, err := strconv.Atoi(ref); err == nil && n == p.Port {
 			return p
 		}
 	}
@@ -541,12 +537,11 @@ func (s *ServiceSpec) resolveExposedPort() *ServicePort {
 }
 
 func (s *ServiceSpec) validateMounts() error {
-	// Validate volume mounts (RUNE-070).
 	if err := ValidateVolumeMounts(s.Volumes); err != nil {
 		return err
 	}
 
-	// Cross-mount lint (RUNE-070/072): shared paths, system blocklist, RWO+scale>1.
+	// Shared paths, system blocklist, and RWO volumes on a scaled-up service.
 	owner := fmt.Sprintf("service %q", s.Name)
 	if err := ValidateMountPathConflicts(owner, s.Scale, s.Volumes, s.SecretMounts, s.ConfigmapMounts); err != nil {
 		return err

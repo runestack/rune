@@ -412,52 +412,85 @@ service:
 }
 
 // Validate runs its checks in a fixed order and returns the first failure, so
-// a spec with several problems reports a stable error. Pinned because the
-// checks live in a slice now and reordering it is a one-line, silent change.
+// which error a bad spec reports depends on that order. The slice in Validate
+// makes reordering a one-line, silent edit, so this walks a spec that violates
+// every check and repairs them one at a time: repairing check N must surface
+// check N+1, which pins every boundary rather than a sample of them.
 func TestServiceSpec_Validate_CheckOrder(t *testing.T) {
-	cases := []struct {
-		name string
-		spec ServiceSpec
-		want string
+	steps := []struct {
+		want   string
+		repair func(*ServiceSpec)
 	}{
-		{"name before image", ServiceSpec{}, "service name is required"},
-		{"image before scale", ServiceSpec{Name: "api", Scale: -1}, "service image is required"},
-		{
-			"scale before ports",
-			ServiceSpec{Name: "api", Image: "repo/api", Scale: -1, Ports: []ServicePort{{Port: 80}}},
-			"service scale cannot be negative",
-		},
-		{
-			"ports before health",
-			ServiceSpec{
-				Name:   "api",
-				Image:  "repo/api",
-				Ports:  []ServicePort{{Port: 80}},
-				Health: &HealthCheck{Liveness: &Probe{Type: "http"}},
-			},
-			"port name is required",
-		},
-		{
-			"ports before autoscale",
-			ServiceSpec{
-				Name:      "api",
-				Image:     "repo/api",
-				Ports:     []ServicePort{{Port: 80}},
-				Autoscale: &ServiceAutoscale{Enabled: true, Min: -1},
-			},
-			"port name is required",
-		},
+		{"service name is required", func(s *ServiceSpec) { s.Name = "api" }},
+		{"service image is required", func(s *ServiceSpec) { s.Image = "repo/api" }},
+		{"service scale cannot be negative", func(s *ServiceSpec) { s.Scale = 1 }},
+		{"port name is required", func(s *ServiceSpec) { s.Ports[0].Name = "http" }},
+		{"invalid health check", func(s *ServiceSpec) { s.Health.Liveness = &Probe{Type: "http", Path: "/healthz", Port: 8080} }},
+		{"must specify exactly one of", func(s *ServiceSpec) { s.EnvFrom[0].Secret = "creds" }},
+		{"must specify 'from' peers", func(s *ServiceSpec) {
+			s.NetworkPolicy.Ingress[0].From = []NetworkPolicyPeer{{Service: "web"}}
+		}},
+		{"autoscale min cannot be negative", func(s *ServiceSpec) {
+			s.Autoscale = &ServiceAutoscale{Enabled: true, Min: 1, Max: 3, Metric: "cpu", Target: "80"}
+		}},
+		{"must specify service, secret, or configmap", func(s *ServiceSpec) {
+			s.Dependencies[0].Service = "db"
+		}},
+		{"cpu.request cannot be negative", func(s *ServiceSpec) { s.Resources.CPU.Request = "100m" }},
+		{"expose port is required", func(s *ServiceSpec) { s.Expose.Port = "http" }},
+		{"volume mount at index 0: name is required", func(s *ServiceSpec) {
+			s.Volumes[0] = VolumeMount{Name: "data", MountPath: "/data", Claim: &VolumeClaim{Name: "data"}}
+		}},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.spec.Validate()
-			if err == nil {
-				t.Fatalf("expected an error, got nil")
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("got %q, want it to contain %q", err.Error(), tc.want)
-			}
-		})
+
+	spec := ServiceSpec{
+		Scale:         -1,
+		Ports:         []ServicePort{{Port: 8080}},
+		Health:        &HealthCheck{Liveness: &Probe{Type: "http"}},
+		EnvFrom:       []EnvFromSourceSpec{{}},
+		NetworkPolicy: &ServiceNetworkPolicy{Ingress: []IngressRule{{}}},
+		Autoscale:     &ServiceAutoscale{Enabled: true, Min: -1},
+		Dependencies:  []ServiceDependency{{}},
+		Resources:     &Resources{CPU: ResourceLimit{Request: "-1"}},
+		Expose:        &ServiceExpose{},
+		Volumes:       []VolumeMount{{MountPath: "/data"}},
+	}
+
+	for i, step := range steps {
+		err := spec.Validate()
+		if err == nil {
+			t.Fatalf("step %d: expected %q, got no error — a check ran out of order or stopped firing", i, step.want)
+		}
+		if !strings.Contains(err.Error(), step.want) {
+			t.Fatalf("step %d: got %q, want it to contain %q", i, err.Error(), step.want)
+		}
+		step.repair(&spec)
+	}
+
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("every check repaired, but Validate still failed: %v", err)
+	}
+}
+
+// The unknown-field check runs before every rule above, and only it reports the
+// offending line — so a cast with both a typo and a missing name must report the
+// typo, or the user loses the line number.
+func TestServiceSpec_Validate_StructureBeforeFields(t *testing.T) {
+	cast := "service:\n  nam: api\n  image: repo/api\n"
+	cf, err := ParseCastFileFromBytes([]byte(cast), "")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	specs := cf.GetServiceSpecs()
+	if len(specs) != 1 {
+		t.Fatalf("got %d services, want 1", len(specs))
+	}
+	err = specs[0].Validate()
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("got %q, want the unknown-field error rather than a later check", err.Error())
 	}
 }
 
