@@ -955,6 +955,20 @@ func (s *Service) hash(includeDesiredState bool) string {
 	// Resources (always include deterministically)
 	fmt.Fprintf(h, "cpu:%s:%s\n", s.Resources.CPU.Request, s.Resources.CPU.Limit)
 	fmt.Fprintf(h, "memory:%s:%s\n", s.Resources.Memory.Request, s.Resources.Memory.Limit)
+	// A device change makes the running container wrong, not just
+	// outnumbered, so it belongs in the template half.
+	//
+	// DeviceCount rather than Count: zero means one, so hashing the raw
+	// field would replace every instance when someone spells out the
+	// implicit count: 1. Absent still differs from present-and-empty —
+	// no request at all, versus one whole device.
+	if g := s.Resources.GPU; g != nil {
+		fmt.Fprintf(h, "gpu:%d:%s:%t\n", g.DeviceCount(), g.VRAM, g.AllowHeterogeneous)
+	} else {
+		// Safe to change this line's shape: no hash is ever stored, so cast
+		// hashes the old and new spec with the same binary.
+		fmt.Fprintf(h, "gpu:none\n")
+	}
 
 	// Health checks
 	if s.Health != nil {

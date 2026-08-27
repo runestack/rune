@@ -87,3 +87,46 @@ func TestClassifyCreateError_DeviceWordsAloneAreNotAGPUFailure(t *testing.T) {
 		assert.Equal(t, "RunnerCreateError", got, "inner: %s", inner)
 	}
 }
+
+// Editing resources.gpu has to replace the instance. Cast writes a freshly
+// rendered spec whose TemplateGeneration is zero, which disables the
+// counter check, so this field comparison is the only thing that fires.
+func TestClassifyObserved_DeviceRequestChangeReplacesTheInstance(t *testing.T) {
+	running := func(devices ...string) *types.Instance {
+		return &types.Instance{
+			ID: "i-1", Name: "vllm-0", Namespace: "default", ServiceName: "vllm",
+			ContainerID: "c-1", Status: types.InstanceStatusRunning,
+			GPUAssignments: devices,
+		}
+	}
+	svc := func(g *types.GPURequest) *types.Service {
+		return &types.Service{
+			Name: "vllm", Namespace: "default", Runtime: "docker",
+			Resources: types.Resources{GPU: g},
+		}
+	}
+	obs := instanceObservation{status: types.InstanceStatusRunning}
+
+	for _, tc := range []struct {
+		name string
+		svc  *types.Service
+		inst *types.Instance
+		want CompatClass
+	}{
+		{"count raised", svc(&types.GPURequest{Count: 2}), running("GPU-1"), CompatOutdated},
+		{"count lowered", svc(&types.GPURequest{Count: 1}), running("GPU-1", "GPU-2"), CompatOutdated},
+		{"request removed", svc(nil), running("GPU-1"), CompatOutdated},
+		{"request added", svc(&types.GPURequest{}), running(), CompatOutdated},
+		// An implicit count of one and an explicit one are the same
+		// request, so spelling it out must not reload a model.
+		{"implicit one made explicit", svc(&types.GPURequest{Count: 1}), running("GPU-1"), CompatOK},
+		{"unchanged whole device", svc(&types.GPURequest{}), running("GPU-1"), CompatOK},
+		{"unchanged shared device", svc(&types.GPURequest{VRAM: "20Gi"}), running("GPU-1"), CompatOK},
+		{"no gpu either side", svc(nil), running(), CompatOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := classifyObserved(tc.inst, tc.svc, obs, log.NewTestLogger())
+			assert.Equal(t, tc.want, v.Class, "reason: %s", v.Reason)
+		})
+	}
+}

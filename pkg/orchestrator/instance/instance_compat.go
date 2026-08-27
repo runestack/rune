@@ -195,6 +195,20 @@ func classifyObserved(instance *types.Instance, service *types.Service, obs inst
 			}
 		}
 
+		// Devices. This comparison is what actually replaces an instance
+		// when resources.gpu changes: cast writes a freshly rendered spec
+		// whose TemplateGeneration is zero, which disables the counter
+		// check above, so the field-level fallback is the only thing left.
+		//
+		// Compares the device COUNT the instance holds against the count
+		// the spec now asks for. A vram-only edit is invisible here — the
+		// instance records which devices it holds, never how much of them
+		// it was admitted for — so 20Gi to 40Gi does not replace anything.
+		// Closing that needs the admitted request on the instance record.
+		if service.Resources.GPU.DeviceCount() != len(instance.GPUAssignments) {
+			return CompatVerdict{CompatOutdated, "gpu request changed"}
+		}
+
 		// Check for significant resource changes
 		if service.Resources.CPU.Limit != "" || service.Resources.Memory.Limit != "" {
 			if instance.Resources == nil ||
