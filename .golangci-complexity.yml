@@ -51,8 +51,9 @@ issues:
   # its declaration line new. A decomposition PR that relocates an offender
   # must rewrite it or suppress it in the same PR.
   #
-  # `make lint-complexity` overrides the base ref, so a branch stacked on
-  # another feature branch is judged against its own parent.
+  # This value only applies to a bare `golangci-lint run -c` — `make
+  # lint-complexity` always passes --new-from-merge-base, so that is where the
+  # base ref is actually chosen (COMPLEXITY_BASE, defaulting to origin/dev).
   #
   # Removing this line is the goal, and needs the backlog gone first.
   new-from-merge-base: origin/dev

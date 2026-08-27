@@ -79,14 +79,14 @@ func (s *APIServer) execWSHandler() http.HandlerFunc {
 		// Exec output can burst; raise the per-message read limit from the 32KB
 		// default. Individual frames stay well under this.
 		conn.SetReadLimit(4 << 20)
-		defer conn.CloseNow() //nolint:errcheck
+		defer conn.CloseNow() //nolint:errcheck // teardown; the handler has already returned
 
 		if err := s.bridgeExec(r.Context(), conn, token); err != nil {
 			s.logger.Debug("exec ws: session ended", log.Err(err))
-			conn.Close(websocket.StatusInternalError, "exec session error") //nolint:errcheck
+			conn.Close(websocket.StatusInternalError, "exec session error") //nolint:errcheck // the session error is already logged
 			return
 		}
-		conn.Close(websocket.StatusNormalClosure, "") //nolint:errcheck
+		conn.Close(websocket.StatusNormalClosure, "") //nolint:errcheck // nothing left to report a close failure to
 	}
 }
 
@@ -100,7 +100,7 @@ func (s *APIServer) bridgeExec(parent context.Context, conn *websocket.Conn, tok
 	if err != nil {
 		return err
 	}
-	defer gconn.Close() //nolint:errcheck
+	defer gconn.Close() //nolint:errcheck // teardown; bridgeExec's own error is the one that matters
 
 	execClient := generated.NewExecServiceClient(gconn)
 	// Carry the bearer token so the gRPC auth + rbac (exec:exec) + audit

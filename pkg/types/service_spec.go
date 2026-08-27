@@ -489,6 +489,12 @@ func validateResourcePair[T int64 | float64](field, request, limit string, parse
 }
 
 func parseResourceQuantity[T int64 | float64](field, value string, parse func(string) (T, error)) (T, error) {
+	// ParseCPU and ParseMemory both already return (0, nil) here, so this is
+	// redundant for them — it keeps that from becoming a requirement on a
+	// third parser, since the caller treats "" as "unset" rather than zero.
+	if value == "" {
+		return 0, nil
+	}
 	v, err := parse(value)
 	if err != nil {
 		return 0, NewValidationError("invalid " + field + ": " + err.Error())

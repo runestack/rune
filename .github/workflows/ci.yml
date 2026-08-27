@@ -28,8 +28,12 @@ jobs:
       - name: Install tools
         run: make setup
       - name: Lint
-        # Judge a stacked branch against its own parent, not against dev.
-        run: make lint COMPLEXITY_BASE=origin/${{ github.base_ref || 'dev' }}
+        # Judge a stacked branch against its own parent, not against dev. The
+        # ref goes through the environment: refnames may contain shell
+        # metacharacters, and interpolating one into `run:` would execute them.
+        env:
+          BASE_REF: ${{ github.base_ref || 'dev' }}
+        run: make lint COMPLEXITY_BASE="origin/$BASE_REF"
 
   test:
     name: Unit Tests

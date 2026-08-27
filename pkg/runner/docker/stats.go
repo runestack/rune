@@ -79,7 +79,7 @@ func (r *DockerRunner) InstanceStats(ctx context.Context, instance *types.Instan
 	if err != nil {
 		return nil, fmt.Errorf("docker stats: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close() //nolint:errcheck // read-only body; a close failure cannot affect the decoded stats
 
 	var sr container.StatsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {

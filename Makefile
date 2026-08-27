@@ -315,6 +315,8 @@ help:
 	@echo ""
 	@echo "Dev Tools:"
 	@echo "  lint              Run linters"
+	@echo "  lint-complexity   Complexity gate for code this branch adds"
+	@echo "  lint-complexity-report  Functions still over the complexity threshold"
 	@echo "  clean             Clean all artifacts"
 	@echo "  setup             Install dev tools"
 	@echo ""
