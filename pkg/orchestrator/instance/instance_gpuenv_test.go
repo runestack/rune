@@ -159,3 +159,40 @@ func TestPrepareEnvVars_ReportsWhatTheDenialDisplaced(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, quiet)
 }
+
+// The warning's whole history is that it stopped firing without anyone
+// noticing, so pin the wiring and not only the value it reads.
+func TestRunCreateAttempt_WarnsWhenDenyingRequestedDevices(t *testing.T) {
+	logger := log.NewTestLogger()
+	st := store.NewBadgerStore(logger)
+	require.NoError(t, st.Open(t.TempDir()))
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	testRunner := runner.NewTestRunner()
+	mgr := manager.NewTestRunnerManager(nil)
+	mgr.SetDockerRunner(testRunner)
+	mgr.SetProcessRunner(testRunner)
+	c := NewController(st, mgr, logger)
+	// NewController derives a component logger, and TestLogger's derived
+	// loggers do not share their capture buffer. Point the resolver back at
+	// the one this test can read; the call site under test is unchanged.
+	c.env.logger = logger
+
+	svc := &types.Service{
+		ID: "s-1", Name: "web", Namespace: "default", Scale: 1,
+		Env: map[string]string{"NVIDIA_VISIBLE_DEVICES": "all"},
+	}
+	require.NoError(t, st.Create(ctx, types.ResourceTypeService, svc.Namespace, svc.ID, svc))
+
+	_, err := c.CreateInstance(ctx, svc, "web-0", 0)
+	require.NoError(t, err)
+
+	var warned bool
+	for _, e := range logger.GetEntries() {
+		if e.Message == "Denying GPUs to a service that did not request them" {
+			warned = true
+		}
+	}
+	assert.True(t, warned, "the warning stopped firing once without anyone noticing")
+}

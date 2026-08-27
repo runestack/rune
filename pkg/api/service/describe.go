@@ -148,6 +148,10 @@ func (s *DescribeService) describeInstance(ctx context.Context, ns, name string)
 		if l := resourceLine("Memory", inst.Resources.Memory); l != "" {
 			lines = append(lines, l)
 		}
+		// Nothing else in the CLI shows which instance holds which card.
+		if len(inst.GPUAssignments) > 0 {
+			lines = append(lines, "GPU: "+strings.Join(inst.GPUAssignments, ", "))
+		}
 		if len(lines) > 0 {
 			res.Sections = append(res.Sections, &generated.DescribeSection{Title: "Resources", Lines: lines})
 		}

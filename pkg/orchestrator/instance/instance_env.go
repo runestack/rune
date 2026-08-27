@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
@@ -20,10 +21,11 @@ import (
 type envResolver struct {
 	secretRepo *repos.SecretRepo
 	configRepo *repos.ConfigmapRepo
+	logger     log.Logger
 }
 
-func newEnvResolver(secretRepo *repos.SecretRepo, configRepo *repos.ConfigmapRepo) *envResolver {
-	return &envResolver{secretRepo: secretRepo, configRepo: configRepo}
+func newEnvResolver(secretRepo *repos.SecretRepo, configRepo *repos.ConfigmapRepo, logger log.Logger) *envResolver {
+	return &envResolver{secretRepo: secretRepo, configRepo: configRepo, logger: logger}
 }
 
 // Thin delegators: lifecycle code and existing tests call these on the
@@ -258,4 +260,25 @@ func (r *envResolver) resolveConfigmapValue(ctx context.Context, resourceRef typ
 		return "", fmt.Errorf("key %s not found in configmap %s.%s", resourceRef.Key, resourceRef.Namespace, resourceRef.Name)
 	}
 	return v, nil
+}
+
+// warnIfDenyingRequestedDevices reports a service that asked for devices
+// in a way Rune can read while declaring no resources.gpu. Such a service
+// keeps working until its container is next replaced, then fails inside
+// the app with "no CUDA devices" — an ordinary-looking crash loop.
+//
+// It cannot catch a service whose IMAGE asks: Rune never reads image ENV,
+// so nothing is displaced. Absence of this warning is not evidence that
+// nothing was affected.
+func (r *envResolver) warnIfDenyingRequestedDevices(service *types.Service, instance *types.Instance, displaced string) {
+	if r.logger == nil || service == nil || instance == nil || len(instance.GPUAssignments) > 0 {
+		return
+	}
+	if displaced == "" || displaced == runner.DevicesDenied {
+		return
+	}
+	r.logger.Warn("Denying GPUs to a service that did not request them",
+		log.Str("service", service.Namespace+"/"+service.Name),
+		log.Str("was", displaced),
+		log.Str("fix", "declare resources.gpu"))
 }

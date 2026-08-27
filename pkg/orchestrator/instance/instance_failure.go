@@ -276,6 +276,22 @@ func classifyCreateError(err error) string {
 		return "InitStepFailed"
 	case strings.Contains(msg, "get runner"):
 		return "RunnerUnavailable"
+	// Before the generic runner cases: these are host setup, not a broken
+	// container. Split, because the remedies differ — a dropped card needs
+	// the node re-probed, a missing runtime needs the toolkit installed.
+	// Both device phrases are generic English, so they are qualified by
+	// the hook's own name — otherwise an ordinary volume or driver failure
+	// on a box with no GPUs reports a missing card.
+	case strings.Contains(msg, "nvidia-container-cli") &&
+		(strings.Contains(msg, "unknown device") || strings.Contains(msg, "device error")):
+		return types.GPUReasonDeviceMissing
+	// nvidia-container-runtime names the shim, which is what the daemon
+	// reports when it is the default runtime and missing — a toolkit
+	// failure carrying no device phrase.
+	case strings.Contains(msg, "could not select device driver"),
+		strings.Contains(msg, "nvidia-container-cli"),
+		strings.Contains(msg, "nvidia-container-runtime"):
+		return types.GPUReasonToolkitMissing
 	case strings.Contains(msg, "failed to create instance:"):
 		return "RunnerCreateError"
 	case strings.Contains(msg, "failed to start instance"):

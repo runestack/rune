@@ -207,12 +207,16 @@ func (c *Controller) runCreateAttempt(ctx context.Context, service *types.Servic
 	instance.Runner = serviceRunner.Type()
 
 	// Build environment variables and interpolate secret:/config: values
-	envVars, _, err := c.prepareEnvVars(ctx, service, instance)
+	envVars, displacedVisibility, err := c.prepareEnvVars(ctx, service, instance)
 	if err != nil {
 		wrapped := fmt.Errorf("failed to prepare environment variables: %w", err)
 		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
 		return wrapped
 	}
+
+	// Once per creation, not per reconcile: this is news only at the create
+	// that stops handing a workload cards.
+	c.env.warnIfDenyingRequestedDevices(service, instance, displacedVisibility)
 	c.logger.Debug("Prepared environment variables",
 		log.Str("instance", instance.Name),
 		log.Int("env_var_count", len(envVars)))
