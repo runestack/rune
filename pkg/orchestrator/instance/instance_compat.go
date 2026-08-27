@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -212,6 +213,14 @@ func classifyObserved(instance *types.Instance, service *types.Service, obs inst
 			for key, value := range service.Env {
 				// Skip RUNE internal environment variables
 				if len(key) > 5 && key[:5] == "RUNE_" {
+					continue
+				}
+				// And the device scoping: Rune writes those keys last, so a
+				// spec value here is compared against something Rune wrote,
+				// not against the spec. On a GPU service that never matches
+				// — the instance is outdated on every pass and so is its
+				// replacement, a service that replaces itself forever.
+				if runner.IsGPUVisibilityVar(key) {
 					continue
 				}
 				instanceValue, exists := instance.Environment[key]

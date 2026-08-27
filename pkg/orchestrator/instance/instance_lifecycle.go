@@ -207,7 +207,7 @@ func (c *Controller) runCreateAttempt(ctx context.Context, service *types.Servic
 	instance.Runner = serviceRunner.Type()
 
 	// Build environment variables and interpolate secret:/config: values
-	envVars, err := c.prepareEnvVars(ctx, service, instance)
+	envVars, _, err := c.prepareEnvVars(ctx, service, instance)
 	if err != nil {
 		wrapped := fmt.Errorf("failed to prepare environment variables: %w", err)
 		c.recordCreateFailure(ctx, instance, wrapped, classifyCreateError(wrapped))
@@ -407,7 +407,7 @@ func (c *Controller) UpdateInstance(ctx context.Context, service *types.Service,
 
 	// Update environment variables (only adding/modifying, not removing)
 	envVarsUpdated := false
-	envVars, err := c.prepareEnvVars(ctx, service, instance)
+	envVars, _, err := c.prepareEnvVars(ctx, service, instance)
 	if err != nil {
 		return fmt.Errorf("failed to prepare environment variables: %w", err)
 	}

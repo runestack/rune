@@ -1177,7 +1177,7 @@ func (s *ServiceSpec) validateGPU() error {
 	// A spec that sets them too would either be overridden silently or
 	// override Rune — and NVIDIA_VISIBLE_DEVICES=all in particular hands
 	// the container every card on the box.
-	for _, k := range []string{"CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES"} {
+	for _, k := range GPUVisibilityVars {
 		if _, ok := s.Env[k]; ok {
 			return NewValidationError(
 				"resources.gpu cannot be combined with a " + k + " entry in env: " +

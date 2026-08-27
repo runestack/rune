@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -27,7 +28,7 @@ func newEnvResolver(secretRepo *repos.SecretRepo, configRepo *repos.ConfigmapRep
 
 // Thin delegators: lifecycle code and existing tests call these on the
 // controller; the logic lives on envResolver.
-func (c *Controller) prepareEnvVars(ctx context.Context, service *types.Service, instance *types.Instance) (map[string]string, error) {
+func (c *Controller) prepareEnvVars(ctx context.Context, service *types.Service, instance *types.Instance) (map[string]string, string, error) {
 	return c.env.prepareEnvVars(ctx, service, instance)
 }
 
@@ -36,7 +37,9 @@ func (c *Controller) interpolateEnv(ctx context.Context, value, defaultNamespace
 }
 
 // prepareEnvVars prepares environment variables for an instance
-func (r *envResolver) prepareEnvVars(ctx context.Context, service *types.Service, instance *types.Instance) (map[string]string, error) {
+// Also returns any NVIDIA_VISIBLE_DEVICES value the assignment or the
+// denial overwrote — the returned map carries the new one.
+func (r *envResolver) prepareEnvVars(ctx context.Context, service *types.Service, instance *types.Instance) (map[string]string, string, error) {
 	envVars := make(map[string]string)
 
 	// 1) Import from envFrom sources in order
@@ -45,13 +48,13 @@ func (r *envResolver) prepareEnvVars(ctx context.Context, service *types.Service
 		if src.SecretName != "" {
 			sec, err := r.secretRepo.Get(ctx, src.Namespace, src.SecretName)
 			if err != nil {
-				return nil, fmt.Errorf("envFrom secret %s.%s: %w", src.Namespace, src.SecretName, err)
+				return nil, "", fmt.Errorf("envFrom secret %s.%s: %w", src.Namespace, src.SecretName, err)
 			}
 			data = sec.Data
 		} else if src.ConfigmapName != "" {
 			cfg, err := r.configRepo.Get(ctx, src.Namespace, src.ConfigmapName)
 			if err != nil {
-				return nil, fmt.Errorf("envFrom configmap %s.%s: %w", src.Namespace, src.ConfigmapName, err)
+				return nil, "", fmt.Errorf("envFrom configmap %s.%s: %w", src.Namespace, src.ConfigmapName, err)
 			}
 			data = cfg.Data
 		}
@@ -64,7 +67,7 @@ func (r *envResolver) prepareEnvVars(ctx context.Context, service *types.Service
 				key = src.Prefix + key
 			}
 			if !isValidEnvKey(key) {
-				return nil, fmt.Errorf("invalid environment variable name from envFrom: %s", key)
+				return nil, "", fmt.Errorf("invalid environment variable name from envFrom: %s", key)
 			}
 			envVars[key] = v
 		}
@@ -74,7 +77,7 @@ func (r *envResolver) prepareEnvVars(ctx context.Context, service *types.Service
 	for key, value := range service.Env {
 		resolved, err := r.interpolateEnv(ctx, value, service.Namespace)
 		if err != nil {
-			return nil, fmt.Errorf("failed to interpolate env %s: %w", key, err)
+			return nil, "", fmt.Errorf("failed to interpolate env %s: %w", key, err)
 		}
 		envVars[key] = resolved
 	}
@@ -103,7 +106,40 @@ func (r *envResolver) prepareEnvVars(ctx context.Context, service *types.Service
 		}
 	}
 
-	return envVars, nil
+	return envVars, applyGPUVisibility(envVars, instance), nil
+}
+
+// applyGPUVisibility scopes the instance to the devices it was assigned.
+//
+// Both variables: the toolkit hook reads one, a bare process reads the
+// other, and neither is enough alone.
+//
+// UUIDs rather than indices: CUDA accepts GPU-… directly, and indices are
+// renumbered by the driver across reboots.
+//
+// Setting these is not by itself enforcement. Under Docker the enforcing
+// half is the device request on the host config; on runner: process there
+// is none, and an ordinary process can unset the variable.
+// Returns the NVIDIA_VISIBLE_DEVICES value it displaced, if any.
+func applyGPUVisibility(envVars map[string]string, instance *types.Instance) string {
+	if instance == nil {
+		return ""
+	}
+	displaced := envVars[runner.EnvNvidiaVisibleDevices]
+	if len(instance.GPUAssignments) == 0 {
+		// Denied, not merely unmentioned — see types.DevicesDenied. Inert
+		// on a host with no container toolkit.
+		runner.DenyDevices(envVars)
+		return displaced
+	}
+	devices := strings.Join(instance.GPUAssignments, ",")
+	// Last writer in prepareEnvVars, and that ordering IS the enforcement:
+	// ServiceSpec.Validate rejects these keys but runs only on the CLI
+	// path, so the overwrite is what actually holds.
+	for _, k := range types.GPUVisibilityVars {
+		envVars[k] = devices
+	}
+	return displaced
 }
 
 // isValidEnvKey checks if key matches ^[A-Z_][A-Z0-9_]*$

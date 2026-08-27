@@ -80,9 +80,9 @@ func (r *DockerRunner) RunDebug(ctx context.Context, instance *runetypes.Instanc
 		return nil, fmt.Errorf("debug exec requires a command")
 	}
 
-	cfg, hostCfg, err := r.instanceToContainerConfig(instance)
+	cfg, hostCfg, err := r.debugSidecarConfig(instance)
 	if err != nil {
-		return nil, fmt.Errorf("build sidecar config: %w", err)
+		return nil, err
 	}
 
 	// Replace the entrypoint so the failing app doesn't re-run when we
@@ -253,4 +253,23 @@ func (r *DockerRunner) Dial(ctx context.Context, instance *runetypes.Instance, p
 		return nil, fmt.Errorf("dial %s:%d: %w", ip, port, err)
 	}
 	return conn, nil
+}
+
+// debugSidecarConfig builds the postmortem sidecar's container config from
+// the instance it sits beside, minus that instance's devices.
+//
+// A debug sidecar is not the assigned workload. It is usually attached to
+// a Failed tombstone, whose reservation was released the moment it was
+// tombstoned — so the card may already belong to the replacement, and a
+// sidecar that inherited it would sit on a live engine with no ledger row
+// naming it. Dropping the request also keeps `rune exec --debug` working
+// on a host with no container toolkit.
+func (r *DockerRunner) debugSidecarConfig(instance *runetypes.Instance) (*container.Config, *container.HostConfig, error) {
+	cfg, hostCfg, err := r.instanceToContainerConfig(instance)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build sidecar config: %w", err)
+	}
+	hostCfg.Resources.DeviceRequests = nil
+	cfg.Env = formatEnvVars(runner.DeniedEnv(instance.Environment, len(instance.GPUAssignments) > 0))
+	return cfg, hostCfg, nil
 }
