@@ -187,7 +187,7 @@ func NewController(store store.Store, runnerManager manager.IRunnerManager, logg
 		store:         store,
 		runnerManager: runnerManager,
 		logger:        logger.WithComponent("instance-controller"),
-		env:           newEnvResolver(secretRepo, configRepo),
+		env:           newEnvResolver(secretRepo, configRepo, logger.WithComponent("instance-controller")),
 		nodes:         repos.NewNodeRepo(store),
 		lastPublished: map[string]string{},
 	}

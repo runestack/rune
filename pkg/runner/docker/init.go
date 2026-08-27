@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/api/types/mount"
 
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
 	runetypes "github.com/runestack/rune/pkg/types"
 )
 
@@ -156,11 +157,13 @@ func (r *DockerRunner) RunInit(ctx context.Context, instance *runetypes.Instance
 // for one InitStep, filtering the parent instance's resolved mounts
 // and merging step env on top of instance env.
 func (r *DockerRunner) initStepToContainerConfig(instance *runetypes.Instance, step runetypes.InitStep) (*container.Config, *container.HostConfig, error) {
-	// Build env: parent first, step overlays.
-	env := make(map[string]string, len(instance.Environment)+len(step.Env))
-	for k, v := range instance.Environment {
-		env[k] = v
-	}
+	// A step gets no devices. Keeping DeviceRequests out of this path is
+	// only half of it — the env grants cards on its own under the legacy
+	// runtime — so the parent's scoping is denied rather than inherited.
+	env := runner.DeniedEnv(instance.Environment, len(instance.GPUAssignments) > 0)
+	// After the denial: an explicit per-step value is the operator saying
+	// they meant it, which is the escape hatch a weight-conversion step
+	// would need.
 	for k, v := range step.Env {
 		env[k] = v
 	}

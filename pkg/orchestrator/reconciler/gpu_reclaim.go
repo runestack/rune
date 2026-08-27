@@ -307,8 +307,10 @@ func (r *Reconciler) flagInstance(ctx context.Context, inst *types.Instance, rea
 // succeeded. Without this the instance keeps reporting a reason that is
 // no longer true, and StatusReason feeds the service-level summary.
 //
-// Only clears reasons this sweep writes: another controller's note about
-// the same instance is not ours to drop.
+// Clears only the GPU reason family, not any note another controller
+// left. GpuDeviceMissing is also written by create-failure classification,
+// and clearing that one is right for the same reason: a successful adopt
+// means the card is back.
 func (r *Reconciler) clearGPUFlag(ctx context.Context, inst *types.Instance) {
 	var fresh types.Instance
 	err := r.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {

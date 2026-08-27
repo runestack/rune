@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/runner/process/security"
 	"github.com/runestack/rune/pkg/types"
 )
@@ -67,16 +69,7 @@ func (r *ProcessRunner) RunInit(ctx context.Context, instance *types.Instance, s
 	cmd := exec.CommandContext(ctx, step.Command, step.Args...)
 	cmd.Dir = workDir
 
-	// Env: parent first, step overlays. Always inherit the runner's
-	// own environment so the step can find PATH / TMPDIR / etc.
-	env := os.Environ()
-	for k, v := range instance.Environment {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	for k, v := range step.Env {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	cmd.Env = env
+	cmd.Env = initStepEnv(instance, step)
 
 	// Inherit the parent service's security context if set. Init steps
 	// that need to e.g. format a volume owned by the service user must
@@ -201,4 +194,33 @@ func timeOf(cmd *exec.Cmd) time.Time {
 	// We approximate by subtracting elapsed CPU time from now, which
 	// is good enough for a structured log field.
 	return time.Now().Add(-cmd.ProcessState.UserTime() - cmd.ProcessState.SystemTime())
+}
+
+// initStepEnv builds a step's environment: the runner's own first, so the
+// step can find PATH and TMPDIR, then the parent instance's, then the
+// step's own overlay.
+//
+// The parent's device scoping does NOT come along: a step is not the
+// workload they were assigned to.
+func initStepEnv(instance *types.Instance, step types.InitStep) []string {
+	// runed's own environment is inherited for PATH and TMPDIR, so it can
+	// carry a device scoping too — an operator who exported
+	// CUDA_VISIBLE_DEVICES in the unit file would otherwise hand it to
+	// every step, with nothing overriding it.
+	var env []string
+	for _, kv := range os.Environ() {
+		if k, _, ok := strings.Cut(kv, "="); ok && runner.IsGPUVisibilityVar(k) {
+			continue
+		}
+		env = append(env, kv)
+	}
+	for k, v := range runner.DeniedEnv(instance.Environment, len(instance.GPUAssignments) > 0) {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	// Last, so an explicit per-step value is the operator overriding the
+	// denial on purpose.
+	for k, v := range step.Env {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	return env
 }

@@ -203,7 +203,7 @@ func TestPrepareEnvVars_WithoutInterpolation(t *testing.T) {
 	}
 
 	// This should work since no interpolation is needed
-	envVars, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
+	envVars, _, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
 	assert.NoError(t, err)
 	assert.NotNil(t, envVars)
 
@@ -258,7 +258,7 @@ func TestPrepareEnvVars_Basic(t *testing.T) {
 	}
 
 	// Prepare environment variables
-	envVars, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
+	envVars, _, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
 	assert.NoError(t, err, "prepareEnvVars should not return an error")
 	assert.NotNil(t, envVars, "Environment variables should not be nil")
 
@@ -307,7 +307,7 @@ func TestPrepareEnvVars_HyphenatedNames(t *testing.T) {
 	}
 
 	// Prepare environment variables
-	envVars, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
+	envVars, _, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
 	assert.NoError(t, err, "prepareEnvVars should not return an error")
 	assert.NotNil(t, envVars, "Environment variables should not be nil")
 
@@ -372,7 +372,7 @@ func TestPrepareEnvVars_WithTemplateInterpolation(t *testing.T) {
 	}
 
 	// Prepare environment variables
-	envVars, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
+	envVars, _, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
 	assert.NoError(t, err, "prepareEnvVars should not return an error")
 	assert.NotNil(t, envVars, "Environment variables should not be nil")
 
@@ -424,7 +424,7 @@ func TestPrepareEnvVars_EnvFrom(t *testing.T) {
 
 	instance := &types.Instance{ID: "i1", Name: "i1", Namespace: "default", ServiceID: "svc"}
 
-	env, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
+	env, _, err := instanceCtrl.prepareEnvVars(ctx, service, instance)
 	require.NoError(t, err)
 
 	// Imported with prefix
@@ -444,6 +444,6 @@ func TestPrepareEnvVars_EnvFrom(t *testing.T) {
 	badService := &types.Service{ID: "svc2", Name: "svc2", Namespace: "default", EnvFrom: []types.EnvFromSource{
 		{SecretName: "bad", Namespace: "default"},
 	}}
-	_, err = instanceCtrl.prepareEnvVars(ctx, badService, instance)
+	_, _, err = instanceCtrl.prepareEnvVars(ctx, badService, instance)
 	require.Error(t, err)
 }

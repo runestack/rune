@@ -12,6 +12,8 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/go-connections/nat"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/types"
 	runetypes "github.com/runestack/rune/pkg/types"
 )
 
@@ -53,7 +55,7 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 			"rune.service.name":  instance.ServiceName,
 			"rune.instance.name": instance.Name,
 		},
-		Env: formatEnvVars(instance.Environment),
+		Env: formatEnvVars(deviceScopedEnv(instance)),
 	}
 
 	// Apply the service's command/args to the container.
@@ -89,6 +91,12 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 	if instance != nil && instance.Resources != nil {
 		applyResourceLimits(hostConfig, instance.Resources)
 	}
+
+	// Deliberately NOT in applyResourceLimits: that is shared with init
+	// steps, and a build or fetch step must not hold a card while the
+	// engine it prepares waits for one. RunDebug's sidecar shares this
+	// builder and clears the request; see debugSidecarConfig.
+	applyDeviceRequests(hostConfig, instance)
 
 	// Handle secret and config mounts
 	if instance.Metadata != nil {
@@ -244,4 +252,57 @@ func formatEnvVars(env map[string]string) []string {
 		result = append(result, fmt.Sprintf("%s=%s", k, v))
 	}
 	return result
+}
+
+// applyDeviceRequests scopes the container to its assigned devices.
+//
+// Count and DeviceIDs are an either/or pair, and the sentinel is the trap:
+// Count: -1 means EVERY device on the host, so a zero-valued struct that
+// later grows a Count by copy-paste hands out the whole box. Count stays 0
+// and DeviceIDs carries the assignment.
+//
+// This is the half that enforces. The orchestrator sets the matching
+// NVIDIA_VISIBLE_DEVICES, without which a stock image's built-in "all"
+// overrides this under the legacy runtime. Neither half is sufficient.
+func applyDeviceRequests(hostConfig *container.HostConfig, instance *runetypes.Instance) {
+	if instance == nil || len(instance.GPUAssignments) == 0 {
+		return
+	}
+	hostConfig.Resources.DeviceRequests = []container.DeviceRequest{{
+		Driver:       "nvidia",
+		Count:        0,
+		DeviceIDs:    append([]string(nil), instance.GPUAssignments...),
+		Capabilities: [][]string{{"gpu"}},
+	}}
+}
+
+// deviceScopedEnv is the instance's environment, with a device denial
+// added when it holds no assignment.
+//
+// The orchestrator writes this too. Repeating it here makes the denial a
+// property of the builder rather than of its callers, so an instance that
+// reaches here with an environment Rune never resolved is still denied.
+func deviceScopedEnv(instance *runetypes.Instance) map[string]string {
+	if len(instance.GPUAssignments) > 0 {
+		// Copied, not returned directly: a consumer that ever mutated the
+		// result would otherwise corrupt the instance record on GPU
+		// instances only — a bug that cannot reproduce on a box with no
+		// cards.
+		out := make(map[string]string, len(instance.Environment))
+		for k, v := range instance.Environment {
+			out[k] = v
+		}
+		// Same self-sufficiency as the branch below: an instance whose
+		// environment Rune never resolved must still be scoped, or a stock
+		// image's built-in "all" decides. Fills only, so a resolved
+		// environment passes through untouched.
+		devices := strings.Join(instance.GPUAssignments, ",")
+		for _, k := range types.GPUVisibilityVars {
+			if _, ok := out[k]; !ok {
+				out[k] = devices
+			}
+		}
+		return out
+	}
+	return runner.DeniedEnv(instance.Environment, false)
 }
