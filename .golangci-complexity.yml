@@ -1,0 +1,44 @@
+# Complexity gate, run as a second pass by `make lint-complexity`.
+#
+# Separate from .golangci.yml because `new-from-merge-base` below filters
+# *every* linter in the run down to changed lines: folding it into the main
+# config would quietly turn the whole-tree gate into a diff-only one.
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    # Not gocyclo: it counts branches without caring how deeply they nest, and
+    # scores the flat switch in methodToAction 67, the highest in the tree.
+    - gocognit
+    # One //nolint:gocognit defeats this file. This cannot stop that, only
+    # force it to name the linter and a reason, where review can see it.
+    - nolintlint
+
+linters-settings:
+  gocognit:
+    min-complexity: 20
+  nolintlint:
+    require-specific: true
+    require-explanation: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  # ~197 functions are already over the threshold, so the gate can only judge
+  # what a branch adds until they are rewritten (`make lint-complexity-report`).
+  #
+  # It catches less than it sounds like: gocognit reports at the func
+  # declaration line, so a new function fails and an existing one never does,
+  # even when this branch is what pushed it over. Relocating a function counts
+  # as new. Overridden by COMPLEXITY_BASE in the Makefile, which is where the
+  # base ref is chosen for every `make` path.
+  new-from-merge-base: origin/dev
+
+  exclude-dirs:
+    - vendor/
+    - examples/

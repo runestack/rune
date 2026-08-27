@@ -308,27 +308,43 @@ func (s *ServiceSpec) Kind() string         { return "Service" }
 // Deprecated: ValidateStructure is no longer used; structural checks happen in Validate via validateStructureFromNode.
 func (s *ServiceSpec) ValidateStructure(data []byte) error { return nil }
 
-// Validate validates the service specification.
+// Validate validates the service specification. Checks run in the order
+// listed and the first failure is returned, so moving an entry changes which
+// error a bad spec reports.
 func (s *ServiceSpec) Validate() error {
-	// Structural validation against original YAML node when available
-	if err := s.validateStructureFromNode(); err != nil {
-		return err
+	for _, check := range []func() error{
+		s.validateStructureFromNode,
+		s.validateNameAndImage,
+		s.validateScaleAndUpdate,
+		s.validatePorts,
+		s.validateHealth,
+		s.validateEnvFrom,
+		s.validateNetworkPolicy,
+		s.validateAutoscale,
+		s.validateDependencies,
+		s.validateResources,
+		s.validateExpose,
+		s.validateMounts,
+	} {
+		if err := check(); err != nil {
+			return err
+		}
 	}
+	return nil
+}
+
+func (s *ServiceSpec) validateNameAndImage() error {
 	if s.Name == "" {
 		return NewValidationError("service name is required")
 	}
-
 	if s.Image == "" {
 		return NewValidationError("service image is required")
 	}
-
-	// Validate registry override if present
 	if s.Registry != nil {
 		if err := s.Registry.Validate(); err != nil {
 			return WrapValidationError(err, "invalid registry override")
 		}
 	}
-
 	if s.ImagePull != "" {
 		switch s.ImagePull {
 		case ImagePullAlways, ImagePullMissing, ImagePullNever:
@@ -336,7 +352,10 @@ func (s *ServiceSpec) Validate() error {
 			return NewValidationError(fmt.Sprintf("invalid imagePull %q (allowed: always, missing, never)", s.ImagePull))
 		}
 	}
+	return nil
+}
 
+func (s *ServiceSpec) validateScaleAndUpdate() error {
 	if s.Scale < 0 {
 		return NewValidationError("service scale cannot be negative")
 	}
@@ -360,8 +379,10 @@ func (s *ServiceSpec) Validate() error {
 			"drainSeconds must be between 0 and %d (0 is still floored at %ds so in-flight requests are not cut off)",
 			MaxDrainSeconds, MinDrainSeconds))
 	}
+	return nil
+}
 
-	// Validate ports if present
+func (s *ServiceSpec) validatePorts() error {
 	for i, port := range s.Ports {
 		if port.Name == "" {
 			return NewValidationError("port name is required for port at index " + strconv.Itoa(i))
@@ -370,15 +391,20 @@ func (s *ServiceSpec) Validate() error {
 			return NewValidationError("port must be between 1 and 65535 for port " + port.Name)
 		}
 	}
+	return nil
+}
 
-	// Validate health checks if present
-	if s.Health != nil {
-		if err := s.Health.Validate(); err != nil {
-			return WrapValidationError(err, "invalid health check")
-		}
+func (s *ServiceSpec) validateHealth() error {
+	if s.Health == nil {
+		return nil
 	}
+	if err := s.Health.Validate(); err != nil {
+		return WrapValidationError(err, "invalid health check")
+	}
+	return nil
+}
 
-	// Validate envFrom sources
+func (s *ServiceSpec) validateEnvFrom() error {
 	for i, src := range s.EnvFrom {
 		if (src.Secret == "" && src.Configmap == "") || (src.Secret != "" && src.Configmap != "") {
 			return NewValidationError("envFrom item at index " + strconv.Itoa(i) + " must specify exactly one of 'secret' or 'configmap'")
@@ -391,136 +417,137 @@ func (s *ServiceSpec) Validate() error {
 		}
 		// Prefix can be any non-empty string; stricter validation enforced when materializing env vars
 	}
+	return nil
+}
 
-	// Validate network policy if present
-	if s.NetworkPolicy != nil {
-		if err := s.NetworkPolicy.Validate(); err != nil {
-			return WrapValidationError(err, "invalid network policy")
-		}
+func (s *ServiceSpec) validateNetworkPolicy() error {
+	if s.NetworkPolicy == nil {
+		return nil
 	}
-
-	// Validate autoscale if present
-	if s.Autoscale != nil && s.Autoscale.Enabled {
-		if s.Autoscale.Min < 0 {
-			return NewValidationError("autoscale min cannot be negative")
-		}
-		if s.Autoscale.Max < s.Autoscale.Min {
-			return NewValidationError("autoscale max cannot be less than min")
-		}
-		if s.Autoscale.Metric == "" {
-			return NewValidationError("autoscale metric is required")
-		}
-		if s.Autoscale.Target == "" {
-			return NewValidationError("autoscale target is required")
-		}
+	if err := s.NetworkPolicy.Validate(); err != nil {
+		return WrapValidationError(err, "invalid network policy")
 	}
+	return nil
+}
 
-	// Basic dependency validation (independent of autoscale)
+func (s *ServiceSpec) validateAutoscale() error {
+	if s.Autoscale == nil || !s.Autoscale.Enabled {
+		return nil
+	}
+	if s.Autoscale.Min < 0 {
+		return NewValidationError("autoscale min cannot be negative")
+	}
+	if s.Autoscale.Max < s.Autoscale.Min {
+		return NewValidationError("autoscale max cannot be less than min")
+	}
+	if s.Autoscale.Metric == "" {
+		return NewValidationError("autoscale metric is required")
+	}
+	if s.Autoscale.Target == "" {
+		return NewValidationError("autoscale target is required")
+	}
+	return nil
+}
+
+func (s *ServiceSpec) validateDependencies() error {
 	for i, dep := range s.Dependencies {
 		if dep.Service == "" && dep.FQDN == "" && dep.Secret == "" && dep.Configmap == "" {
 			return NewValidationError("dependency at index " + strconv.Itoa(i) + " must specify service, secret, or configmap (or FQDN string)")
 		}
 	}
+	return nil
+}
 
-	// Validate resource constraints if present
-	if s.Resources != nil {
-		// CPU
-		if s.Resources.CPU.Request != "" {
-			v, err := ParseCPU(s.Resources.CPU.Request)
-			if err != nil {
-				return NewValidationError("invalid cpu.request: " + err.Error())
-			}
-			if v < 0 {
-				return NewValidationError("cpu.request cannot be negative")
-			}
-		}
-		if s.Resources.CPU.Limit != "" {
-			v, err := ParseCPU(s.Resources.CPU.Limit)
-			if err != nil {
-				return NewValidationError("invalid cpu.limit: " + err.Error())
-			}
-			if v < 0 {
-				return NewValidationError("cpu.limit cannot be negative")
-			}
-		}
-		// request <= limit when both set
-		if s.Resources.CPU.Request != "" && s.Resources.CPU.Limit != "" {
-			req, _ := ParseCPU(s.Resources.CPU.Request)
-			lim, _ := ParseCPU(s.Resources.CPU.Limit)
-			if req > lim {
-				return NewValidationError("cpu.request cannot exceed cpu.limit")
-			}
-		}
+func (s *ServiceSpec) validateResources() error {
+	if s.Resources == nil {
+		return nil
+	}
+	if err := validateResourcePair("cpu", s.Resources.CPU.Request, s.Resources.CPU.Limit, ParseCPU); err != nil {
+		return err
+	}
+	if err := validateResourcePair("memory", s.Resources.Memory.Request, s.Resources.Memory.Limit, ParseMemory); err != nil {
+		return err
+	}
+	return s.validateGPU()
+}
 
-		// Memory
-		if s.Resources.Memory.Request != "" {
-			v, err := ParseMemory(s.Resources.Memory.Request)
-			if err != nil {
-				return NewValidationError("invalid memory.request: " + err.Error())
-			}
-			if v < 0 {
-				return NewValidationError("memory.request cannot be negative")
-			}
+// validateResourcePair is generic because the two quantity parsers disagree on
+// return type: ParseCPU gives float64 cores, ParseMemory gives int64 bytes.
+func validateResourcePair[T int64 | float64](field, request, limit string, parse func(string) (T, error)) error {
+	req, err := parseResourceQuantity(field+".request", request, parse)
+	if err != nil {
+		return err
+	}
+	lim, err := parseResourceQuantity(field+".limit", limit, parse)
+	if err != nil {
+		return err
+	}
+	if request != "" && limit != "" && req > lim {
+		return NewValidationError(field + ".request cannot exceed " + field + ".limit")
+	}
+	return nil
+}
+
+func parseResourceQuantity[T int64 | float64](field, value string, parse func(string) (T, error)) (T, error) {
+	// ParseCPU and ParseMemory both already return (0, nil) here, so this is
+	// redundant for them — it keeps that from becoming a requirement on a
+	// third parser, since the caller treats "" as "unset" rather than zero.
+	if value == "" {
+		return 0, nil
+	}
+	v, err := parse(value)
+	if err != nil {
+		return 0, NewValidationError("invalid " + field + ": " + err.Error())
+	}
+	if v < 0 {
+		return 0, NewValidationError(field + " cannot be negative")
+	}
+	return v, nil
+}
+
+func (s *ServiceSpec) validateExpose() error {
+	if s.Expose == nil {
+		return nil
+	}
+	if s.Expose.Port == "" {
+		return NewValidationError("expose port is required")
+	}
+	resolved := s.portByNameOrNumber(s.Expose.Port)
+	if resolved == nil {
+		return NewValidationError("expose.port must reference a declared service port by name or number")
+	}
+	proto := strings.ToLower(strings.TrimSpace(resolved.Protocol))
+	if proto == "" {
+		proto = "tcp"
+	}
+	if proto != "tcp" {
+		return NewValidationError("expose only supports tcp protocol in MVP")
+	}
+	return nil
+}
+
+// portByNameOrNumber returns the first declared port whose name or number
+// matches ref, scanning in declaration order — so a numeric match on an earlier
+// port wins over a name match on a later one.
+func (s *ServiceSpec) portByNameOrNumber(ref string) *ServicePort {
+	for i := range s.Ports {
+		p := &s.Ports[i]
+		if p.Name == ref {
+			return p
 		}
-		if s.Resources.Memory.Limit != "" {
-			v, err := ParseMemory(s.Resources.Memory.Limit)
-			if err != nil {
-				return NewValidationError("invalid memory.limit: " + err.Error())
-			}
-			if v < 0 {
-				return NewValidationError("memory.limit cannot be negative")
-			}
-		}
-		if s.Resources.Memory.Request != "" && s.Resources.Memory.Limit != "" {
-			req, _ := ParseMemory(s.Resources.Memory.Request)
-			lim, _ := ParseMemory(s.Resources.Memory.Limit)
-			if req > lim {
-				return NewValidationError("memory.request cannot exceed memory.limit")
-			}
-		}
-		if err := s.validateGPU(); err != nil {
-			return err
+		if n, err := strconv.Atoi(ref); err == nil && n == p.Port {
+			return p
 		}
 	}
+	return nil
+}
 
-	// Validate expose if present
-	if s.Expose != nil {
-		if s.Expose.Port == "" {
-			return NewValidationError("expose port is required")
-		}
-		// Resolve expose.port by name or number and ensure the port exists and is TCP
-		var resolved *ServicePort
-		for i := range s.Ports {
-			p := &s.Ports[i]
-			if p.Name == s.Expose.Port {
-				resolved = p
-				break
-			}
-			// Try numeric match if expose.port is a number string
-			if n, err := strconv.Atoi(s.Expose.Port); err == nil && n == p.Port {
-				resolved = p
-				break
-			}
-		}
-		if resolved == nil {
-			return NewValidationError("expose.port must reference a declared service port by name or number")
-		}
-		// Default protocol to tcp if empty
-		proto := strings.ToLower(strings.TrimSpace(resolved.Protocol))
-		if proto == "" {
-			proto = "tcp"
-		}
-		if proto != "tcp" {
-			return NewValidationError("expose only supports tcp protocol in MVP")
-		}
-	}
-
-	// Validate volume mounts (RUNE-070).
+func (s *ServiceSpec) validateMounts() error {
 	if err := ValidateVolumeMounts(s.Volumes); err != nil {
 		return err
 	}
 
-	// Cross-mount lint (RUNE-070/072): shared paths, system blocklist, RWO+scale>1.
+	// Shared paths, system blocklist, and RWO volumes on a scaled-up service.
 	owner := fmt.Sprintf("service %q", s.Name)
 	if err := ValidateMountPathConflicts(owner, s.Scale, s.Volumes, s.SecretMounts, s.ConfigmapMounts); err != nil {
 		return err

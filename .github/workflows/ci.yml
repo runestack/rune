@@ -14,6 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # No merge base means revgrep cannot filter, and the complexity gate
+          # fails the job with ~200 pre-existing findings.
+          fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -23,7 +27,11 @@ jobs:
       - name: Install tools
         run: make setup
       - name: Lint
-        run: make lint
+        # Judge a stacked branch against its own parent. Via env, not `run:`
+        # interpolation — refnames may contain shell metacharacters.
+        env:
+          BASE_REF: ${{ github.base_ref || 'dev' }}
+        run: make lint COMPLEXITY_BASE="origin/$BASE_REF"
 
   test:
     name: Unit Tests

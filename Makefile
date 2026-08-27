@@ -1,4 +1,4 @@
-.PHONY: build test lint lint-orderedlog-seam clean setup dev generate proto proto-tools proto-ts ui docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
+.PHONY: build test lint lint-orderedlog-seam lint-complexity lint-complexity-report clean setup dev generate proto proto-tools proto-ts ui docs docker install coverage-report coverage-summary test-unit test-unit-race test-unit-race-script test-integration coverage-unit coverage help build-all build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64
 
 # Tools and paths
 GO ?= go
@@ -181,15 +181,33 @@ check-coverage:
 		exit 1; \
 	fi
 
-## Lint the project
+## Lint the project. Complexity runs last so one over-threshold function does
+## not hide every gofmt and staticcheck finding behind it.
 lint: lint-orderedlog-seam
 	@echo "Running linters..."
 	@golangci-lint run ./...
+	@$(MAKE) --no-print-directory lint-complexity
 
 ## Enforce orderedlog seam (RUNE-039): no direct Badger writes to
 ## protected key prefixes outside pkg/store/orderedlog/.
 lint-orderedlog-seam:
 	@scripts/check_orderedlog_seam.sh
+
+## Complexity gate for code this branch adds. Needs the base ref fetched;
+## override it for a branch stacked on another: COMPLEXITY_BASE=origin/feat/x.
+##
+## `config verify` first: golangci-lint rejects an unknown linter loudly but
+## accepts a misspelled *setting* silently, falling back to gocognit's default
+## of 30 — the one way this gate weakens without anyone noticing.
+COMPLEXITY_BASE ?= origin/dev
+lint-complexity:
+	@echo "Checking complexity of new code..."
+	@golangci-lint config verify -c .golangci-complexity.yml
+	@golangci-lint run -c .golangci-complexity.yml --new-from-merge-base=$(COMPLEXITY_BASE) ./...
+
+## What is left of the complexity backlog: same gate, whole tree, no filter.
+lint-complexity-report:
+	@golangci-lint run -c .golangci-complexity.yml --new-from-merge-base= ./... || true
 
 ## Clean build and coverage artifacts
 clean:
@@ -294,6 +312,8 @@ help:
 	@echo ""
 	@echo "Dev Tools:"
 	@echo "  lint              Run linters"
+	@echo "  lint-complexity   Complexity gate for code this branch adds"
+	@echo "  lint-complexity-report  Functions still over the complexity threshold"
 	@echo "  clean             Clean all artifacts"
 	@echo "  setup             Install dev tools"
 	@echo ""
