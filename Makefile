@@ -182,7 +182,7 @@ check-coverage:
 	fi
 
 ## Lint the project
-lint: lint-orderedlog-seam
+lint: lint-orderedlog-seam lint-complexity
 	@echo "Running linters..."
 	@golangci-lint run ./...
 
@@ -190,6 +190,19 @@ lint: lint-orderedlog-seam
 ## protected key prefixes outside pkg/store/orderedlog/.
 lint-orderedlog-seam:
 	@scripts/check_orderedlog_seam.sh
+
+## Complexity gate. A second pass because .golangci-complexity.yml filters to
+## changed lines, which would weaken the whole-tree pass if merged into it.
+## Needs origin/dev present: CI checks out with fetch-depth 0 for this.
+lint-complexity:
+	@echo "Checking complexity of new code..."
+	@golangci-lint run -c .golangci-complexity.yml ./...
+
+## What is left of the complexity backlog: same gate, whole tree, no filter.
+## Informational — never wired into `lint`, and it will report ~170 functions
+## until the rewrite is done.
+lint-complexity-report:
+	@golangci-lint run -c .golangci-complexity.yml --new-from-merge-base= ./... || true
 
 ## Clean build and coverage artifacts
 clean:

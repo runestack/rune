@@ -410,3 +410,81 @@ service:
 		t.Fatalf("got: %v", err)
 	}
 }
+
+// Validate runs its checks in a fixed order and returns the first failure, so
+// a spec with several problems reports a stable error. Pinned because the
+// checks live in a slice now and reordering it is a one-line, silent change.
+func TestServiceSpec_Validate_CheckOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		spec ServiceSpec
+		want string
+	}{
+		{"name before image", ServiceSpec{}, "service name is required"},
+		{"image before scale", ServiceSpec{Name: "api", Scale: -1}, "service image is required"},
+		{
+			"scale before ports",
+			ServiceSpec{Name: "api", Image: "repo/api", Scale: -1, Ports: []ServicePort{{Port: 80}}},
+			"service scale cannot be negative",
+		},
+		{
+			"ports before health",
+			ServiceSpec{
+				Name:   "api",
+				Image:  "repo/api",
+				Ports:  []ServicePort{{Port: 80}},
+				Health: &HealthCheck{Liveness: &Probe{Type: "http"}},
+			},
+			"port name is required",
+		},
+		{
+			"ports before autoscale",
+			ServiceSpec{
+				Name:      "api",
+				Image:     "repo/api",
+				Ports:     []ServicePort{{Port: 80}},
+				Autoscale: &ServiceAutoscale{Enabled: true, Min: -1},
+			},
+			"port name is required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.spec.Validate()
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %q, want it to contain %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+// ParseCPU and ParseMemory both accept a leading minus, so the negative check
+// is the only thing rejecting "cpu.request: -1".
+func TestServiceSpec_Validate_NegativeResources(t *testing.T) {
+	cases := []struct {
+		name      string
+		resources Resources
+		want      string
+	}{
+		{"cpu request", Resources{CPU: ResourceLimit{Request: "-1"}}, "cpu.request cannot be negative"},
+		{"cpu limit", Resources{CPU: ResourceLimit{Limit: "-500m"}}, "cpu.limit cannot be negative"},
+		{"memory request", Resources{Memory: ResourceLimit{Request: "-1Gi"}}, "memory.request cannot be negative"},
+		{"memory limit", Resources{Memory: ResourceLimit{Limit: "-1Gi"}}, "memory.limit cannot be negative"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := tc.resources
+			spec := ServiceSpec{Name: "api", Image: "repo/api", Resources: &res}
+			err := spec.Validate()
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %q, want it to contain %q", err.Error(), tc.want)
+			}
+		})
+	}
+}

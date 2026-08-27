@@ -1,0 +1,52 @@
+# Complexity gate, run as a second pass by `make lint-complexity`.
+#
+# Separate from .golangci.yml because of `new-from-merge-base` below: that
+# setting filters *every* linter in the run down to changed lines, so folding
+# it into the main config would silently turn the whole-tree gofmt/govet/
+# staticcheck gate into a diff-only one. Two passes, two configs.
+#
+# gocognit rather than gocyclo: gocyclo counts branches, so a flat
+# field-by-field converter like ServiceToProto scores 55 while a nested
+# reconciler loop scores 34, which is backwards. gocognit charges for nesting
+# and gives a long flat switch almost nothing, which matches what is actually
+# hard to read.
+
+run:
+  timeout: 5m
+  tests: false
+
+linters:
+  disable-all: true
+  enable:
+    - gocognit
+
+linters-settings:
+  gocognit:
+    min-complexity: 20
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  # TEMPORARY. The tree has ~170 functions over the threshold, so the gate can
+  # only apply to code a branch actually adds; merge-base rather than a plain
+  # rev so commits that landed on dev after you branched are not charged to you.
+  #
+  # What this actually catches, verified rather than assumed: gocognit anchors
+  # its report at the func declaration line, and the new-code filter keeps only
+  # issues on changed lines. So a NEW function over the threshold fails, and an
+  # existing one does not — even if this branch edits its body, even if the edit
+  # is what pushed it over. It is a no-new-debt ratchet, not a ceiling.
+  #
+  # Two ways to tighten once the backlog shrinks: add --whole-files, which
+  # flags every offender in any file the branch touches, or delete this line so
+  # the gate covers the tree. The second is the goal.
+  #
+  # `make lint-complexity-report` prints what is left.
+  new-from-merge-base: origin/dev
+
+  exclude-dirs:
+    - vendor/
+    - examples/
+  exclude-files:
+    - ".*\\.generated\\.go$"
