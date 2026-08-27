@@ -5,6 +5,7 @@ package client
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -163,6 +164,22 @@ func ServiceToProto(service *types.Service) *generated.Service {
 				Request: service.Resources.Memory.Request,
 				Limit:   service.Resources.Memory.Limit,
 			},
+		}
+		// Absent stays absent: a nil request and an empty one mean opposite
+		// things — no GPU at all, versus one whole device.
+		if g := service.Resources.GPU; g != nil {
+			// Saturate rather than wrap. Admission refuses a count larger
+			// than the node has devices either way, but a wrap could turn
+			// an absurd request into an admissible one.
+			count := g.Count
+			if count > math.MaxInt32 {
+				count = math.MaxInt32
+			}
+			protoService.Resources.Gpu = &generated.GPURequest{
+				Count:              int32(count), //nolint:gosec // G115: saturated above
+				Vram:               g.VRAM,
+				AllowHeterogeneous: g.AllowHeterogeneous,
+			}
 		}
 	}
 
@@ -586,6 +603,13 @@ func ProtoToService(proto *generated.Service) (*types.Service, error) {
 			service.Resources.Memory = types.ResourceLimit{
 				Request: proto.Resources.Memory.Request,
 				Limit:   proto.Resources.Memory.Limit,
+			}
+		}
+		if g := proto.Resources.Gpu; g != nil {
+			service.Resources.GPU = &types.GPURequest{
+				Count:              int(g.Count),
+				VRAM:               g.Vram,
+				AllowHeterogeneous: g.AllowHeterogeneous,
 			}
 		}
 	}

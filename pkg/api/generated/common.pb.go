@@ -465,7 +465,10 @@ type Resources struct {
 	// CPU request and limit
 	Cpu *ResourceLimit `protobuf:"bytes,1,opt,name=cpu,proto3" json:"cpu,omitempty"`
 	// Memory request and limit
-	Memory        *ResourceLimit `protobuf:"bytes,2,opt,name=memory,proto3" json:"memory,omitempty"`
+	Memory *ResourceLimit `protobuf:"bytes,2,opt,name=memory,proto3" json:"memory,omitempty"`
+	// GPU devices. Optional: absent means no request at all, which is not
+	// the same as a present-but-empty one — that asks for a whole device.
+	Gpu           *GPURequest `protobuf:"bytes,3,opt,name=gpu,proto3,oneof" json:"gpu,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -514,6 +517,77 @@ func (x *Resources) GetMemory() *ResourceLimit {
 	return nil
 }
 
+func (x *Resources) GetGpu() *GPURequest {
+	if x != nil {
+		return x.Gpu
+	}
+	return nil
+}
+
+// GPURequest asks for accelerator devices.
+type GPURequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Number of whole devices. Zero means one.
+	Count int32 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	// A share of one device's memory, e.g. "20Gi". Set instead of count.
+	Vram string `protobuf:"bytes,2,opt,name=vram,proto3" json:"vram,omitempty"`
+	// Allow a multi-device request to span different products.
+	AllowHeterogeneous bool `protobuf:"varint,3,opt,name=allow_heterogeneous,json=allowHeterogeneous,proto3" json:"allow_heterogeneous,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *GPURequest) Reset() {
+	*x = GPURequest{}
+	mi := &file_pkg_api_proto_common_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GPURequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GPURequest) ProtoMessage() {}
+
+func (x *GPURequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_common_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GPURequest.ProtoReflect.Descriptor instead.
+func (*GPURequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GPURequest) GetCount() int32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *GPURequest) GetVram() string {
+	if x != nil {
+		return x.Vram
+	}
+	return ""
+}
+
+func (x *GPURequest) GetAllowHeterogeneous() bool {
+	if x != nil {
+		return x.AllowHeterogeneous
+	}
+	return false
+}
+
 // ProcessSpec represents process-specific configuration for a service.
 type ProcessSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -531,7 +605,7 @@ type ProcessSpec struct {
 
 func (x *ProcessSpec) Reset() {
 	*x = ProcessSpec{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[5]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -543,7 +617,7 @@ func (x *ProcessSpec) String() string {
 func (*ProcessSpec) ProtoMessage() {}
 
 func (x *ProcessSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[5]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -556,7 +630,7 @@ func (x *ProcessSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessSpec.ProtoReflect.Descriptor instead.
 func (*ProcessSpec) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{5}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ProcessSpec) GetCommand() string {
@@ -608,7 +682,7 @@ type ProcessSecurityContext struct {
 
 func (x *ProcessSecurityContext) Reset() {
 	*x = ProcessSecurityContext{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[6]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -620,7 +694,7 @@ func (x *ProcessSecurityContext) String() string {
 func (*ProcessSecurityContext) ProtoMessage() {}
 
 func (x *ProcessSecurityContext) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[6]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -633,7 +707,7 @@ func (x *ProcessSecurityContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessSecurityContext.ProtoReflect.Descriptor instead.
 func (*ProcessSecurityContext) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{6}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ProcessSecurityContext) GetUser() string {
@@ -699,7 +773,7 @@ type ServicePort struct {
 
 func (x *ServicePort) Reset() {
 	*x = ServicePort{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -711,7 +785,7 @@ func (x *ServicePort) String() string {
 func (*ServicePort) ProtoMessage() {}
 
 func (x *ServicePort) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[7]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -724,7 +798,7 @@ func (x *ServicePort) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServicePort.ProtoReflect.Descriptor instead.
 func (*ServicePort) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{7}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ServicePort) GetName() string {
@@ -795,7 +869,7 @@ type ServiceExpose struct {
 
 func (x *ServiceExpose) Reset() {
 	*x = ServiceExpose{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[8]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -807,7 +881,7 @@ func (x *ServiceExpose) String() string {
 func (*ServiceExpose) ProtoMessage() {}
 
 func (x *ServiceExpose) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[8]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -820,7 +894,7 @@ func (x *ServiceExpose) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceExpose.ProtoReflect.Descriptor instead.
 func (*ServiceExpose) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{8}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ServiceExpose) GetPort() string {
@@ -888,7 +962,7 @@ type ExposeClientCert struct {
 
 func (x *ExposeClientCert) Reset() {
 	*x = ExposeClientCert{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[9]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -900,7 +974,7 @@ func (x *ExposeClientCert) String() string {
 func (*ExposeClientCert) ProtoMessage() {}
 
 func (x *ExposeClientCert) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[9]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -913,7 +987,7 @@ func (x *ExposeClientCert) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExposeClientCert.ProtoReflect.Descriptor instead.
 func (*ExposeClientCert) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{9}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ExposeClientCert) GetCaSecret() string {
@@ -957,7 +1031,7 @@ type ExposeServiceTLS struct {
 
 func (x *ExposeServiceTLS) Reset() {
 	*x = ExposeServiceTLS{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[10]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -969,7 +1043,7 @@ func (x *ExposeServiceTLS) String() string {
 func (*ExposeServiceTLS) ProtoMessage() {}
 
 func (x *ExposeServiceTLS) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[10]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -982,7 +1056,7 @@ func (x *ExposeServiceTLS) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExposeServiceTLS.ProtoReflect.Descriptor instead.
 func (*ExposeServiceTLS) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{10}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ExposeServiceTLS) GetSecret() string {
@@ -1038,7 +1112,7 @@ type Probe struct {
 
 func (x *Probe) Reset() {
 	*x = Probe{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[11]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1050,7 +1124,7 @@ func (x *Probe) String() string {
 func (*Probe) ProtoMessage() {}
 
 func (x *Probe) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[11]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1063,7 +1137,7 @@ func (x *Probe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Probe.ProtoReflect.Descriptor instead.
 func (*Probe) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{11}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Probe) GetType() ProbeType {
@@ -1149,7 +1223,7 @@ type HealthCheck struct {
 
 func (x *HealthCheck) Reset() {
 	*x = HealthCheck{}
-	mi := &file_pkg_api_proto_common_proto_msgTypes[12]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1161,7 +1235,7 @@ func (x *HealthCheck) String() string {
 func (*HealthCheck) ProtoMessage() {}
 
 func (x *HealthCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_api_proto_common_proto_msgTypes[12]
+	mi := &file_pkg_api_proto_common_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1174,7 +1248,7 @@ func (x *HealthCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheck.ProtoReflect.Descriptor instead.
 func (*HealthCheck) Descriptor() ([]byte, []int) {
-	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{12}
+	return file_pkg_api_proto_common_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *HealthCheck) GetLiveness() *Probe {
@@ -1207,10 +1281,17 @@ const file_pkg_api_proto_common_proto_rawDesc = "" +
 	"\x12continuation_token\x18\x03 \x01(\tR\x11continuationToken\"?\n" +
 	"\rResourceLimit\x12\x18\n" +
 	"\arequest\x18\x01 \x01(\tR\arequest\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\tR\x05limit\"g\n" +
+	"\x05limit\x18\x02 \x01(\tR\x05limit\"\x9c\x01\n" +
 	"\tResources\x12)\n" +
 	"\x03cpu\x18\x01 \x01(\v2\x17.rune.api.ResourceLimitR\x03cpu\x12/\n" +
-	"\x06memory\x18\x02 \x01(\v2\x17.rune.api.ResourceLimitR\x06memory\"\xa9\x01\n" +
+	"\x06memory\x18\x02 \x01(\v2\x17.rune.api.ResourceLimitR\x06memory\x12+\n" +
+	"\x03gpu\x18\x03 \x01(\v2\x14.rune.api.GPURequestH\x00R\x03gpu\x88\x01\x01B\x06\n" +
+	"\x04_gpu\"g\n" +
+	"\n" +
+	"GPURequest\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x05R\x05count\x12\x12\n" +
+	"\x04vram\x18\x02 \x01(\tR\x04vram\x12/\n" +
+	"\x13allow_heterogeneous\x18\x03 \x01(\bR\x12allowHeterogeneous\"\xa9\x01\n" +
 	"\vProcessSpec\x12\x18\n" +
 	"\acommand\x18\x01 \x01(\tR\acommand\x12\x12\n" +
 	"\x04args\x18\x02 \x03(\tR\x04args\x12\x1f\n" +
@@ -1300,7 +1381,7 @@ func file_pkg_api_proto_common_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_api_proto_common_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_pkg_api_proto_common_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_pkg_api_proto_common_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_pkg_api_proto_common_proto_goTypes = []any{
 	(ResourceType)(0),              // 0: rune.api.ResourceType
 	(EventType)(0),                 // 1: rune.api.EventType
@@ -1311,29 +1392,31 @@ var file_pkg_api_proto_common_proto_goTypes = []any{
 	(*PagingParams)(nil),           // 6: rune.api.PagingParams
 	(*ResourceLimit)(nil),          // 7: rune.api.ResourceLimit
 	(*Resources)(nil),              // 8: rune.api.Resources
-	(*ProcessSpec)(nil),            // 9: rune.api.ProcessSpec
-	(*ProcessSecurityContext)(nil), // 10: rune.api.ProcessSecurityContext
-	(*ServicePort)(nil),            // 11: rune.api.ServicePort
-	(*ServiceExpose)(nil),          // 12: rune.api.ServiceExpose
-	(*ExposeClientCert)(nil),       // 13: rune.api.ExposeClientCert
-	(*ExposeServiceTLS)(nil),       // 14: rune.api.ExposeServiceTLS
-	(*Probe)(nil),                  // 15: rune.api.Probe
-	(*HealthCheck)(nil),            // 16: rune.api.HealthCheck
+	(*GPURequest)(nil),             // 9: rune.api.GPURequest
+	(*ProcessSpec)(nil),            // 10: rune.api.ProcessSpec
+	(*ProcessSecurityContext)(nil), // 11: rune.api.ProcessSecurityContext
+	(*ServicePort)(nil),            // 12: rune.api.ServicePort
+	(*ServiceExpose)(nil),          // 13: rune.api.ServiceExpose
+	(*ExposeClientCert)(nil),       // 14: rune.api.ExposeClientCert
+	(*ExposeServiceTLS)(nil),       // 15: rune.api.ExposeServiceTLS
+	(*Probe)(nil),                  // 16: rune.api.Probe
+	(*HealthCheck)(nil),            // 17: rune.api.HealthCheck
 }
 var file_pkg_api_proto_common_proto_depIdxs = []int32{
 	7,  // 0: rune.api.Resources.cpu:type_name -> rune.api.ResourceLimit
 	7,  // 1: rune.api.Resources.memory:type_name -> rune.api.ResourceLimit
-	10, // 2: rune.api.ProcessSpec.security_context:type_name -> rune.api.ProcessSecurityContext
-	14, // 3: rune.api.ServiceExpose.tls:type_name -> rune.api.ExposeServiceTLS
-	13, // 4: rune.api.ServiceExpose.client_cert:type_name -> rune.api.ExposeClientCert
-	3,  // 5: rune.api.Probe.type:type_name -> rune.api.ProbeType
-	15, // 6: rune.api.HealthCheck.liveness:type_name -> rune.api.Probe
-	15, // 7: rune.api.HealthCheck.readiness:type_name -> rune.api.Probe
-	8,  // [8:8] is the sub-list for method output_type
-	8,  // [8:8] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	9,  // 2: rune.api.Resources.gpu:type_name -> rune.api.GPURequest
+	11, // 3: rune.api.ProcessSpec.security_context:type_name -> rune.api.ProcessSecurityContext
+	15, // 4: rune.api.ServiceExpose.tls:type_name -> rune.api.ExposeServiceTLS
+	14, // 5: rune.api.ServiceExpose.client_cert:type_name -> rune.api.ExposeClientCert
+	3,  // 6: rune.api.Probe.type:type_name -> rune.api.ProbeType
+	16, // 7: rune.api.HealthCheck.liveness:type_name -> rune.api.Probe
+	16, // 8: rune.api.HealthCheck.readiness:type_name -> rune.api.Probe
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_pkg_api_proto_common_proto_init() }
@@ -1341,13 +1424,14 @@ func file_pkg_api_proto_common_proto_init() {
 	if File_pkg_api_proto_common_proto != nil {
 		return
 	}
+	file_pkg_api_proto_common_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_common_proto_rawDesc), len(file_pkg_api_proto_common_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

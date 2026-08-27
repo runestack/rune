@@ -66,6 +66,22 @@ message Resources {
   
   // Memory request and limit
   ResourceLimit memory = 2;
+
+  // GPU devices. Optional: absent means no request at all, which is not
+  // the same as a present-but-empty one — that asks for a whole device.
+  optional GPURequest gpu = 3;
+}
+
+// GPURequest asks for accelerator devices.
+message GPURequest {
+  // Number of whole devices. Zero means one.
+  int32 count = 1;
+
+  // A share of one device's memory, e.g. "20Gi". Set instead of count.
+  string vram = 2;
+
+  // Allow a multi-device request to span different products.
+  bool allow_heterogeneous = 3;
 }
 
 
