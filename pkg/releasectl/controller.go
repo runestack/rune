@@ -303,6 +303,7 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 		svc.Metadata.OwnedBy = &stamp
 		if existing, err := a.c.orch.GetService(ctx, ref.Namespace, ref.Name); err == nil {
 			a.capture(ref, preImage{Existed: true, Service: deepCopy(existing)})
+			carryGenerations(existing, svc)
 			return a.c.orch.UpdateService(ctx, svc)
 		}
 		a.capture(ref, preImage{})
@@ -557,3 +558,44 @@ var (
 	_ release.LiveLookup     = (*liveLookup)(nil)
 	_ release.Applier        = (*applier)(nil)
 )
+
+// carryGenerations moves the stored counters onto a freshly rendered
+// service, bumping them when the spec actually changed.
+//
+// A rendered service starts at zero — ToService builds its metadata from
+// nothing — so writing it through unchanged resets both counters on every
+// apply. That is not cosmetic: TemplateGeneration is what tells the
+// reconciler an instance is running an old template, and zero is never
+// newer than anything, so the check goes quiet for the rest of the
+// service's life. What kept updates working at all is the field-by-field
+// comparison beneath it, which is narrower and differs by runtime.
+//
+// A stored zero is a service that has been through that, so it counts as
+// one rather than staying at zero — otherwise the first apply after this
+// lands would look like no change at all and leave the counter dead.
+func carryGenerations(stored, rendered *types.Service) {
+	if stored == nil || stored.Metadata == nil || rendered == nil || rendered.Metadata == nil {
+		return
+	}
+	generation := stored.Metadata.Generation
+	if generation == 0 {
+		generation = 1
+	}
+	templateGeneration := stored.Metadata.TemplateGeneration
+	if templateGeneration == 0 {
+		templateGeneration = generation
+	}
+
+	if stored.CalculateHash() != rendered.CalculateHash() {
+		generation++
+		// Only a template change replaces instances. A scale or
+		// updateStrategy edit moves the generation and leaves them alone.
+		if stored.CalculateTemplateHash() != rendered.CalculateTemplateHash() {
+			templateGeneration = generation
+		}
+	}
+
+	rendered.Metadata.Generation = generation
+	rendered.Metadata.TemplateGeneration = templateGeneration
+	rendered.Metadata.ObservedGeneration = stored.Metadata.ObservedGeneration
+}
