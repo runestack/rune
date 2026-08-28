@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -32,6 +33,15 @@ type Orchestrator interface {
 	// Service operations
 	CreateService(ctx context.Context, service *types.Service) error
 	UpdateService(ctx context.Context, service *types.Service) error
+
+	// UpdateServiceFunc reads the stored service, runs mutate on it and writes
+	// it back atomically. Anything whose result depends on what was read — a
+	// counter derived from the stored value, a guard on a field — must use this
+	// rather than GetService followed by UpdateService, which silently discards
+	// whatever another writer changed in between. mutate may run more than once,
+	// on a target re-read each time, and must not call back into the store.
+	// Returns ErrServiceNotFound, and only that, when the service is absent.
+	UpdateServiceFunc(ctx context.Context, namespace, name string, mutate func(stored *types.Service) error) error
 	DeleteService(ctx context.Context, request *types.DeletionRequest) (*types.DeletionResponse, error)
 	GetService(ctx context.Context, namespace, name string) (*types.Service, error)
 	ListServices(ctx context.Context, namespace string) ([]*types.Service, error)
@@ -475,6 +485,38 @@ func (o *orchestrator) CreateService(ctx context.Context, service *types.Service
 		log.Str("namespace", service.Namespace))
 	return nil
 }
+
+func (o *orchestrator) UpdateServiceFunc(ctx context.Context, namespace, name string, mutate func(*types.Service) error) error {
+	var fresh types.Service
+	// Wrapped so a caller's own error is never mistaken for absence: the store
+	// reports not-found by message, and a mutate that rejects something for a
+	// reason phrased "… not found" would otherwise read as "no such service"
+	// — which callers answer by creating one.
+	err := o.store.UpdateFunc(ctx, types.ResourceTypeService, namespace, name, &fresh, func() error {
+		if err := mutate(&fresh); err != nil {
+			return mutateRejected{err}
+		}
+		return nil
+	})
+	var rejected mutateRejected
+	if errors.As(err, &rejected) {
+		return rejected.err
+	}
+	if err != nil && store.IsNotFoundError(err) {
+		return fmt.Errorf("%w: %s/%s", ErrServiceNotFound, namespace, name)
+	}
+	return err
+}
+
+// ErrServiceNotFound reports that a service does not exist. Callers branch on
+// this to tell "absent" from "the update was rejected", so it must never stand
+// in for anything else.
+var ErrServiceNotFound = errors.New("service not found")
+
+type mutateRejected struct{ err error }
+
+func (e mutateRejected) Error() string { return e.err.Error() }
+func (e mutateRejected) Unwrap() error { return e.err }
 
 func (o *orchestrator) UpdateService(ctx context.Context, service *types.Service) error {
 	o.logger.Info("Updating service",

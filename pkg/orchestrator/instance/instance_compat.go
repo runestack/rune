@@ -78,7 +78,8 @@ func preClassifyInstance(instance *types.Instance, service *types.Service) (v Co
 	// describes. Report OK so the reconciler leaves the record in
 	// place; the reconciler's retry-in-place branch handles backoff
 	// (Failed) or holds-without-retry (Stalled — operator must run
-	// `rune restart instance` or `rune cast` to re-arm).
+	// `rune restart <service>` to re-arm; a cast will not, because this
+	// gate reports compatible before any generation comparison).
 	//
 	// This guard stays FIRST and stays OK. Everything below assumes a
 	// container existed at some point.

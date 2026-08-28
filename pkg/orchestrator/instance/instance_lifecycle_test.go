@@ -543,7 +543,7 @@ func TestRetryCreateInstance_ResetsTransientStateAndPreservesAttempts(t *testing
 }
 
 // TestRestartInstance_StuckInCreateReusesSameRecord asserts the
-// operator-action path: `rune restart instance` on a Stalled (or
+// operator-action path: `rune restart <service>` on a Stalled (or
 // Failed-with-backoff) stuck-in-create record clears CreateAttempts
 // and re-runs the create pipeline against the SAME UUID, instead of
 // the tombstone+replace dance used for Running instances. Operators

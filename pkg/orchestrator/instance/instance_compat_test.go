@@ -95,12 +95,39 @@ func TestIsInstanceCompatible_PreMigrationServiceDoesNotBounce(t *testing.T) {
 		"pre-migration services must not bounce instances on upgrade; got reason: %s", reason)
 }
 
+// Mirror of the case above: the service has a template generation and the
+// instance has none. It must read as outdated, or it keeps the old image with
+// nothing in flight to replace it.
+func TestIsInstanceCompatible_InstanceStampedZeroIsOutdated(t *testing.T) {
+	ctx, _, testRunner, controller := setupTestController(t)
+
+	service := &types.Service{
+		ID: "svc-zeroed", Name: "svc-zeroed", Namespace: "default",
+		Image: "app:v2", Scale: 1,
+		Metadata: &types.ServiceMetadata{Generation: 1, TemplateGeneration: 1},
+	}
+	instance := &types.Instance{
+		ID: "svc-zeroed-abc", Name: "svc-zeroed-abc", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status:   types.InstanceStatusRunning,
+		Metadata: &types.InstanceMetadata{ServiceGeneration: 0},
+	}
+	testRunner.StatusResults[instance.ID] = types.InstanceStatusRunning
+
+	// Outdated specifically, not merely incompatible: Broken is deleted
+	// immediately and outside the update budget, which is the whole-fleet
+	// teardown the template counter exists to avoid.
+	verdict := controller.ClassifyInstance(ctx, instance, service)
+	assert.Equal(t, CompatOutdated, verdict.Class)
+	assert.NotEmpty(t, verdict.Reason)
+}
+
 // TestIsInstanceCompatibleWithService_StuckInCreateHoldsSlot is the
 // regression guard against the churn loop. A Failed record whose
 // container never came up (ContainerEverCreatedAt == nil) must report
 // as compatible so the reconciler does NOT tombstone+recreate-with-
 // new-UUID every tick. The slot is held in place until an operator
-// re-arms it via `rune restart instance`.
+// re-arms it via `rune restart <service>`.
 func TestIsInstanceCompatibleWithService_StuckInCreateHoldsSlot(t *testing.T) {
 	ctx, testStore, _, controller := setupTestController(t)
 	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
