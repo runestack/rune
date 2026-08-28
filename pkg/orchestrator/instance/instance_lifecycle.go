@@ -452,7 +452,7 @@ func (c *Controller) UpdateInstance(ctx context.Context, service *types.Service,
 	// Check if the service TEMPLATE generation has changed. Instances key on
 	// TemplateGeneration (not Generation, which also bumps on scale) so this
 	// in-place sync only fires on genuine template drift (issue #142).
-	generationUpdated := instance.Metadata.ServiceGeneration != service.Metadata.TemplateGeneration
+	generationUpdated := templateGenerationAdvanced(instance, service)
 	if generationUpdated {
 		instance.Metadata.ServiceGeneration = service.Metadata.TemplateGeneration
 		instanceUpdated = true
@@ -992,4 +992,21 @@ func (c *Controller) CollectRunningInstances(ctx context.Context) (map[string]*R
 	}
 
 	return instances, nil
+}
+
+// templateGenerationAdvanced reports whether the service's template has
+// moved ahead of what this instance recorded.
+//
+// FORWARD ONLY, and the direction is the point. A service whose
+// TemplateGeneration is BEHIND the instance is not a template change, it
+// is a service that lost its counter — which is what a release apply used
+// to do on every cast. Following it down resets a live instance to
+// generation 0 and silences the template check for it permanently: zero is
+// never less than anything, and the branch that catches an unstamped
+// instance needs a stamped service to compare against.
+func templateGenerationAdvanced(instance *types.Instance, service *types.Service) bool {
+	if instance == nil || instance.Metadata == nil || service == nil || service.Metadata == nil {
+		return false
+	}
+	return instance.Metadata.ServiceGeneration < service.Metadata.TemplateGeneration
 }

@@ -196,3 +196,24 @@ func TestRunCreateAttempt_WarnsWhenDenyingRequestedDevices(t *testing.T) {
 	}
 	assert.True(t, warned, "the warning stopped firing once without anyone noticing")
 }
+
+// Forward only. A service whose counter is behind the instance is a
+// service that lost it, not a template change — and following it down
+// resets the instance to zero, which silences the template check for that
+// instance permanently.
+func TestTemplateGenerationAdvanced_IsForwardOnly(t *testing.T) {
+	at := func(instanceGen, templateGen int64) bool {
+		return templateGenerationAdvanced(
+			&types.Instance{Metadata: &types.InstanceMetadata{ServiceGeneration: instanceGen}},
+			&types.Service{Metadata: &types.ServiceMetadata{TemplateGeneration: templateGen}})
+	}
+
+	assert.True(t, at(4, 9), "a real template change")
+	assert.False(t, at(4, 4), "unchanged")
+	assert.False(t, at(4, 0), "a service that lost its counter must not drag the instance down")
+	assert.False(t, at(4, 1), "nor part-way down")
+	assert.True(t, at(0, 1), "an unstamped instance still adopts a stamped template")
+
+	assert.False(t, templateGenerationAdvanced(nil, nil))
+	assert.False(t, templateGenerationAdvanced(&types.Instance{}, &types.Service{}))
+}
