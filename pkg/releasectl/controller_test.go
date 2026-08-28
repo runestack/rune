@@ -3,6 +3,7 @@ package releasectl
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/runestack/rune/pkg/crypto"
 	"github.com/runestack/rune/pkg/log"
@@ -29,6 +30,9 @@ func newTestController(t *testing.T) (*Controller, *store.TestStore) {
 	})
 	orch := orchestrator.NewFakeOrchestrator()
 	c := NewController(orch, st, log.NewTestLogger())
+	// Bounded, so a service that never reaches Running fails the test instead
+	// of outliving `go test`'s own timeout and wedging the package.
+	c.verifyTimeout = 2 * time.Second
 	return c, st
 }
 

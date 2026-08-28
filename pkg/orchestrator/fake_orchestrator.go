@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -23,8 +24,9 @@ type FakeOrchestrator struct {
 	mu sync.RWMutex
 
 	// Fake data
-	services  map[string]*types.Service
-	instances map[string]*types.Instance
+	services          map[string]*types.Service
+	tombstoneOnDelete bool
+	instances         map[string]*types.Instance
 
 	// Exec-related fields for testing
 	ExecStdout   []byte
@@ -145,7 +147,43 @@ func (fo *FakeOrchestrator) CreateService(ctx context.Context, service *types.Se
 	fo.mu.Lock()
 	defer fo.mu.Unlock()
 	key := service.Namespace + "/" + service.Name
+	// Mirror the real orchestrator's generation seeding, or tests reach states
+	// that cannot occur in production and pass for the wrong reason.
+	if service.Metadata == nil {
+		service.Metadata = &types.ServiceMetadata{}
+	}
+	if service.Metadata.Generation == 0 {
+		service.Metadata.Generation = 1
+	}
+	if service.Metadata.TemplateGeneration == 0 {
+		service.Metadata.TemplateGeneration = service.Metadata.Generation
+	}
+	if service.Metadata.LastNonZeroScale == 0 && service.Scale > 0 {
+		service.Metadata.LastNonZeroScale = service.Scale
+	}
 	fo.services[key] = service
+	return nil
+}
+
+// UpdateServiceFunc mutates the stored service under the fake's lock. One pass:
+// the interface's retry-on-conflict contract is a no-op with a single writer.
+func (fo *FakeOrchestrator) UpdateServiceFunc(ctx context.Context, namespace, name string, mutate func(*types.Service) error) error {
+	fo.mu.Lock()
+	defer fo.mu.Unlock()
+	key := namespace + "/" + name
+	stored, ok := fo.services[key]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrServiceNotFound, key)
+	}
+	fresh := *stored
+	if fresh.Metadata != nil {
+		md := *fresh.Metadata
+		fresh.Metadata = &md
+	}
+	if err := mutate(&fresh); err != nil {
+		return err
+	}
+	fo.services[key] = &fresh
 	return nil
 }
 
@@ -171,11 +209,36 @@ func (fo *FakeOrchestrator) UpdateService(ctx context.Context, service *types.Se
 	return nil
 }
 
+// TombstoneOnDelete makes DeleteService stamp a deletion timestamp and
+// finalizers and keep the record, as the real controller does, instead of
+// removing it outright. Off by default: with no reconciler to pop the
+// finalizers the record would never go away, which most callers do not want.
+// Turn it on to exercise the window between a delete being accepted and the
+// teardown finishing — the state a concurrent writer actually meets.
+func (fo *FakeOrchestrator) TombstoneOnDelete(on bool) {
+	fo.mu.Lock()
+	defer fo.mu.Unlock()
+	fo.tombstoneOnDelete = on
+}
+
 // DeleteService implements Orchestrator interface
 func (fo *FakeOrchestrator) DeleteService(ctx context.Context, request *types.DeletionRequest) (*types.DeletionResponse, error) {
 	fo.mu.Lock()
 	defer fo.mu.Unlock()
 	key := request.Namespace + "/" + request.Name
+	if svc, ok := fo.services[key]; ok && fo.tombstoneOnDelete {
+		now := time.Now()
+		if svc.Metadata == nil {
+			svc.Metadata = &types.ServiceMetadata{}
+		}
+		svc.Metadata.DeletionTimestamp = &now
+		svc.Metadata.Finalizers = []types.FinalizerType{types.FinalizerTypeInstanceCleanup}
+		svc.Status = types.ServiceStatusDeleted
+		return &types.DeletionResponse{
+			DeletionID: "fake-deletion-" + request.Name,
+			Status:     "in_progress",
+		}, nil
+	}
 	delete(fo.services, key)
 	return &types.DeletionResponse{
 		DeletionID: "fake-deletion-" + request.Name,
@@ -368,11 +431,25 @@ func (fo *FakeOrchestrator) GetDeletionStatus(ctx context.Context, namespace, de
 	}, nil
 }
 
-// GetServiceStatus implements the old orchestrator interface for compatibility
+// GetServiceStatus reports the stored status, standing in for a reconciler that
+// has already run: Pending reads back Running. Anything else is
+// returned as stored, so a caller polling for readiness can be given a Failed.
 func (fo *FakeOrchestrator) GetServiceStatus(ctx context.Context, namespace, serviceName string) (*types.ServiceStatusInfo, error) {
-	return &types.ServiceStatusInfo{
-		Status: types.ServiceStatusRunning,
-	}, nil
+	fo.mu.Lock()
+	defer fo.mu.Unlock()
+	svc, ok := fo.services[namespace+"/"+serviceName]
+	if !ok {
+		return nil, fmt.Errorf("service %s/%s not found", namespace, serviceName)
+	}
+	st := svc.Status
+	if st == types.ServiceStatusPending {
+		st = types.ServiceStatusRunning
+	}
+	info := &types.ServiceStatusInfo{Status: st}
+	if svc.Metadata != nil {
+		info.ObservedGeneration = svc.Metadata.ObservedGeneration
+	}
+	return info, nil
 }
 
 // RestartService implements the old orchestrator interface for compatibility
