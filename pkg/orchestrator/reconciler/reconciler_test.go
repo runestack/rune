@@ -643,7 +643,7 @@ func TestReconcileExistingInstance_StuckInCreate_RetriesWhenBackoffElapsed(t *te
 
 // TestReconcileExistingInstance_Stalled_NoAutoRetry is the
 // operator-action guard: Stalled records must never trigger auto-retry,
-// only `rune restart instance` / `rune cast` can re-arm them. Without
+// only `rune restart <service>` can re-arm them. Without
 // this guard a Stalled record would retry on every tick (the same
 // churn cadence we just fixed, just on the same UUID).
 func TestReconcileExistingInstance_Stalled_NoAutoRetry(t *testing.T) {
