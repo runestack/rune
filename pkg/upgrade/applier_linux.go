@@ -48,9 +48,9 @@ type Applier struct {
 	// polling the wrong address rolls back a healthy upgrade, so the
 	// applier has to read the unit rather than the runefile alone.
 	grpcAddrOverride string
-	// hadFileCaps records whether the replaced binary carried file
-	// capabilities; setcap does not survive a copy.
-	hadFileCaps bool
+	// fileCaps is the capability set the replaced binary carried, verbatim;
+	// setcap does not survive the copy that installs the new one.
+	fileCaps string
 }
 
 // ApplierRuntime carries the host facts an apply needs; separated so tests
@@ -361,9 +361,9 @@ func (a *Applier) swapAndRestart(ctx context.Context, m *Manifest, binDir string
 	if err := systemctl("daemon-reload"); err != nil {
 		logf("warning: daemon-reload: %v", err)
 	}
-	// daemon-reload re-reads unit files but does not re-arm a running path
-	// unit, so a changed PathExists= would otherwise take effect only at
-	// the next boot.
+	// The path unit was just rewritten from the new binary's template;
+	// restart it so systemd watches the unit as rendered rather than as it
+	// was loaded.
 	if err := systemctl("restart", UpgradePathUnit); err != nil {
 		logf("warning: could not re-arm %s: %v", UpgradePathUnit, err)
 	}
@@ -430,6 +430,14 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 	}
 
 	unitBackedUp := false
+	// Writing /etc/systemd/system when the live unit is a vendor unit under
+	// /lib does not refresh it, it shadows it — and rollback would have no
+	// backup to restore, leaving the old binary under the new unit.
+	if fp := liveFragmentPath(); fp != "" && fp != runedUnitPath {
+		a.unitRefreshNote = "left the unit unchanged: runed.service is provided at " + fp + ", not " + runedUnitPath
+		logf("⚠️  %s", a.unitRefreshNote)
+		return false
+	}
 	newUnit, err := render("print-systemd", "--user", vals.User, "--group", vals.Group, "--binary", vals.BinaryPath, "--config", vals.ConfigPath)
 	if err != nil {
 		logf("warning: rendering refreshed unit failed (%v); leaving %s as is", err, runedUnitPath)
@@ -440,11 +448,8 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 		case string(current) == newUnit:
 			// unchanged
 		case reason != "":
-			// The unit was authored by something other than this binary
-			// (the Terraform modules write their own, with EnvironmentFile=
-			// and runed as root). Rendering over it would silently drop
-			// whatever the template cannot express, and the upgrade would
-			// still report success.
+			// Authored by something other than this binary; see
+			// unitRefreshUnsafe.
 			a.unitRefreshNote = "left " + runedUnitPath + " unchanged: " + reason
 			logf("⚠️  %s", a.unitRefreshNote)
 			logf("    apply any new directives by hand, or use a drop-in under %s.d/", runedUnitPath)
@@ -488,6 +493,16 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 	return unitBackedUp
 }
 
+// liveFragmentPath returns the unit file systemd actually loaded runed
+// from, or "" when it cannot be determined.
+func liveFragmentPath() string {
+	out, err := exec.Command("systemctl", "show", runedUnit, "-p", "FragmentPath", "--value").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // unitRefreshUnsafe reports why the live runed unit must not be replaced by
 // a print-systemd render, or "" when the refresh is safe.
 //
@@ -505,7 +520,7 @@ func unitRefreshUnsafe(current, rendered string) string {
 	cur, ren := unitDirectives(current), unitDirectives(rendered)
 	var dropped []string
 	for d := range cur {
-		if !ren[d] {
+		if !ren[d] && !benignDirectives[d] {
 			dropped = append(dropped, d)
 		}
 	}
@@ -519,25 +534,61 @@ func unitRefreshUnsafe(current, rendered string) string {
 	return ""
 }
 
-// unitDirectives returns the set of directive names a unit file sets.
+// benignDirectives are documentation-only: losing them changes nothing
+// about how the service runs, so they are not a reason to refuse a refresh
+// for ever. examples/config/runed.service ships Documentation=.
+var benignDirectives = map[string]bool{
+	"Documentation": true,
+	"Alias":         true,
+}
+
+// unitDirectives returns what a unit file sets: every directive name, plus
+// each flag in an ExecStart command line as "ExecStart <flag>".
+//
+// The flags matter as much as the directive names. runed takes 22 daemon
+// flags and the template reproduces one of them, so a unit started with
+// e.g. --data-dir would come back pointing at the default store: the server
+// would restart on an empty database, pass verification, and report a
+// successful upgrade.
 func unitDirectives(unit string) map[string]bool {
 	out := map[string]bool{}
+	continuation := false
 	for _, line := range strings.Split(unit, "\n") {
 		line = strings.TrimSpace(line)
+		wasContinuation := continuation
+		continuation = strings.HasSuffix(line, "\\")
+		// A wrapped line belongs to the directive above it; reading its
+		// "--config=..." as a directive name produced nonsense refusals.
+		if wasContinuation {
+			continue
+		}
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "[") {
 			continue
 		}
-		if k, _, ok := strings.Cut(line, "="); ok {
-			out[strings.TrimSpace(k)] = true
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		out[k] = true
+		if k == "ExecStart" {
+			for _, f := range strings.Fields(v) {
+				if strings.HasPrefix(f, "-") {
+					// "--flag=value" and "--flag value" are the same flag.
+					name, _, _ := strings.Cut(f, "=")
+					out["ExecStart "+name] = true
+				}
+			}
 		}
 	}
 	return out
 }
 
-// applyCaps mirrors upgrade-server.sh: when the unit declares
-// AmbientCapabilities= those are the source of truth and file caps on the
-// binary actively suppress them, so strip; otherwise leave file caps to
-// the operator (greenfield installs use the unit).
+// applyCaps restores whichever capability mechanism the host was using. A
+// unit declaring AmbientCapabilities= is the source of truth, and file caps
+// on the binary suppress ambient caps, so strip them. Otherwise the file
+// caps are what let runed bind :80/:443 — and they are xattrs on the inode,
+// so the copy that replaced the binary dropped them; re-apply.
 func (a *Applier) applyCaps(binDir string) {
 	runedBin := filepath.Join(binDir, "runed")
 	current, err := os.ReadFile(runedUnitPath)
@@ -545,22 +596,33 @@ func (a *Applier) applyCaps(binDir string) {
 		_ = exec.Command("setcap", "-r", runedBin).Run()
 		return
 	}
-	// No ambient caps in the unit: the file caps are what let runed bind
-	// :80/:443, and they do not survive the copy that replaced the binary.
-	if a.hadFileCaps {
-		if err := exec.Command("setcap", "cap_net_bind_service=+ep", runedBin).Run(); err != nil {
-			logf("warning: could not re-apply cap_net_bind_service to %s: %v", runedBin, err)
+	if a.fileCaps != "" {
+		if err := exec.Command("setcap", a.fileCaps, runedBin).Run(); err != nil {
+			logf("warning: could not re-apply %q to %s: %v", a.fileCaps, runedBin, err)
 		} else {
-			logf("re-applied cap_net_bind_service to %s", runedBin)
+			logf("re-applied %q to %s", a.fileCaps, runedBin)
 		}
 	}
 }
 
-// detectFileCaps records whether the installed binary carries file
-// capabilities, before it is replaced.
+// detectFileCaps records the capability set the installed binary carries,
+// before it is replaced. The whole set, not just the one capability this
+// project usually grants — re-applying a narrowed set would silently drop
+// the rest on a host that had more.
+//
+// getcap prints "<path> <caps>" (or "<path> = <caps>" on older libcap).
 func (a *Applier) detectFileCaps(binDir string) {
 	out, err := exec.Command("getcap", filepath.Join(binDir, "runed")).Output()
-	a.hadFileCaps = err == nil && strings.Contains(string(out), "cap_net_bind_service")
+	if err != nil {
+		return
+	}
+	f := strings.Fields(strings.TrimSpace(string(out)))
+	if len(f) >= 2 {
+		caps := f[len(f)-1]
+		if strings.Contains(caps, "cap_") {
+			a.fileCaps = caps
+		}
+	}
 }
 
 // currentUnitValues reads User/Group/ExecStart from the live unit via

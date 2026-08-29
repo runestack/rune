@@ -159,3 +159,50 @@ func TestParseManifest_RejectsNonSemverVersion(t *testing.T) {
 		t.Fatalf("a real tag must parse: %v %v", m, err)
 	}
 }
+
+// A dropped ExecStart flag is the worst shape of all: the server restarts
+// against the default data dir, opens an empty store, passes verification
+// and reports success with every service gone.
+func TestUnitRefreshUnsafe_ExecStartFlags(t *testing.T) {
+	render := "[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml\n"
+	for _, live := range []string{
+		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --data-dir /mnt/data\n",
+		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml --http-addr :9000\n",
+		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --dev-mode\n",
+		// The equals form is the same flag and must be caught too.
+		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --data-dir=/mnt/data\n",
+	} {
+		if why := unitRefreshUnsafe(live, render); why == "" {
+			t.Fatalf("a flag the render cannot reproduce must block the refresh:\n%s", live)
+		}
+	}
+	// The flags the render does reproduce are not a reason to refuse —
+	// including in the equals form, which is the same flag written
+	// differently and must not read as one the template cannot express.
+	for _, same := range []string{
+		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml\n",
+		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --config=/etc/rune/runefile.toml\n",
+	} {
+		if why := unitRefreshUnsafe(same, render); why != "" {
+			t.Fatalf("a flag the render does reproduce must stay safe, got %q\n%s", why, same)
+		}
+	}
+}
+
+func TestUnitRefreshUnsafe_FalsePositives(t *testing.T) {
+	render := "[Unit]\nDescription=Rune Server\n\n[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml\n"
+
+	// Documentation= is shipped in examples/config/runed.service and changes
+	// nothing about how the service runs; refusing on it would disable the
+	// refresh for ever over a cosmetic line.
+	doc := "[Unit]\nDescription=Rune Server\nDocumentation=https://runestack.io\n\n[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml\n"
+	if why := unitRefreshUnsafe(doc, render); why != "" {
+		t.Fatalf("Documentation= must not block the refresh, got %q", why)
+	}
+
+	// A wrapped ExecStart is one directive, not two.
+	wrapped := "[Unit]\nDescription=Rune Server\n\n[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed \\\n  --config=/etc/rune/runefile.toml\n"
+	if why := unitRefreshUnsafe(wrapped, render); strings.Contains(why, "--config") {
+		t.Fatalf("a continuation line must not register as a directive: %q", why)
+	}
+}

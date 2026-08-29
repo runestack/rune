@@ -229,7 +229,8 @@ install_upgrade_units() {
     return
   fi
   # A build with no release version cannot seed a floor, and arming the
-  # units without one would leave the host permanently downgrade-open.
+  # units without one leaves the host downgrade-open until its first
+  # successful in-band upgrade seeds one.
   floor_version="${RUNE_VERSION:-$("$bin" --version 2>/dev/null | grep -oE 'v[0-9][^ )]*' | head -1 || true)}"
   if [ -z "$floor_version" ] && [ ! -f /etc/rune/version-floor ]; then
     log "This build reports no release version; skipping in-band upgrade units"

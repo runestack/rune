@@ -15,15 +15,13 @@ import (
 
 const upgradeMethod = "/rune.api.AdminService/UpgradeServer"
 
-// TestUpgradeServerRBAC pins the RUNE-321 mapping invariant. The
-// remote-callability of UpgradeServer rests on TWO functions agreeing:
-// methodToAction must return the dedicated ("system","upgrade") verb and
-// methodToResource must return non-"admin" (resource "admin" re-arms the
-// localhost-only admin gate). A half-updated mapping is the one asymmetry
-// that fails open — this test is what catches it.
+// The remote-callability of UpgradeServer rests on methodToAction and
+// methodToResource agreeing: the dedicated ("server","upgrade") action, and
+// a resource that is not "admin" (which would re-arm the localhost-only
+// gate). A half-updated mapping is the asymmetry that fails open.
 func TestUpgradeServerRBAC(t *testing.T) {
-	if r, v := methodToAction(upgradeMethod); r != "system" || v != "upgrade" {
-		t.Fatalf("methodToAction = (%q,%q), want (system,upgrade)", r, v)
+	if r, v := methodToAction(upgradeMethod); r != "server" || v != "upgrade" {
+		t.Fatalf("methodToAction = (%q,%q), want (server,upgrade)", r, v)
 	}
 	if r := methodToResource(upgradeMethod); r == "admin" {
 		t.Fatal("methodToResource must not be \"admin\" — that re-arms the localhost-only gate")

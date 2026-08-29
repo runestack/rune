@@ -192,8 +192,7 @@ func (s *Stager) Stage(ctx context.Context, version, sha256, requester string, a
 // checkUnits verifies the applier units are installed and that the path
 // unit watches THIS server's staging dir. A runefile whose data_dir moved
 // after install would otherwise stage into a directory nothing watches — a
-// silent wedge. The unit-file check is the real
-// capability gate.
+// silent wedge.
 func (s *Stager) checkUnits() error {
 	dir := s.UnitDir
 	if dir == "" {
@@ -327,20 +326,52 @@ func (l *flock) release() {
 	_ = l.f.Close()
 }
 
-// StagingDirFromMessage extracts the staging directory a server reported in
-// a units-missing precondition, so the CLI's remedy can point the units at
-// the right place. Returns "" when the message names none.
-func StagingDirFromMessage(msg string) string {
+// DataDirFromMessage extracts the data directory a server reported in a
+// units-missing precondition, so the CLI's remedy can point the units at
+// the right place. The message names <data-dir>/upgrade/ready; the
+// installers take --data-dir and append "upgrade" themselves, so both
+// trailing components come off here. Returns "" when the message names
+// none, or names anything that is not a plain absolute path.
+//
+// The result is interpolated into a command the CLI prints for the operator
+// to run as root, and the message it comes from arrives over a channel with
+// no transport authentication — so anything that could turn one argument
+// into two commands (whitespace, shell metacharacters, control bytes) makes
+// this return "" and the remedy fall back to its flagless form.
+func DataDirFromMessage(msg string) string {
 	const marker = "but this server stages to "
 	i := strings.Index(msg, marker)
 	if i < 0 {
 		return ""
 	}
 	rest := msg[i+len(marker):]
-	if j := strings.IndexAny(rest, " \t"); j >= 0 {
+	if j := strings.IndexAny(rest, " \t\r\n"); j >= 0 {
 		rest = rest[:j]
 	}
-	return strings.TrimSuffix(strings.TrimSpace(rest), "/"+readyName)
+	rest = strings.TrimSuffix(rest, "/"+readyName)
+	rest = strings.TrimSuffix(rest, "/"+stagingDirName)
+	if !strings.HasPrefix(rest, "/") || strings.ContainsAny(rest, "\"'`$;&|<>()*?[]{}\\!#~") {
+		return ""
+	}
+	for _, r := range rest {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return rest
+}
+
+// SanitizeServerDetail strips control bytes from a server-supplied string
+// before it is printed. The channel has no transport authentication, so a
+// detail can carry ANSI escapes that reposition or overwrite the lines
+// around it — including a command the operator is being told to run.
+func SanitizeServerDetail(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // parseManifestVersion decodes just enough of a staged manifest to judge

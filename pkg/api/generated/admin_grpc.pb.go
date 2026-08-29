@@ -48,11 +48,12 @@ const (
 type AdminServiceClient interface {
 	AdminBootstrap(ctx context.Context, in *AdminBootstrapRequest, opts ...grpc.CallOption) (*AdminBootstrapResponse, error)
 	// UpgradeServer stages an in-band server upgrade. Maps to the dedicated
-	// ("system","upgrade") RBAC action — held only by the *:* builtins —
-	// and deliberately NOT to resource "admin", so it is exempt from the
-	// admin localhost-only gate (remote upgrade is the point) without
+	// ("server","upgrade") RBAC action, which of the shipped builtins only
+	// root and admin grant, and deliberately NOT to resource "admin", so it
+	// is exempt from the admin localhost-only gate (remote upgrade is the
+	// point) without
 	// opening the rest of the admin surface via allow_remote_admin.
-	// Never add it to publicMethodSuffixes.
+	// It must never be exempted from authentication.
 	UpgradeServer(ctx context.Context, in *UpgradeServerRequest, opts ...grpc.CallOption) (*UpgradeServerResponse, error)
 	PolicyCreate(ctx context.Context, in *PolicyCreateRequest, opts ...grpc.CallOption) (*PolicyCreateResponse, error)
 	PolicyUpdate(ctx context.Context, in *PolicyUpdateRequest, opts ...grpc.CallOption) (*PolicyUpdateResponse, error)
@@ -302,11 +303,12 @@ func (c *adminServiceClient) NetworkStatus(ctx context.Context, in *NetworkStatu
 type AdminServiceServer interface {
 	AdminBootstrap(context.Context, *AdminBootstrapRequest) (*AdminBootstrapResponse, error)
 	// UpgradeServer stages an in-band server upgrade. Maps to the dedicated
-	// ("system","upgrade") RBAC action — held only by the *:* builtins —
-	// and deliberately NOT to resource "admin", so it is exempt from the
-	// admin localhost-only gate (remote upgrade is the point) without
+	// ("server","upgrade") RBAC action, which of the shipped builtins only
+	// root and admin grant, and deliberately NOT to resource "admin", so it
+	// is exempt from the admin localhost-only gate (remote upgrade is the
+	// point) without
 	// opening the rest of the admin surface via allow_remote_admin.
-	// Never add it to publicMethodSuffixes.
+	// It must never be exempted from authentication.
 	UpgradeServer(context.Context, *UpgradeServerRequest) (*UpgradeServerResponse, error)
 	PolicyCreate(context.Context, *PolicyCreateRequest) (*PolicyCreateResponse, error)
 	PolicyUpdate(context.Context, *PolicyUpdateRequest) (*PolicyUpdateResponse, error)

