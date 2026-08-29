@@ -279,3 +279,22 @@ func TestSanitizeServerDetail(t *testing.T) {
 		t.Fatalf("control bytes must be stripped, got %q", got)
 	}
 }
+
+// unitRefreshUnsafe normalises "--flag=value" to "--flag"; this parser must
+// agree, or the guard certifies a refresh whose render then drops the value.
+func TestParseUnitShow_InlineValues(t *testing.T) {
+	for _, out := range []string{
+		"ExecStart={ path=/x ; argv[]=/x --config=/etc/rune/rune.yaml --grpc-addr=:9443 }\n",
+		"ExecStart={ path=/x ; argv[]=/x -config=/etc/rune/rune.yaml -grpc-addr=:9443 }\n",
+		"ExecStart={ path=/x ; argv[]=/x --config /etc/rune/rune.yaml --grpc-addr :9443 }\n",
+	} {
+		vals := defaultUnitOptionsForTest()
+		_, cfg, addr := ParseUnitShow(out, &vals)
+		if cfg != "/etc/rune/rune.yaml" {
+			t.Fatalf("config from %q = %q", out, cfg)
+		}
+		if addr != ":9443" {
+			t.Fatalf("grpc addr from %q = %q", out, addr)
+		}
+	}
+}

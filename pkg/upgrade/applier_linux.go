@@ -420,8 +420,8 @@ func (a *Applier) rollback(ctx context.Context, m *Manifest, binDir, backupRune,
 // (preserving the current unit's user/binary/config values — a flagless
 // render would clobber a custom install, which is exactly what the old
 // upgrade-server.sh --refresh-unit did) and re-renders the applier's own
-// units so they are not frozen at bootstrap forever. Returns whether the
-// runed unit was backed up (for rollback).
+// units — unless it bailed out above — so they are not frozen at bootstrap
+// forever. Returns whether the runed unit was backed up (for rollback).
 func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 	newBinary := filepath.Join(binDir, "runed")
 	render := func(args ...string) (string, error) {
@@ -433,15 +433,21 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 	// Writing /etc/systemd/system when the live unit is a vendor unit under
 	// /lib does not refresh it, it shadows it — and rollback would have no
 	// backup to restore, leaving the old binary under the new unit.
-	if fp := liveFragmentPath(); fp != "" && fp != runedUnitPath {
-		a.unitRefreshNote = "left the unit unchanged: runed.service is provided at " + fp + ", not " + runedUnitPath
+	// "Don't know" is treated as "don't touch it": systemctl is known to
+	// work by now (currentUnitValues hard-errors otherwise), so an empty
+	// answer means a transient or generator-produced unit, and writing
+	// /etc would shadow rather than refresh it — with no backup for
+	// rollback to restore. The applier's own units are re-rendered below
+	// regardless: those always live in /etc and are always ours.
+	skipRunedUnit := liveFragmentPath() != runedUnitPath
+	if skipRunedUnit {
+		a.unitRefreshNote = "left " + runedUnitPath + " unchanged: systemd loads runed.service from elsewhere"
 		logf("⚠️  %s", a.unitRefreshNote)
-		return false
 	}
 	newUnit, err := render("print-systemd", "--user", vals.User, "--group", vals.Group, "--binary", vals.BinaryPath, "--config", vals.ConfigPath)
-	if err != nil {
+	if err != nil && !skipRunedUnit {
 		logf("warning: rendering refreshed unit failed (%v); leaving %s as is", err, runedUnitPath)
-	} else {
+	} else if !skipRunedUnit {
 		current, _ := os.ReadFile(runedUnitPath)
 		reason := unitRefreshUnsafe(string(current), newUnit)
 		switch {
@@ -503,6 +509,29 @@ func liveFragmentPath() string {
 	return strings.TrimSpace(string(out))
 }
 
+// parseGetcap extracts the capability set from getcap output, or "" when
+// there is none.
+//
+// Every clause, not just the last: a file can carry
+// "cap_net_bind_service=ep cap_sys_admin=p", and setcap replaces the whole
+// set rather than adding to it, so keeping one clause silently drops the
+// rest. Older libcap prints "<path> = <caps>", so a bare "=" is dropped.
+func parseGetcap(out string) string {
+	f := strings.Fields(strings.TrimSpace(out))
+	if len(f) < 2 {
+		return ""
+	}
+	clauses := f[1:]
+	if clauses[0] == "=" {
+		clauses = clauses[1:]
+	}
+	caps := strings.Join(clauses, " ")
+	if !strings.Contains(caps, "cap_") {
+		return ""
+	}
+	return caps
+}
+
 // unitRefreshUnsafe reports why the live runed unit must not be replaced by
 // a print-systemd render, or "" when the refresh is safe.
 //
@@ -534,34 +563,54 @@ func unitRefreshUnsafe(current, rendered string) string {
 	return ""
 }
 
-// benignDirectives are documentation-only: losing them changes nothing
-// about how the service runs, so they are not a reason to refuse a refresh
-// for ever. examples/config/runed.service ships Documentation=.
+// benignDirectives are inert: losing one changes nothing about how the
+// service runs, so it must not disable the refresh for ever over a cosmetic
+// line. examples/config/runed.service ships Documentation=. Alias= is
+// deliberately absent: it creates a working second name for the unit.
 var benignDirectives = map[string]bool{
 	"Documentation": true,
-	"Alias":         true,
+}
+
+// joinContinuations folds systemd's backslash line continuations into one
+// logical line each. Skipping the wrapped lines instead would drop the
+// flags they carry — a long ExecStart is normally written wrapped, and
+// that is precisely where --data-dir lives.
+func joinContinuations(unit string) []string {
+	var out []string
+	var cur strings.Builder
+	for _, line := range strings.Split(unit, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasSuffix(t, "\\") {
+			cur.WriteString(strings.TrimSuffix(t, "\\"))
+			cur.WriteString(" ")
+			continue
+		}
+		if cur.Len() > 0 {
+			cur.WriteString(t)
+			out = append(out, cur.String())
+			cur.Reset()
+			continue
+		}
+		out = append(out, t)
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 // unitDirectives returns what a unit file sets: every directive name, plus
 // each flag in an ExecStart command line as "ExecStart <flag>".
 //
-// The flags matter as much as the directive names. runed takes 22 daemon
-// flags and the template reproduces one of them, so a unit started with
+// The flags matter as much as the directive names. runed takes two dozen
+// daemon flags and the template reproduces one of them, so a unit started with
 // e.g. --data-dir would come back pointing at the default store: the server
 // would restart on an empty database, pass verification, and report a
 // successful upgrade.
 func unitDirectives(unit string) map[string]bool {
 	out := map[string]bool{}
-	continuation := false
-	for _, line := range strings.Split(unit, "\n") {
+	for _, line := range joinContinuations(unit) {
 		line = strings.TrimSpace(line)
-		wasContinuation := continuation
-		continuation = strings.HasSuffix(line, "\\")
-		// A wrapped line belongs to the directive above it; reading its
-		// "--config=..." as a directive name produced nonsense refusals.
-		if wasContinuation {
-			continue
-		}
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "[") {
 			continue
 		}
@@ -573,11 +622,13 @@ func unitDirectives(unit string) map[string]bool {
 		out[k] = true
 		if k == "ExecStart" {
 			for _, f := range strings.Fields(v) {
-				if strings.HasPrefix(f, "-") {
-					// "--flag=value" and "--flag value" are the same flag.
-					name, _, _ := strings.Cut(f, "=")
-					out["ExecStart "+name] = true
+				if !strings.HasPrefix(f, "-") {
+					continue
 				}
+				// "--flag=value" and "--flag value" are the same flag, and
+				// Go's flag package accepts "-flag" for "--flag".
+				name, _, _ := strings.Cut(f, "=")
+				out["ExecStart --"+strings.TrimLeft(name, "-")] = true
 			}
 		}
 	}
@@ -607,8 +658,9 @@ func (a *Applier) applyCaps(binDir string) {
 
 // detectFileCaps records the capability set the installed binary carries,
 // before it is replaced. The whole set, not just the one capability this
-// project usually grants — re-applying a narrowed set would silently drop
-// the rest on a host that had more.
+// project usually grants — setcap replaces rather than adds, so
+// re-applying a narrowed set would silently drop the rest on a host that
+// had more.
 //
 // getcap prints "<path> <caps>" (or "<path> = <caps>" on older libcap).
 func (a *Applier) detectFileCaps(binDir string) {
@@ -616,13 +668,7 @@ func (a *Applier) detectFileCaps(binDir string) {
 	if err != nil {
 		return
 	}
-	f := strings.Fields(strings.TrimSpace(string(out)))
-	if len(f) >= 2 {
-		caps := f[len(f)-1]
-		if strings.Contains(caps, "cap_") {
-			a.fileCaps = caps
-		}
-	}
+	a.fileCaps = parseGetcap(string(out))
 }
 
 // currentUnitValues reads User/Group/ExecStart from the live unit via

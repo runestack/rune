@@ -212,7 +212,7 @@ func methodToResource(method string) string {
 	case strings.HasPrefix(method, "/rune.api.AdminService/UpgradeServer"):
 		// Must stay in sync with methodToAction's case above — resource
 		// "admin" would re-arm the localhost-only gate.
-		return "system"
+		return "server"
 	case strings.HasPrefix(method, "/rune.api.AdminService/"):
 		return "admin"
 	default:

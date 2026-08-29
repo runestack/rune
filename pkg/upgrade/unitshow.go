@@ -64,18 +64,34 @@ func parseExecStartShow(body string) (binPath, configPath, grpcAddr string) {
 		}
 		if v, ok := strings.CutPrefix(part, "argv[]="); ok {
 			args := strings.Fields(v)
-			for i, a := range args {
-				if i+1 >= len(args) {
-					continue
-				}
-				switch a {
-				case "--config", "-config":
-					configPath = args[i+1]
-				case "--grpc-addr", "-grpc-addr":
-					grpcAddr = args[i+1]
-				}
+			if v, ok := execStartFlag(args, "--config"); ok {
+				configPath = v
+			}
+			if v, ok := execStartFlag(args, "--grpc-addr"); ok {
+				grpcAddr = v
 			}
 		}
 	}
 	return binPath, configPath, grpcAddr
+}
+
+// execStartFlag finds want in an ExecStart argv, accepting both
+// "--flag value" and "--flag=value", and a single leading dash for either
+// (Go's flag package does). unitRefreshUnsafe normalises the same way: if
+// the two disagree, the guard certifies a refresh whose render then drops
+// the value.
+func execStartFlag(args []string, want string) (string, bool) {
+	for i, a := range args {
+		name, inline, hasInline := strings.Cut(a, "=")
+		if "--"+strings.TrimLeft(name, "-") != want {
+			continue
+		}
+		if hasInline {
+			return inline, true
+		}
+		if i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
 }

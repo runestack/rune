@@ -206,3 +206,22 @@ func TestUnitRefreshUnsafe_FalsePositives(t *testing.T) {
 		t.Fatalf("a continuation line must not register as a directive: %q", why)
 	}
 }
+
+// setcap replaces the capability set rather than adding to it, so keeping
+// only one clause of a multi-clause set silently drops the rest — on a host
+// that had more than this project usually grants.
+func TestParseGetcap(t *testing.T) {
+	cases := map[string]string{
+		"/usr/local/bin/runed cap_net_bind_service=ep":                 "cap_net_bind_service=ep",
+		"/usr/local/bin/runed cap_net_bind_service=ep cap_sys_admin=p": "cap_net_bind_service=ep cap_sys_admin=p",
+		"/usr/local/bin/runed = cap_net_bind_service+ep":               "cap_net_bind_service+ep",
+		"/usr/local/bin/runed":                                         "",
+		"":                                                             "",
+		"/usr/local/bin/runed something-else":                          "",
+	}
+	for out, want := range cases {
+		if got := parseGetcap(out); got != want {
+			t.Fatalf("parseGetcap(%q) = %q, want %q", out, got, want)
+		}
+	}
+}

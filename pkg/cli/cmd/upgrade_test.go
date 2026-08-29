@@ -41,32 +41,69 @@ func TestClassifyStageError(t *testing.T) {
 
 	// Non-admin degrades to client-only (proceed=false, no hard error) —
 	// unless the server half was the entire request.
-	if p, _, hard := classifyStageError(status.Error(codes.PermissionDenied, "denied"), target, both); p || hard != nil {
+	if p, _, _, hard := classifyStageError(status.Error(codes.PermissionDenied, "denied"), target, both); p || hard != nil {
 		t.Fatalf("PermissionDenied: proceed=%v hard=%v", p, hard)
 	}
-	if _, _, hard := classifyStageError(status.Error(codes.PermissionDenied, "denied"), target, serverOnly); hard == nil {
+	if _, _, _, hard := classifyStageError(status.Error(codes.PermissionDenied, "denied"), target, serverOnly); hard == nil {
 		t.Fatal("PermissionDenied with --server must be a hard error")
 	}
 
 	// A dropped connection means possibly staged: watch, don't fail.
-	p, watch, hard := classifyStageError(status.Error(codes.Unavailable, "gone"), target, both)
+	p, watch, _, hard := classifyStageError(status.Error(codes.Unavailable, "gone"), target, both)
 	if !p || !watch || hard != nil {
 		t.Fatalf("Unavailable: proceed=%v watch=%v hard=%v", p, watch, hard)
 	}
 
 	// Pre-RUNE-321 server degrades with the one-time SSH remedy.
-	if p, _, hard := classifyStageError(status.Error(codes.Unimplemented, "old"), target, both); p || hard != nil {
+	if p, _, _, hard := classifyStageError(status.Error(codes.Unimplemented, "old"), target, both); p || hard != nil {
 		t.Fatalf("Unimplemented: proceed=%v hard=%v", p, hard)
 	}
-	if _, _, hard := classifyStageError(status.Error(codes.Unimplemented, "old"), target, serverOnly); hard == nil || !strings.Contains(hard.Error(), "upgrade-server.sh") {
+	if _, _, _, hard := classifyStageError(status.Error(codes.Unimplemented, "old"), target, serverOnly); hard == nil || !strings.Contains(hard.Error(), "upgrade-server.sh") {
 		t.Fatalf("Unimplemented with --server must hand over the one-liner: %v", hard)
 	}
 
 	// Precondition slugs pick distinct paths.
-	if _, _, hard := classifyStageError(status.Error(codes.FailedPrecondition, "reason=upgrade-in-progress: v is staging"), target, both); hard == nil || !strings.Contains(hard.Error(), "already in progress") {
+	if _, _, _, hard := classifyStageError(status.Error(codes.FailedPrecondition, "reason=upgrade-in-progress: v is staging"), target, both); hard == nil || !strings.Contains(hard.Error(), "already in progress") {
 		t.Fatalf("in-progress: %v", hard)
 	}
-	if p, _, hard := classifyStageError(status.Error(codes.FailedPrecondition, "reason=units-missing: not installed"), target, both); p || hard != nil {
+	if p, _, _, hard := classifyStageError(status.Error(codes.FailedPrecondition, "reason=units-missing: not installed"), target, both); p || hard != nil {
 		t.Fatalf("units-missing must degrade: proceed=%v hard=%v", p, hard)
+	}
+}
+
+// The six ways the server half can be skipped, and whether each is
+// something a human can go and fix. A capability the caller never had is
+// not a failure of the command, so it must not exit non-zero — an exit
+// code that always fires is one people learn to ignore.
+func TestClassifyStageError_ActionableSplit(t *testing.T) {
+	both := &upgradeOptions{}
+	cases := []struct {
+		name       string
+		err        error
+		actionable bool
+	}{
+		{"no admin token", status.Error(codes.PermissionDenied, "denied"), false},
+		{"not systemd", status.Error(codes.FailedPrecondition, "reason=no-systemd: dev"), false},
+		{"expired token", status.Error(codes.Unauthenticated, "expired"), true},
+		{"server too old", status.Error(codes.Unimplemented, "old"), true},
+		{"units missing", status.Error(codes.FailedPrecondition, "reason=units-missing: not installed"), true},
+	}
+	for _, tc := range cases {
+		proceed, _, skipped, hard := classifyStageError(tc.err, "v0.0.1-dev.150", both)
+		if proceed || hard != nil {
+			t.Fatalf("%s: expected a degrade, got proceed=%v hard=%v", tc.name, proceed, hard)
+		}
+		if skipped == nil {
+			t.Fatalf("%s: degrade must report why it skipped", tc.name)
+		}
+		if skipped.actionable != tc.actionable {
+			t.Fatalf("%s: actionable=%v, want %v", tc.name, skipped.actionable, tc.actionable)
+		}
+		if skipped.reason == "" {
+			t.Fatalf("%s: reason must not be empty", tc.name)
+		}
+		if tc.actionable && skipped.nextStep == "" {
+			t.Fatalf("%s: an actionable degrade must say what to do", tc.name)
+		}
 	}
 }

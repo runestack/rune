@@ -23,7 +23,16 @@ func TestUpgradeServerRBAC(t *testing.T) {
 	if r, v := methodToAction(upgradeMethod); r != "server" || v != "upgrade" {
 		t.Fatalf("methodToAction = (%q,%q), want (server,upgrade)", r, v)
 	}
-	if r := methodToResource(upgradeMethod); r == "admin" {
+	// Assert the two agree, not merely that one is not "admin": a
+	// half-applied rename satisfies the negative and is exactly the drift
+	// this test exists to catch — it has already happened once.
+	if got, want := methodToResource(upgradeMethod), "server"; got != want {
+		t.Fatalf("methodToResource = %q, want %q (must match methodToAction)", got, want)
+	}
+	if r, _ := methodToAction(upgradeMethod); methodToResource(upgradeMethod) != r {
+		t.Fatalf("methodToAction and methodToResource disagree: %q vs %q", r, methodToResource(upgradeMethod))
+	}
+	if methodToResource(upgradeMethod) == "admin" {
 		t.Fatal("methodToResource must not be \"admin\" — that re-arms the localhost-only gate")
 	}
 	// And it must never become public: unauthenticated binary replacement.

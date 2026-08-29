@@ -206,11 +206,9 @@ service AdminService {
 
   // UpgradeServer stages an in-band server upgrade. Maps to the dedicated
   // ("server","upgrade") RBAC action, which of the shipped builtins only
-  // root and admin grant, and deliberately NOT to resource "admin", so it
-  // is exempt from the admin localhost-only gate (remote upgrade is the
-  // point) without
-  // opening the rest of the admin surface via allow_remote_admin.
-  // It must never be exempted from authentication.
+  // root and admin grant, and deliberately NOT to resource "admin" — that
+  // resource carries a localhost-only gate, and remote upgrade is the
+  // point of the feature. It must never be exempted from authentication.
   rpc UpgradeServer(UpgradeServerRequest) returns (UpgradeServerResponse);
 
   rpc PolicyCreate(PolicyCreateRequest) returns (PolicyCreateResponse);
