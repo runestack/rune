@@ -69,7 +69,8 @@ jobs:
       # container still holds — is asserted only by comments.
       - name: Volume teardown tests (privileged)
         run: |
-          docker run --rm --privileged -v "$PWD":/src -w /src golang:1.25 sh -c '
+          docker run --rm --privileged -e RUNE_REQUIRE_PRIVILEGED_MOUNT=1 \
+            -v "$PWD":/src -w /src golang:1.25 sh -c '
             apt-get -qq update && apt-get -qq install -y e2fsprogs >/dev/null &&
             go test ./pkg/storage/driver/mountsync/... -v'
 

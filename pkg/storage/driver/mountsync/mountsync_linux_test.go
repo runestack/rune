@@ -3,6 +3,7 @@
 package mountsync
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,7 +126,32 @@ func TestUnmountReportsUnflushedFilesystem(t *testing.T) {
 // at all, so a CI failure means a real regression rather than a sandbox.
 func requirePrivilegedUnmount(t *testing.T) {
 	t.Helper()
-	if err := unix.Unmount(t.TempDir(), 0); err == unix.EPERM {
+	if err := unix.Unmount(t.TempDir(), 0); errors.Is(err, unix.EPERM) {
 		t.Skip("umount(2) needs CAP_SYS_ADMIN; runed has it in production, this environment does not")
+	}
+}
+
+// TestUnmountNothingMountedSaysNothingFlushed covers the third message
+// branch. Reporting "flushed as of now" when the target was never a mount
+// point would assert work that did not happen — and that combination is
+// not contrived: it is the shape when runed has lost CAP_SYS_ADMIN, since
+// the mount never succeeded either.
+//
+// Runs unprivileged, which is where the branch is reachable: with the
+// capability, umount(2) on a non-mount-point returns EINVAL and the call
+// succeeds instead.
+func TestUnmountNothingMountedSaysNothingFlushed(t *testing.T) {
+	if err := unix.Unmount(t.TempDir(), 0); !errors.Is(err, unix.EPERM) {
+		t.Skip("privileged: umount(2) succeeds on a non-mount-point, so this branch is unreachable")
+	}
+	err := Unmount("test", t.TempDir())
+	if err == nil {
+		t.Fatal("expected the unprivileged umount to fail")
+	}
+	if !strings.Contains(err.Error(), "nothing was mounted") {
+		t.Errorf("must not claim a flush that never happened, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "flushed as of now") {
+		t.Errorf("claims a flush on a path where nothing was mounted: %v", err)
 	}
 }

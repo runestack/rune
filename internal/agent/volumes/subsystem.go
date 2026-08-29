@@ -676,6 +676,16 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 // error.
 func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) (detached bool, err error) {
 	opctx := s.teardownOpContext(ctx, id, m)
+	// Named before the call, not after: Unmount flushes the filesystem
+	// first, which on a volume with a lot of dirty data is the longest
+	// unattended pause in a shutdown. Without this line the operator sees
+	// systemd hang with no indication of which volume, or whether it is
+	// working at all.
+	s.log.Info("Unmounting volume",
+		log.Str("volume_id", id),
+		log.Str("namespace", m.VolumeNS),
+		log.Str("name", m.VolumeName),
+		log.Str("target", string(m.Target)))
 	var firstErr error
 	if uerr := m.Driver.Unmount(ctx, opctx, m.Target); uerr != nil {
 		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, uerr)

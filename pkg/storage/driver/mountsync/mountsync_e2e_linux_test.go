@@ -130,27 +130,128 @@ func mustRun(t *testing.T, name string, args ...string) {
 // job in the CI workflow.
 func requireLoopMount(t *testing.T) {
 	t.Helper()
+	// The CI job that exists to run these sets this. Without it a
+	// degraded runner — no CAP_SYS_ADMIN, no loop device, no mkfs —
+	// would skip every one of them and the step would still go green,
+	// which is the silent-skip failure this package was written to end.
+	mustRun := os.Getenv("RUNE_REQUIRE_PRIVILEGED_MOUNT") != ""
+	skip := func(format string, args ...any) {
+		if mustRun {
+			t.Fatalf("RUNE_REQUIRE_PRIVILEGED_MOUNT is set but "+format, args...)
+		}
+		t.Skipf(format, args...)
+	}
 	if unix.Geteuid() != 0 {
-		t.Skip("needs root to mount a loop device")
+		skip("needs root to mount a loop device")
 	}
 	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
-		t.Skip("needs mkfs.ext4")
+		skip("needs mkfs.ext4")
 	}
 	dir := t.TempDir()
 	img := filepath.Join(dir, "probe.img")
 	f, err := os.Create(img)
 	if err != nil {
-		t.Skip("cannot create a probe image")
+		skip("cannot create a probe image")
 	}
 	_ = f.Truncate(8 << 20)
 	_ = f.Close()
 	if out, err := exec.Command("mkfs.ext4", "-q", "-F", img).CombinedOutput(); err != nil {
-		t.Skipf("cannot mkfs: %v (%s)", err, strings.TrimSpace(string(out)))
+		skip("cannot mkfs: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 	mnt := filepath.Join(dir, "probe")
 	_ = os.MkdirAll(mnt, 0o755)
 	if out, err := exec.Command("mount", "-o", "loop", img, mnt).CombinedOutput(); err != nil {
-		t.Skipf("cannot loop-mount here: %v (%s)", err, strings.TrimSpace(string(out)))
+		skip("cannot loop-mount here: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 	_ = exec.Command("umount", mnt).Run()
+}
+
+// TestUnmountSymlinkedTargetStillFlushes guards the gate against the two
+// syscalls that act on the path after it.
+//
+// syncTarget's open(2) and umount(2) both follow symlinks. A mount-point
+// check that did not would answer "nothing mounted here" for a symlinked
+// target, skip the flush, and then unmount successfully — losing the
+// writes it was there to protect.
+func TestUnmountSymlinkedTargetStillFlushes(t *testing.T) {
+	requireLoopMount(t)
+
+	dir := t.TempDir()
+	img := filepath.Join(dir, "disk.img")
+	real := filepath.Join(dir, "real")
+	link := filepath.Join(dir, "link")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	makeExt4(t, img)
+	mustRun(t, "mount", "-o", "loop", img, real)
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(real, "SYSTEM"), nil, 0o644); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	mustRun(t, "sync")
+	// A second reference, as a container's bind would be, so a bare
+	// umount(2) cannot flush on its own.
+	second := filepath.Join(dir, "held")
+	if err := os.MkdirAll(second, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	mustRun(t, "mount", "--bind", real, second)
+	t.Cleanup(func() { _ = exec.Command("umount", "-l", second).Run() })
+
+	if err := os.WriteFile(filepath.Join(real, "SYSTEM"), []byte(strings.Repeat("0", 90)), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Tear down through the symlink.
+	if err := Unmount("test", link); err != nil {
+		t.Fatalf("Unmount via symlink: %v", err)
+	}
+	if got := bytesOnDevice(t, dir, img); got != 90 {
+		t.Errorf("recovered %d bytes through a symlinked target, want 90 — the flush was skipped", got)
+	}
+}
+
+// TestUnmountBusyTargetReportsFlushed covers the EBUSY branch, which had
+// no test in any environment: a host-side holder keeps the mount busy, so
+// umount(2) fails and the caller detaches anyway. The message is the only
+// warning an operator gets, so assert its wording.
+func TestUnmountBusyTargetReportsFlushed(t *testing.T) {
+	requireLoopMount(t)
+
+	dir := t.TempDir()
+	img := filepath.Join(dir, "disk.img")
+	target := filepath.Join(dir, "mnt")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	makeExt4(t, img)
+	mustRun(t, "mount", "-o", "loop", img, target)
+	t.Cleanup(func() { _ = exec.Command("umount", "-l", target).Run() })
+
+	file := filepath.Join(target, "SYSTEM")
+	if err := os.WriteFile(file, []byte("held"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// An open fd in this namespace is what makes umount(2) return EBUSY;
+	// a bind mount does not (it is an independent reference).
+	held, err := os.Open(file)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = held.Close() }()
+
+	err = Unmount("test", target)
+	if err == nil {
+		t.Fatal("expected EBUSY with an open fd holding the mount")
+	}
+	if !strings.Contains(err.Error(), "flushed as of now") {
+		t.Errorf("a busy target was flushed, and the message must say so: %v", err)
+	}
+	if strings.Contains(err.Error(), "nothing was flushed") {
+		t.Errorf("the mount was real and was flushed; message claims otherwise: %v", err)
+	}
 }

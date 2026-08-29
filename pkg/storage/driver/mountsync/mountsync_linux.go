@@ -28,9 +28,13 @@ func syncTarget(path string) error {
 
 func unmountTarget(driver, target string) error {
 	// Flush first, and before the unmount — see the package doc.
-	var syncErr error
+	var (
+		syncErr error
+		synced  bool
+	)
 	if isMountPoint(target) {
 		syncErr = syncTarget(target)
+		synced = syncErr == nil
 	}
 	// No pre-probe on the unmount itself. A probe needs a subprocess
 	// (findmnt), teardown runs during shutdown where a cancelled context
@@ -44,6 +48,11 @@ func unmountTarget(driver, target string) error {
 	case syncErr != nil:
 		return fmt.Errorf("%s: umount(2) %s: %w (the filesystem was NOT flushed first: %v; a detach now can lose unwritten data)",
 			driver, target, err, syncErr)
+	case !synced:
+		// Nothing was mounted here, so there was nothing to flush. Saying
+		// "flushed" would assert work that never happened.
+		return fmt.Errorf("%s: umount(2) %s: %w (nothing was mounted at this path, so nothing was flushed)",
+			driver, target, err)
 	default:
 		// Not a reassurance: on this path the holder is usually a running
 		// container, still writing.
@@ -64,10 +73,13 @@ func unmountTarget(driver, target string) error {
 // one costs data.
 func isMountPoint(target string) bool {
 	var self, parent unix.Stat_t
-	if err := unix.Lstat(target, &self); err != nil {
+	// Stat, not Lstat: syncTarget's open(2) and umount(2) both follow
+	// symlinks, so a gate that did not would answer "nothing mounted here"
+	// for a symlinked target and skip the flush on a live volume.
+	if err := unix.Stat(target, &self); err != nil {
 		return true // cannot tell: flush anyway
 	}
-	if err := unix.Lstat(target+"/..", &parent); err != nil {
+	if err := unix.Stat(target+"/..", &parent); err != nil {
 		return true
 	}
 	return self.Dev != parent.Dev
@@ -83,6 +95,10 @@ func isMountPoint(target string) bool {
 // a silent no-op — the same class of bug as the findmnt probe this
 // replaced. runed holds CAP_SYS_ADMIN in production (it mounts these
 // volumes), so EPERM there is a real misconfiguration and must surface.
+//
+// EINVAL is trusted as "not a mount point" because runed runs in the host
+// mount namespace. A runed inside its own namespace would get EINVAL for a
+// volume it can see but not unmount, and that would read as success here.
 func notMounted(err error) bool {
 	return errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT)
 }
