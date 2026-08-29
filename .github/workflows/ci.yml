@@ -62,6 +62,16 @@ jobs:
         env:
           COVERAGE_THRESHOLD: ${{ secrets.COVERAGE_THRESHOLD }}
         run: make check-coverage
+      # The volume teardown tests need CAP_SYS_ADMIN: umount(2) and loop
+      # mounts are unavailable to the ordinary runner user, so the tests that
+      # matter most skip silently in the job above. Without this step the
+      # package's central guarantee — that a detach cannot discard writes a
+      # container still holds — is asserted only by comments.
+      - name: Volume teardown tests (privileged)
+        run: |
+          docker run --rm --privileged -v "$PWD":/src -w /src golang:1.25 sh -c '
+            apt-get -qq update && apt-get -qq install -y e2fsprogs >/dev/null &&
+            go test ./pkg/storage/driver/mountsync/... -v'
 
   build:
     name: Build

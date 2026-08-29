@@ -9,10 +9,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// syncTarget opens the mount point and calls syncfs(2) on it, which
-// flushes only the filesystem containing that path. sync(2) would flush
-// every filesystem on the node — on a host with several volumes and a
-// busy root disk that turns one volume's teardown into everyone's stall,
+// syncTarget opens the mount point and calls syncfs(2) on it, flushing
+// only the filesystem containing that path. sync(2) would flush every
+// filesystem on the node — on a host with several volumes and a busy
+// root disk that turns one volume's teardown into everyone's stall,
 // inside a shutdown budget measured in seconds.
 func syncTarget(path string) error {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
@@ -27,43 +27,63 @@ func syncTarget(path string) error {
 }
 
 func unmountTarget(driver, target string) error {
-	// Flush first. See the package doc: the caller detaches even when the
-	// unmount below fails, and a detach drops whatever is still cached.
-	syncErr := syncTarget(target)
-
-	// Attempt the unmount unconditionally rather than probing first. The
-	// drivers used to shell out to `findmnt` to decide whether to bother —
-	// but exec cannot start on an expired or cancelled context, and a
-	// probe that failed to run was read as "not mounted", silently
-	// skipping the unmount entirely. Teardown runs during shutdown, which
-	// is exactly where contexts expire. umount(2) itself is the
-	// authoritative answer and needs no subprocess.
+	// Flush first — see the package doc. Unconditional and before the
+	// unmount, both deliberately.
+	var syncErr error
+	if isMountPoint(target) {
+		syncErr = syncTarget(target)
+	}
+	// No pre-probe on the unmount itself. A probe needs a subprocess
+	// (findmnt), teardown runs during shutdown where a cancelled context
+	// stops exec starting, and a probe that could not run reads as "not
+	// mounted" — skipping the unmount entirely. umount(2) answers
+	// authoritatively with no subprocess.
 	err := unix.Unmount(target, 0)
 	switch {
-	case err == nil:
-		return nil
-	case notMounted(err):
+	case err == nil, notMounted(err):
 		return nil
 	case syncErr != nil:
-		return fmt.Errorf("%s: umount(2) %s: %w (filesystem was NOT flushed first: %v; detaching now can lose unwritten data)",
+		return fmt.Errorf("%s: umount(2) %s: %w (the filesystem was NOT flushed first: %v; a detach now can lose unwritten data)",
 			driver, target, err, syncErr)
 	default:
-		return fmt.Errorf("%s: umount(2) %s: %w (filesystem was flushed, so a detach will not lose data)",
+		// Deliberately a fact, not a reassurance. Anything the holder
+		// writes between the flush and the detach is still lost, and on
+		// this path the holder is usually a running container.
+		return fmt.Errorf("%s: umount(2) %s: %w (flushed as of now; writes made after this point are not on the disk)",
 			driver, target, err)
 	}
+}
+
+// isMountPoint reports whether target has a different filesystem from the
+// directory containing it, which for these drivers means a volume is
+// mounted there — they always mount a distinct block device.
+//
+// It exists to keep the idempotent path off the root disk: on a target
+// where nothing is mounted, the syncfs above would resolve to / and flush
+// that instead, which is the whole-node stall syncTarget is written to
+// avoid. It is advisory only, and any uncertainty answers "yes, sync it" —
+// an unnecessary flush costs time, a skipped one costs data.
+func isMountPoint(target string) bool {
+	var self, parent unix.Stat_t
+	if err := unix.Lstat(target, &self); err != nil {
+		return true // cannot tell: flush anyway
+	}
+	if err := unix.Lstat(target+"/..", &parent); err != nil {
+		return true
+	}
+	return self.Dev != parent.Dev
 }
 
 // notMounted reports whether an error from umount(2) means there was
 // nothing mounted at the target — the idempotent success this package
 // promises.
 //
-// EPERM is deliberately NOT in this set. Unprivileged umount(2) fails
-// with EPERM before the kernel ever considers whether the path is a
-// mount point, so treating it as "nothing to do" would turn a missing
-// CAP_SYS_ADMIN into a silent no-op — the same class of bug as the
-// findmnt probe this replaced. runed holds CAP_SYS_ADMIN in production
-// (it mounts these volumes in the first place), so EPERM there is a real
-// misconfiguration and must surface.
+// EPERM is deliberately absent. Unprivileged umount(2) fails with EPERM
+// before the kernel considers whether the path is a mount point, so
+// treating it as "nothing to do" would turn a missing CAP_SYS_ADMIN into
+// a silent no-op — the same class of bug as the findmnt probe this
+// replaced. runed holds CAP_SYS_ADMIN in production (it mounts these
+// volumes), so EPERM there is a real misconfiguration and must surface.
 func notMounted(err error) bool {
 	return errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT)
 }

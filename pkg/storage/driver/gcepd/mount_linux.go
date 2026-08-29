@@ -30,8 +30,5 @@ func (execMounter) Mount(ctx context.Context, dev, target, fsType string, readOn
 
 // Unmount on Linux flushes the filesystem, then calls umount2(2).
 func (execMounter) Unmount(_ context.Context, target string) error {
-	// Flush-then-unmount lives in mountsync, shared by every cloud driver:
-	// a detach discards unflushed pages, and four private copies of that
-	// logic is four chances for one to drift. See issue #270.
 	return mountsync.Unmount("gcepd", target)
 }

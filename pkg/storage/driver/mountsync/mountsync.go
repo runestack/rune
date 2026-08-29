@@ -1,44 +1,41 @@
-// Package mountsync owns the teardown half of a block-volume mount:
-// flushing the filesystem and unmounting it.
+// Package mountsync flushes a mounted filesystem and unmounts it, for the
+// cloud volume drivers that then detach the underlying disk.
 //
-// It exists because detaching a cloud disk discards whatever is still in
-// the page cache. A successful umount(2) flushes on its own, so the sync
-// is redundant on the happy path — it matters on the paths where the
-// unmount does not happen:
+// The flush is not belt-and-braces. umount(2) writes the filesystem out
+// only when it releases the LAST reference to the superblock, and a
+// container started with this volume holds a second one: the runtime
+// binds the mount into the container's own mount namespace. So the
+// agent's umount(2) returns success, flushes nothing, and the detach
+// that follows discards every page still dirty.
 //
-//   - The unmount fails. A container still holding the bind returns
-//     EBUSY, and the agent detaches anyway rather than strand the volume
-//     on a node that is going away.
-//   - The disk is detached by something outside this process.
+// Measured on loop-backed ext4, writing a 90-byte file without fsync and
+// then reading back the raw device (what a detach hands you):
 //
-// In those cases an unsynced ext4 comes back with its metadata journaled
-// and its file contents gone: files with the right name, owner and mode,
-// and a length of zero. That was issue #270.
+//	single mount, bare umount(2)         rc=0   90 bytes
+//	second mount held, bare umount(2)    rc=0    0 bytes
 //
-// The four cloud drivers (do-volume, gce-pd, aws-ebs, hcloud-volume) had
-// byte-identical copies of this logic. They share this one now, because
-// a subtle difference between copies of a data-loss-critical routine is
-// not something a reviewer would reliably catch.
+// Zero-length files with correct names, owners and modes is the signature
+// operators see. Any workload relying on ordinary write-back is exposed;
+// databases escape only because they fsync their own journals.
+//
+// The consequence for anyone editing this package: the sync must stay
+// unconditional and must stay BEFORE the unmount. Moving it after, or
+// behind an error check, reads as a cheap optimisation because umount(2)
+// "already flushes" — and silently reopens the bug for every volume a
+// container is holding. See issue #270.
 package mountsync
 
-// Target flushes every dirty page of the filesystem containing path.
+// Unmount flushes the filesystem at target and then unmounts it. driver
+// names the calling driver for error messages ("gcepd").
 //
-// Best-effort by design: on a teardown path the useful response to
-// "could not sync" is to carry on and report it, not to abandon the
-// unmount. A nil return means the filesystem was flushed.
-func Target(path string) error {
-	return syncTarget(path)
-}
-
-// Unmount flushes the filesystem at target and then unmounts it.
+// When the unmount fails the error states whether the flush succeeded:
+// the caller detaches either way, so that is the difference between a
+// volume left attached and unwritten data discarded.
 //
-// driver names the calling driver for error messages ("gcepd"). The
-// returned error says explicitly whether the flush succeeded, because
-// the caller detaches the disk either way: that is the difference
-// between a volume left attached somewhere and unwritten data discarded.
-//
-// Idempotent — unmounting a path that is not a mount point, or that no
-// longer exists, is a nil return.
+// Idempotent for a caller holding CAP_SYS_ADMIN — a target that is not a
+// mount point, or is already gone, returns nil. Unprivileged, umount(2)
+// answers EPERM before it looks at the target, and that surfaces as an
+// error rather than a silent success.
 func Unmount(driver, target string) error {
 	return unmountTarget(driver, target)
 }
