@@ -358,7 +358,16 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 	var downSince time.Time
 	lastVersion, lastReady := "", false
 
-	for time.Now().Before(deadline) {
+	// Downgrade targets may predate the ready flag entirely (today every
+	// released build does), so — mirroring the applier — the watch
+	// demands it only in the upgrade direction.
+	requireReady := true
+	if cmp, err := upgrade.CompareVersions(target, fromVersion); err == nil && cmp < 0 {
+		requireReady = false
+	}
+
+	watchStart := time.Now()
+	for poll := 0; time.Now().Before(deadline); poll++ {
 		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		resp, err := hc.GetServerVersion(pctx, &generated.GetServerVersionRequest{})
 		cancel()
@@ -367,7 +376,7 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 			if downSince.IsZero() {
 				downSince = time.Now()
 			}
-		case resp.GetVersion() == target && resp.GetReady():
+		case resp.GetVersion() == target && (resp.GetReady() || !requireReady):
 			downFor := ""
 			if !downSince.IsZero() {
 				downFor = fmt.Sprintf(" (was down %ds)", int(time.Since(downSince).Seconds()))
@@ -376,6 +385,15 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 			return nil
 		default:
 			lastVersion, lastReady = resp.GetVersion(), resp.GetReady()
+			// A terminal outcome from THIS attempt ends the wait now —
+			// a floor refusal or verification failure lands as an event
+			// within seconds, and holding the full deadline to report
+			// it would be an 8-minute stare at a known answer.
+			if poll%5 == 4 && resp.GetVersion() == fromVersion {
+				if ev := latestTerminalUpgradeEvent(api, watchStart); ev != "" {
+					return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, ev)
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -383,14 +401,14 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 		case <-time.After(2 * time.Second):
 		}
 	}
-	return diagnoseWatchTimeout(api, fromVersion, target, lastVersion, lastReady)
+	return diagnoseWatchTimeout(api, watchStart, fromVersion, target, lastVersion, lastReady)
 }
 
 // diagnoseWatchTimeout names the state at the deadline. The four cases are
 // genuinely different nights for the operator; reporting only "rolled
 // back" would be wrong in three of them.
-func diagnoseWatchTimeout(api *client.Client, fromVersion, target, lastVersion string, lastReady bool) error {
-	return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, latestTerminalUpgradeEvent(api))
+func diagnoseWatchTimeout(api *client.Client, since time.Time, fromVersion, target, lastVersion string, lastReady bool) error {
+	return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, latestTerminalUpgradeEvent(api, since))
 }
 
 // watchTimeoutDiagnosis is the pure decision; terminalEvent is the most
@@ -415,8 +433,10 @@ func watchTimeoutDiagnosis(fromVersion, target, lastVersion string, lastReady bo
 }
 
 // latestTerminalUpgradeEvent best-effort fetches the most recent apply
-// outcome ("" when none or unreadable).
-func latestTerminalUpgradeEvent(api *client.Client) string {
+// outcome newer than since ("" when none or unreadable). The since filter
+// keeps a stale outcome from an earlier attempt from being mistaken for
+// this one's.
+func latestTerminalUpgradeEvent(api *client.Client, since time.Time) string {
 	ec := generated.NewEventServiceClient(api.Conn())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -427,6 +447,9 @@ func latestTerminalUpgradeEvent(api *client.Client) string {
 	for _, e := range resp.GetEvents() {
 		switch e.GetReason() {
 		case "UpgradeApplied", "UpgradeRolledBack", "UpgradeFailed", "UpgradeSkipped":
+			if ts, err := time.Parse(time.RFC3339, e.GetLastSeen()); err == nil && ts.Before(since) {
+				return ""
+			}
 			return e.GetReason() + ": " + e.GetMessage()
 		}
 	}
