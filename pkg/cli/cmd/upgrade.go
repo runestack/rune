@@ -210,14 +210,16 @@ func confirmUpgradePlan(plan *upgradePlan, opts *upgradeOptions) error {
 func executeUpgradePlan(ctx context.Context, hc *http.Client, api *client.Client, plan *upgradePlan, opts *upgradeOptions) error {
 	serverUpgraded := !plan.doServer || plan.serverAtTarget
 	var serverSkipped *degradeSkipped
+	var seq eventBaseline
 	switch {
 	case plan.doServer && !plan.serverAtTarget:
-		proceeded, skipped, err := upgradeServer(ctx, api, plan.server, plan.checksums, plan.target, plan.allowDowngrade, opts)
+		proceeded, skipped, staged, err := upgradeServer(ctx, api, plan.server, plan.checksums, plan.target, plan.allowDowngrade, opts)
 		if err != nil {
 			return err
 		}
 		serverUpgraded = proceeded
 		serverSkipped = skipped
+		seq = staged
 		if proceeded {
 			postRestartSweep(api)
 		}
@@ -238,6 +240,9 @@ func executeUpgradePlan(ctx context.Context, hc *http.Client, api *client.Client
 	}
 	// Never report more than happened. The partial result gets no ✓, and
 	// says the fact once — as the error when someone can act on it.
+	if serverUpgraded && plan.doServer {
+		reportUnitLeftUnchanged(api, seq)
+	}
 	if !serverUpgraded {
 		summary := fmt.Sprintf("CLI upgraded to %s; server still on %s.", plan.target, plan.server.GetVersion())
 		if serverSkipped != nil && !serverSkipped.actionable {
@@ -271,16 +276,16 @@ func probeServerVersion() (*generated.GetServerVersionResponse, *client.Client) 
 // upgradeServer stages the upgrade over the RPC and watches the restart
 // window. Returns whether the server half actually ran (false = degraded
 // to client-only); a hard error aborts the command.
-func upgradeServer(ctx context.Context, api *client.Client, server *generated.GetServerVersionResponse, checksums upgrade.Checksums, target string, allowDowngrade bool, opts *upgradeOptions) (bool, *degradeSkipped, error) {
+func upgradeServer(ctx context.Context, api *client.Client, server *generated.GetServerVersionResponse, checksums upgrade.Checksums, target string, allowDowngrade bool, opts *upgradeOptions) (bool, *degradeSkipped, eventBaseline, error) {
 	if server.GetOs() != "linux" {
 		proceed, _, skipped, hard := degrade(degradeSkipped{
 			reason: fmt.Sprintf("it runs %s/%s; servers self-upgrade on linux only", server.GetOs(), server.GetArch()),
 		}, opts)
-		return proceed, skipped, hard
+		return proceed, skipped, eventBaseline{}, hard
 	}
 	digest, err := checksums.Digest(upgrade.ServerAsset(server.GetArch()))
 	if err != nil {
-		return false, nil, err
+		return false, nil, eventBaseline{}, err
 	}
 
 	fmt.Printf("  server: staging %s ...\n", target)
@@ -297,10 +302,10 @@ func upgradeServer(ctx context.Context, api *client.Client, server *generated.Ge
 	if err != nil {
 		proceed, watchAnyway, skipped, herr := classifyStageError(err, target, opts)
 		if herr != nil {
-			return false, nil, herr
+			return false, nil, seqBaseline, herr
 		}
 		if !proceed {
-			return false, skipped, nil // degraded to client-only; message already printed
+			return false, skipped, seqBaseline, nil // degraded to client-only; message already printed
 		}
 		stagedUncertain = watchAnyway
 	}
@@ -310,7 +315,7 @@ func upgradeServer(ctx context.Context, api *client.Client, server *generated.Ge
 	fmt.Println("  server: applying — connection will drop while runed restarts")
 	fmt.Println("          Ctrl-C is safe: the upgrade finishes or rolls back on the host")
 
-	return true, nil, watchServerUpgrade(ctx, api, server.GetVersion(), target, seqBaseline)
+	return true, nil, seqBaseline, watchServerUpgrade(ctx, api, server.GetVersion(), target, seqBaseline)
 }
 
 // classifyStageError maps an UpgradeServer failure to what to do next:
@@ -321,9 +326,14 @@ func classifyStageError(err error, target string, opts *upgradeOptions) (proceed
 	if !ok {
 		return true, true, nil, nil
 	}
+	// Sanitise once, here, rather than at each site that prints it: this
+	// text crosses a channel with no transport authentication, and the
+	// per-site approach already grew a sixth unsanitised site a round
+	// after five were counted.
+	msg := upgrade.SanitizeServerDetail(st.Message())
 	sshOneLiner := fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/%s/%s/scripts/upgrade-server.sh | sudo bash -s -- --version %s --refresh-unit",
 		upgrade.Repo, target, target)
-	if dir := upgrade.DataDirFromMessage(st.Message()); dir != "" {
+	if dir := upgrade.DataDirFromMessage(msg); dir != "" {
 		// The server's data dir is somewhere other than the default, so
 		// the remedy has to install units that watch it.
 		sshOneLiner += " --data-dir " + dir
@@ -338,16 +348,16 @@ func classifyStageError(err error, target string, opts *upgradeOptions) (proceed
 		return degrade(degradeSkipped{reason: "this server is too old to upgrade itself",
 			nextStep: "run this on the host once:\n" + sshOneLiner, actionable: true}, opts)
 	case codes.FailedPrecondition:
-		switch reason := upgrade.PreconditionReason(st.Message()); reason {
+		switch reason := upgrade.PreconditionReason(msg); reason {
 		case upgrade.ReasonInProgress:
-			return false, false, nil, fmt.Errorf("an upgrade is already in progress on the server: %s", st.Message())
+			return false, false, nil, fmt.Errorf("an upgrade is already in progress on the server: %s", msg)
 		case upgrade.ReasonNoSystemd:
 			return degrade(degradeSkipped{reason: "it isn't running under systemd, so it can't restart itself"}, opts)
 		case upgrade.ReasonUnitsMissing:
 			why := "its upgrade helper isn't installed yet"
 			// The generic "X not installed" adds nothing; a mismatched
 			// staging path is the variant worth quoting.
-			if d := upgrade.SanitizeServerDetail(st.Message()); strings.Contains(d, "stages to") {
+			if d := msg; strings.Contains(d, "stages to") {
 				// Just the mismatch, not the whole message — the remedy
 				// below already says to reinstall, and the one-liner
 				// already carries the right --data-dir.
@@ -362,7 +372,7 @@ func classifyStageError(err error, target string, opts *upgradeOptions) (proceed
 			return degrade(degradeSkipped{reason: why,
 				nextStep: "run this on the host once:\n" + sshOneLiner, actionable: true}, opts)
 		default:
-			return false, false, nil, fmt.Errorf("server refused the upgrade: %s", st.Message())
+			return false, false, nil, fmt.Errorf("server refused the upgrade: %s", msg)
 		}
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
 		// The reply may have raced the restart: treat as possibly staged
@@ -370,7 +380,7 @@ func classifyStageError(err error, target string, opts *upgradeOptions) (proceed
 		fmt.Println("  server: connection dropped during staging — watching for the new version anyway")
 		return true, true, nil, nil
 	default:
-		return false, false, nil, fmt.Errorf("staging upgrade: %s", st.Message())
+		return false, false, nil, fmt.Errorf("staging upgrade: %s", msg)
 	}
 }
 
@@ -462,13 +472,6 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 			}
 		case resp.GetVersion() == target && (resp.GetReady() || !requireReady):
 			printWatchSuccess(target, downSince)
-			// A refused unit refresh means this host's unit is now frozen
-			// relative to the binary. It reaches the journal and the event
-			// log either way, but the operator has no reason to look there
-			// after a success — so say it here.
-			if ev := latestTerminalUpgradeEvent(api, since); strings.Contains(ev, "left ") {
-				fmt.Printf("  server: %s\n", strings.TrimPrefix(ev, "UpgradeApplied: "))
-			}
 			return nil
 		default:
 			lastVersion, lastReady = resp.GetVersion(), resp.GetReady()
@@ -498,6 +501,25 @@ func earlyOutcome(api *client.Client, since eventBaseline, poll int, fromVersion
 		return nil
 	}
 	return watchTimeoutDiagnosis(currentContextName(), fromVersion, target, lastVersion, lastReady, ev)
+}
+
+// reportUnitLeftUnchanged prints the applier's refusal to touch this host's
+// unit, if there was one. A refused refresh leaves the unit frozen relative
+// to the binary — every later release's unit directives pass it by — and
+// nothing else on a successful run would tell the operator.
+//
+// Read here rather than at the success line because the applier records it
+// only after its hold-down, roughly ten seconds after the CLI can first see
+// the server healthy. By this point the client half has downloaded and
+// verified its own tarball, so the event has long since landed and no wait
+// was added to get it.
+func reportUnitLeftUnchanged(api *client.Client, since eventBaseline) {
+	note := unitUnchangedNote(api, since)
+	if note == "" {
+		return
+	}
+	fmt.Printf("\nnote: %s\n", note)
+	fmt.Println("      it will not pick up new unit directives until you reconcile it.")
 }
 
 // watchRequiresReady mirrors the applier: a downgrade target may predate the
@@ -542,6 +564,32 @@ func watchTimeoutDiagnosis(host, fromVersion, target, lastVersion string, lastRe
 	}
 }
 
+// unitUnchangedNote returns the applier's declined-refresh message, matched
+// on its own event reason rather than on the wording of the message.
+func unitUnchangedNote(api *client.Client, since eventBaseline) string {
+	ec := generated.NewEventServiceClient(api.Conn())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	resp, err := ec.ListEvents(ctx, &generated.ListEventsRequest{Limit: 50})
+	if err != nil {
+		return ""
+	}
+	for _, e := range resp.GetEvents() {
+		if e.GetReason() != "UpgradeAppliedUnitUnchanged" {
+			continue
+		}
+		if !since.newerThan(e.GetSeq(), e.GetLastSeen()) {
+			continue
+		}
+		msg := upgrade.SanitizeServerDetail(e.GetMessage())
+		if _, note, ok := strings.Cut(msg, "("); ok {
+			return strings.TrimSuffix(note, ")")
+		}
+		return msg
+	}
+	return ""
+}
+
 // latestTerminalUpgradeEvent returns this attempt's apply outcome ("" when
 // none yet). The window is generous because a restart is the noisiest
 // moment on the box — every instance reconcile emits — and the outcome
@@ -550,19 +598,19 @@ func latestTerminalUpgradeEvent(api *client.Client, since eventBaseline) string 
 	ec := generated.NewEventServiceClient(api.Conn())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	resp, err := ec.ListEvents(ctx, &generated.ListEventsRequest{Limit: 500})
+	resp, err := ec.ListEvents(ctx, &generated.ListEventsRequest{Limit: 50})
 	if err != nil {
 		return ""
 	}
 	for _, e := range resp.GetEvents() {
 		switch e.GetReason() {
-		case "UpgradeApplied", "UpgradeRolledBack", "UpgradeFailed", "UpgradeSkipped":
+		case "UpgradeApplied", "UpgradeAppliedUnitUnchanged", "UpgradeRolledBack", "UpgradeFailed", "UpgradeSkipped":
 			// Skip a previous attempt's outcome; see eventBaseline for why
 			// sequence alone is not enough.
 			if !since.newerThan(e.GetSeq(), e.GetLastSeen()) {
 				continue
 			}
-			return e.GetReason() + ": " + e.GetMessage()
+			return upgrade.SanitizeServerDetail(e.GetReason() + ": " + e.GetMessage())
 		}
 	}
 	return ""

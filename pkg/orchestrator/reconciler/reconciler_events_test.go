@@ -36,6 +36,10 @@ func (l *recordingEventLog) ListLatest(context.Context, int) ([]types.Event, err
 	return nil, nil
 }
 
+func (l *recordingEventLog) ListLatestFiltered(context.Context, string, int, int) ([]types.Event, error) {
+	return nil, nil
+}
+
 func (l *recordingEventLog) ListSince(context.Context, int64, int) ([]types.Event, error) {
 	return nil, nil
 }

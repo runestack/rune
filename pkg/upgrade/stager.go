@@ -17,6 +17,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/runestack/rune/pkg/events"
 	"github.com/runestack/rune/pkg/log"
@@ -367,7 +368,10 @@ func DataDirFromMessage(msg string) string {
 // around it — including a command the operator is being told to run.
 func SanitizeServerDetail(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		// C0, DEL and the 8-bit C1 block (U+009B decodes to CSI on
+		// terminals that honour it), plus Unicode format characters,
+		// which can reorder what is displayed relative to what is copied.
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r

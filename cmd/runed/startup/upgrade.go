@@ -28,6 +28,32 @@ func newUpgradeStager(dataDir, nodeID string, eventLog events.EventLog, logger l
 	}
 }
 
+// upgradeEvent maps an applier result to the event that reports it.
+//
+// A successful apply that still carries a reason is the declined unit
+// refresh: it gets its own slug so consumers match on that rather than on
+// the wording of the message.
+func upgradeEvent(res *upgrade.Result) (types.EventLevel, string, string) {
+	level, reason := types.EventLevelInfo, "UpgradeApplied"
+	switch res.Outcome {
+	case "success":
+		if res.Reason != "" {
+			reason = "UpgradeAppliedUnitUnchanged"
+		}
+	case "rolled-back":
+		level, reason = types.EventLevelWarn, "UpgradeRolledBack"
+	case "failed":
+		level, reason = types.EventLevelWarn, "UpgradeFailed"
+	case "noop":
+		reason = "UpgradeSkipped"
+	}
+	msg := "Server upgrade " + res.Outcome + ": " + res.FromVersion + " -> " + res.ToVersion
+	if res.Reason != "" {
+		msg += " (" + res.Reason + ")"
+	}
+	return level, reason, msg
+}
+
 // watchUpgradeResult polls for the applier's result file and emits the
 // matching event within seconds. The applier cannot emit events itself
 // (it is a separate root process, and for a failed-before-restart apply
@@ -72,20 +98,7 @@ func watchUpgradeResult(ctx context.Context, eventLog events.EventLog, nodeID st
 		first = false
 		lastSeen = mtime
 
-		level := types.EventLevelInfo
-		reason := "UpgradeApplied"
-		switch res.Outcome {
-		case "rolled-back":
-			level, reason = types.EventLevelWarn, "UpgradeRolledBack"
-		case "failed":
-			level, reason = types.EventLevelWarn, "UpgradeFailed"
-		case "noop":
-			reason = "UpgradeSkipped"
-		}
-		msg := "Server upgrade " + res.Outcome + ": " + res.FromVersion + " -> " + res.ToVersion
-		if res.Reason != "" {
-			msg += " (" + res.Reason + ")"
-		}
+		level, reason, msg := upgradeEvent(res)
 		now := time.Now().UTC()
 		if err := eventLog.Emit(ctx, types.Event{
 			Kind: "Node", Name: nodeID, Level: level, Reason: reason, Message: msg,
