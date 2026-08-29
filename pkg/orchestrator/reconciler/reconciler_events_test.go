@@ -32,6 +32,10 @@ func (l *recordingEventLog) Emit(_ context.Context, e types.Event) error {
 func (l *recordingEventLog) ListByResource(context.Context, string, string, string, int) ([]types.Event, error) {
 	return nil, nil
 }
+func (l *recordingEventLog) ListLatest(context.Context, int) ([]types.Event, error) {
+	return nil, nil
+}
+
 func (l *recordingEventLog) ListSince(context.Context, int64, int) ([]types.Event, error) {
 	return nil, nil
 }

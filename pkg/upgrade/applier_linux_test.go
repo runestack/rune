@@ -171,6 +171,11 @@ func TestUnitRefreshUnsafe_ExecStartFlags(t *testing.T) {
 		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --dev-mode\n",
 		// The equals form is the same flag and must be caught too.
 		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed --data-dir=/mnt/data\n",
+		// Only on a continuation line — a long ExecStart is normally
+		// written this way, and skipping wrapped lines instead of joining
+		// them made every flag on them invisible while every single-line
+		// case still refused, so nothing failed.
+		"[Service]\nUser=rune\nGroup=rune\nExecStart=/usr/local/bin/runed \\\n  --data-dir /mnt/data \\\n  --config /etc/rune/runefile.toml\n",
 	} {
 		if why := unitRefreshUnsafe(live, render); why == "" {
 			t.Fatalf("a flag the render cannot reproduce must block the refresh:\n%s", live)
@@ -211,17 +216,27 @@ func TestUnitRefreshUnsafe_FalsePositives(t *testing.T) {
 // only one clause of a multi-clause set silently drops the rest — on a host
 // that had more than this project usually grants.
 func TestParseGetcap(t *testing.T) {
+	const bin = "/usr/local/bin/runed"
 	cases := map[string]string{
-		"/usr/local/bin/runed cap_net_bind_service=ep":                 "cap_net_bind_service=ep",
-		"/usr/local/bin/runed cap_net_bind_service=ep cap_sys_admin=p": "cap_net_bind_service=ep cap_sys_admin=p",
-		"/usr/local/bin/runed = cap_net_bind_service+ep":               "cap_net_bind_service+ep",
-		"/usr/local/bin/runed":                                         "",
-		"":                                                             "",
-		"/usr/local/bin/runed something-else":                          "",
+		bin + " cap_net_bind_service=ep":                 "cap_net_bind_service=ep",
+		bin + " cap_net_bind_service=ep cap_sys_admin=p": "cap_net_bind_service=ep cap_sys_admin=p",
+		bin + " = cap_net_bind_service+ep":               "cap_net_bind_service+ep",
+		bin:                                              "",
+		"":                                               "",
+		bin + " something-else":                          "",
 	}
 	for out, want := range cases {
-		if got := parseGetcap(out); got != want {
+		if got := parseGetcap(out, bin); got != want {
 			t.Fatalf("parseGetcap(%q) = %q, want %q", out, got, want)
 		}
+	}
+
+	// A bin dir containing a space must not fold part of the path into the
+	// capability string: setcap would reject it, the failure is only
+	// logged, and the upgrade would report success with runed unable to
+	// bind :80/:443.
+	const spaced = "/opt/my rune/runed"
+	if got := parseGetcap(spaced+" cap_net_bind_service=ep", spaced); got != "cap_net_bind_service=ep" {
+		t.Fatalf("spaced bin dir: %q", got)
 	}
 }

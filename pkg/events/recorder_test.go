@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -178,4 +179,45 @@ func TestRecorder_EmitRejectsBadInput(t *testing.T) {
 	require.Error(t, err)
 	err = r.Emit(context.Background(), types.Event{Kind: "x"})
 	require.Error(t, err)
+}
+
+// ListSince is the ascending outbox view, so asking it for "the newest" by
+// passing cursor 0 hands back the OLDEST events. ListLatest exists because
+// the CLI's event views want recency; a caller that confuses the two shows
+// a stale window on exactly the busy box where it matters.
+func TestListLatest_ReturnsNewestNotOldest(t *testing.T) {
+	r := newTestRecorder(t)
+	ctx := context.Background()
+	for i := 0; i < 30; i++ {
+		if err := r.Emit(ctx, mkEvent("Reason", fmt.Sprintf("event-%02d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	latest, err := r.ListLatest(ctx, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest) != 5 {
+		t.Fatalf("want 5 events, got %d", len(latest))
+	}
+	if latest[0].Message != "event-29" {
+		t.Fatalf("newest first: got %q, want event-29", latest[0].Message)
+	}
+	if latest[4].Message != "event-25" {
+		t.Fatalf("descending: got %q, want event-25", latest[4].Message)
+	}
+
+	// The distinction this function exists for: the ascending view with a
+	// zero cursor starts at the other end of the log.
+	oldest, err := r.ListSince(ctx, 0, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldest[0].Message != "event-00" {
+		t.Fatalf("ListSince(0) must start at the oldest, got %q", oldest[0].Message)
+	}
+	if latest[0].Seq <= oldest[0].Seq {
+		t.Fatalf("ListLatest must return higher sequences than ListSince(0): %d vs %d", latest[0].Seq, oldest[0].Seq)
+	}
 }

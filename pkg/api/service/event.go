@@ -71,17 +71,28 @@ func (s *EventService) ListEvents(ctx context.Context, req *generated.ListEvents
 		}
 		out, err = s.log.ListByResource(ctx, ns, canonKind, name, limit)
 	} else {
-		// Namespace-wide view: scan the cursor index and filter. Cheap
-		// for typical TTL windows (~1h of state-transition events).
+		// Namespace-wide view: newest first, filtered by namespace.
+		//
+		// This reads the sequence index in reverse rather than taking the
+		// first N of the ascending outbox view: the latter returns the
+		// OLDEST events, so on a busy box the newest ones were missing
+		// from the response entirely and callers saw an empty or stale
+		// window. Over-fetch so the namespace filter still has candidates.
 		var all []types.Event
-		all, err = s.log.ListSince(ctx, 0, 1000)
+		scan := limit * 10
+		if scan < 500 {
+			scan = 500
+		}
+		all, err = s.log.ListLatest(ctx, scan)
 		if err == nil {
-			// Newest first, filter by namespace.
-			for i := len(all) - 1; i >= 0 && len(out) < limit; i-- {
-				if req.Namespace != "" && all[i].Namespace != req.Namespace {
+			for _, ev := range all {
+				if len(out) >= limit {
+					break
+				}
+				if req.Namespace != "" && ev.Namespace != req.Namespace {
 					continue
 				}
-				out = append(out, all[i])
+				out = append(out, ev)
 			}
 		}
 	}

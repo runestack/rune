@@ -81,17 +81,29 @@ func parseExecStartShow(body string) (binPath, configPath, grpcAddr string) {
 // the two disagree, the guard certifies a refresh whose render then drops
 // the value.
 func execStartFlag(args []string, want string) (string, bool) {
+	val, found := "", false
 	for i, a := range args {
+		// Only actual flags: without this a bare value that happens to
+		// read "config" would be taken for the flag, and the token after
+		// it for its value. unitDirectives guards the same way, and the
+		// two must agree or the guard certifies a refresh whose render
+		// then drops the value.
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
 		name, inline, hasInline := strings.Cut(a, "=")
 		if "--"+strings.TrimLeft(name, "-") != want {
 			continue
 		}
-		if hasInline {
-			return inline, true
-		}
-		if i+1 < len(args) {
-			return args[i+1], true
+		// Keep scanning: Go's flag package takes the LAST occurrence, so
+		// returning the first would hand the applier a different runefile
+		// than the one runed reads.
+		switch {
+		case hasInline:
+			val, found = inline, true
+		case i+1 < len(args):
+			val, found = args[i+1], true
 		}
 	}
-	return "", false
+	return val, found
 }

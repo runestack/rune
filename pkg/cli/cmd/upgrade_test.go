@@ -22,12 +22,12 @@ func TestWatchTimeoutDiagnosis(t *testing.T) {
 		// The stager's UpgradeStaged is emitted on EVERY attempt before
 		// the trigger exists, so only terminal events count — an empty
 		// terminalEvent must diagnose "never applied", not fall through.
-		{"never applied", from, false, "", "runed-upgrade.path"},
+		{"no outcome recorded", from, false, "", "journalctl -u runed-upgrade"},
 		{"failed closed", from, false, "UpgradeFailed: sha mismatch", "journalctl -u runed-upgrade"},
 		{"nobody answering", "", false, "", "mid-rollback"},
 	}
 	for _, tc := range cases {
-		err := watchTimeoutDiagnosis(from, target, tc.lastVersion, tc.lastReady, tc.terminalEvent)
+		err := watchTimeoutDiagnosis("prod", from, target, tc.lastVersion, tc.lastReady, tc.terminalEvent)
 		if err == nil || !strings.Contains(err.Error(), tc.wantSubstring) {
 			t.Fatalf("%s: got %v, want substring %q", tc.name, err, tc.wantSubstring)
 		}
@@ -71,8 +71,9 @@ func TestClassifyStageError(t *testing.T) {
 	}
 }
 
-// The six ways the server half can be skipped, and whether each is
-// something a human can go and fix. A capability the caller never had is
+// Every way classifyStageError can skip the server half, and whether each
+// is something a human can go and fix. (The non-linux server degrades the
+// same way, from upgradeServer rather than here.) A capability the caller never had is
 // not a failure of the command, so it must not exit non-zero — an exit
 // code that always fires is one people learn to ignore.
 func TestClassifyStageError_ActionableSplit(t *testing.T) {
@@ -105,5 +106,25 @@ func TestClassifyStageError_ActionableSplit(t *testing.T) {
 		if tc.actionable && skipped.nextStep == "" {
 			t.Fatalf("%s: an actionable degrade must say what to do", tc.name)
 		}
+	}
+}
+
+// The diagnosis must not claim more than the evidence supports: an absent
+// outcome means it was not recorded, which is not the same as an upgrade
+// that never ran, and the journal is the record that settles it.
+func TestWatchTimeoutDiagnosis_NamesTheHostAndDoesNotOverclaim(t *testing.T) {
+	err := watchTimeoutDiagnosis("prod", "v0.0.1-dev.147", "v0.0.1-dev.150", "v0.0.1-dev.147", false, "")
+	if err == nil {
+		t.Fatal("expected a diagnosis")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "prod") {
+		t.Fatalf("the diagnosis must name the host: %q", msg)
+	}
+	if strings.Contains(msg, "no upgrade was applied") {
+		t.Fatalf("must not assert the apply never happened: %q", msg)
+	}
+	if !strings.Contains(msg, "journalctl -u runed-upgrade") {
+		t.Fatalf("must point at the durable record: %q", msg)
 	}
 }

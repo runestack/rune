@@ -48,6 +48,7 @@ type EventLog interface {
 	Emit(ctx context.Context, e types.Event) error
 	ListByResource(ctx context.Context, namespace, kind, name string, limit int) ([]types.Event, error)
 	ListSince(ctx context.Context, cursor int64, limit int) ([]types.Event, error)
+	ListLatest(ctx context.Context, limit int) ([]types.Event, error)
 	LoadCursor(ctx context.Context, consumerID string) (int64, error)
 	SaveCursor(ctx context.Context, consumerID string, seq int64) error
 }
@@ -230,6 +231,36 @@ func (r *Recorder) ListByResource(ctx context.Context, ns, kind, name string, li
 	// Cache miss — scan the by-resource keyspace.
 	prefix := []byte(byResourcePrefix + ns + "/" + kind + "/" + name + "/")
 	var out []types.Event
+	err := r.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.IteratorOptions{Prefix: prefix, Reverse: true, PrefetchValues: true, PrefetchSize: limit})
+		defer it.Close()
+		// Reverse iteration needs a seek past the upper bound.
+		seekKey := append(append([]byte{}, prefix...), 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)
+		for it.Seek(seekKey); it.ValidForPrefix(prefix) && len(out) < limit; it.Next() {
+			var ev types.Event
+			if err := it.Item().Value(func(v []byte) error { return json.Unmarshal(v, &ev) }); err != nil {
+				return err
+			}
+			out = append(out, ev)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// ListLatest returns up to limit events in descending Seq order — the
+// newest events in the log.
+//
+// ListSince is the outbox view and iterates forward from a cursor, so
+// asking it for "the newest" by passing cursor 0 returns the OLDEST limit
+// events instead. A caller that wants recency (the CLI's event views) has
+// to scan the sequence index in reverse, which is what this does.
+func (r *Recorder) ListLatest(ctx context.Context, limit int) ([]types.Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	prefix := []byte(bySeqPrefix)
+	out := make([]types.Event, 0, limit)
 	err := r.db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.IteratorOptions{Prefix: prefix, Reverse: true, PrefetchValues: true, PrefetchSize: limit})
 		defer it.Close()

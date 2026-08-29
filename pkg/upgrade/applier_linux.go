@@ -416,12 +416,13 @@ func (a *Applier) rollback(ctx context.Context, m *Manifest, binDir, backupRune,
 	return cause
 }
 
-// refreshUnits rewrites runed.service from the NEW binary's print-systemd
-// (preserving the current unit's user/binary/config values — a flagless
-// render would clobber a custom install, which is exactly what the old
-// upgrade-server.sh --refresh-unit did) and re-renders the applier's own
-// units — unless it bailed out above — so they are not frozen at bootstrap
-// forever. Returns whether the runed unit was backed up (for rollback).
+// refreshUnits rewrites runed.service from the NEW binary's print-systemd,
+// preserving the live unit's user/binary/config values (a flagless render
+// would clobber a custom install — see ParseUnitShow), and re-renders the
+// applier's own units so they are not frozen at bootstrap forever. The
+// runed unit is skipped when systemd loads it from outside /etc; the
+// applier's own units are refreshed either way. Returns whether the runed
+// unit was backed up, for rollback.
 func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 	newBinary := filepath.Join(binDir, "runed")
 	render := func(args ...string) (string, error) {
@@ -435,9 +436,10 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 	// backup to restore, leaving the old binary under the new unit.
 	// "Don't know" is treated as "don't touch it": systemctl is known to
 	// work by now (currentUnitValues hard-errors otherwise), so an empty
-	// answer means a transient or generator-produced unit, and writing
-	// /etc would shadow rather than refresh it — with no backup for
-	// rollback to restore. The applier's own units are re-rendered below
+	// answer means a transient unit or no unit at all — and a
+	// generator-written one answers with its /run path, which is equally
+	// not ours to overwrite. Writing /etc would shadow rather than refresh,
+	// with no backup for rollback to restore. The applier's own units are re-rendered below
 	// regardless: those always live in /etc and are always ours.
 	skipRunedUnit := liveFragmentPath() != runedUnitPath
 	if skipRunedUnit {
@@ -509,27 +511,25 @@ func liveFragmentPath() string {
 	return strings.TrimSpace(string(out))
 }
 
-// parseGetcap extracts the capability set from getcap output, or "" when
-// there is none.
+// parseGetcap extracts the capability set from getcap output for binPath,
+// or "" when there is none.
 //
 // Every clause, not just the last: a file can carry
 // "cap_net_bind_service=ep cap_sys_admin=p", and setcap replaces the whole
 // set rather than adding to it, so keeping one clause silently drops the
 // rest. Older libcap prints "<path> = <caps>", so a bare "=" is dropped.
-func parseGetcap(out string) string {
-	f := strings.Fields(strings.TrimSpace(out))
-	if len(f) < 2 {
+func parseGetcap(out, binPath string) string {
+	rest := strings.TrimSpace(out)
+	// Strip the path we asked about rather than splitting on whitespace:
+	// a bin dir containing a space would otherwise fold part of the path
+	// into the capability string, setcap would reject it, and the upgrade
+	// would report success with runed unable to bind :80/:443.
+	rest = strings.TrimSpace(strings.TrimPrefix(rest, binPath))
+	rest = strings.TrimSpace(strings.TrimPrefix(rest, "="))
+	if !strings.Contains(rest, "cap_") {
 		return ""
 	}
-	clauses := f[1:]
-	if clauses[0] == "=" {
-		clauses = clauses[1:]
-	}
-	caps := strings.Join(clauses, " ")
-	if !strings.Contains(caps, "cap_") {
-		return ""
-	}
-	return caps
+	return rest
 }
 
 // unitRefreshUnsafe reports why the live runed unit must not be replaced by
@@ -600,7 +600,8 @@ func joinContinuations(unit string) []string {
 }
 
 // unitDirectives returns what a unit file sets: every directive name, plus
-// each flag in an ExecStart command line as "ExecStart <flag>".
+// each flag in an ExecStart command line as "ExecStart --<flag>", dashes
+// normalised.
 //
 // The flags matter as much as the directive names. runed takes two dozen
 // daemon flags and the template reproduces one of them, so a unit started with
@@ -661,14 +662,12 @@ func (a *Applier) applyCaps(binDir string) {
 // project usually grants — setcap replaces rather than adds, so
 // re-applying a narrowed set would silently drop the rest on a host that
 // had more.
-//
-// getcap prints "<path> <caps>" (or "<path> = <caps>" on older libcap).
 func (a *Applier) detectFileCaps(binDir string) {
 	out, err := exec.Command("getcap", filepath.Join(binDir, "runed")).Output()
 	if err != nil {
 		return
 	}
-	a.fileCaps = parseGetcap(string(out))
+	a.fileCaps = parseGetcap(string(out), filepath.Join(binDir, "runed"))
 }
 
 // currentUnitValues reads User/Group/ExecStart from the live unit via

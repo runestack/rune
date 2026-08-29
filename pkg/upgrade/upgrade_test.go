@@ -298,3 +298,21 @@ func TestParseUnitShow_InlineValues(t *testing.T) {
 		}
 	}
 }
+
+// execStartFlag must agree with unitDirectives about what a flag is, and
+// must match Go's flag package on which occurrence wins — the applier uses
+// the result to decide which runefile runed reads.
+func TestExecStartFlag_ValuesAndPrecedence(t *testing.T) {
+	vals := defaultUnitOptionsForTest()
+	// A bare value that happens to read like a flag name is not a flag.
+	_, cfg, _ := ParseUnitShow("ExecStart={ path=/x ; argv[]=/x --log-level config --dev-mode }\n", &vals)
+	if cfg != "" {
+		t.Fatalf("a dash-less token must not be taken for --config, got %q", cfg)
+	}
+	// Go's flag package takes the last occurrence; so must we.
+	vals = defaultUnitOptionsForTest()
+	_, cfg, _ = ParseUnitShow("ExecStart={ path=/x ; argv[]=/x --config /etc/a.toml --config /etc/b.toml }\n", &vals)
+	if cfg != "/etc/b.toml" {
+		t.Fatalf("last occurrence must win, got %q", cfg)
+	}
+}

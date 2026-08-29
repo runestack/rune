@@ -462,6 +462,13 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 			}
 		case resp.GetVersion() == target && (resp.GetReady() || !requireReady):
 			printWatchSuccess(target, downSince)
+			// A refused unit refresh means this host's unit is now frozen
+			// relative to the binary. It reaches the journal and the event
+			// log either way, but the operator has no reason to look there
+			// after a success — so say it here.
+			if ev := latestTerminalUpgradeEvent(api, since); strings.Contains(ev, "left ") {
+				fmt.Printf("  server: %s\n", strings.TrimPrefix(ev, "UpgradeApplied: "))
+			}
 			return nil
 		default:
 			lastVersion, lastReady = resp.GetVersion(), resp.GetReady()
@@ -490,7 +497,7 @@ func earlyOutcome(api *client.Client, since eventBaseline, poll int, fromVersion
 	if ev == "" {
 		return nil
 	}
-	return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, ev)
+	return watchTimeoutDiagnosis(currentContextName(), fromVersion, target, lastVersion, lastReady, ev)
 }
 
 // watchRequiresReady mirrors the applier: a downgrade target may predate the
@@ -512,7 +519,7 @@ func printWatchSuccess(target string, downSince time.Time) {
 // genuinely different nights for the operator; reporting only "rolled
 // back" would be wrong in three of them.
 func diagnoseWatchTimeout(api *client.Client, since eventBaseline, fromVersion, target, lastVersion string, lastReady bool) error {
-	return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, latestTerminalUpgradeEvent(api, since))
+	return watchTimeoutDiagnosis(currentContextName(), fromVersion, target, lastVersion, lastReady, latestTerminalUpgradeEvent(api, since))
 }
 
 // watchTimeoutDiagnosis is the pure decision; terminalEvent is the most
@@ -520,15 +527,14 @@ func diagnoseWatchTimeout(api *client.Client, since eventBaseline, fromVersion, 
 // not a terminal event — the stager emits it before creating the trigger,
 // so it exists on every attempt and would make "never applied"
 // undetectable.
-func watchTimeoutDiagnosis(fromVersion, target, lastVersion string, lastReady bool, terminalEvent string) error {
-	host := "the host"
+func watchTimeoutDiagnosis(host, fromVersion, target, lastVersion string, lastReady bool, terminalEvent string) error {
 	switch {
 	case lastVersion == target && !lastReady:
 		return fmt.Errorf("server is running %s but has not finished starting after %s — it may be crash-looping; on %s check: journalctl -u runed -n 50", target, upgradeWatchDeadline, host)
 	case lastVersion == fromVersion && strings.Contains(terminalEvent, "rolled-back"):
 		return fmt.Errorf("server rolled back to %s — see: journalctl -u runed-upgrade on %s\n(%s)", fromVersion, host, terminalEvent)
 	case lastVersion == fromVersion && terminalEvent == "":
-		return fmt.Errorf("server still reports %s and no upgrade was applied — check on %s: systemctl status runed-upgrade.path runed-upgrade.service", fromVersion, host)
+		return fmt.Errorf("server still reports %s and no apply outcome was recorded — on %s check: journalctl -u runed-upgrade -n 80, then systemctl status runed-upgrade.path", fromVersion, host)
 	case lastVersion == fromVersion:
 		return fmt.Errorf("server still reports %s (%s) — see journalctl -u runed-upgrade on %s", fromVersion, terminalEvent, host)
 	default:
@@ -537,15 +543,9 @@ func watchTimeoutDiagnosis(fromVersion, target, lastVersion string, lastReady bo
 }
 
 // latestTerminalUpgradeEvent returns this attempt's apply outcome ("" when
-// none yet).
-//
-// Known limitation: ListEvents with no For filter reads the OLDEST live
-// events and reverses them, so on a box emitting more than that window in
-// an event TTL the newest outcome is not in the response at all and this
-// returns "" — the timeout then reports "no upgrade was applied" for a real
-// rollback. The limit here does not fix that (the window is anchored at the
-// old end); scoping the query to the node's own events would. Until then
-// the journal is the reliable record and the CLI says so on every branch.
+// none yet). The window is generous because a restart is the noisiest
+// moment on the box — every instance reconcile emits — and the outcome
+// must not be crowded out by them.
 func latestTerminalUpgradeEvent(api *client.Client, since eventBaseline) string {
 	ec := generated.NewEventServiceClient(api.Conn())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
