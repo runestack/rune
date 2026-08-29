@@ -173,8 +173,9 @@ func buildUpgradePlan(ctx context.Context, hc *http.Client, opts *upgradeOptions
 }
 
 func confirmUpgradePlan(plan *upgradePlan, opts *upgradeOptions) error {
-	if !plan.doServer && !plan.clientAtTarget {
-		// Client-only downgrades deserve the same pause as server ones.
+	if (!plan.doServer || plan.serverAtTarget) && !plan.clientAtTarget {
+		// A downgrade that only touches the client (no server half, or
+		// the server already at target) deserves the same pause.
 		var ignored bool
 		if err := confirmDowngrade(version.Version, plan.target, opts.yes, &ignored); err != nil {
 			return err
@@ -453,8 +454,12 @@ func latestTerminalUpgradeEvent(api *client.Client, since time.Time) string {
 	for _, e := range resp.GetEvents() {
 		switch e.GetReason() {
 		case "UpgradeApplied", "UpgradeRolledBack", "UpgradeFailed", "UpgradeSkipped":
+			// Skip stale outcomes rather than giving up: the recorder
+			// folds a repeated identical failure into its ORIGINAL
+			// sequence slot (only LastSeen advances), so this attempt's
+			// outcome can sit behind an older-sequenced event.
 			if ts, err := time.Parse(time.RFC3339, e.GetLastSeen()); err == nil && ts.Before(since) {
-				return ""
+				continue
 			}
 			return e.GetReason() + ": " + e.GetMessage()
 		}

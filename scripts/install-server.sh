@@ -393,7 +393,7 @@ install_upgrade_units() {
   if ! "$bin" print-systemd --upgrade-units --staging "$staging" </dev/null >/dev/null 2>&1; then
     return
   fi
-  "$bin" print-systemd --upgrade-units --staging "$staging" --binary "$bin" --config "" > /etc/systemd/system/runed-upgrade.service
+  "$bin" print-systemd --upgrade-units --staging "$staging" --binary "$bin" --config /etc/rune/runefile.toml > /etc/systemd/system/runed-upgrade.service
   "$bin" print-systemd --upgrade-path-unit --staging "$staging" > /etc/systemd/system/runed-upgrade.path
   systemctl daemon-reload
   systemctl enable --now runed-upgrade.path 2>/dev/null || true

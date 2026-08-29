@@ -155,7 +155,11 @@ func (a *Applier) consume() (*Manifest, string, error) {
 	// The staging directory itself is rune-writable, so even the unlinks
 	// must not traverse it by path (a swapped-in symlink would point
 	// root's unlinkat elsewhere): open it once, O_NOFOLLOW, and do
-	// everything through the dirfd.
+	// everything through the dirfd. Residual (availability-only): if the
+	// service account replaces the whole dir with a symlink, this open
+	// fails ELOOP before the unlink defers exist and `ready` survives at
+	// the symlink's target — the refire is then contained by systemd's
+	// start-rate limit rather than consumed.
 	dirfd, err := syscall.Open(a.StagingDir, syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, "", fmt.Errorf("staging dir: %w", err)
@@ -224,8 +228,14 @@ func consumeFileAt(dirfd int, dir, name string, wantUID uint32, dst string) ([]b
 		return nil, err
 	}
 	defer out.Close()
-	if _, err := io.Copy(out, io.LimitReader(f, maxConsumeBytes)); err != nil {
+	n, err := io.Copy(out, io.LimitReader(f, maxConsumeBytes+1))
+	if err != nil {
 		return nil, err
+	}
+	if n > maxConsumeBytes {
+		// Refuse rather than truncate: a silently truncated copy would
+		// die later as a misleading digest mismatch.
+		return nil, fmt.Errorf("%s/%s exceeds the %dMB consume cap", dir, name, maxConsumeBytes>>20)
 	}
 	return nil, nil
 }
@@ -407,8 +417,13 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 		default:
 			unitBackedUp = len(current) > 0
 			if err := os.WriteFile(runedUnitPath, []byte(newUnit), 0o644); err != nil {
+				// O_TRUNC may have left a partial unit; put the backup
+				// straight back rather than clearing unitBackedUp — a
+				// failed write is exactly when the backup matters.
 				logf("warning: writing refreshed unit: %v", err)
-				unitBackedUp = false
+				if unitBackedUp {
+					_ = copyFile(runedUnitPath+".bak", runedUnitPath, 0o644)
+				}
 			} else {
 				logf("refreshed %s (previous at %s.bak); diff:", runedUnitPath, runedUnitPath)
 				journalDiff(string(current), newUnit)
