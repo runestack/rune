@@ -18,9 +18,8 @@ type UpgradeStager interface {
 	Stage(ctx context.Context, version, sha256, requester string, allowDowngrade bool) error
 }
 
-// SetUpgradeStager plugs in the live stager. A server without one (dev
-// builds that predate wiring) answers Unimplemented, which the CLI treats
-// like a pre-RUNE-321 server.
+// SetUpgradeStager plugs in the live stager. Without one the RPC answers
+// Unimplemented, which the CLI reports as a server that cannot self-upgrade.
 func (s *AdminService) SetUpgradeStager(u UpgradeStager) { s.upgrader = u }
 
 // UpgradeServer stages an upgrade of this server's own binaries. The apply

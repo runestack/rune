@@ -34,7 +34,7 @@ func runPrintSystemd(args []string, stdout, stderr io.Writer) int {
 		binaryPath = fs.String("binary", defaults.BinaryPath, "Absolute path to the runed binary on the host")
 		configPath = fs.String("config", defaults.ConfigPath, "Path passed to runed via --config (empty omits the flag and lets runed auto-discover)")
 
-		upgradeUnits    = fs.Bool("upgrade-units", false, "Render runed-upgrade.service (the RUNE-321 root applier oneshot) instead of runed.service")
+		upgradeUnits    = fs.Bool("upgrade-units", false, "Render runed-upgrade.service (the root applier oneshot) instead of runed.service")
 		upgradePathUnit = fs.Bool("upgrade-path-unit", false, "Render runed-upgrade.path (watches the staging dir for a staged upgrade) instead of runed.service")
 		stagingDir      = fs.String("staging", "", "Staging directory the upgrade units act on, normally <data-dir>/upgrade (required with --upgrade-units / --upgrade-path-unit)")
 	)
@@ -118,9 +118,7 @@ func dispatchSubcommand() (handled bool, exitCode int) {
 		return true, runApplyUpgrade(os.Args[2:], os.Stdout, os.Stderr)
 	default:
 		// Falls through to the daemon path; main() rejects unknown
-		// positional args so a subcommand this binary doesn't know
-		// cannot silently launch the daemon (as root, when invoked by
-		// the upgrade oneshot on a binary/units skew).
+		// positional args.
 		return false, 0
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/client"
@@ -27,15 +28,15 @@ type upgradeOptions struct {
 	yes        bool
 }
 
-// Timing: the stage RPC must outlive the server's ~4-minute CDN-504 retry
-// budget (the default 30s call timeout would cancel the download before
-// the retry ever runs), and the watch deadline covers stage + the
-// applier's own checksum fetch + restart + verify + a possible rollback.
-// Both are deliberately constants, not flags — on expiry the output says
-// exactly what to check.
+// Timing. The stage RPC must outlive the server's ~4-minute CDN-504 retry
+// budget: the default 30s call timeout would cancel the download before the
+// retry ever ran. The watch deadline is derived from the applier's worst
+// case — checksum fetch (up to 4m) + swap + verify (3m) + hold-down + a
+// rollback restart and its verify (1m) — with margin. Both are deliberately
+// constants, not flags: on expiry the output names what to check.
 const (
 	upgradeStageTimeout  = 6 * time.Minute
-	upgradeWatchDeadline = 8 * time.Minute
+	upgradeWatchDeadline = 12 * time.Minute
 )
 
 func newUpgradeCmd() *cobra.Command {
@@ -185,8 +186,9 @@ func confirmUpgradePlan(plan *upgradePlan, opts *upgradeOptions) error {
 		if err := confirmDowngrade(plan.server.GetVersion(), plan.target, opts.yes, &plan.allowDowngrade); err != nil {
 			return err
 		}
-		fmt.Println("Ingress and service-to-service traffic pause for ~10s while the server")
-		fmt.Println("restarts (longer if the upgrade rolls back). Instances keep running.")
+		fmt.Println("Ingress and service-to-service traffic pause while the server restarts —")
+		fmt.Println("typically ~15s, up to a few minutes if the upgrade rolls back.")
+		fmt.Println("Container instances keep running; process-mode services restart with it.")
 		fmt.Println()
 	}
 	if opts.yes {
@@ -206,12 +208,14 @@ func confirmUpgradePlan(plan *upgradePlan, opts *upgradeOptions) error {
 }
 
 func executeUpgradePlan(ctx context.Context, hc *http.Client, api *client.Client, plan *upgradePlan, opts *upgradeOptions) error {
+	serverUpgraded := !plan.doServer || plan.serverAtTarget
 	switch {
 	case plan.doServer && !plan.serverAtTarget:
 		proceeded, err := upgradeServer(ctx, api, plan.server, plan.checksums, plan.target, plan.allowDowngrade, opts)
 		if err != nil {
 			return err
 		}
+		serverUpgraded = proceeded
 		if proceeded {
 			postRestartSweep(api)
 		}
@@ -223,13 +227,18 @@ func executeUpgradePlan(ctx context.Context, hc *http.Client, api *client.Client
 		fmt.Printf("✓ upgraded to %s\n", plan.target)
 		return nil
 	}
-	if plan.clientAtTarget {
+	if !plan.clientAtTarget {
+		if err := upgradeClient(ctx, hc, plan.checksums, plan.target); err != nil {
+			return err
+		}
+	} else {
 		fmt.Printf("  client: already at %s\n", plan.target)
-		fmt.Printf("✓ %s\n", plan.target)
-		return nil
 	}
-	if err := upgradeClient(ctx, hc, plan.checksums, plan.target); err != nil {
-		return err
+	// Never report more than happened: a degraded server half leaves the
+	// server on its old version, and the exit code says so too.
+	if !serverUpgraded {
+		fmt.Printf("✓ CLI upgraded to %s — server still on %s\n", plan.target, plan.server.GetVersion())
+		return fmt.Errorf("server was not upgraded")
 	}
 	fmt.Printf("✓ upgraded to %s\n", plan.target)
 	return nil
@@ -258,7 +267,9 @@ func probeServerVersion() (*generated.GetServerVersionResponse, *client.Client) 
 // to client-only); a hard error aborts the command.
 func upgradeServer(ctx context.Context, api *client.Client, server *generated.GetServerVersionResponse, checksums upgrade.Checksums, target string, allowDowngrade bool, opts *upgradeOptions) (bool, error) {
 	if server.GetOs() != "linux" {
-		return false, fmt.Errorf("server reports %s/%s; server self-upgrade supports linux only", server.GetOs(), server.GetArch())
+		proceed, _, hard := degradeWithOneLiner(
+			fmt.Sprintf("this server runs %s/%s and can only self-upgrade on linux", server.GetOs(), server.GetArch()), "", opts)
+		return proceed, hard
 	}
 	digest, err := checksums.Digest(upgrade.ServerAsset(server.GetArch()))
 	if err != nil {
@@ -266,6 +277,7 @@ func upgradeServer(ctx context.Context, api *client.Client, server *generated.Ge
 	}
 
 	fmt.Printf("  server: staging %s ...\n", target)
+	seqBaseline := eventSeqBaseline(api)
 	ac := generated.NewAdminServiceClient(api.Conn())
 	rctx, cancel := api.ContextWithTimeout(upgradeStageTimeout)
 	defer cancel()
@@ -290,7 +302,7 @@ func upgradeServer(ctx context.Context, api *client.Client, server *generated.Ge
 	}
 	fmt.Println("  server: applying — connection will drop while runed restarts")
 
-	return true, watchServerUpgrade(ctx, api, server.GetVersion(), target)
+	return true, watchServerUpgrade(ctx, api, server.GetVersion(), target, seqBaseline)
 }
 
 // classifyStageError maps an UpgradeServer failure to what to do next:
@@ -303,8 +315,20 @@ func classifyStageError(err error, target string, opts *upgradeOptions) (proceed
 	}
 	sshOneLiner := fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/%s/%s/scripts/upgrade-server.sh | sudo bash -s -- --version %s --refresh-unit",
 		upgrade.Repo, target, target)
+	if dir := upgrade.StagingDirFromMessage(st.Message()); dir != "" {
+		// The server stages somewhere other than the default, so the
+		// remedy has to install units that watch that directory.
+		sshOneLiner += " --data-dir " + dir
+	}
 
 	switch st.Code() {
+	case codes.Unauthenticated:
+		msg := "your session has expired (run `rune login`) — upgrading your CLI only"
+		if opts.serverOnly {
+			return false, false, fmt.Errorf("not authenticated — run `rune login`")
+		}
+		fmt.Printf("  server: %s\n", msg)
+		return false, false, nil
 	case codes.PermissionDenied:
 		msg := "server upgrades need an admin token — upgrading your CLI only"
 		if opts.serverOnly {
@@ -322,6 +346,10 @@ func classifyStageError(err error, target string, opts *upgradeOptions) (proceed
 		case upgrade.ReasonNoSystemd:
 			return degradeWithOneLiner("the server does not run under systemd (dev mode?), so it cannot self-upgrade", "", opts)
 		case upgrade.ReasonUnitsMissing:
+			detail := strings.TrimSpace(strings.TrimPrefix(st.Message(), "reason="+reason+":"))
+			if detail != "" {
+				fmt.Printf("  server: %s\n", detail)
+			}
 			return degradeWithOneLiner("the server is missing its upgrade units (one-time setup)", sshOneLiner, opts)
 		default:
 			return false, false, fmt.Errorf("server refused the upgrade: %s", st.Message())
@@ -353,7 +381,21 @@ func degradeWithOneLiner(why, oneLiner string, opts *upgradeOptions) (bool, bool
 // watchServerUpgrade polls the public GetServerVersion through the restart
 // window until the target version answers ready, then reports. On the
 // deadline it distinguishes the terminal states instead of guessing.
-func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, target string) error {
+// eventSeqBaseline records the newest event sequence before staging, so the
+// watch can tell this attempt's outcome from a previous one without
+// comparing a server timestamp to the local clock.
+func eventSeqBaseline(api *client.Client) int64 {
+	ec := generated.NewEventServiceClient(api.Conn())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	resp, err := ec.ListEvents(ctx, &generated.ListEventsRequest{Limit: 1})
+	if err != nil || len(resp.GetEvents()) == 0 {
+		return 0
+	}
+	return resp.GetEvents()[0].GetSeq()
+}
+
+func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, target string, sinceSeq int64) error {
 	hc := generated.NewHealthServiceClient(api.Conn())
 	deadline := time.Now().Add(upgradeWatchDeadline)
 	var downSince time.Time
@@ -361,7 +403,6 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 
 	requireReady := watchRequiresReady(target, fromVersion)
 
-	watchStart := time.Now()
 	for poll := 0; time.Now().Before(deadline); poll++ {
 		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		resp, err := hc.GetServerVersion(pctx, &generated.GetServerVersionRequest{})
@@ -381,7 +422,7 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 			// within seconds, and holding the full deadline to report
 			// it would be an 8-minute stare at a known answer.
 			if poll%5 == 4 && lastVersion == fromVersion {
-				if ev := latestTerminalUpgradeEvent(api, watchStart); ev != "" {
+				if ev := latestTerminalUpgradeEvent(api, sinceSeq); ev != "" {
 					return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, ev)
 				}
 			}
@@ -392,12 +433,11 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 		case <-time.After(2 * time.Second):
 		}
 	}
-	return diagnoseWatchTimeout(api, watchStart, fromVersion, target, lastVersion, lastReady)
+	return diagnoseWatchTimeout(api, sinceSeq, fromVersion, target, lastVersion, lastReady)
 }
 
-// watchRequiresReady mirrors the applier: downgrade targets may predate
-// the ready flag entirely (today every released build does), so the watch
-// demands it only in the upgrade direction.
+// watchRequiresReady mirrors the applier: a downgrade target may predate the
+// ready flag, so the watch demands it only in the upgrade direction.
 func watchRequiresReady(target, fromVersion string) bool {
 	cmp, err := upgrade.CompareVersions(target, fromVersion)
 	return err != nil || cmp >= 0
@@ -414,8 +454,8 @@ func printWatchSuccess(target string, downSince time.Time) {
 // diagnoseWatchTimeout names the state at the deadline. The four cases are
 // genuinely different nights for the operator; reporting only "rolled
 // back" would be wrong in three of them.
-func diagnoseWatchTimeout(api *client.Client, since time.Time, fromVersion, target, lastVersion string, lastReady bool) error {
-	return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, latestTerminalUpgradeEvent(api, since))
+func diagnoseWatchTimeout(api *client.Client, sinceSeq int64, fromVersion, target, lastVersion string, lastReady bool) error {
+	return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, latestTerminalUpgradeEvent(api, sinceSeq))
 }
 
 // watchTimeoutDiagnosis is the pure decision; terminalEvent is the most
@@ -443,22 +483,26 @@ func watchTimeoutDiagnosis(fromVersion, target, lastVersion string, lastReady bo
 // outcome newer than since ("" when none or unreadable). The since filter
 // keeps a stale outcome from an earlier attempt from being mistaken for
 // this one's.
-func latestTerminalUpgradeEvent(api *client.Client, since time.Time) string {
+// latestTerminalUpgradeEvent returns this attempt's apply outcome ("" when
+// none yet). The limit is generous because a restart is the noisiest moment
+// on the box — every instance reconcile emits — and the upgrade result is
+// easily pushed past a short window.
+func latestTerminalUpgradeEvent(api *client.Client, sinceSeq int64) string {
 	ec := generated.NewEventServiceClient(api.Conn())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	resp, err := ec.ListEvents(ctx, &generated.ListEventsRequest{Limit: 50})
+	resp, err := ec.ListEvents(ctx, &generated.ListEventsRequest{Limit: 500})
 	if err != nil {
 		return ""
 	}
 	for _, e := range resp.GetEvents() {
 		switch e.GetReason() {
 		case "UpgradeApplied", "UpgradeRolledBack", "UpgradeFailed", "UpgradeSkipped":
-			// Skip stale outcomes rather than giving up: the recorder
-			// folds a repeated identical failure into its ORIGINAL
-			// sequence slot (only LastSeen advances), so this attempt's
-			// outcome can sit behind an older-sequenced event.
-			if ts, err := time.Parse(time.RFC3339, e.GetLastSeen()); err == nil && ts.Before(since) {
+			// Skip a previous attempt's outcome rather than giving up: the
+			// recorder folds a repeated identical failure into its ORIGINAL
+			// sequence slot, so this attempt's outcome can sit behind an
+			// older-sequenced event.
+			if e.GetSeq() <= sinceSeq {
 				continue
 			}
 			return e.GetReason() + ": " + e.GetMessage()
@@ -467,33 +511,32 @@ func latestTerminalUpgradeEvent(api *client.Client, since time.Time) string {
 	return ""
 }
 
-// postRestartSweep lists instances that did not come back cleanly and
-// prints the exact re-arm command for each — a runed restart is known to
-// strand volume-backed instances in VolumeNotReady occasionally, and they
-// need `rune restart` rather than patience.
+// postRestartSweep names the services that did not come back after the
+// restart and prints the exact command to re-arm each. A runed restart can
+// leave a volume-backed service stranded (VolumeNotReady) where it needs a
+// deliberate `rune restart` rather than patience.
+//
+// It reads Service, not Instance: `status_reason` carries the slug, and
+// the Instance message has no equivalent field — an earlier version of
+// this matched a Stalled enum value that does not exist on the wire.
 func postRestartSweep(api *client.Client) {
-	ic := generated.NewInstanceServiceClient(api.Conn())
+	sc := generated.NewServiceServiceClient(api.Conn())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := ic.ListInstances(ctx, &generated.ListInstancesRequest{Namespace: "*"})
+	resp, err := sc.ListServices(ctx, &generated.ListServicesRequest{Namespace: "*"})
 	if err != nil {
 		return
 	}
-	seen := map[string]bool{}
-	for _, inst := range resp.GetInstances() {
-		stuck := inst.GetStatus() == generated.InstanceStatus_INSTANCE_STATUS_FAILED ||
-			strings.Contains(inst.GetStatusMessage(), "VolumeNotReady") ||
-			strings.Contains(inst.GetStatusMessage(), "Stalled")
-		if !stuck {
+	for _, svc := range resp.GetServices() {
+		if svc.GetStatus() == generated.ServiceStatus_SERVICE_STATUS_RUNNING {
 			continue
 		}
-		key := inst.GetNamespace() + "/" + inst.GetServiceName()
-		if seen[key] {
-			continue
+		why := svc.GetStatusReason()
+		if why == "" {
+			why = svc.GetStatus().String()
 		}
-		seen[key] = true
-		fmt.Printf("  note: %s is not running (%s) — re-arm it with: rune restart %s -n %s\n",
-			key, inst.GetStatusMessage(), inst.GetServiceName(), inst.GetNamespace())
+		fmt.Printf("  note: %s/%s is not running (%s) — re-arm it with: rune restart %s -n %s\n",
+			svc.GetNamespace(), svc.GetName(), why, svc.GetName(), svc.GetNamespace())
 	}
 }
 
@@ -535,13 +578,19 @@ func confirmDowngrade(from, target string, yes bool, allowDowngrade *bool) error
 	return nil
 }
 
+var (
+	stdinScanner     *bufio.Scanner
+	stdinScannerOnce sync.Once
+)
+
 func confirmPrompt(q string) bool {
 	fmt.Printf("%s [y/N] ", q)
-	sc := bufio.NewScanner(os.Stdin)
-	if !sc.Scan() {
+	stdinScannerOnce.Do(func() { stdinScanner = bufio.NewScanner(os.Stdin) })
+	if !stdinScanner.Scan() {
+		fmt.Println("\nnot a terminal — re-run with --yes to confirm non-interactively")
 		return false
 	}
-	answer := strings.ToLower(strings.TrimSpace(sc.Text()))
+	answer := strings.ToLower(strings.TrimSpace(stdinScanner.Text()))
 	return answer == "y" || answer == "yes"
 }
 

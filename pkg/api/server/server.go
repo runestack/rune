@@ -563,16 +563,17 @@ func (s *APIServer) evaluatePolicies(ctx context.Context, subjectID, resource, v
 	return authz.NewStoreAuthorizer(s.store).Authorize(ctx, subjectID, resource, verb, namespace)
 }
 
-// Stop stops the API server gracefully.
 // SetReady forwards the startup-complete signal to the health service so
-// GetServerVersion can report it (RUNE-321 upgrade verification keys on
-// this, not on the version string alone).
+// GetServerVersion can report it. Upgrade verification keys on this, not on
+// the version string alone: the control plane answers before the node
+// phase runs.
 func (s *APIServer) SetReady(v bool) {
 	if s.healthService != nil {
 		s.healthService.SetReady(v)
 	}
 }
 
+// Stop stops the API server gracefully.
 func (s *APIServer) Stop() error {
 	s.stopOnce.Do(func() {
 		s.stopErr = s.stop()

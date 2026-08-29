@@ -176,7 +176,13 @@ download_release() {
 install_upgrade_units() {
   local bin="$BIN_DIR/runed" staging="$DATA_DIR/upgrade"
   if ! "$bin" print-systemd --upgrade-units --staging "$staging" </dev/null >/dev/null 2>&1; then
-    log "This runed build predates in-band upgrades; skipping upgrade units"
+    log "This runed build predates in-band upgrades; disarming the upgrade units"
+    # Leaving them armed would point the path unit at a binary that does
+    # not know 'apply-upgrade' and would fall through to starting a second,
+    # root daemon.
+    systemctl disable --now runed-upgrade.path >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/runed-upgrade.path /etc/systemd/system/runed-upgrade.service
+    systemctl daemon-reload || true
     return
   fi
   # Clear any stale staged upgrade so enabling the path unit cannot fire

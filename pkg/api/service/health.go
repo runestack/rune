@@ -38,8 +38,6 @@ type HealthService struct {
 	runners RunnerHealthReporter
 	logger  log.Logger
 
-	// ready flips true once startup completes through the node phase;
-	// see SetReady.
 	ready atomic.Bool
 
 	// Optional cached capacity (single-node MVP)

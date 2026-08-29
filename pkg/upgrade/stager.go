@@ -60,7 +60,7 @@ func PreconditionReason(msg string) string {
 	return rest
 }
 
-// UpgradeUnitPath and UpgradeServicePath are where the applier's units live.
+// Unit names and the directory the applier's systemd units are installed under.
 const (
 	UpgradeServiceUnit = "runed-upgrade.service"
 	UpgradePathUnit    = "runed-upgrade.path"
@@ -169,6 +169,7 @@ func (s *Stager) Stage(ctx context.Context, version, sha256, requester string, a
 	m := Manifest{Version: version, AllowDowngrade: allowDowngrade, StagedAt: time.Now().UTC()}
 	mb, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
+		_ = os.RemoveAll(staging)
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(staging, manifestName), mb, 0o644); err != nil {
@@ -191,8 +192,8 @@ func (s *Stager) Stage(ctx context.Context, version, sha256, requester string, a
 // checkUnits verifies the applier units are installed and that the path
 // unit watches THIS server's staging dir. A runefile whose data_dir moved
 // after install would otherwise stage into a directory nothing watches — a
-// silent wedge. The unit-file check (not INVOCATION_ID, which CI runners
-// inherit too) is the real capability gate.
+// silent wedge. The unit-file check is the real
+// capability gate.
 func (s *Stager) checkUnits() error {
 	dir := s.UnitDir
 	if dir == "" {
@@ -222,6 +223,14 @@ func (s *Stager) checkUnits() error {
 // inFlight reports an upgrade currently staged or applying.
 func (s *Stager) inFlight(staging string) (string, bool) {
 	if b, err := os.ReadFile(filepath.Join(staging, readyName)); err == nil {
+		// A trigger older than the applier's staleness window is one the
+		// applier would consume as a no-op, so it must not block a new
+		// attempt for ever. Re-staging overwrites it.
+		if mb, err := os.ReadFile(filepath.Join(staging, manifestName)); err == nil {
+			if m, err := parseManifestVersion(mb); err == nil && m.Stale(time.Now()) {
+				return "", false
+			}
+		}
 		return strings.TrimSpace(string(b)), true
 	}
 	// `systemctl is-active` is an unprivileged read; exit 0 means active
@@ -316,4 +325,31 @@ func acquireFlock(path string) (*flock, error) {
 func (l *flock) release() {
 	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
 	_ = l.f.Close()
+}
+
+// StagingDirFromMessage extracts the staging directory a server reported in
+// a units-missing precondition, so the CLI's remedy can point the units at
+// the right place. Returns "" when the message names none.
+func StagingDirFromMessage(msg string) string {
+	const marker = "but this server stages to "
+	i := strings.Index(msg, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := msg[i+len(marker):]
+	if j := strings.IndexAny(rest, " \t"); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSuffix(strings.TrimSpace(rest), "/"+readyName)
+}
+
+// parseManifestVersion decodes just enough of a staged manifest to judge
+// its age. The applier has its own stricter parse; this one only has to
+// answer "is this trigger stale".
+func parseManifestVersion(b []byte) (*Manifest, error) {
+	var m Manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
 }

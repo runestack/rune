@@ -40,9 +40,9 @@ func (o UpgradeUnitOptions) Validate() error {
 // short-lived unit is the point of the stage/apply split. It has no
 // [Install] section — only the path unit starts it.
 //
-// ConditionPathExists guards a units/binary skew: on a binary too old to
-// know `apply-upgrade`, main() rejects the positional arg — but the
-// condition keeps the unit from even launching without a staged trigger.
+// ConditionPathExists keeps the oneshot from running when no upgrade is
+// staged: the path unit also activates at boot, and a run with no trigger
+// would consume nothing and exit non-zero.
 const upgradeServiceTemplate = `[Unit]
 Description=Rune server upgrade applier
 After=network-online.target
@@ -51,6 +51,10 @@ ConditionPathExists={{.StagingDir}}/ready
 
 [Service]
 Type=oneshot
+# The applier can legitimately run for minutes when a freshly published
+# release makes it ride out CDN 504s. oneshot defaults to no start timeout;
+# pinned so a distro changing that default cannot kill an apply mid-swap.
+TimeoutStartSec=infinity
 ExecStart={{.BinaryPath}} apply-upgrade --staging {{.StagingDir}}{{if .ConfigPath}} --config {{.ConfigPath}}{{end}}
 `
 

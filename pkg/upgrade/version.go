@@ -78,6 +78,9 @@ func WriteFloor(path, version string) error {
 	if _, err := ParseVersion(version); err != nil {
 		return fmt.Errorf("refusing to write floor: %w", err)
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".version-floor-*")
 	if err != nil {
 		return err

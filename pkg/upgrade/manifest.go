@@ -11,7 +11,7 @@ import (
 // Staging layout under <data-dir>/upgrade/. The directory is owned by the
 // unprivileged service user; everything in it is untrusted input to the
 // root applier, which is why the applier copies files out via validated
-// fds before believing anything (see applier.go).
+// fds before believing anything (see applier_linux.go).
 const (
 	stagingDirName = "upgrade"
 	readyName      = "ready"

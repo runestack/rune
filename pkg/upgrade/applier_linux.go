@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +39,18 @@ type Applier struct {
 	StagingDir string // <data-dir>/upgrade, from the unit's ExecStart
 	ConfigPath string // runefile passed to runed via --config ("" = defaults)
 	Runtime    ApplierRuntime
+
+	// unitRefreshNote records a skipped unit refresh so the operator sees
+	// it in the result and the event, not only in the journal.
+	unitRefreshNote string
+	// grpcAddrOverride is runed's bind address when the live unit sets it
+	// by flag or environment. runed resolves flag > env > runefile, and
+	// polling the wrong address rolls back a healthy upgrade, so the
+	// applier has to read the unit rather than the runefile alone.
+	grpcAddrOverride string
+	// hadFileCaps records whether the replaced binary carried file
+	// capabilities; setcap does not survive a copy.
+	hadFileCaps bool
 }
 
 // ApplierRuntime carries the host facts an apply needs; separated so tests
@@ -49,7 +62,7 @@ type ApplierRuntime struct {
 }
 
 const (
-	verifyBudget         = 90 * time.Second
+	verifyBudget         = 180 * time.Second
 	verifyHoldDown       = 10 * time.Second
 	rollbackVerifyBudget = 60 * time.Second
 	runedUnit            = "runed.service"
@@ -105,11 +118,6 @@ func (a *Applier) Apply(ctx context.Context) error {
 		return err
 	}
 
-	// Independent verification: the digest that authorizes the swap comes
-	// from the release's checksums.txt fetched by THIS root process over
-	// TLS from the pinned repo — never from anything the service user
-	// wrote. Same retry budget as the stager: this fetch hits the same
-	// CDN edge that 504s on fresh releases.
 	binDir, unitVals, err := a.currentUnitValues()
 	if err != nil {
 		_ = WriteResult(Result{Outcome: "failed", FromVersion: from, ToVersion: m.Version, Reason: err.Error(), FinishedAt: now().UTC()})
@@ -123,7 +131,7 @@ func (a *Applier) Apply(ctx context.Context) error {
 	defer os.Remove(newRune)
 	defer os.Remove(newRuned)
 	// Nothing has been stopped and no binary touched up to here: every
-	// failure above leaves the host exactly as it was.
+	// failure above leaves the running server untouched.
 
 	if err := a.swapAndRestart(ctx, m, binDir, unitVals, newRune, newRuned, from, now); err != nil {
 		return err
@@ -134,7 +142,7 @@ func (a *Applier) Apply(ctx context.Context) error {
 	} else {
 		logf("version floor advanced to %s", m.Version)
 	}
-	_ = WriteResult(Result{Outcome: "success", FromVersion: from, ToVersion: m.Version, FinishedAt: now().UTC()})
+	_ = WriteResult(Result{Outcome: "success", FromVersion: from, ToVersion: m.Version, Reason: a.unitRefreshNote, FinishedAt: now().UTC()})
 	logf("✅ upgrade to %s complete", m.Version)
 	return nil
 }
@@ -148,7 +156,7 @@ const maxConsumeBytes = 256 << 20
 // consume moves manifest+tarball into the workdir via validated fds and
 // removes ready/manifest/tarball from the staging dir — on EVERY outcome.
 // An error that left `ready` behind would make systemd refire the oneshot
-// in a loop until the path unit trips its start-rate limit and lands in
+// in a loop until the path unit trips its trigger limit and lands in
 // failed state, after which no future upgrade ever fires; a failed consume
 // must therefore still consume the trigger (the operator re-stages).
 func (a *Applier) consume() (*Manifest, string, error) {
@@ -159,7 +167,7 @@ func (a *Applier) consume() (*Manifest, string, error) {
 	// service account replaces the whole dir with a symlink, this open
 	// fails ELOOP before the unlink defers exist and `ready` survives at
 	// the symlink's target — the refire is then contained by systemd's
-	// start-rate limit rather than consumed.
+	// trigger limit rather than consumed.
 	dirfd, err := syscall.Open(a.StagingDir, syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, "", fmt.Errorf("staging dir: %w", err)
@@ -230,9 +238,11 @@ func consumeFileAt(dirfd int, dir, name string, wantUID uint32, dst string) ([]b
 	defer out.Close()
 	n, err := io.Copy(out, io.LimitReader(f, maxConsumeBytes+1))
 	if err != nil {
+		_ = os.Remove(dst)
 		return nil, err
 	}
 	if n > maxConsumeBytes {
+		_ = os.Remove(dst)
 		// Refuse rather than truncate: a silently truncated copy would
 		// die later as a misleading digest mismatch.
 		return nil, fmt.Errorf("%s/%s exceeds the %dMB consume cap", dir, name, maxConsumeBytes>>20)
@@ -285,6 +295,11 @@ func targetRequiresReady(target, current string) bool {
 	return !isDowngrade(target, current)
 }
 
+// verifyAndUnpack is the trust anchor: the digest that authorizes the swap
+// comes from the release's checksums.txt fetched by THIS root process over
+// TLS from the pinned repo, never from anything the service user wrote. It
+// carries the same retry budget as the stager because it hits the same CDN
+// edge that 504s on freshly published releases.
 func (a *Applier) verifyAndUnpack(ctx context.Context, m *Manifest, tarLocal string) (newRune, newRuned string, err error) {
 	hc := &http.Client{Timeout: 2 * time.Minute}
 	cs, err := FetchChecksums(ctx, hc, m.Version)
@@ -320,6 +335,7 @@ func (a *Applier) verifyAndUnpack(ctx context.Context, m *Manifest, tarLocal str
 // swapAndRestart performs the mutating half: backup, swap, unit refresh,
 // restart, verify — and rolls back on verification failure.
 func (a *Applier) swapAndRestart(ctx context.Context, m *Manifest, binDir string, vals systemd.UnitOptions, newRune, newRuned, from string, now func() time.Time) error {
+	a.detectFileCaps(binDir)
 	backupRune := filepath.Join(binDir, ".rune.bak")
 	backupRuned := filepath.Join(binDir, ".runed.bak")
 	if err := copyFile(filepath.Join(binDir, "rune"), backupRune, 0o755); err != nil && !os.IsNotExist(err) {
@@ -345,6 +361,12 @@ func (a *Applier) swapAndRestart(ctx context.Context, m *Manifest, binDir string
 	if err := systemctl("daemon-reload"); err != nil {
 		logf("warning: daemon-reload: %v", err)
 	}
+	// daemon-reload re-reads unit files but does not re-arm a running path
+	// unit, so a changed PathExists= would otherwise take effect only at
+	// the next boot.
+	if err := systemctl("restart", UpgradePathUnit); err != nil {
+		logf("warning: could not re-arm %s: %v", UpgradePathUnit, err)
+	}
 	logf("restarting %s — the API drops here", runedUnit)
 	if err := systemctl("restart", runedUnit); err != nil {
 		return a.rollback(ctx, m, binDir, backupRune, backupRuned, unitBackedUp, from, now, fmt.Errorf("systemctl restart: %w", err))
@@ -368,6 +390,12 @@ func (a *Applier) rollback(ctx context.Context, m *Manifest, binDir, backupRune,
 	_ = installFile(backupRuned, filepath.Join(binDir, "runed"))
 	if unitBackedUp {
 		_ = copyFile(runedUnitPath+".bak", runedUnitPath, 0o644)
+	}
+	for _, u := range []string{UpgradeServiceUnit, UpgradePathUnit} {
+		p := filepath.Join(unitDir, u)
+		if _, err := os.Stat(p + ".bak"); err == nil {
+			_ = copyFile(p+".bak", p, 0o644)
+		}
 	}
 	a.applyCaps(binDir)
 	_ = systemctl("daemon-reload")
@@ -407,9 +435,19 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 		logf("warning: rendering refreshed unit failed (%v); leaving %s as is", err, runedUnitPath)
 	} else {
 		current, _ := os.ReadFile(runedUnitPath)
+		reason := unitRefreshUnsafe(string(current), newUnit)
 		switch {
 		case string(current) == newUnit:
 			// unchanged
+		case reason != "":
+			// The unit was authored by something other than this binary
+			// (the Terraform modules write their own, with EnvironmentFile=
+			// and runed as root). Rendering over it would silently drop
+			// whatever the template cannot express, and the upgrade would
+			// still report success.
+			a.unitRefreshNote = "left " + runedUnitPath + " unchanged: " + reason
+			logf("⚠️  %s", a.unitRefreshNote)
+			logf("    apply any new directives by hand, or use a drop-in under %s.d/", runedUnitPath)
 		case len(current) > 0 && copyFile(runedUnitPath, runedUnitPath+".bak", 0o644) != nil:
 			// Never replace a unit we could not back up — a later
 			// rollback would have nothing to restore.
@@ -425,7 +463,7 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 					_ = copyFile(runedUnitPath+".bak", runedUnitPath, 0o644)
 				}
 			} else {
-				logf("refreshed %s (previous at %s.bak); diff:", runedUnitPath, runedUnitPath)
+				logf("refreshed %s (previous at %s.bak); changes:", runedUnitPath, runedUnitPath)
 				journalDiff(string(current), newUnit)
 			}
 		}
@@ -434,8 +472,15 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 	svc, err1 := render("print-systemd", "--upgrade-units", "--staging", a.StagingDir, "--binary", vals.BinaryPath, "--config", vals.ConfigPath)
 	path, err2 := render("print-systemd", "--upgrade-path-unit", "--staging", a.StagingDir)
 	if err1 == nil && err2 == nil {
-		_ = os.WriteFile(filepath.Join(unitDir, UpgradeServiceUnit), []byte(svc), 0o644)
-		_ = os.WriteFile(filepath.Join(unitDir, UpgradePathUnit), []byte(path), 0o644)
+		svcPath := filepath.Join(unitDir, UpgradeServiceUnit)
+		pathPath := filepath.Join(unitDir, UpgradePathUnit)
+		// Backed up alongside runed.service: a rollback that left the new
+		// release's upgrade units in place would hand the old binary an
+		// ExecStart it may not accept, wedging every future upgrade.
+		_ = copyFile(svcPath, svcPath+".bak", 0o644)
+		_ = copyFile(pathPath, pathPath+".bak", 0o644)
+		_ = os.WriteFile(svcPath, []byte(svc), 0o644)
+		_ = os.WriteFile(pathPath, []byte(path), 0o644)
 		logf("refreshed own units from the new binary")
 	} else {
 		logf("warning: new binary cannot render upgrade units; leaving them as installed")
@@ -443,15 +488,79 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 	return unitBackedUp
 }
 
+// unitRefreshUnsafe reports why the live runed unit must not be replaced by
+// a print-systemd render, or "" when the refresh is safe.
+//
+// The check is derived from the render rather than a hardcoded list, so it
+// stays correct as the template grows: a directive the live unit sets and
+// the render does not is one the refresh would silently drop. The Terraform
+// modules provision exactly such a unit (EnvironmentFile= carrying registry
+// credentials, and no User= because runed runs as root there), and dropping
+// either while reporting a successful upgrade is the worst outcome this
+// applier can produce.
+func unitRefreshUnsafe(current, rendered string) string {
+	if strings.TrimSpace(current) == "" {
+		return ""
+	}
+	cur, ren := unitDirectives(current), unitDirectives(rendered)
+	var dropped []string
+	for d := range cur {
+		if !ren[d] {
+			dropped = append(dropped, d)
+		}
+	}
+	if len(dropped) > 0 {
+		sort.Strings(dropped)
+		return "it sets " + strings.Join(dropped, ", ") + ", which this build's unit template cannot express"
+	}
+	if !cur["User"] && ren["User"] {
+		return "it runs runed as root (no User=), and the refresh would change the service user"
+	}
+	return ""
+}
+
+// unitDirectives returns the set of directive names a unit file sets.
+func unitDirectives(unit string) map[string]bool {
+	out := map[string]bool{}
+	for _, line := range strings.Split(unit, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "[") {
+			continue
+		}
+		if k, _, ok := strings.Cut(line, "="); ok {
+			out[strings.TrimSpace(k)] = true
+		}
+	}
+	return out
+}
+
 // applyCaps mirrors upgrade-server.sh: when the unit declares
 // AmbientCapabilities= those are the source of truth and file caps on the
 // binary actively suppress them, so strip; otherwise leave file caps to
 // the operator (greenfield installs use the unit).
 func (a *Applier) applyCaps(binDir string) {
+	runedBin := filepath.Join(binDir, "runed")
 	current, err := os.ReadFile(runedUnitPath)
 	if err == nil && strings.Contains(string(current), "AmbientCapabilities=") {
-		_ = exec.Command("setcap", "-r", filepath.Join(binDir, "runed")).Run()
+		_ = exec.Command("setcap", "-r", runedBin).Run()
+		return
 	}
+	// No ambient caps in the unit: the file caps are what let runed bind
+	// :80/:443, and they do not survive the copy that replaced the binary.
+	if a.hadFileCaps {
+		if err := exec.Command("setcap", "cap_net_bind_service=+ep", runedBin).Run(); err != nil {
+			logf("warning: could not re-apply cap_net_bind_service to %s: %v", runedBin, err)
+		} else {
+			logf("re-applied cap_net_bind_service to %s", runedBin)
+		}
+	}
+}
+
+// detectFileCaps records whether the installed binary carries file
+// capabilities, before it is replaced.
+func (a *Applier) detectFileCaps(binDir string) {
+	out, err := exec.Command("getcap", filepath.Join(binDir, "runed")).Output()
+	a.hadFileCaps = err == nil && strings.Contains(string(out), "cap_net_bind_service")
 }
 
 // currentUnitValues reads User/Group/ExecStart from the live unit via
@@ -461,17 +570,21 @@ func (a *Applier) currentUnitValues() (string, systemd.UnitOptions, error) {
 	vals := systemd.DefaultUnitOptions()
 	vals.ConfigPath = a.ConfigPath
 
-	out, err := exec.Command("systemctl", "show", runedUnit, "-p", "User", "-p", "Group", "-p", "ExecStart").Output()
+	out, err := exec.Command("systemctl", "show", runedUnit, "-p", "User", "-p", "Group", "-p", "ExecStart", "-p", "Environment").Output()
 	if err != nil {
 		return "", vals, fmt.Errorf("systemctl show %s: %w", runedUnit, err)
 	}
-	binPath, cfg := ParseUnitShow(string(out), &vals)
+	binPath, cfg, grpcAddr := ParseUnitShow(string(out), &vals)
 	if binPath != "" {
 		vals.BinaryPath = binPath
 	}
 	if cfg != "" {
+		// The runefile runed actually reads, which is not necessarily the
+		// one the upgrade unit was installed with.
 		vals.ConfigPath = cfg
+		a.ConfigPath = cfg
 	}
+	a.grpcAddrOverride = grpcAddr
 	return filepath.Dir(vals.BinaryPath), vals, nil
 }
 
@@ -539,13 +652,17 @@ func (a *Applier) verify(ctx context.Context, wantVersion string, requireReady b
 // via --config; the bind address is configurable, so localhost is a guess
 // only when the config binds a wildcard.
 func (a *Applier) grpcAddr() (string, error) {
-	cfg, err := config.Load(a.ConfigPath)
-	if err != nil {
-		return "", fmt.Errorf("loading runefile for the verify address: %w", err)
+	addr := a.grpcAddrOverride
+	if addr == "" {
+		cfg, err := config.Load(a.ConfigPath)
+		if err != nil {
+			return "", fmt.Errorf("loading runefile for the verify address: %w", err)
+		}
+		addr = cfg.Server.GRPCAddr
 	}
-	host, port, err := net.SplitHostPort(cfg.Server.GRPCAddr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "", fmt.Errorf("grpc_address %q: %w", cfg.Server.GRPCAddr, err)
+		return "", fmt.Errorf("grpc address %q: %w", addr, err)
 	}
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
@@ -577,12 +694,18 @@ func parseManifest(b []byte) (*Manifest, error) {
 	if m.Version == "" {
 		return nil, fmt.Errorf("upgrade manifest has no version")
 	}
+	// The version is interpolated into the release URL this applier fetches
+	// its checksums from — the anchor for everything it installs. A version
+	// that is not a semver tag could redirect that fetch, so it never
+	// reaches DownloadURL unparsed. checkFloor cannot be relied on for this:
+	// it returns early on a host with no floor.
+	if _, err := ParseVersion(m.Version); err != nil {
+		return nil, fmt.Errorf("upgrade manifest: %w", err)
+	}
 	return &m, nil
 }
 
-// installFile is `install`: write next to dst, then atomic rename. The
-// temp file is removed on failure so a dead apply doesn't litter the bin
-// dir.
+// installFile is atomic: write beside dst, then rename over.
 func installFile(src, dst string) error {
 	tmp := dst + ".new"
 	if err := copyFile(src, tmp, 0o755); err != nil {

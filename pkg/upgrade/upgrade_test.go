@@ -173,7 +173,7 @@ func TestParseUnitShow(t *testing.T) {
 	out := "User=custom\nGroup=customgrp\n" +
 		"ExecStart={ path=/opt/rune/runed ; argv[]=/opt/rune/runed --config /etc/rune/custom.toml ; ignore_errors=no }\n"
 	vals := defaultUnitOptionsForTest()
-	bin, cfg := ParseUnitShow(out, &vals)
+	bin, cfg, _ := ParseUnitShow(out, &vals)
 	if bin != "/opt/rune/runed" || cfg != "/etc/rune/custom.toml" {
 		t.Fatalf("bin=%q cfg=%q", bin, cfg)
 	}
@@ -182,9 +182,44 @@ func TestParseUnitShow(t *testing.T) {
 	}
 	// Empty show output leaves defaults intact.
 	vals2 := defaultUnitOptionsForTest()
-	bin, cfg = ParseUnitShow("User=\nGroup=\n", &vals2)
+	bin, cfg, _ = ParseUnitShow("User=\nGroup=\n", &vals2)
 	if bin != "" || cfg != "" || vals2.User != vals2.Group {
 		// user/group both default to "rune"
 		t.Fatalf("empty show must not clobber: bin=%q cfg=%q %+v", bin, cfg, vals2)
+	}
+}
+
+// The applier polls the address runed actually binds; runed resolves
+// flag > env > runefile, so a unit that pins either must win over the file
+// or a healthy upgrade gets rolled back.
+func TestParseUnitShow_BindAddressOverrides(t *testing.T) {
+	vals := defaultUnitOptionsForTest()
+	_, _, addr := ParseUnitShow(
+		"ExecStart={ path=/usr/local/bin/runed ; argv[]=/usr/local/bin/runed --grpc-addr 127.0.0.1:9999 ; ignore_errors=no }\n", &vals)
+	if addr != "127.0.0.1:9999" {
+		t.Fatalf("flag address: %q", addr)
+	}
+
+	vals = defaultUnitOptionsForTest()
+	_, _, addr = ParseUnitShow(
+		"Environment=RUNE_SERVER_GRPC_ADDRESS=0.0.0.0:9001 OTHER=x\nExecStart={ path=/usr/local/bin/runed ; argv[]=/usr/local/bin/runed }\n", &vals)
+	if addr != "0.0.0.0:9001" {
+		t.Fatalf("env address: %q", addr)
+	}
+
+	vals = defaultUnitOptionsForTest()
+	if _, _, addr = ParseUnitShow("ExecStart={ path=/usr/local/bin/runed ; argv[]=/usr/local/bin/runed }\n", &vals); addr != "" {
+		t.Fatalf("no override must yield empty, got %q", addr)
+	}
+
+	// Flag beats env, in either print order.
+	for _, out := range []string{
+		"Environment=RUNE_SERVER_GRPC_ADDRESS=0.0.0.0:9001\nExecStart={ path=/x ; argv[]=/x --grpc-addr 127.0.0.1:9999 }\n",
+		"ExecStart={ path=/x ; argv[]=/x --grpc-addr 127.0.0.1:9999 }\nEnvironment=RUNE_SERVER_GRPC_ADDRESS=0.0.0.0:9001\n",
+	} {
+		vals = defaultUnitOptionsForTest()
+		if _, _, addr = ParseUnitShow(out, &vals); addr != "127.0.0.1:9999" {
+			t.Fatalf("flag must outrank env regardless of order: %q", addr)
+		}
 	}
 }

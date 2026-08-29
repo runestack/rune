@@ -184,7 +184,7 @@ func methodToAction(method string) (string, string) {
 	case strings.HasPrefix(method, "/rune.api.AuthService/WhoAmI"):
 		return "auth", "get"
 	case strings.HasPrefix(method, "/rune.api.AdminService/UpgradeServer"):
-		// RUNE-321. Deliberately NOT ("admin","*"): resource "admin"
+		// Deliberately NOT ("admin","*"): resource "admin"
 		// carries the localhost-only gate (adminUnaryInterceptor), and a
 		// remote operator upgrading without SSH is the point of the
 		// feature — the alternative, auth.allow_remote_admin, would open

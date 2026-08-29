@@ -89,7 +89,6 @@ func init() {
 	rootCmd.AddCommand(newStorageClassCmd())
 	rootCmd.AddCommand(newVolumeCmd())
 	rootCmd.AddCommand(newSnapshotCmd())
-	// Upgrade Rune itself: server then CLI (RUNE-321)
 	rootCmd.AddCommand(newUpgradeCmd())
 	// Context management commands (server, token, default namespace)
 	rootCmd.AddCommand(newContextCmd())

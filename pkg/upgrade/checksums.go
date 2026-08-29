@@ -18,9 +18,10 @@ import (
 // The release workflow writes lines as `sha256sum dist/*.tar.gz`, so paths
 // carry a `dist/` prefix; keys here are basenames so lookups work with the
 // bare asset name. The shell installers survive the prefix via substring
-// grep — a Go parser matching the full path exactly would find nothing, and
-// per RUNE-321 a missing digest is a hard failure, never a silent skip
-// (the installers' fail-open behavior is the bug, not the precedent).
+// grep — a Go parser matching the full path exactly would find nothing. A
+// missing digest is a hard failure here, never a silent skip: scripts/install.sh
+// skips verification when the digest is absent, and that is the bug, not the
+// precedent.
 type Checksums map[string]string
 
 // FetchChecksums downloads and parses checksums.txt for a release tag.

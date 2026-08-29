@@ -81,3 +81,81 @@ func TestConsume_ErrorStillConsumesReady(t *testing.T) {
 		t.Fatal("a failed consume must still remove the ready trigger")
 	}
 }
+
+// The Terraform modules provision their own runed.service: EnvironmentFile=
+// carrying registry credentials, and no User= because runed runs as root
+// there. Rendering the canonical template over it drops both — and the
+// upgrade would still report success, which is the worst outcome the
+// applier can produce.
+func TestUnitRefreshUnsafe(t *testing.T) {
+	const terraform = `[Unit]
+Description=Rune Server
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/rune/runed.env
+ExecStart=/usr/local/bin/runed
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+`
+	const rendered = `[Unit]
+Description=Rune Server
+
+[Service]
+Type=simple
+User=rune
+Group=rune
+ExecStart=/usr/local/bin/runed --config /etc/rune/runefile.toml
+Restart=on-failure
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+`
+	if why := unitRefreshUnsafe(terraform, rendered); why == "" {
+		t.Fatal("a unit carrying EnvironmentFile= must not be refreshed")
+	} else if !strings.Contains(why, "EnvironmentFile") {
+		t.Fatalf("the reason must name the directive at risk, got %q", why)
+	}
+
+	// Same unit minus the foreign directive still runs as root, so the
+	// refresh would silently demote the service user.
+	rootOnly := strings.Replace(terraform, "EnvironmentFile=-/etc/rune/runed.env\n", "", 1)
+	if why := unitRefreshUnsafe(rootOnly, rendered); why == "" {
+		t.Fatal("a root-running unit must not be silently given User=")
+	}
+
+	// A unit this template authored refreshes freely — that is the drift
+	// fix the refresh exists for.
+	ours := strings.Replace(rendered, "AmbientCapabilities=CAP_NET_BIND_SERVICE\n", "", 1)
+	if why := unitRefreshUnsafe(ours, rendered); why != "" {
+		t.Fatalf("adding a directive must stay safe, got %q", why)
+	}
+	if why := unitRefreshUnsafe("", rendered); why != "" {
+		t.Fatalf("absent unit must be safe to write, got %q", why)
+	}
+}
+
+// The staged version is interpolated into the release URL this applier
+// fetches its checksums from — the anchor for every byte it installs. A
+// version that is not a semver tag could point that fetch somewhere else,
+// so parseManifest refuses it before it can reach DownloadURL. checkFloor
+// cannot be relied on for this: it returns early on a floor-less host.
+func TestParseManifest_RejectsNonSemverVersion(t *testing.T) {
+	for _, bad := range []string{
+		`{"version":"../../../attacker/evil/releases/download/v1"}`,
+		`{"version":"v1 v2"}`,
+		`{"version":"not-a-version"}`,
+		`{"version":""}`,
+	} {
+		if _, err := parseManifest([]byte(bad)); err == nil {
+			t.Fatalf("manifest %s must be refused", bad)
+		}
+	}
+	m, err := parseManifest([]byte(`{"version":"v0.0.1-dev.150"}`))
+	if err != nil || m.Version != "v0.0.1-dev.150" {
+		t.Fatalf("a real tag must parse: %v %v", m, err)
+	}
+}
