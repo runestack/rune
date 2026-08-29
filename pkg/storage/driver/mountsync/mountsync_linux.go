@@ -27,8 +27,7 @@ func syncTarget(path string) error {
 }
 
 func unmountTarget(driver, target string) error {
-	// Flush first — see the package doc. Unconditional and before the
-	// unmount, both deliberately.
+	// Flush first, and before the unmount — see the package doc.
 	var syncErr error
 	if isMountPoint(target) {
 		syncErr = syncTarget(target)
@@ -46,9 +45,8 @@ func unmountTarget(driver, target string) error {
 		return fmt.Errorf("%s: umount(2) %s: %w (the filesystem was NOT flushed first: %v; a detach now can lose unwritten data)",
 			driver, target, err, syncErr)
 	default:
-		// Deliberately a fact, not a reassurance. Anything the holder
-		// writes between the flush and the detach is still lost, and on
-		// this path the holder is usually a running container.
+		// Not a reassurance: on this path the holder is usually a running
+		// container, still writing.
 		return fmt.Errorf("%s: umount(2) %s: %w (flushed as of now; writes made after this point are not on the disk)",
 			driver, target, err)
 	}
@@ -58,11 +56,12 @@ func unmountTarget(driver, target string) error {
 // directory containing it, which for these drivers means a volume is
 // mounted there — they always mount a distinct block device.
 //
-// It exists to keep the idempotent path off the root disk: on a target
-// where nothing is mounted, the syncfs above would resolve to / and flush
-// that instead, which is the whole-node stall syncTarget is written to
-// avoid. It is advisory only, and any uncertainty answers "yes, sync it" —
-// an unnecessary flush costs time, a skipped one costs data.
+// It exists to keep the idempotent path off the root disk: where nothing
+// is mounted, syncTarget would resolve to whatever the mount root sits on
+// — on a default node, the root disk — which is the whole-node stall
+// syncTarget is written to avoid. Advisory only: any uncertainty answers
+// "yes, sync it", because an unnecessary flush costs time and a skipped
+// one costs data.
 func isMountPoint(target string) bool {
 	var self, parent unix.Stat_t
 	if err := unix.Lstat(target, &self); err != nil {

@@ -3,7 +3,6 @@
 package mountsync
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +13,7 @@ import (
 )
 
 // TestUnmountFlushesWhenAnotherMountHoldsTheSuperblock is the test this
-// package exists to pass, and the only one that fails against the code
-// this replaced.
+// package exists to pass.
 //
 // It builds the production shape on a real filesystem: an ext4 volume
 // mounted where the agent mounts one, with a SECOND mount of the same
@@ -24,17 +22,14 @@ import (
 // write-back workload — and then the raw device is captured, which is
 // what a detach hands back.
 //
-// A bare umount(2) returns success here and flushes nothing, because it
-// releases only one of two references to the superblock. That is the
-// production bug: the agent logged "Volume unmounted" and detached a
-// filesystem whose pages were still dirty. Unmount must recover the file
-// intact where a bare umount(2) loses it.
+// Against a bare umount(2) this fixture loses the file — that is the
+// production bug. Unmount must recover it intact.
 func TestUnmountFlushesWhenAnotherMountHoldsTheSuperblock(t *testing.T) {
 	requireLoopMount(t)
 
 	for _, tc := range []struct {
 		name      string
-		bare      bool // tear down with a bare umount(2), as the old code did
+		bare      bool // tear down with a bare umount(2)
 		wantBytes int
 	}{
 		{"bare umount(2) loses the write", true, 0},
@@ -158,5 +153,4 @@ func requireLoopMount(t *testing.T) {
 		t.Skipf("cannot loop-mount here: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 	_ = exec.Command("umount", mnt).Run()
-	_ = fmt.Sprint()
 }

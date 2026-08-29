@@ -45,17 +45,12 @@ func TestSyncTargetRejectsNonDirectory(t *testing.T) {
 
 // --- isMountPoint ----------------------------------------------------
 
-// A plain directory is not a mount point, so teardown must not flush the
-// filesystem it happens to sit on — that would be the root disk, and the
-// whole-node stall syncTarget exists to avoid.
 func TestIsMountPointFalseForPlainDirectory(t *testing.T) {
 	if isMountPoint(t.TempDir()) {
 		t.Error("a plain directory must not be treated as a mount point")
 	}
 }
 
-// Uncertainty resolves toward flushing: an unnecessary sync costs time, a
-// skipped one costs data.
 func TestIsMountPointAssumesMountedWhenItCannotTell(t *testing.T) {
 	if !isMountPoint(filepath.Join(t.TempDir(), "absent")) {
 		t.Error("an unstattable target must be assumed mounted, so the flush still happens")
@@ -68,7 +63,8 @@ func TestIsMountPointAssumesMountedWhenItCannotTell(t *testing.T) {
 // failed unmount reports success while the caller detaches a live
 // filesystem; too strict and ordinary idempotent teardown looks broken.
 //
-// Table-driven because umount(2) needs CAP_SYS_ADMIN, which CI lacks.
+// Table-driven so the classifier is covered by the ordinary CI job,
+// which cannot call umount(2).
 func TestNotMountedClassification(t *testing.T) {
 	cases := []struct {
 		name string
@@ -96,8 +92,8 @@ func TestNotMountedClassification(t *testing.T) {
 
 // Idempotence is only observable to a privileged caller: without
 // CAP_SYS_ADMIN the kernel answers EPERM before it evaluates the target.
-// runed holds that capability in production; CI does not, so this skips
-// rather than asserting something the environment cannot show.
+// The ordinary CI job skips this; the privileged job in the CI workflow
+// runs it.
 func TestUnmountIsIdempotentOnNonMountpoint(t *testing.T) {
 	requirePrivilegedUnmount(t)
 	if err := Unmount("test", t.TempDir()); err != nil {
