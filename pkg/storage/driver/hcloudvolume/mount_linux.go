@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/runestack/rune/pkg/storage/driver/mountsync"
 )
 
 func (execMounter) Mount(ctx context.Context, dev, target, fsType string, readOnly bool) error {
@@ -23,12 +25,9 @@ func (execMounter) Mount(ctx context.Context, dev, target, fsType string, readOn
 	return nil
 }
 
-func (execMounter) Unmount(ctx context.Context, target string) error {
-	if !alreadyMounted(ctx, target) {
-		return nil
-	}
-	if err := unix.Unmount(target, 0); err != nil {
-		return fmt.Errorf("hcloudvolume: umount(2) %s: %w", target, err)
-	}
-	return nil
+func (execMounter) Unmount(_ context.Context, target string) error {
+	// Flush-then-unmount lives in mountsync, shared by every cloud driver:
+	// a detach discards unflushed pages, and four private copies of that
+	// logic is four chances for one to drift. See issue #270.
+	return mountsync.Unmount("hcloudvolume", target)
 }
