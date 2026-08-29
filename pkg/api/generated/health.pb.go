@@ -594,7 +594,13 @@ type GetServerVersionResponse struct {
 	// Operating system the server is running on (GOOS).
 	Os string `protobuf:"bytes,5,opt,name=os,proto3" json:"os,omitempty"`
 	// Architecture the server is running on (GOARCH).
-	Arch          string `protobuf:"bytes,6,opt,name=arch,proto3" json:"arch,omitempty"`
+	Arch string `protobuf:"bytes,6,opt,name=arch,proto3" json:"arch,omitempty"`
+	// Ready reports that startup completed through the node phase — the
+	// control plane serves before the dataplane/volumes/ingress start, so
+	// version alone does not mean healthy. This is an atomic read of an
+	// in-memory flag, never a store or subsystem probe: the RPC is public
+	// on every transport precisely because it is free to serve.
+	Ready         bool `protobuf:"varint,7,opt,name=ready,proto3" json:"ready,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -671,6 +677,13 @@ func (x *GetServerVersionResponse) GetArch() string {
 	return ""
 }
 
+func (x *GetServerVersionResponse) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
 var File_pkg_api_proto_health_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_health_proto_rawDesc = "" +
@@ -708,7 +721,7 @@ const file_pkg_api_proto_health_proto_rawDesc = "" +
 	"components\x18\x01 \x03(\v2\x19.rune.api.ComponentHealthR\n" +
 	"components\x12(\n" +
 	"\x06status\x18\x02 \x01(\v2\x10.rune.api.StatusR\x06status\"\x19\n" +
-	"\x17GetServerVersionRequest\"\xae\x01\n" +
+	"\x17GetServerVersionRequest\"\xc4\x01\n" +
 	"\x18GetServerVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x16\n" +
 	"\x06commit\x18\x02 \x01(\tR\x06commit\x12\x1d\n" +
@@ -717,7 +730,8 @@ const file_pkg_api_proto_health_proto_rawDesc = "" +
 	"\n" +
 	"go_version\x18\x04 \x01(\tR\tgoVersion\x12\x0e\n" +
 	"\x02os\x18\x05 \x01(\tR\x02os\x12\x12\n" +
-	"\x04arch\x18\x06 \x01(\tR\x04arch*\x9c\x01\n" +
+	"\x04arch\x18\x06 \x01(\tR\x04arch\x12\x14\n" +
+	"\x05ready\x18\a \x01(\bR\x05ready*\x9c\x01\n" +
 	"\fHealthStatus\x12\x1d\n" +
 	"\x19HEALTH_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15HEALTH_STATUS_UNKNOWN\x10\x01\x12\x19\n" +

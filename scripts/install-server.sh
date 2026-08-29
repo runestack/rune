@@ -379,9 +379,30 @@ UNIT
   # above; no drop-in override is needed.
 
 
+  install_upgrade_units
   systemctl daemon-reload
   systemctl enable --now runed
   log "Systemd service installed and enabled"
+}
+
+# RUNE-321: in-band upgrade units + version floor, so upgrades after this
+# one can be `rune upgrade` instead of SSH. Rendered by the installed
+# binary — no second template to drift. Skipped on builds that predate it.
+install_upgrade_units() {
+  local bin=/usr/local/bin/runed staging="$DATA_DIR/upgrade"
+  if ! "$bin" print-systemd --upgrade-units --staging "$staging" </dev/null >/dev/null 2>&1; then
+    return
+  fi
+  "$bin" print-systemd --upgrade-units --staging "$staging" --binary "$bin" > /etc/systemd/system/runed-upgrade.service
+  "$bin" print-systemd --upgrade-path-unit --staging "$staging" > /etc/systemd/system/runed-upgrade.path
+  systemctl daemon-reload
+  systemctl enable --now runed-upgrade.path 2>/dev/null || true
+  if [ ! -f /etc/rune/version-floor ] && [ -n "${RUNE_VERSION:-}" ]; then
+    mkdir -p /etc/rune
+    printf '%s\n' "$RUNE_VERSION" > /etc/rune/version-floor
+    log "Seeded version floor at /etc/rune/version-floor ($RUNE_VERSION)"
+  fi
+  log "Installed in-band upgrade units (rune upgrade)"
 }
 
 verify_installation() {

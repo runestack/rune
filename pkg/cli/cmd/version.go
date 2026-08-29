@@ -113,6 +113,12 @@ func printVersionText(info versionInfo) {
 	if info.Server != nil {
 		fmt.Println("Server:")
 		printPart(*info.Server)
+		// A convenience notice, not a guard: the real skew defenses are
+		// `rune upgrade`'s server-first ordering and its non-zero exit
+		// when the client half fails.
+		if info.Server.Version != info.Client.Version {
+			fmt.Println("\nNote: client and server versions differ — run 'rune upgrade' to align them.")
+		}
 	} else if info.Note != "" {
 		fmt.Println(info.Note)
 	}

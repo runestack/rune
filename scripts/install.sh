@@ -215,8 +215,29 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 UNIT
   fi
+  install_upgrade_units
   systemctl daemon-reload
   systemctl enable --now runed
+}
+
+# RUNE-321: in-band upgrade units + version floor, so upgrades after this
+# one can be `rune upgrade` instead of SSH. Rendered by the installed
+# binary — no second template to drift. Skipped on builds that predate it.
+install_upgrade_units() {
+  local bin=/usr/local/bin/runed staging="$DATA_DIR/upgrade"
+  if ! "$bin" print-systemd --upgrade-units --staging "$staging" </dev/null >/dev/null 2>&1; then
+    return
+  fi
+  "$bin" print-systemd --upgrade-units --staging "$staging" --binary "$bin" > /etc/systemd/system/runed-upgrade.service
+  "$bin" print-systemd --upgrade-path-unit --staging "$staging" > /etc/systemd/system/runed-upgrade.path
+  systemctl daemon-reload
+  systemctl enable --now runed-upgrade.path 2>/dev/null || true
+  if [ ! -f /etc/rune/version-floor ]; then
+    mkdir -p /etc/rune
+    "$bin" --version 2>/dev/null | grep -oE 'v[0-9][^ )]*' | head -1 > /etc/rune/version-floor || true
+    [ -s /etc/rune/version-floor ] || rm -f /etc/rune/version-floor
+  fi
+  log "Installed in-band upgrade units (rune upgrade)"
 }
 
 main() {

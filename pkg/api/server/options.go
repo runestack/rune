@@ -56,6 +56,11 @@ type Options struct {
 	// (RUNE-040).
 	NetworkStatusProvider service.NetworkStatusProvider
 
+	// UpgradeStager, if set, is wired into AdminService so UpgradeServer
+	// can stage in-band server upgrades (RUNE-321). Unset (dev shells,
+	// tests) the RPC answers Unimplemented.
+	UpgradeStager service.UpgradeStager
+
 	// VIPAllocator, if set, is plugged into ServiceService so each
 	// CreateService call assigns a stable VIP from the pool.
 	// Supplied by runed at startup.
@@ -243,6 +248,13 @@ func WithExtraGRPCRegistrar(reg func(grpc.ServiceRegistrar)) Option {
 
 // WithNetworkStatusProvider plugs the live VIP allocator into the
 // AdminService.NetworkStatus RPC.
+// WithUpgradeStager plugs the RUNE-321 stager into AdminService.
+func WithUpgradeStager(u service.UpgradeStager) Option {
+	return func(opts *Options) {
+		opts.UpgradeStager = u
+	}
+}
+
 func WithNetworkStatusProvider(p service.NetworkStatusProvider) Option {
 	return func(opts *Options) {
 		opts.NetworkStatusProvider = p

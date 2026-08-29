@@ -33,6 +33,10 @@ func runPrintSystemd(args []string, stdout, stderr io.Writer) int {
 		group      = fs.String("group", defaults.Group, "Linux group runed runs as (usually matches --user)")
 		binaryPath = fs.String("binary", defaults.BinaryPath, "Absolute path to the runed binary on the host")
 		configPath = fs.String("config", defaults.ConfigPath, "Path passed to runed via --config (empty omits the flag and lets runed auto-discover)")
+
+		upgradeUnits    = fs.Bool("upgrade-units", false, "Render runed-upgrade.service (the RUNE-321 root applier oneshot) instead of runed.service")
+		upgradePathUnit = fs.Bool("upgrade-path-unit", false, "Render runed-upgrade.path (watches the staging dir for a staged upgrade) instead of runed.service")
+		stagingDir      = fs.String("staging", "", "Staging directory the upgrade units act on, normally <data-dir>/upgrade (required with --upgrade-units / --upgrade-path-unit)")
 	)
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, `Usage: runed print-systemd [flags]
@@ -65,6 +69,25 @@ Example:
 		return 2
 	}
 
+	if *upgradeUnits || *upgradePathUnit {
+		uo := systemd.UpgradeUnitOptions{
+			StagingDir: *stagingDir,
+			BinaryPath: *binaryPath,
+			ConfigPath: *configPath,
+		}
+		render := systemd.RenderUpgradeService
+		if *upgradePathUnit {
+			render = systemd.RenderUpgradePath
+		}
+		out, err := render(uo)
+		if err != nil {
+			fmt.Fprintf(stderr, "runed print-systemd: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(stdout, out)
+		return 0
+	}
+
 	opts := systemd.UnitOptions{
 		User:       *user,
 		Group:      *group,
@@ -91,9 +114,13 @@ func dispatchSubcommand() (handled bool, exitCode int) {
 	switch os.Args[1] {
 	case "print-systemd":
 		return true, runPrintSystemd(os.Args[2:], os.Stdout, os.Stderr)
+	case "apply-upgrade":
+		return true, runApplyUpgrade(os.Args[2:], os.Stdout, os.Stderr)
 	default:
-		// Falls through to the daemon path; flag.Parse will reject
-		// unknown things in its own way.
+		// Falls through to the daemon path; main() rejects unknown
+		// positional args so a subcommand this binary doesn't know
+		// cannot silently launch the daemon (as root, when invoked by
+		// the upgrade oneshot on a binary/units skew).
 		return false, 0
 	}
 }

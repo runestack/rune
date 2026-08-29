@@ -22,6 +22,7 @@ set -euo pipefail
 
 RUNE_VERSION=""
 BIN_DIR="/usr/local/bin"
+DATA_DIR="/var/lib/rune"
 SERVICE_NAME="runed"
 SKIP_RESTART=false
 SKIP_CAPS=false
@@ -147,9 +148,43 @@ download_release() {
     die "Failed to download release from $url"
   fi
 
+  # Verify against the release checksums.txt. Deliberately a hard failure
+  # when the digest can't be fetched or found — the fail-open verification
+  # in install.sh let a missing checksums line pass silently.
+  local sums want have
+  sums="https://github.com/runestack/rune/releases/download/${RUNE_VERSION}/checksums.txt"
+  curl -fsSL -o "$TMP_DIR/checksums.txt" "$sums" || die "Failed to download $sums"
+  want=$(grep "rune_linux_${arch}.tar.gz" "$TMP_DIR/checksums.txt" | awk '{print $1}' | head -1)
+  [ -n "$want" ] || die "checksums.txt has no entry for rune_linux_${arch}.tar.gz"
+  have=$(sha256sum "$TMP_DIR/rune.tgz" | awk '{print $1}')
+  [ "$have" = "$want" ] || die "checksum mismatch for rune_linux_${arch}.tar.gz (expected $want, got $have)"
+  log "sha256 verified against checksums.txt"
+
   tar -C "$TMP_DIR" -xzf "$TMP_DIR/rune.tgz" rune runed
   chmod 0755 "$TMP_DIR/rune" "$TMP_DIR/runed"
   log "Fetched ${RUNE_VERSION} for linux/${arch}"
+}
+
+# RUNE-321: install/refresh the in-band upgrade units and seed the version
+# floor, so the next upgrade can be `rune upgrade` instead of this script.
+# Units are rendered by the NEW binary (no second template to drift); a
+# binary too old to render them skips with a note.
+install_upgrade_units() {
+  local bin="$BIN_DIR/runed" staging="$DATA_DIR/upgrade"
+  if ! "$bin" print-systemd --upgrade-units --staging "$staging" </dev/null >/dev/null 2>&1; then
+    log "This runed build predates in-band upgrades; skipping upgrade units"
+    return
+  fi
+  "$bin" print-systemd --upgrade-units --staging "$staging" --binary "$bin" > /etc/systemd/system/runed-upgrade.service
+  "$bin" print-systemd --upgrade-path-unit --staging "$staging" > /etc/systemd/system/runed-upgrade.path
+  systemctl daemon-reload
+  systemctl enable --now runed-upgrade.path
+  log "Installed upgrade units; future upgrades can use 'rune upgrade'"
+  if [ ! -f /etc/rune/version-floor ]; then
+    mkdir -p /etc/rune
+    printf '%s\n' "$RUNE_VERSION" > /etc/rune/version-floor
+    log "Seeded version floor at /etc/rune/version-floor ($RUNE_VERSION) — downgrades below it need a root edit"
+  fi
 }
 
 detect_caps() {
@@ -367,6 +402,7 @@ main() {
     case "$1" in
       --version) RUNE_VERSION="$2"; shift 2 ;;
       --bin-dir) BIN_DIR="$2"; shift 2 ;;
+      --data-dir) DATA_DIR="$2"; shift 2 ;;
       --skip-restart) SKIP_RESTART=true; shift ;;
       --skip-caps) SKIP_CAPS=true; shift ;;
       --no-keep-backup) KEEP_BACKUP=false; shift ;;
@@ -389,6 +425,7 @@ main() {
   swap_binaries
   reapply_caps
   refresh_unit
+  install_upgrade_units
   warn_if_unit_missing_ambient
   start_service
   verify

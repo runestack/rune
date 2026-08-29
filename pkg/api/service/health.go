@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -36,6 +37,10 @@ type HealthService struct {
 	store   store.Store
 	runners RunnerHealthReporter
 	logger  log.Logger
+
+	// ready flips true once startup completes through the node phase;
+	// see SetReady.
+	ready atomic.Bool
 
 	// Optional cached capacity (single-node MVP)
 	capacityCPU float64
@@ -330,8 +335,18 @@ func (s *HealthService) GetServerVersion(_ context.Context, _ *generated.GetServ
 		GoVersion: runtime.Version(),
 		Os:        runtime.GOOS,
 		Arch:      runtime.GOARCH,
+		Ready:     s.ready.Load(),
 	}, nil
 }
+
+// SetReady marks startup complete through the node phase. The control
+// plane serves before the dataplane/volumes/ingress start, so upgrade
+// verification (and anything else equating "answers" with "healthy") needs
+// this bit, not just a version match. It must stay an in-memory atomic —
+// GetServerVersion is public on every transport because it is free to
+// serve, and a probe here would hand unauthenticated callers a
+// store-hammering primitive.
+func (s *HealthService) SetReady(v bool) { s.ready.Store(v) }
 
 // getServiceHealth retrieves health for a service or services.
 func (s *HealthService) getServiceHealth(ctx context.Context, req *generated.GetHealthRequest) (*generated.GetHealthResponse, error) {

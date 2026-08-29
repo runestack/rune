@@ -273,6 +273,9 @@ func (s *APIServer) Start() error {
 		s.observeService.SetAlerting(alertRules, alertChannels, s.alerter)
 	}
 
+	if s.options.UpgradeStager != nil {
+		s.adminService.SetUpgradeStager(s.options.UpgradeStager)
+	}
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
 	}
@@ -561,6 +564,15 @@ func (s *APIServer) evaluatePolicies(ctx context.Context, subjectID, resource, v
 }
 
 // Stop stops the API server gracefully.
+// SetReady forwards the startup-complete signal to the health service so
+// GetServerVersion can report it (RUNE-321 upgrade verification keys on
+// this, not on the version string alone).
+func (s *APIServer) SetReady(v bool) {
+	if s.healthService != nil {
+		s.healthService.SetReady(v)
+	}
+}
+
 func (s *APIServer) Stop() error {
 	s.stopOnce.Do(func() {
 		s.stopErr = s.stop()

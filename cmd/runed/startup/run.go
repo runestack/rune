@@ -29,6 +29,12 @@ func Run(f *Flags) {
 	metricsServer := startAuxiliarySurfaces(b, n)
 	agentStop := n.stop
 
+	// Startup is complete: flip the public ready bit. The API has been
+	// answering since mustStartControlPlane, so anything that equates
+	// "answers" with "healthy" — upgrade verification above all — must
+	// key on this, not on the version string.
+	apiServer.SetReady(true)
+
 	// Wait for cancellation
 	<-ctx.Done()
 
