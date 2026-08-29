@@ -358,13 +358,7 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 	var downSince time.Time
 	lastVersion, lastReady := "", false
 
-	// Downgrade targets may predate the ready flag entirely (today every
-	// released build does), so — mirroring the applier — the watch
-	// demands it only in the upgrade direction.
-	requireReady := true
-	if cmp, err := upgrade.CompareVersions(target, fromVersion); err == nil && cmp < 0 {
-		requireReady = false
-	}
+	requireReady := watchRequiresReady(target, fromVersion)
 
 	watchStart := time.Now()
 	for poll := 0; time.Now().Before(deadline); poll++ {
@@ -377,11 +371,7 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 				downSince = time.Now()
 			}
 		case resp.GetVersion() == target && (resp.GetReady() || !requireReady):
-			downFor := ""
-			if !downSince.IsZero() {
-				downFor = fmt.Sprintf(" (was down %ds)", int(time.Since(downSince).Seconds()))
-			}
-			fmt.Printf("  server: %s answering and healthy%s\n", target, downFor)
+			printWatchSuccess(target, downSince)
 			return nil
 		default:
 			lastVersion, lastReady = resp.GetVersion(), resp.GetReady()
@@ -389,7 +379,7 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 			// a floor refusal or verification failure lands as an event
 			// within seconds, and holding the full deadline to report
 			// it would be an 8-minute stare at a known answer.
-			if poll%5 == 4 && resp.GetVersion() == fromVersion {
+			if poll%5 == 4 && lastVersion == fromVersion {
 				if ev := latestTerminalUpgradeEvent(api, watchStart); ev != "" {
 					return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, ev)
 				}
@@ -402,6 +392,22 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 		}
 	}
 	return diagnoseWatchTimeout(api, watchStart, fromVersion, target, lastVersion, lastReady)
+}
+
+// watchRequiresReady mirrors the applier: downgrade targets may predate
+// the ready flag entirely (today every released build does), so the watch
+// demands it only in the upgrade direction.
+func watchRequiresReady(target, fromVersion string) bool {
+	cmp, err := upgrade.CompareVersions(target, fromVersion)
+	return err != nil || cmp >= 0
+}
+
+func printWatchSuccess(target string, downSince time.Time) {
+	downFor := ""
+	if !downSince.IsZero() {
+		downFor = fmt.Sprintf(" (was down %ds)", int(time.Since(downSince).Seconds()))
+	}
+	fmt.Printf("  server: %s answering and healthy%s\n", target, downFor)
 }
 
 // diagnoseWatchTimeout names the state at the deadline. The four cases are
