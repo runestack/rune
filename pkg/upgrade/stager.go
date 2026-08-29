@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -105,7 +106,11 @@ func (s *Stager) Stage(ctx context.Context, version, sha256, requester string, a
 		return err
 	}
 
-	s.mu.Lock()
+	// TryLock, not Lock: a second concurrent call must get a prompt
+	// upgrade-in-progress, not queue behind a multi-minute download.
+	if !s.mu.TryLock() {
+		return &PreconditionError{Reason: ReasonInProgress, Detail: "another upgrade is staging"}
+	}
 	defer s.mu.Unlock()
 
 	staging := StagingDir(s.DataDir)
@@ -114,7 +119,10 @@ func (s *Stager) Stage(ctx context.Context, version, sha256, requester string, a
 	}
 	lock, err := acquireFlock(filepath.Join(filepath.Dir(staging), ".upgrade.lock"))
 	if err != nil {
-		return &PreconditionError{Reason: ReasonInProgress, Detail: "another upgrade is staging"}
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return &PreconditionError{Reason: ReasonInProgress, Detail: "another upgrade is staging"}
+		}
+		return fmt.Errorf("acquiring upgrade lock: %w", err)
 	}
 	defer lock.release()
 
@@ -300,7 +308,7 @@ func acquireFlock(path string) (*flock, error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return nil, err
+		return nil, fmt.Errorf("flock: %w", err)
 	}
 	return &flock{f: f}, nil
 }

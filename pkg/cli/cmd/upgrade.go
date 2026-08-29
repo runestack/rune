@@ -57,6 +57,11 @@ version floor.`,
 			target := ""
 			if len(args) == 1 && args[0] != "latest" {
 				target = args[0]
+				// Catch the one plausible misreading at the moment it
+				// happens: someone reaching for `rune upgrade <service>`.
+				if _, err := upgrade.ParseVersion(target); err != nil {
+					return fmt.Errorf("%q is not a release version — `rune upgrade` updates Rune itself (server and CLI); to update a service, use `rune cast`", target)
+				}
 			}
 			if opts.clientOnly && opts.serverOnly {
 				return fmt.Errorf("--client and --server are mutually exclusive")
@@ -168,6 +173,13 @@ func buildUpgradePlan(ctx context.Context, hc *http.Client, opts *upgradeOptions
 }
 
 func confirmUpgradePlan(plan *upgradePlan, opts *upgradeOptions) error {
+	if !plan.doServer && !plan.clientAtTarget {
+		// Client-only downgrades deserve the same pause as server ones.
+		var ignored bool
+		if err := confirmDowngrade(version.Version, plan.target, opts.yes, &ignored); err != nil {
+			return err
+		}
+	}
 	if plan.doServer && !plan.serverAtTarget {
 		if err := confirmDowngrade(plan.server.GetVersion(), plan.target, opts.yes, &plan.allowDowngrade); err != nil {
 			return err
@@ -378,26 +390,33 @@ func watchServerUpgrade(ctx context.Context, api *client.Client, fromVersion, ta
 // genuinely different nights for the operator; reporting only "rolled
 // back" would be wrong in three of them.
 func diagnoseWatchTimeout(api *client.Client, fromVersion, target, lastVersion string, lastReady bool) error {
-	upgradeEvent := latestUpgradeEvent(api)
-	host := "the host"
+	return watchTimeoutDiagnosis(fromVersion, target, lastVersion, lastReady, latestTerminalUpgradeEvent(api))
+}
 
+// watchTimeoutDiagnosis is the pure decision; terminalEvent is the most
+// recent APPLY-outcome event ("" when none). UpgradeStaged is deliberately
+// not a terminal event — the stager emits it before creating the trigger,
+// so it exists on every attempt and would make "never applied"
+// undetectable.
+func watchTimeoutDiagnosis(fromVersion, target, lastVersion string, lastReady bool, terminalEvent string) error {
+	host := "the host"
 	switch {
 	case lastVersion == target && !lastReady:
 		return fmt.Errorf("server is running %s but has not finished starting after %s — it may be crash-looping; on %s check: journalctl -u runed -n 50", target, upgradeWatchDeadline, host)
-	case lastVersion == fromVersion && strings.Contains(upgradeEvent, "rolled-back"):
-		return fmt.Errorf("server rolled back to %s — see: journalctl -u runed-upgrade on %s\n(%s)", fromVersion, host, upgradeEvent)
-	case lastVersion == fromVersion && upgradeEvent == "":
-		return fmt.Errorf("server still reports %s and no upgrade activity was recorded — the staged upgrade may never have been applied; on %s check: systemctl status runed-upgrade.path runed-upgrade.service", fromVersion, host)
+	case lastVersion == fromVersion && strings.Contains(terminalEvent, "rolled-back"):
+		return fmt.Errorf("server rolled back to %s — see: journalctl -u runed-upgrade on %s\n(%s)", fromVersion, host, terminalEvent)
+	case lastVersion == fromVersion && terminalEvent == "":
+		return fmt.Errorf("server still reports %s and no upgrade was applied — check on %s: systemctl status runed-upgrade.path runed-upgrade.service", fromVersion, host)
 	case lastVersion == fromVersion:
-		return fmt.Errorf("server still reports %s (%s) — see journalctl -u runed-upgrade on %s", fromVersion, upgradeEvent, host)
+		return fmt.Errorf("server still reports %s (%s) — see journalctl -u runed-upgrade on %s", fromVersion, terminalEvent, host)
 	default:
 		return fmt.Errorf("server did not answer within %s — it may still be mid-rollback; on %s check: journalctl -u runed -u runed-upgrade -n 80", upgradeWatchDeadline, host)
 	}
 }
 
-// latestUpgradeEvent best-effort fetches the most recent Upgrade* node
-// event ("" when none or unreadable).
-func latestUpgradeEvent(api *client.Client) string {
+// latestTerminalUpgradeEvent best-effort fetches the most recent apply
+// outcome ("" when none or unreadable).
+func latestTerminalUpgradeEvent(api *client.Client) string {
 	ec := generated.NewEventServiceClient(api.Conn())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -406,7 +425,8 @@ func latestUpgradeEvent(api *client.Client) string {
 		return ""
 	}
 	for _, e := range resp.GetEvents() {
-		if strings.HasPrefix(e.GetReason(), "Upgrade") {
+		switch e.GetReason() {
+		case "UpgradeApplied", "UpgradeRolledBack", "UpgradeFailed", "UpgradeSkipped":
 			return e.GetReason() + ": " + e.GetMessage()
 		}
 	}
@@ -471,11 +491,11 @@ func confirmDowngrade(from, target string, yes bool, allowDowngrade *bool) error
 		return nil
 	}
 	*allowDowngrade = true
-	fmt.Printf("⚠️  %s is OLDER than the server's %s — this is a downgrade.\n", target, from)
+	fmt.Printf("⚠️  %s is OLDER than the current %s — this is a downgrade.\n", target, from)
 	if yes {
 		return nil
 	}
-	if !confirmPrompt("Downgrade the server?") {
+	if !confirmPrompt("Downgrade?") {
 		return fmt.Errorf("aborted")
 	}
 	return nil

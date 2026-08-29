@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -138,33 +139,48 @@ func (a *Applier) Apply(ctx context.Context) error {
 	return nil
 }
 
+// maxConsumeBytes caps what the applier copies into the workdir. The
+// workdir is tmpfs (RAM), so this bounds both a legit apply's peak and a
+// hostile service account ballooning /run before verification. Real
+// server tarballs are ~40-60 MB.
+const maxConsumeBytes = 256 << 20
+
 // consume moves manifest+tarball into the workdir via validated fds and
-// removes ready/manifest/tarball from the staging dir.
+// removes ready/manifest/tarball from the staging dir — on EVERY outcome.
+// An error that left `ready` behind would make systemd refire the oneshot
+// in a loop until the path unit trips its start-rate limit and lands in
+// failed state, after which no future upgrade ever fires; a failed consume
+// must therefore still consume the trigger (the operator re-stages).
 func (a *Applier) consume() (*Manifest, string, error) {
-	dirFi, err := os.Stat(a.StagingDir)
+	// The staging directory itself is rune-writable, so even the unlinks
+	// must not traverse it by path (a swapped-in symlink would point
+	// root's unlinkat elsewhere): open it once, O_NOFOLLOW, and do
+	// everything through the dirfd.
+	dirfd, err := syscall.Open(a.StagingDir, syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, "", fmt.Errorf("staging dir: %w", err)
 	}
-	dirStat, ok := dirFi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, "", fmt.Errorf("staging dir: no stat")
+	defer syscall.Close(dirfd)
+	defer func() {
+		_ = syscall.Unlinkat(dirfd, manifestName)
+		_ = syscall.Unlinkat(dirfd, tarballName)
+		_ = syscall.Unlinkat(dirfd, readyName)
+	}()
+
+	var dirStat syscall.Stat_t
+	if err := syscall.Fstat(dirfd, &dirStat); err != nil {
+		return nil, "", fmt.Errorf("staging dir: %w", err)
 	}
 
-	manifestBytes, err := consumeFile(filepath.Join(a.StagingDir, manifestName), dirStat.Uid, "")
+	manifestBytes, err := consumeFileAt(dirfd, a.StagingDir, manifestName, dirStat.Uid, "")
 	if err != nil {
 		return nil, "", err
 	}
 	tarLocal := filepath.Join(Workdir, tarballName)
 	_ = os.Remove(tarLocal)
-	if _, err := consumeFile(filepath.Join(a.StagingDir, tarballName), dirStat.Uid, tarLocal); err != nil {
+	if _, err := consumeFileAt(dirfd, a.StagingDir, tarballName, dirStat.Uid, tarLocal); err != nil {
 		return nil, "", err
 	}
-	// Unlink the trigger last, and the others regardless of errors below —
-	// systemd re-activates a PathExists= unit whenever the path is present
-	// and the service inactive, so a left-behind `ready` is a refire loop.
-	_ = os.Remove(filepath.Join(a.StagingDir, manifestName))
-	_ = os.Remove(filepath.Join(a.StagingDir, tarballName))
-	_ = os.Remove(filepath.Join(a.StagingDir, readyName))
 
 	m, err := parseManifest(manifestBytes)
 	if err != nil {
@@ -173,16 +189,18 @@ func (a *Applier) consume() (*Manifest, string, error) {
 	return m, tarLocal, nil
 }
 
-// consumeFile opens src with O_NOFOLLOW, validates the fd (regular file,
-// owned by the staging dir's owner, link count 1) and either returns its
-// bytes (dst=="") or copies the fd's content to dst (root-owned, O_EXCL).
-// It never re-opens src by path — the service user owns that inode and can
-// swap it at any moment; the fd is the only trustworthy handle.
-func consumeFile(src string, wantUID uint32, dst string) ([]byte, error) {
-	f, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+// consumeFileAt opens name relative to the staging dirfd with O_NOFOLLOW,
+// validates the fd (regular file, owned by the staging dir's owner, link
+// count 1) and either returns its bytes (dst=="") or copies the fd's
+// content to dst (root-owned, O_EXCL). It never touches a staging path by
+// name — the service user owns those inodes and can swap them at any
+// moment; the fd is the only trustworthy handle.
+func consumeFileAt(dirfd int, dir, name string, wantUID uint32, dst string) ([]byte, error) {
+	fd, err := syscall.Openat(dirfd, name, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", src, err)
+		return nil, fmt.Errorf("opening %s/%s: %w", dir, name, err)
 	}
+	f := os.NewFile(uintptr(fd), name)
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
@@ -190,13 +208,13 @@ func consumeFile(src string, wantUID uint32, dst string) ([]byte, error) {
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok || !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: not a regular file", src)
+		return nil, fmt.Errorf("%s/%s: not a regular file", dir, name)
 	}
 	if st.Uid != wantUID {
-		return nil, fmt.Errorf("%s: owned by uid %d, want %d", src, st.Uid, wantUID)
+		return nil, fmt.Errorf("%s/%s: owned by uid %d, want %d", dir, name, st.Uid, wantUID)
 	}
 	if st.Nlink != 1 {
-		return nil, fmt.Errorf("%s: link count %d, want 1 (hardlink games)", src, st.Nlink)
+		return nil, fmt.Errorf("%s/%s: link count %d, want 1 (hardlink games)", dir, name, st.Nlink)
 	}
 	if dst == "" {
 		return io.ReadAll(io.LimitReader(f, 1<<20))
@@ -206,13 +224,21 @@ func consumeFile(src string, wantUID uint32, dst string) ([]byte, error) {
 		return nil, err
 	}
 	defer out.Close()
-	if _, err := io.Copy(out, io.LimitReader(f, maxArtifactBytes)); err != nil {
+	if _, err := io.Copy(out, io.LimitReader(f, maxConsumeBytes)); err != nil {
 		return nil, err
 	}
 	return nil, nil
 }
 
 func (a *Applier) checkFloor(m *Manifest) error {
+	// The downgrade opt-in is enforced here, not only displayed: a direct
+	// RPC (or forged manifest) with an old-but-above-floor target and no
+	// opt-in must not silently downgrade. The floor below remains the
+	// control the in-scope attackers cannot write.
+	if isDowngrade(m.Version, a.Runtime.CurrentVersion) && !m.AllowDowngrade {
+		return fmt.Errorf("target %s is older than the running %s and the request did not opt into a downgrade", m.Version, a.Runtime.CurrentVersion)
+	}
+
 	floor, err := ReadFloor(a.Runtime.FloorPath)
 	if err != nil {
 		return err // includes ErrFloorUnparseable: corruption fails closed
@@ -232,14 +258,32 @@ func (a *Applier) checkFloor(m *Manifest) error {
 	return nil
 }
 
+// isDowngrade reports target < current; unparseable versions (a "dev"
+// from-source build) report false and leave the decision to the floor.
+func isDowngrade(target, current string) bool {
+	cmp, err := CompareVersions(target, current)
+	return err == nil && cmp < 0
+}
+
+// targetRequiresReady decides whether the post-restart verify demands the
+// `ready` flag. Any target NEWER than this (already ready-aware) applier
+// carries the flag; a downgrade target may predate it — today every
+// released build does — and requiring it there would burn the verify
+// budget and roll back a working deliberate downgrade. Unparseable
+// versions default to requiring it.
+func targetRequiresReady(target, current string) bool {
+	return !isDowngrade(target, current)
+}
+
 func (a *Applier) verifyAndUnpack(ctx context.Context, m *Manifest, tarLocal string) (newRune, newRuned string, err error) {
 	hc := &http.Client{Timeout: 2 * time.Minute}
 	cs, err := FetchChecksums(ctx, hc, m.Version)
 	if err != nil {
 		return "", "", err
 	}
-	arch := hostArch()
-	want, err := cs.Digest(ServerAsset(arch))
+	// This applier binary is the installed runed, so its own GOARCH is
+	// the host arch by construction.
+	want, err := cs.Digest(ServerAsset(runtime.GOARCH))
 	if err != nil {
 		return "", "", err
 	}
@@ -296,7 +340,7 @@ func (a *Applier) swapAndRestart(ctx context.Context, m *Manifest, binDir string
 		return a.rollback(ctx, m, binDir, backupRune, backupRuned, unitBackedUp, from, now, fmt.Errorf("systemctl restart: %w", err))
 	}
 
-	if err := a.verify(ctx, m.Version, true, verifyBudget); err != nil {
+	if err := a.verify(ctx, m.Version, targetRequiresReady(m.Version, from), verifyBudget); err != nil {
 		return a.rollback(ctx, m, binDir, backupRune, backupRuned, unitBackedUp, from, now, err)
 	}
 	return nil
@@ -353,14 +397,18 @@ func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
 		logf("warning: rendering refreshed unit failed (%v); leaving %s as is", err, runedUnitPath)
 	} else {
 		current, _ := os.ReadFile(runedUnitPath)
-		if string(current) != newUnit {
-			if len(current) > 0 {
-				if err := copyFile(runedUnitPath, runedUnitPath+".bak", 0o644); err == nil {
-					unitBackedUp = true
-				}
-			}
+		switch {
+		case string(current) == newUnit:
+			// unchanged
+		case len(current) > 0 && copyFile(runedUnitPath, runedUnitPath+".bak", 0o644) != nil:
+			// Never replace a unit we could not back up — a later
+			// rollback would have nothing to restore.
+			logf("warning: could not back up %s; leaving it unchanged", runedUnitPath)
+		default:
+			unitBackedUp = len(current) > 0
 			if err := os.WriteFile(runedUnitPath, []byte(newUnit), 0o644); err != nil {
 				logf("warning: writing refreshed unit: %v", err)
+				unitBackedUp = false
 			} else {
 				logf("refreshed %s (previous at %s.bak); diff:", runedUnitPath, runedUnitPath)
 				journalDiff(string(current), newUnit)
@@ -506,15 +554,6 @@ func systemctl(args ...string) error {
 	return nil
 }
 
-func hostArch() string {
-	switch out, err := exec.Command("uname", "-m").Output(); {
-	case err == nil && strings.TrimSpace(string(out)) == "aarch64":
-		return "arm64"
-	default:
-		return "amd64"
-	}
-}
-
 func parseManifest(b []byte) (*Manifest, error) {
 	var m Manifest
 	if err := json.Unmarshal(b, &m); err != nil {
@@ -526,13 +565,20 @@ func parseManifest(b []byte) (*Manifest, error) {
 	return &m, nil
 }
 
-// installFile is `install`: write next to dst, then atomic rename.
+// installFile is `install`: write next to dst, then atomic rename. The
+// temp file is removed on failure so a dead apply doesn't litter the bin
+// dir.
 func installFile(src, dst string) error {
 	tmp := dst + ".new"
 	if err := copyFile(src, tmp, 0o755); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func journalDiff(oldContent, newContent string) {

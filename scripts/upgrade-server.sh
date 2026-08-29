@@ -154,7 +154,7 @@ download_release() {
   local sums want have
   sums="https://github.com/runestack/rune/releases/download/${RUNE_VERSION}/checksums.txt"
   curl -fsSL -o "$TMP_DIR/checksums.txt" "$sums" || die "Failed to download $sums"
-  want=$(grep "rune_linux_${arch}.tar.gz" "$TMP_DIR/checksums.txt" | awk '{print $1}' | head -1)
+  want=$(grep "rune_linux_${arch}.tar.gz" "$TMP_DIR/checksums.txt" | awk '{print $1}' | head -1 || true)
   [ -n "$want" ] || die "checksums.txt has no entry for rune_linux_${arch}.tar.gz"
   have=$(sha256sum "$TMP_DIR/rune.tgz" | awk '{print $1}')
   [ "$have" = "$want" ] || die "checksum mismatch for rune_linux_${arch}.tar.gz (expected $want, got $have)"
@@ -169,16 +169,23 @@ download_release() {
 # floor, so the next upgrade can be `rune upgrade` instead of this script.
 # Units are rendered by the NEW binary (no second template to drift); a
 # binary too old to render them skips with a note.
+#
+# Runs AFTER the upgrade is verified (and every step tolerates failure):
+# this is the break-glass path, and a unit-enable hiccup must never strand
+# the server stopped mid-script.
 install_upgrade_units() {
   local bin="$BIN_DIR/runed" staging="$DATA_DIR/upgrade"
   if ! "$bin" print-systemd --upgrade-units --staging "$staging" </dev/null >/dev/null 2>&1; then
     log "This runed build predates in-band upgrades; skipping upgrade units"
     return
   fi
-  "$bin" print-systemd --upgrade-units --staging "$staging" --binary "$bin" > /etc/systemd/system/runed-upgrade.service
-  "$bin" print-systemd --upgrade-path-unit --staging "$staging" > /etc/systemd/system/runed-upgrade.path
-  systemctl daemon-reload
-  systemctl enable --now runed-upgrade.path
+  # Clear any stale staged upgrade so enabling the path unit cannot fire
+  # the applier over an attempt this script just superseded.
+  rm -rf "$staging" 2>/dev/null || true
+  "$bin" print-systemd --upgrade-units --staging "$staging" --binary "$bin" --config "" > /etc/systemd/system/runed-upgrade.service || { log "⚠️  rendering upgrade units failed; skipping"; return; }
+  "$bin" print-systemd --upgrade-path-unit --staging "$staging" > /etc/systemd/system/runed-upgrade.path || { log "⚠️  rendering upgrade path unit failed; skipping"; return; }
+  systemctl daemon-reload || true
+  systemctl enable --now runed-upgrade.path || log "⚠️  could not enable runed-upgrade.path; enable it manually"
   log "Installed upgrade units; future upgrades can use 'rune upgrade'"
   if [ ! -f /etc/rune/version-floor ]; then
     mkdir -p /etc/rune
@@ -425,10 +432,10 @@ main() {
   swap_binaries
   reapply_caps
   refresh_unit
-  install_upgrade_units
   warn_if_unit_missing_ambient
   start_service
   verify
+  install_upgrade_units
   cleanup_backups
 
   log "✅ Upgrade to $RUNE_VERSION complete"
