@@ -148,7 +148,7 @@ func TestUnmountNothingMountedSaysNothingFlushed(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the unprivileged umount to fail")
 	}
-	if !strings.Contains(err.Error(), "nothing was mounted") {
+	if !strings.Contains(err.Error(), "nothing appeared to be mounted") {
 		t.Errorf("must not claim a flush that never happened, got: %v", err)
 	}
 	if strings.Contains(err.Error(), "flushed as of now") {

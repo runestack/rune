@@ -151,9 +151,9 @@ func requireLoopMount(t *testing.T) {
 	// degraded runner — no CAP_SYS_ADMIN, no loop device, no mkfs —
 	// would skip every one of them and the step would still go green,
 	// which is the silent-skip failure this package was written to end.
-	mustRun := os.Getenv("RUNE_REQUIRE_PRIVILEGED_MOUNT") != ""
+	required := os.Getenv("RUNE_REQUIRE_PRIVILEGED_MOUNT") != ""
 	skip := func(format string, args ...any) {
-		if mustRun {
+		if required {
 			t.Fatalf("RUNE_REQUIRE_PRIVILEGED_MOUNT is set but "+format, args...)
 		}
 		t.Skipf(format, args...)

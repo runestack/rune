@@ -51,7 +51,7 @@ func unmountTarget(driver, target string) error {
 	case !synced:
 		// Nothing was mounted here, so there was nothing to flush. Saying
 		// "flushed" would assert work that never happened.
-		return fmt.Errorf("%s: umount(2) %s: %w (nothing was mounted at this path, so nothing was flushed)",
+		return fmt.Errorf("%s: umount(2) %s: %w (nothing appeared to be mounted at this path, so nothing was flushed)",
 			driver, target, err)
 	default:
 		// Not a reassurance: on this path the holder is usually a running

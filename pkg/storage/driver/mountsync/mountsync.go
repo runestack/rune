@@ -37,9 +37,8 @@ package mountsync
 // no timeout. Cutting it short means detaching on a half-written
 // filesystem, which is the failure this package exists to prevent, so a
 // slow flush is the correct behaviour and not something to "fix" with a
-// deadline. Note the ceiling is set elsewhere regardless — systemd's
-// TimeoutStopSec then SIGKILL, and SIGKILL does not interrupt an
-// in-flight syncfs.
+// deadline. Nothing bounds it: SIGKILL does not interrupt an in-flight
+// syncfs, so not even systemd's TimeoutStopSec is a ceiling on this.
 //
 // Idempotent for a caller holding CAP_SYS_ADMIN — a target that is not a
 // mount point, or is already gone, returns nil. Unprivileged, umount(2)

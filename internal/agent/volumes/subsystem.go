@@ -290,10 +290,16 @@ func (s *Subsystem) Stop(ctx context.Context) error {
 	return nil
 }
 
-// teardownFallbackTimeout bounds a single volume's teardown when the
-// caller's context carries no deadline of its own. Provider clients set
-// their own (longer) HTTP timeouts, which must not be what decides how
-// long shutdown takes.
+// teardownFallbackTimeout bounds a single volume's PROVIDER calls when
+// the caller's context carries no deadline of its own. Provider clients
+// set their own (longer) HTTP timeouts, which must not be what decides
+// how long shutdown takes.
+//
+// It does not bound the whole teardown. The filesystem flush inside
+// Driver.Unmount takes no context and is deliberately unbounded, because
+// cutting it short detaches a half-written filesystem — so a shutdown can
+// legitimately outlive this and any deadline the caller sets. See
+// pkg/storage/driver/mountsync.
 const teardownFallbackTimeout = 8 * time.Second
 
 // drainMounts tears down every tracked mount concurrently.
