@@ -36,33 +36,10 @@ func TestUnmountFlushesWhenAnotherMountHoldsTheSuperblock(t *testing.T) {
 		{"mountsync.Unmount keeps it", false, 90},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			img := filepath.Join(dir, "disk.img")
-			target := filepath.Join(dir, "mnt")
-			second := filepath.Join(dir, "held")
-			for _, d := range []string{target, second} {
-				if err := os.MkdirAll(d, 0o755); err != nil {
-					t.Fatalf("mkdir: %v", err)
-				}
-			}
-			makeExt4(t, img)
-			mustRun(t, "mount", "-o", "loop", img, target)
-
-			// Create and commit the file, so only its contents are at risk —
-			// the reported signature is a correctly-named zero-length file.
-			if err := os.WriteFile(filepath.Join(target, "SYSTEM"), nil, 0o644); err != nil {
-				t.Fatalf("create: %v", err)
-			}
-			mustRun(t, "sync")
-
-			// The container's bind: a second reference to the superblock.
-			mustRun(t, "mount", "--bind", target, second)
-			t.Cleanup(func() { _ = exec.Command("umount", "-l", second).Run() })
+			dir, img, target := heldMountFixture(t)
 
 			// The workload writes and does not fsync.
-			if err := os.WriteFile(filepath.Join(target, "SYSTEM"), []byte(strings.Repeat("0", 90)), 0o644); err != nil {
-				t.Fatalf("write: %v", err)
-			}
+			writeManifest(t, target)
 
 			if tc.bare {
 				if err := unix.Unmount(target, 0); err != nil {
@@ -72,11 +49,51 @@ func TestUnmountFlushesWhenAnotherMountHoldsTheSuperblock(t *testing.T) {
 				t.Fatalf("Unmount: %v", err)
 			}
 
-			got := bytesOnDevice(t, dir, img)
-			if got != tc.wantBytes {
+			if got := bytesOnDevice(t, dir, img); got != tc.wantBytes {
 				t.Errorf("recovered %d bytes from the raw device, want %d", got, tc.wantBytes)
 			}
 		})
+	}
+}
+
+// heldMountFixture builds the production shape: an ext4 volume mounted
+// where the agent mounts one, with a second mount of the same superblock
+// standing in for the bind a container runtime makes into its own mount
+// namespace. Returns the working dir, the backing image, and the mount
+// target.
+func heldMountFixture(t *testing.T) (dir, img, target string) {
+	t.Helper()
+	dir = t.TempDir()
+	img = filepath.Join(dir, "disk.img")
+	target = filepath.Join(dir, "mnt")
+	second := filepath.Join(dir, "held")
+	for _, d := range []string{target, second} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	makeExt4(t, img)
+	mustRun(t, "mount", "-o", "loop", img, target)
+	t.Cleanup(func() { _ = exec.Command("umount", "-l", target).Run() })
+
+	// Create and commit the file, so only its contents are at risk — the
+	// reported signature is a correctly-named zero-length file.
+	if err := os.WriteFile(filepath.Join(target, "SYSTEM"), nil, 0o644); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	mustRun(t, "sync")
+
+	mustRun(t, "mount", "--bind", target, second)
+	t.Cleanup(func() { _ = exec.Command("umount", "-l", second).Run() })
+	return dir, img, target
+}
+
+// writeManifest writes the 90-byte payload without fsync — an ordinary
+// write-back workload.
+func writeManifest(t *testing.T, target string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(target, "SYSTEM"), []byte(strings.Repeat("0", 90)), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 }
 
