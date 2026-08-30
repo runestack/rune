@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/runestack/rune/pkg/storage/driver/mountsync"
 )
 
 // Mount on Linux calls mount(2) directly. /bin/mount on util-linux 2.39+
@@ -26,13 +28,7 @@ func (execMounter) Mount(ctx context.Context, dev, target, fsType string, readOn
 	return nil
 }
 
-// Unmount on Linux calls umount2(2) directly with no flags.
-func (execMounter) Unmount(ctx context.Context, target string) error {
-	if !alreadyMounted(ctx, target) {
-		return nil
-	}
-	if err := unix.Unmount(target, 0); err != nil {
-		return fmt.Errorf("awsebs: umount(2) %s: %w", target, err)
-	}
-	return nil
+// Unmount on Linux flushes the filesystem, then calls umount2(2).
+func (execMounter) Unmount(_ context.Context, target string) error {
+	return mountsync.Unmount("awsebs", target)
 }
