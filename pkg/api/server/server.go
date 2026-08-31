@@ -273,6 +273,9 @@ func (s *APIServer) Start() error {
 		s.observeService.SetAlerting(alertRules, alertChannels, s.alerter)
 	}
 
+	if s.options.UpgradeStager != nil {
+		s.adminService.SetUpgradeStager(s.options.UpgradeStager)
+	}
 	if s.options.NetworkStatusProvider != nil {
 		s.adminService.SetNetworkStatusProvider(s.options.NetworkStatusProvider)
 	}
@@ -558,6 +561,16 @@ func (s *APIServer) rbacStreamInterceptor() grpc.StreamServerInterceptor {
 // interceptor and the orchestrator's admission gate resolve verbs identically.
 func (s *APIServer) evaluatePolicies(ctx context.Context, subjectID, resource, verb, namespace string) (bool, error) {
 	return authz.NewStoreAuthorizer(s.store).Authorize(ctx, subjectID, resource, verb, namespace)
+}
+
+// SetReady forwards the startup-complete signal to the health service so
+// GetServerVersion can report it. Upgrade verification keys on this, not on
+// the version string alone: the control plane answers before the node
+// phase runs.
+func (s *APIServer) SetReady(v bool) {
+	if s.healthService != nil {
+		s.healthService.SetReady(v)
+	}
 }
 
 // Stop stops the API server gracefully.

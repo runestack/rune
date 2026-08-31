@@ -89,6 +89,7 @@ func init() {
 	rootCmd.AddCommand(newStorageClassCmd())
 	rootCmd.AddCommand(newVolumeCmd())
 	rootCmd.AddCommand(newSnapshotCmd())
+	rootCmd.AddCommand(newUpgradeCmd())
 	// Context management commands (server, token, default namespace)
 	rootCmd.AddCommand(newContextCmd())
 	// Convenient top-level alias for `rune context use`

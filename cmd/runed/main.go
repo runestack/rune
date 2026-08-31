@@ -20,6 +20,15 @@ func main() {
 	f := startup.DefineFlags(flag.CommandLine)
 	flag.Parse()
 
+	// A positional arg here is a subcommand this binary doesn't know
+	// (flag.Parse just parks it in flag.Args()). Falling through would
+	// launch the daemon — as root, when the caller is the upgrade
+	// oneshot invoking `apply-upgrade` on a too-old binary — so refuse.
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "runed: unknown subcommand %q\n", flag.Arg(0))
+		os.Exit(2)
+	}
+
 	if f.ShowHelp {
 		flag.Usage()
 		return

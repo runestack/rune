@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	AdminService_AdminBootstrap_FullMethodName          = "/rune.api.AdminService/AdminBootstrap"
+	AdminService_UpgradeServer_FullMethodName           = "/rune.api.AdminService/UpgradeServer"
 	AdminService_PolicyCreate_FullMethodName            = "/rune.api.AdminService/PolicyCreate"
 	AdminService_PolicyUpdate_FullMethodName            = "/rune.api.AdminService/PolicyUpdate"
 	AdminService_PolicyDelete_FullMethodName            = "/rune.api.AdminService/PolicyDelete"
@@ -46,6 +47,14 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AdminServiceClient interface {
 	AdminBootstrap(ctx context.Context, in *AdminBootstrapRequest, opts ...grpc.CallOption) (*AdminBootstrapResponse, error)
+	// UpgradeServer stages an in-band server upgrade. Maps to the dedicated
+	// ("server","upgrade") RBAC action, which of the shipped builtins only
+	// root and admin grant, and deliberately NOT to resource "admin", so it
+	// is exempt from the admin localhost-only gate (remote upgrade is the
+	// point) without
+	// opening the rest of the admin surface via allow_remote_admin.
+	// It must never be exempted from authentication.
+	UpgradeServer(ctx context.Context, in *UpgradeServerRequest, opts ...grpc.CallOption) (*UpgradeServerResponse, error)
 	PolicyCreate(ctx context.Context, in *PolicyCreateRequest, opts ...grpc.CallOption) (*PolicyCreateResponse, error)
 	PolicyUpdate(ctx context.Context, in *PolicyUpdateRequest, opts ...grpc.CallOption) (*PolicyUpdateResponse, error)
 	PolicyDelete(ctx context.Context, in *PolicyDeleteRequest, opts ...grpc.CallOption) (*PolicyDeleteResponse, error)
@@ -82,6 +91,16 @@ func (c *adminServiceClient) AdminBootstrap(ctx context.Context, in *AdminBootst
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminBootstrapResponse)
 	err := c.cc.Invoke(ctx, AdminService_AdminBootstrap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) UpgradeServer(ctx context.Context, in *UpgradeServerRequest, opts ...grpc.CallOption) (*UpgradeServerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpgradeServerResponse)
+	err := c.cc.Invoke(ctx, AdminService_UpgradeServer_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +302,14 @@ func (c *adminServiceClient) NetworkStatus(ctx context.Context, in *NetworkStatu
 // for forward compatibility.
 type AdminServiceServer interface {
 	AdminBootstrap(context.Context, *AdminBootstrapRequest) (*AdminBootstrapResponse, error)
+	// UpgradeServer stages an in-band server upgrade. Maps to the dedicated
+	// ("server","upgrade") RBAC action, which of the shipped builtins only
+	// root and admin grant, and deliberately NOT to resource "admin", so it
+	// is exempt from the admin localhost-only gate (remote upgrade is the
+	// point) without
+	// opening the rest of the admin surface via allow_remote_admin.
+	// It must never be exempted from authentication.
+	UpgradeServer(context.Context, *UpgradeServerRequest) (*UpgradeServerResponse, error)
 	PolicyCreate(context.Context, *PolicyCreateRequest) (*PolicyCreateResponse, error)
 	PolicyUpdate(context.Context, *PolicyUpdateRequest) (*PolicyUpdateResponse, error)
 	PolicyDelete(context.Context, *PolicyDeleteRequest) (*PolicyDeleteResponse, error)
@@ -317,6 +344,9 @@ type UnimplementedAdminServiceServer struct{}
 
 func (UnimplementedAdminServiceServer) AdminBootstrap(context.Context, *AdminBootstrapRequest) (*AdminBootstrapResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AdminBootstrap not implemented")
+}
+func (UnimplementedAdminServiceServer) UpgradeServer(context.Context, *UpgradeServerRequest) (*UpgradeServerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpgradeServer not implemented")
 }
 func (UnimplementedAdminServiceServer) PolicyCreate(context.Context, *PolicyCreateRequest) (*PolicyCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PolicyCreate not implemented")
@@ -410,6 +440,24 @@ func _AdminService_AdminBootstrap_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AdminServiceServer).AdminBootstrap(ctx, req.(*AdminBootstrapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_UpgradeServer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpgradeServerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).UpgradeServer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_UpgradeServer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).UpgradeServer(ctx, req.(*UpgradeServerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -766,6 +814,10 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminBootstrap",
 			Handler:    _AdminService_AdminBootstrap_Handler,
+		},
+		{
+			MethodName: "UpgradeServer",
+			Handler:    _AdminService_UpgradeServer_Handler,
 		},
 		{
 			MethodName: "PolicyCreate",

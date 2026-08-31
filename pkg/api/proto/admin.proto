@@ -176,8 +176,40 @@ message NetworkStatusResponse {
   uint32 capacity = 5;
 }
 
+// UpgradeServerRequest asks the server to stage an upgrade of its own
+// binaries to a published release (RUNE-321). The server downloads the
+// artifact itself from the pinned release host; a root systemd oneshot
+// applies it after independently re-verifying against the release's
+// checksums.
+message UpgradeServerRequest {
+  // Release tag, e.g. "v0.0.1-dev.150".
+  string version = 1;
+
+  // Advisory: the digest the CLI resolved from checksums.txt for this
+  // server's os/arch. The stager enforces it so bad bytes fail early, but
+  // the applier trusts only its own independent re-verification.
+  string sha256 = 2;
+
+  // Explicit opt-in when the target is older than the running version.
+  // The root-owned version floor on the host still applies.
+  bool allow_downgrade = 3;
+}
+
+message UpgradeServerResponse {
+  // Echo of the staged version; the connection drops shortly after this
+  // reply while the server restarts.
+  string staged_version = 1;
+}
+
 service AdminService {
   rpc AdminBootstrap(AdminBootstrapRequest) returns (AdminBootstrapResponse);
+
+  // UpgradeServer stages an in-band server upgrade. Maps to the dedicated
+  // ("server","upgrade") RBAC action, which of the shipped builtins only
+  // root and admin grant, and deliberately NOT to resource "admin" — that
+  // resource carries a localhost-only gate, and remote upgrade is the
+  // point of the feature. It must never be exempted from authentication.
+  rpc UpgradeServer(UpgradeServerRequest) returns (UpgradeServerResponse);
 
   rpc PolicyCreate(PolicyCreateRequest) returns (PolicyCreateResponse);
   rpc PolicyUpdate(PolicyUpdateRequest) returns (PolicyUpdateResponse);

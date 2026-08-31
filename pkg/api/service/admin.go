@@ -30,9 +30,10 @@ type NetworkStatusProvider interface {
 // AdminService implements generated.AdminServiceServer
 type AdminService struct {
 	generated.UnimplementedAdminServiceServer
-	st     store.Store
-	logger log.Logger
-	netSP  NetworkStatusProvider
+	st       store.Store
+	logger   log.Logger
+	netSP    NetworkStatusProvider
+	upgrader UpgradeStager
 }
 
 func NewAdminService(st store.Store, logger log.Logger) *AdminService {
