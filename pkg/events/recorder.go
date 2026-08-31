@@ -331,7 +331,9 @@ func (r *Recorder) ListLatest(ctx context.Context, limit int) ([]types.Event, er
 }
 
 // ListSince returns up to limit events with Seq > cursor, in ascending
-// Seq order. This is the outbox view RUNE-0XX consumers use; see
+// Seq order. No in-tree caller today — it is the outbox contract an
+// external consumer tracks with a single cursor; callers wanting recency
+// want ListLatest. This is the outbox view RUNE-0XX consumers use; see
 // RUNE-126 §5.6.
 func (r *Recorder) ListSince(ctx context.Context, cursor int64, limit int) ([]types.Event, error) {
 	if limit <= 0 {

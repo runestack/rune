@@ -420,7 +420,7 @@ func (a *Applier) rollback(ctx context.Context, m *Manifest, binDir, backupRune,
 // preserving the live unit's user/binary/config values (a flagless render
 // would clobber a custom install — see ParseUnitShow), and re-renders the
 // applier's own units so they are not frozen at bootstrap forever. The
-// runed unit is skipped when systemd loads it from outside /etc; the
+// runed unit is skipped unless systemd loads it from exactly that path; the
 // applier's own units are refreshed either way. Returns whether the runed
 // unit was backed up, for rollback.
 func (a *Applier) refreshUnits(binDir string, vals systemd.UnitOptions) bool {
@@ -524,7 +524,13 @@ func parseGetcap(out, binPath string) string {
 	// a bin dir containing a space would otherwise fold part of the path
 	// into the capability string, setcap would reject it, and the upgrade
 	// would report success with runed unable to bind :80/:443.
-	rest = strings.TrimSpace(strings.TrimPrefix(rest, binPath))
+	rest, ok := strings.CutPrefix(rest, binPath)
+	if !ok {
+		// Not the file we asked about; anything else in this line is not
+		// a capability set we should hand to setcap.
+		return ""
+	}
+	rest = strings.TrimSpace(rest)
 	rest = strings.TrimSpace(strings.TrimPrefix(rest, "="))
 	if !strings.Contains(rest, "cap_") {
 		return ""
@@ -537,11 +543,14 @@ func parseGetcap(out, binPath string) string {
 //
 // The check is derived from the render rather than a hardcoded list, so it
 // stays correct as the template grows: a directive the live unit sets and
-// the render does not is one the refresh would silently drop. The Terraform
-// modules provision exactly such a unit (EnvironmentFile= carrying registry
-// credentials, and no User= because runed runs as root there), and dropping
-// either while reporting a successful upgrade is the worst outcome this
-// applier can produce.
+// the render does not is one the refresh would silently drop. It compares
+// names and ExecStart flags, not values — a hand-tuned RestartSec= is reset
+// to the template's, which journalDiff records.
+//
+// Units written by an out-of-tree provisioner are the real case:
+// EnvironmentFile= carrying credentials, or no User= because runed runs as
+// root there. Dropping either while still reporting a successful upgrade is
+// the worst outcome this applier can produce.
 func unitRefreshUnsafe(current, rendered string) string {
 	if strings.TrimSpace(current) == "" {
 		return ""

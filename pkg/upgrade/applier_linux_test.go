@@ -82,11 +82,10 @@ func TestConsume_ErrorStillConsumesReady(t *testing.T) {
 	}
 }
 
-// The Terraform modules provision their own runed.service: EnvironmentFile=
-// carrying registry credentials, and no User= because runed runs as root
-// there. Rendering the canonical template over it drops both — and the
-// upgrade would still report success, which is the worst outcome the
-// applier can produce.
+// A unit an out-of-tree provisioner authored — EnvironmentFile= for
+// credentials, no User= because runed runs as root — must not be refreshed
+// away: rendering the canonical template over it drops both, and the
+// upgrade would still report success.
 func TestUnitRefreshUnsafe(t *testing.T) {
 	const terraform = `[Unit]
 Description=Rune Server
