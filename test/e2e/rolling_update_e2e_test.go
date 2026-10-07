@@ -90,7 +90,7 @@ func maxRunningGeneration(t *testing.T, ctx *harness.Context, inst generated.Ins
 	defer cancel()
 	resp, err := inst.ListInstances(c, &generated.ListInstancesRequest{Namespace: "default"})
 	if err != nil {
-		return 0
+		t.Fatalf("list instances for generation baseline: %v", err)
 	}
 	var max int64
 	for _, in := range resp.GetInstances() {
@@ -104,6 +104,32 @@ func maxRunningGeneration(t *testing.T, ctx *harness.Context, inst generated.Ins
 	return max
 }
 
+// convergedPast reports whether exactly scale replicas are Running, all on a
+// template generation newer than preGen.
+func convergedPast(t *testing.T, ctx *harness.Context, inst generated.InstanceServiceClient, service string, scale int, preGen int64) bool {
+	t.Helper()
+	c, cancel := ctx.Ctx()
+	defer cancel()
+	resp, err := inst.ListInstances(c, &generated.ListInstancesRequest{Namespace: "default"})
+	if err != nil {
+		return false
+	}
+	running, onNew := 0, 0
+	for _, in := range resp.GetInstances() {
+		if in.GetServiceName() != service || in.GetStatus() != generated.InstanceStatus_INSTANCE_STATUS_RUNNING {
+			continue
+		}
+		running++
+		if int64(in.GetMetadata().GetGeneration()) > preGen {
+			onNew++
+		}
+	}
+	return running == scale && onNew == scale
+}
+
+// The readiness probe is exec, not tcp: a tcp probe dials the container IP,
+// which Docker Desktop does not route to the macOS host, so a tcp-probed
+// instance never leaves Starting there.
 func writeService(t *testing.T, dir, name, image string, scale int) string {
 	t.Helper()
 	file := filepath.Join(dir, name+".yaml")
@@ -118,8 +144,8 @@ service:
       port: 80
   health:
     readiness:
-      type: tcp
-      port: 80
+      type: exec
+      command: ["nc", "-z", "127.0.0.1", "80"]
       intervalSeconds: 1
       timeoutSeconds: 1
       failureThreshold: 1
@@ -163,23 +189,7 @@ func TestRollingUpdate_CastKeepsCapacity(t *testing.T) {
 	ctx.CLI.MustRun(t, "cast", writeService(t, dir, name, "nginx:1.28-alpine", scale), "--detach", "--release", name)
 
 	ctx.Eventually(5*time.Minute, "every replica to reach the new template", func() bool {
-		c, cancel := ctx.Ctx()
-		defer cancel()
-		resp, err := inst.ListInstances(c, &generated.ListInstancesRequest{Namespace: "default"})
-		if err != nil {
-			return false
-		}
-		running, onNew := 0, 0
-		for _, in := range resp.GetInstances() {
-			if in.GetServiceName() != name || in.GetStatus() != generated.InstanceStatus_INSTANCE_STATUS_RUNNING {
-				continue
-			}
-			running++
-			if int64(in.GetMetadata().GetGeneration()) > preGen {
-				onNew++
-			}
-		}
-		return running == scale && onNew == scale
+		return convergedPast(t, ctx, inst, name, scale, preGen)
 	})
 
 	minSeen, samples := sampler.stop()
@@ -270,10 +280,13 @@ service:
 		return runningInstanceCount(t, ctx, inst, name) == scale
 	})
 
+	preGen := maxRunningGeneration(t, ctx, inst, name)
 	sampler := sampleEndpointSet(t, ctx, inst, name, 50*time.Millisecond)
 	ctx.CLI.MustRun(t, "cast", spec("nginx:1.28-alpine"), "--detach", "--release", name)
+	// Gate on the new generation, not just the count: the old replicas are
+	// still Running until the reconciler sees the new spec.
 	ctx.Eventually(5*time.Minute, "replicas to return on the new template", func() bool {
-		return runningInstanceCount(t, ctx, inst, name) == scale
+		return convergedPast(t, ctx, inst, name, scale, preGen)
 	})
 	minSeen, _ := sampler.stop()
 
