@@ -85,12 +85,17 @@ type PreparedCast struct {
 	Execute func(ctx context.Context, applier Applier) (*types.Release, error)
 }
 
-// Prepare runs the 3-way plan, validates it (conflicts, detach-prune), and
-// writes the pending release intent. It does NOT mutate the cluster — that is
+// Admit authorizes a plan before any of it is recorded or applied. It runs
+// inside Prepare, ahead of the pending record, so a denied cast leaves no
+// Pending release and no bumped revision behind.
+type Admit func(ctx context.Context, plan *Plan) error
+
+// Prepare runs the 3-way plan, validates it (conflicts, detach-prune, admit
+// when non-nil), and writes the pending release intent. It does NOT mutate the cluster — that is
 // the returned PreparedCast.Execute closure's job. On a validation error it
 // still returns a PreparedCast carrying the Plan (Release nil) so callers can
 // surface it.
-func Prepare(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live LiveLookup) (*PreparedCast, error) {
+func Prepare(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live LiveLookup, admit Admit) (*PreparedCast, error) {
 	current, found, err := recs.Get(ctx, spec.Namespace, spec.Name)
 	if err != nil {
 		return nil, err
@@ -109,6 +114,11 @@ func Prepare(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live Li
 	}
 	if spec.Detach && plan.HasPrune() {
 		return &PreparedCast{Plan: plan}, ErrDetachWouldPrune
+	}
+	if admit != nil {
+		if err := admit(ctx, plan); err != nil {
+			return &PreparedCast{Plan: plan}, err
+		}
 	}
 
 	revision := 1
@@ -218,8 +228,8 @@ func (e *execution) fail(ctx context.Context, applier Applier, done []PlannedCha
 // spec.Atomic, the failure path additionally reverts every change this revision
 // made before recording `failed`. Detach callers use Prepare + a background
 // Execute instead (see releasectl.Controller.Cast).
-func Reconcile(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live LiveLookup, applier Applier) (*types.Release, *Plan, error) {
-	prep, err := Prepare(ctx, spec, recs, live)
+func Reconcile(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live LiveLookup, applier Applier, admit Admit) (*types.Release, *Plan, error) {
+	prep, err := Prepare(ctx, spec, recs, live, admit)
 	if err != nil {
 		if prep != nil {
 			return nil, prep.Plan, err

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/runestack/rune/pkg/api/authctx"
+	"github.com/runestack/rune/pkg/release"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -204,4 +205,104 @@ func TestGateDeniesCapAddWithoutVerb(t *testing.T) {
 	if err := gate.AdmitService(ctx, svc); err != nil {
 		t.Fatalf("capAdd denied to a caller holding services.privileged: %v", err)
 	}
+}
+
+func change(a release.Action, rt types.ResourceType, ns, name string) release.PlannedChange {
+	return release.PlannedChange{Action: a, Ref: types.OwnerRef{ResourceType: rt, Namespace: ns, Name: name}}
+}
+
+func TestReleaseChangeRequirement(t *testing.T) {
+	cases := []struct {
+		name   string
+		change release.PlannedChange
+		want   Requirement
+		wantOK bool
+	}{
+		{"create service", change(release.ActionCreate, types.ResourceTypeService, "a", "api"), Requirement{"services", "create"}, true},
+		{"update secret", change(release.ActionUpdate, types.ResourceTypeSecret, "a", "s"), Requirement{"secrets", "update"}, true},
+		// Adoption rewrites an existing resource, and once adopted the
+		// release may prune it — which then needs delete on its own.
+		{"adopt configmap", change(release.ActionAdopt, types.ResourceTypeConfigmap, "a", "c"), Requirement{"configmaps", "update"}, true},
+		{"prune service", change(release.ActionPrune, types.ResourceTypeService, "a", "api"), Requirement{"services", "delete"}, true},
+		{"create volume", change(release.ActionCreate, types.ResourceTypeVolume, "a", "v"), Requirement{"volumes", "create"}, true},
+		{"reference storage class", change(release.ActionReference, types.ResourceTypeStorageClass, "", "fast"), Requirement{}, false},
+		{"unknown kind fails closed", change(release.ActionCreate, types.ResourceType("widget"), "a", "w"), Requirement{"widget", "create"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ReleaseChangeRequirement(tc.change)
+			if ok != tc.wantOK || got != tc.want {
+				t.Fatalf("got %+v,%v want %+v,%v", got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+// nsAuth grants "resource:verb@namespace" exactly, and records each ask.
+type nsAuth struct {
+	allow map[string]bool
+	asked []string
+}
+
+func (a *nsAuth) Authorize(_ context.Context, _, resource, verb, ns string) (bool, error) {
+	k := resource + ":" + verb + "@" + ns
+	a.asked = append(a.asked, k)
+	return a.allow[k], nil
+}
+
+func TestAdmitReleaseChanges(t *testing.T) {
+	ctx := authctx.WithSubject(context.Background(), "ci")
+	plan := []release.PlannedChange{
+		change(release.ActionReference, types.ResourceTypeStorageClass, "", "fast"),
+		change(release.ActionCreate, types.ResourceTypeService, "a", "api"),
+		change(release.ActionPrune, types.ResourceTypeService, "a", "victim"),
+	}
+
+	t.Run("denies prune without delete", func(t *testing.T) {
+		auth := &nsAuth{allow: map[string]bool{"services:create@a": true}}
+		err := NewGate(auth).AdmitReleaseChanges(ctx, plan)
+		var d *DeniedError
+		if !errors.As(err, &d) || d.Verb != "delete" || d.Namespace != "a" {
+			t.Fatalf("want delete denial in a, got %v", err)
+		}
+	})
+
+	t.Run("allows when every verb is held", func(t *testing.T) {
+		auth := &nsAuth{allow: map[string]bool{"services:create@a": true, "services:delete@a": true}}
+		if err := NewGate(auth).AdmitReleaseChanges(ctx, plan); err != nil {
+			t.Fatal(err)
+		}
+		if len(auth.asked) != 2 {
+			t.Fatalf("references must not be authorized; asked %v", auth.asked)
+		}
+	})
+
+	// A namespace-pinned token must not reach another namespace by
+	// naming it on the ref: the ref's namespace is the one checked.
+	t.Run("checks each ref's own namespace", func(t *testing.T) {
+		auth := &nsAuth{allow: map[string]bool{"secrets:create@a": true}}
+		err := NewGate(auth).AdmitReleaseChanges(ctx, []release.PlannedChange{
+			change(release.ActionCreate, types.ResourceTypeSecret, "b", "s"),
+		})
+		if !IsDenied(err) || auth.asked[0] != "secrets:create@b" {
+			t.Fatalf("want denial checked in b, got %v (asked %v)", err, auth.asked)
+		}
+	})
+
+	t.Run("no subject is denied", func(t *testing.T) {
+		auth := &nsAuth{allow: map[string]bool{"services:create@a": true, "services:delete@a": true}}
+		if err := NewGate(auth).AdmitReleaseChanges(context.Background(), plan); !IsDenied(err) {
+			t.Fatalf("want denial, got %v", err)
+		}
+	})
+
+	t.Run("nil gate and system writes admit", func(t *testing.T) {
+		var g *Gate
+		if err := g.AdmitReleaseChanges(ctx, plan); err != nil {
+			t.Fatal(err)
+		}
+		if err := NewGate(&nsAuth{}).AdmitReleaseChanges(WithSystem(ctx), plan); err != nil {
+			t.Fatal(err)
+		}
+	})
 }

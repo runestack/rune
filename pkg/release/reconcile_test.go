@@ -89,7 +89,7 @@ func TestReconcile_FirstInstall_OrdersAndDeploys(t *testing.T) {
 	recs := newFakeRecords()
 	applier := &fakeApplier{}
 
-	rel, _, err := Reconcile(context.Background(), spec, recs, fakeLive{}, applier)
+	rel, _, err := Reconcile(context.Background(), spec, recs, fakeLive{}, applier, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestReconcile_Upgrade_PrunesAfterVerify(t *testing.T) {
 
 	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Resources: desired(a), // b dropped
-	}, recs, fakeLive{}, applier)
+	}, recs, fakeLive{}, applier, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestReconcile_ApplyFailure_DoesNotPrune(t *testing.T) {
 
 	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Resources: desired(a),
-	}, recs, fakeLive{}, applier)
+	}, recs, fakeLive{}, applier, nil)
 	if err == nil {
 		t.Fatal("expected apply error")
 	}
@@ -165,7 +165,7 @@ func TestReconcile_DetachRefusesPrune(t *testing.T) {
 	}
 	_, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Resources: desired(a), Detach: true,
-	}, recs, fakeLive{}, &fakeApplier{})
+	}, recs, fakeLive{}, &fakeApplier{}, nil)
 	if !errors.Is(err, ErrDetachWouldPrune) {
 		t.Errorf("want ErrDetachWouldPrune, got %v", err)
 	}
@@ -176,7 +176,7 @@ func TestReconcile_ConflictIsNotApplied(t *testing.T) {
 	live := fakeLive{a.Key(): {Exists: true, OwnedBy: nil}} // unmanaged collision
 	_, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Resources: desired(a),
-	}, newFakeRecords(), live, &fakeApplier{})
+	}, newFakeRecords(), live, &fakeApplier{}, nil)
 	if !errors.Is(err, ErrConflicts) {
 		t.Errorf("want ErrConflicts, got %v", err)
 	}
@@ -190,7 +190,7 @@ func TestPrepare_RecordsPendingThenExecuteDeploys(t *testing.T) {
 	recs := newFakeRecords()
 	prep, err := Prepare(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Resources: desired(a),
-	}, recs, fakeLive{})
+	}, recs, fakeLive{}, nil)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -225,9 +225,39 @@ func TestPrepare_DetachWithPruneRefused(t *testing.T) {
 	}
 	_, err := Prepare(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Resources: desired(a), Detach: true,
-	}, recs, fakeLive{})
+	}, recs, fakeLive{}, nil)
 	if !errors.Is(err, ErrDetachWouldPrune) {
 		t.Errorf("want ErrDetachWouldPrune, got %v", err)
+	}
+}
+
+// A denied admit must leave nothing behind: no pending record, no bumped
+// revision, and nothing applied.
+func TestReconcile_AdmitDenialRecordsNothing(t *testing.T) {
+	a, b := svcRef("default", "a"), svcRef("default", "b")
+	recs := newFakeRecords()
+	prev := &types.Release{Name: "rel", Namespace: "default", Revision: 3, Status: types.ReleaseStatusDeployed, Owns: []types.OwnerRef{a, b}}
+	recs.rels["default/rel"] = prev
+	denied := errors.New("denied")
+	var seen *Plan
+	applier := &fakeApplier{}
+	_, plan, err := Reconcile(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Resources: desired(a),
+	}, recs, fakeLive{}, applier, func(_ context.Context, p *Plan) error {
+		seen = p
+		return denied
+	})
+	if !errors.Is(err, denied) {
+		t.Fatalf("want admit error, got %v", err)
+	}
+	if seen == nil || !seen.HasPrune() || plan != seen {
+		t.Fatalf("admit must see the full plan, prune included; got %+v", seen)
+	}
+	if got := recs.rels["default/rel"]; got != prev || got.Revision != 3 || got.Status != types.ReleaseStatusDeployed {
+		t.Errorf("record changed after denial: %+v", got)
+	}
+	if len(applier.events) != 0 {
+		t.Errorf("nothing may be applied after denial: %v", applier.events)
 	}
 }
 
@@ -243,7 +273,7 @@ func TestReconcile_Atomic_ApplyFailureReverts(t *testing.T) {
 	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Atomic: true,
 		Resources: desired(web, creds),
-	}, recs, fakeLive{}, applier)
+	}, recs, fakeLive{}, applier, nil)
 	if err == nil {
 		t.Fatal("expected apply error")
 	}
@@ -272,7 +302,7 @@ func TestReconcile_Atomic_VerifyFailureReverts(t *testing.T) {
 	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Atomic: true,
 		Resources: desired(web, creds),
-	}, newFakeRecords(), fakeLive{}, applier)
+	}, newFakeRecords(), fakeLive{}, applier, nil)
 	if err == nil {
 		t.Fatal("expected verify error")
 	}
@@ -303,7 +333,7 @@ func TestReconcile_Atomic_PruneFailureRevertsAll(t *testing.T) {
 
 	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Atomic: true, Resources: desired(a),
-	}, recs, fakeLive{}, applier)
+	}, recs, fakeLive{}, applier, nil)
 	if err == nil {
 		t.Fatal("expected prune error")
 	}
@@ -334,7 +364,7 @@ func TestReconcile_Atomic_RevertFailureAggregates(t *testing.T) {
 	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Atomic: true,
 		Resources: desired(web, creds),
-	}, newFakeRecords(), fakeLive{}, applier)
+	}, newFakeRecords(), fakeLive{}, applier, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -359,7 +389,7 @@ func TestReconcile_NonAtomic_DoesNotRevert(t *testing.T) {
 
 	rel, _, err := Reconcile(context.Background(), ReleaseSpec{
 		Name: "rel", Namespace: "default", Resources: desired(web),
-	}, newFakeRecords(), fakeLive{}, applier)
+	}, newFakeRecords(), fakeLive{}, applier, nil)
 	if err == nil {
 		t.Fatal("expected verify error")
 	}

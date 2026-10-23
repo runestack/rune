@@ -16,6 +16,7 @@ import (
 	"fmt"
 
 	"github.com/runestack/rune/pkg/api/authctx"
+	"github.com/runestack/rune/pkg/release"
 	"github.com/runestack/rune/pkg/types"
 )
 
@@ -80,6 +81,41 @@ func ServiceRequirements(svc *types.Service) []Requirement {
 	return nil
 }
 
+// releaseResources names the RBAC resource for each kind a release writes.
+var releaseResources = map[types.ResourceType]string{
+	types.ResourceTypeService:   "services",
+	types.ResourceTypeSecret:    "secrets",
+	types.ResourceTypeConfigmap: "configmaps",
+	types.ResourceTypeVolume:    "volumes",
+}
+
+// ReleaseChangeRequirement returns the verb a planned release change needs
+// on its resource: the one the direct RPC for the same write demands, so a
+// release can never do what its caller could not do directly. `releases:
+// create` alone would otherwise let a cast-scoped token adopt and then prune
+// any service in reach. Adopt is an update of an existing resource; prune is
+// a delete. ok is false only for references to shared cluster kinds, which
+// write nothing. A kind missing from the table is named by its raw type, a
+// resource no narrow policy grants, so a new kind fails closed.
+func ReleaseChangeRequirement(c release.PlannedChange) (Requirement, bool) {
+	var verb string
+	switch c.Action {
+	case release.ActionCreate:
+		verb = "create"
+	case release.ActionUpdate, release.ActionAdopt:
+		verb = "update"
+	case release.ActionPrune:
+		verb = "delete"
+	default:
+		return Requirement{}, false
+	}
+	res, ok := releaseResources[c.Ref.ResourceType]
+	if !ok {
+		res = string(c.Ref.ResourceType)
+	}
+	return Requirement{Resource: res, Verb: verb}, true
+}
+
 // Gate evaluates admission requirements against the subject carried on
 // the context. A nil Gate admits everything, which is how servers with
 // auth disabled (and the many in-process tests) keep working: the gate
@@ -103,26 +139,52 @@ func (g *Gate) AdmitService(ctx context.Context, svc *types.Service) error {
 	if g == nil || IsSystem(ctx) {
 		return nil
 	}
-	reqs := ServiceRequirements(svc)
-	if len(reqs) == 0 {
-		return nil
-	}
-	subject := authctx.SubjectFrom(ctx)
 	ns := ""
 	if svc != nil {
 		ns = svc.Namespace
 	}
-	for _, r := range reqs {
-		if subject == "" {
-			return &DeniedError{Requirement: r, Namespace: ns}
+	for _, r := range ServiceRequirements(svc) {
+		if err := g.require(ctx, r, ns); err != nil {
+			return err
 		}
-		ok, err := g.auth.Authorize(ctx, subject, r.Resource, r.Verb, ns)
-		if err != nil {
-			return fmt.Errorf("authorization error: %w", err)
-		}
+	}
+	return nil
+}
+
+// AdmitReleaseChanges checks every change against the subject, each in its
+// own resource's namespace, and stops at the first denial. Callers run it
+// over the whole plan before applying anything, so a denial never lands
+// mid-apply. A ref's namespace, not the release's, is the one checked: a
+// castfile may place resources outside the release namespace.
+func (g *Gate) AdmitReleaseChanges(ctx context.Context, changes []release.PlannedChange) error {
+	if g == nil || IsSystem(ctx) {
+		return nil
+	}
+	for _, c := range changes {
+		r, ok := ReleaseChangeRequirement(c)
 		if !ok {
-			return &DeniedError{SubjectID: subject, Requirement: r, Namespace: ns}
+			continue
 		}
+		if err := g.require(ctx, r, c.Ref.Namespace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// require fails closed: with a gate installed, a context with no subject is
+// denied.
+func (g *Gate) require(ctx context.Context, r Requirement, ns string) error {
+	subject := authctx.SubjectFrom(ctx)
+	if subject == "" {
+		return &DeniedError{Requirement: r, Namespace: ns}
+	}
+	ok, err := g.auth.Authorize(ctx, subject, r.Resource, r.Verb, ns)
+	if err != nil {
+		return fmt.Errorf("authorization error: %w", err)
+	}
+	if !ok {
+		return &DeniedError{SubjectID: subject, Requirement: r, Namespace: ns}
 	}
 	return nil
 }
