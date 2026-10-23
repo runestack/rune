@@ -11,7 +11,7 @@ Rune is a lightweight, powerful orchestration platform designed to simplify the 
 - **Container-native**: First-class support for containerized applications
 - **Process-aware**: Run and manage local processes when containers aren't needed
 - **Dependency-aware**: Automatically manage service dependencies
-- **Multi-node**: Scale across multiple nodes
+- **Single-node today**: Multi-node clustering is planned, not yet implemented
 - **Built-in security**: Authentication, authorization, and encryption
 - **Web dashboard**: Embedded browser dashboard for live cluster ops — services, logs, exec, secrets, RBAC
 - **Interactive debugging**: Exec into running services for real-time debugging
