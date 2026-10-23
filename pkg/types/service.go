@@ -981,13 +981,35 @@ func (s *Service) desiredStateView() serviceDesiredState {
 		RestartPolicy:      s.RestartPolicy,
 		Expose:             s.Expose,
 		Dependencies:       sortedDependencies(s.Dependencies),
-		NetworkPolicy:      s.NetworkPolicy,
+		NetworkPolicy:      networkPolicyForHash(s.NetworkPolicy),
 		Discovery:          discoveryWithoutVIP(s.Discovery),
 		LivenessFailures:   livenessThreshold(s.Health),
 		ClaimTemplates:     claimTemplates(s.Volumes),
 		Affinity:           s.Affinity,
 		Autoscale:          s.Autoscale,
 	}
+}
+
+// networkPolicyForHash turns empty peer lists into nil. Their JSON has no
+// omitempty, and the proto conversion returns [] where a cast spec has nil.
+func networkPolicyForHash(np *ServiceNetworkPolicy) *ServiceNetworkPolicy {
+	if np == nil || (len(np.Ingress) == 0 && len(np.Egress) == 0) {
+		return nil
+	}
+	out := &ServiceNetworkPolicy{}
+	for _, r := range np.Ingress {
+		if len(r.From) == 0 {
+			r.From = nil
+		}
+		out.Ingress = append(out.Ingress, r)
+	}
+	for _, r := range np.Egress {
+		if len(r.To) == 0 {
+			r.To = nil
+		}
+		out.Egress = append(out.Egress, r)
+	}
+	return out
 }
 
 func healthWithoutLivenessThreshold(h *HealthCheck) *HealthCheck {

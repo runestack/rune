@@ -34,8 +34,12 @@ func generationTestService() *types.Service {
 		Health: &types.HealthCheck{Readiness: &types.Probe{
 			Type: "tcp", Port: 80, IntervalSeconds: 10,
 		}},
-		Labels:   map[string]string{"team": "a"},
-		Expose:   &types.ServiceExpose{Port: "http", Host: "api.example.com"},
+		Labels: map[string]string{"team": "a"},
+		Expose: &types.ServiceExpose{Port: "http", Host: "api.example.com"},
+		NetworkPolicy: &types.ServiceNetworkPolicy{
+			Ingress: []types.IngressRule{{Ports: []string{"http"}}},
+			Egress:  []types.EgressRule{{To: []types.NetworkPolicyPeer{{Service: "db"}}}},
+		},
 		Metadata: &types.ServiceMetadata{Generation: 5, TemplateGeneration: 5, ObservedGeneration: 5},
 	}
 }

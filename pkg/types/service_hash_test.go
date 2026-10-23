@@ -396,3 +396,20 @@ func TestServiceHash_DependenciesOrderInsensitive(t *testing.T) {
 	}}
 	assert.Equal(t, a.CalculateHash(), b.CalculateHash())
 }
+
+// The proto conversion returns empty peer lists where a cast spec has nil,
+// and an empty policy where a cast spec has none.
+func TestServiceHash_NetworkPolicyEmptyEqualsNil(t *testing.T) {
+	full := func(np *ServiceNetworkPolicy) string {
+		return (&Service{Image: "app:v1", NetworkPolicy: np}).CalculateHash()
+	}
+	assert.Equal(t, full(nil), full(&ServiceNetworkPolicy{}))
+	assert.Equal(t,
+		full(&ServiceNetworkPolicy{Ingress: []IngressRule{{Ports: []string{"http"}}}}),
+		full(&ServiceNetworkPolicy{Ingress: []IngressRule{{From: []NetworkPolicyPeer{}, Ports: []string{"http"}}}}))
+	assert.Equal(t,
+		full(&ServiceNetworkPolicy{Egress: []EgressRule{{}}}),
+		full(&ServiceNetworkPolicy{Egress: []EgressRule{{To: []NetworkPolicyPeer{}}}}))
+	assert.NotEqual(t, full(nil),
+		full(&ServiceNetworkPolicy{Egress: []EgressRule{{To: []NetworkPolicyPeer{{Service: "db"}}}}}))
+}
