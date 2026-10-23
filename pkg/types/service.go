@@ -2,6 +2,7 @@ package types
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -853,349 +854,301 @@ func (s *Service) Validate() error {
 	return nil
 }
 
-// CalculateHash generates a hash of service properties that should trigger reconciliation when changed
+// CalculateHash hashes everything a controller acts on. A change moves
+// Generation; a write that leaves Generation alone is treated as status-only
+// and waits for the next resync.
 func (s *Service) CalculateHash() string {
 	return s.hash(true)
 }
 
-// CalculateTemplateHash hashes only the INSTANCE TEMPLATE — what a container
-// looks like — deliberately excluding scale, updateStrategy and drainSeconds.
-// It drives TemplateGeneration, which is what makes existing instances
-// incompatible and therefore replaced.
-//
-// The distinction matters as of RUNE-042: cast previously stamped
-// TemplateGeneration on ANY spec-hash change, and the hash includes scale, so
-// a cast that changed only the replica count marked every surviving instance
-// stale. Under recreate-everything semantics that was invisible (a scale cast
-// tore things down anyway); with rolling updates it would roll the whole
-// service for a scale edit. The scaling controller already had this right —
-// it bumps Generation without touching TemplateGeneration (#142) — and this
-// closes the same hole on the cast path.
+// CalculateTemplateHash hashes only what an instance is built from. A change
+// moves TemplateGeneration, which marks every running instance outdated and
+// replaces it, so a field belongs here only if a running instance cannot pick
+// it up any other way.
 func (s *Service) CalculateTemplateHash() string {
 	return s.hash(false)
 }
 
-// hash computes the service digest. includeDesiredState adds the fields that
-// describe DESIRED STATE rather than the instance template (scale, and the
-// update knobs that govern how a change is rolled out): they belong in the
-// full hash that drives Generation, but never in the template hash.
+// serviceTemplate is what an instance is built from: the container or
+// process config the runner creates it with, plus the probes, which the
+// health monitor captures once when it starts watching an instance. The
+// liveness failureThreshold is the exception, read live on every failure.
+//
+// Every field is omitempty so nil and empty compare equal: a spec that has
+// been through the store comes back with nil where the caster sent [].
+type serviceTemplate struct {
+	Image           string            `json:"image,omitempty"`
+	Command         string            `json:"command,omitempty"`
+	Args            []string          `json:"args,omitempty"`
+	Env             map[string]string `json:"env,omitempty"`
+	EnvFrom         []EnvFromSource   `json:"envFrom,omitempty"`
+	Runtime         RuntimeType       `json:"runtime,omitempty"`
+	Process         *ProcessSpec      `json:"process,omitempty"`
+	Ports           []ServicePort     `json:"ports,omitempty"`
+	Resources       Resources         `json:"resources"`
+	Health          *HealthCheck      `json:"health,omitempty"`
+	SecretMounts    []SecretMount     `json:"secretMounts,omitempty"`
+	ConfigmapMounts []ConfigmapMount  `json:"configmapMounts,omitempty"`
+	Volumes         []VolumeMount     `json:"volumes,omitempty"`
+	InitSteps       []InitStep        `json:"initSteps,omitempty"`
+	SecurityContext *SecurityContext  `json:"securityContext,omitempty"`
+}
+
+// serviceDesiredState is what controllers read from the live service, so a
+// change applies without replacing anything. Labels, the pull settings and
+// expose are also copied onto an instance when it is created; those copies
+// catch up at the next roll rather than forcing one.
+type serviceDesiredState struct {
+	Scale              int                      `json:"scale"`
+	UpdateStrategy     *UpdateStrategy          `json:"updateStrategy,omitempty"`
+	DrainSeconds       *int                     `json:"drainSeconds,omitempty"`
+	ImageRegistry      string                   `json:"imageRegistry,omitempty"`
+	Registry           *ServiceRegistryOverride `json:"registry,omitempty"`
+	ImagePull          string                   `json:"imagePull,omitempty"`
+	ImagePullAnonymous bool                     `json:"imagePullAnonymous,omitempty"`
+	Labels             map[string]string        `json:"labels,omitempty"`
+	RestartPolicy      RestartPolicy            `json:"restartPolicy,omitempty"`
+	Expose             *ServiceExpose           `json:"expose,omitempty"`
+	Dependencies       []DependencyRef          `json:"dependencies,omitempty"`
+	NetworkPolicy      *ServiceNetworkPolicy    `json:"networkPolicy,omitempty"`
+	Discovery          *ServiceDiscovery        `json:"discovery,omitempty"`
+	LivenessFailures   int                      `json:"livenessFailures,omitempty"`
+	// A claim template is read only when an ordinal's volume does not exist
+	// yet; a replacement reattaches the existing one, so changing the
+	// template affects new ordinals only.
+	ClaimTemplates []VolumeMount `json:"claimTemplates,omitempty"`
+	// Affinity has no consumer while every instance lands on the node that
+	// creates it. Once a scheduler places instances, a changed affinity
+	// means existing ones may be on the wrong node, and it may belong in
+	// the template.
+	Affinity  *ServiceAffinity  `json:"affinity,omitempty"`
+	Autoscale *ServiceAutoscale `json:"autoscale,omitempty"`
+}
+
 func (s *Service) hash(includeDesiredState bool) string {
 	h := sha256.New()
-
-	// Include only fields that should trigger a reconciliation when changed
-	fmt.Fprintf(h, "image:%s\n", s.Image)
-	fmt.Fprintf(h, "imageRegistry:%s\n", s.ImageRegistry)
-	// Registry override details (include auth fields to trigger reconciliation on change)
-	if s.Registry != nil {
-		fmt.Fprintf(h, "registry.name:%s\n", s.Registry.Name)
-		if s.Registry.Auth != nil {
-			fmt.Fprintf(h, "registry.auth.type:%s\n", s.Registry.Auth.Type)
-			fmt.Fprintf(h, "registry.auth.username:%s\n", s.Registry.Auth.Username)
-			fmt.Fprintf(h, "registry.auth.password:%s\n", s.Registry.Auth.Password)
-			fmt.Fprintf(h, "registry.auth.token:%s\n", s.Registry.Auth.Token)
-			fmt.Fprintf(h, "registry.auth.region:%s\n", s.Registry.Auth.Region)
-		}
+	enc := json.NewEncoder(h)
+	// Neither view holds anything encoding/json can fail on, and a failure
+	// would make the hash a constant that hides every change.
+	if err := enc.Encode(s.templateView()); err != nil {
+		panic(fmt.Sprintf("service template hash: %v", err))
 	}
-	fmt.Fprintf(h, "command:%s\n", s.Command)
 	if includeDesiredState {
-		fmt.Fprintf(h, "scale:%d\n", s.Scale)
-		// The update knobs change HOW we roll, not WHAT we roll to, so they
-		// must move Generation (the reconciler should notice) without moving
-		// TemplateGeneration (no instance needs replacing because the
-		// strategy changed).
-		strategy := ""
-		if s.UpdateStrategy != nil {
-			strategy = string(s.UpdateStrategy.Type)
-		}
-		fmt.Fprintf(h, "updateStrategy:%s\n", strategy)
-		if s.DrainSeconds != nil {
-			fmt.Fprintf(h, "drainSeconds:%d\n", *s.DrainSeconds)
-		} else {
-			fmt.Fprintf(h, "drainSeconds:nil\n")
+		if err := enc.Encode(s.desiredStateView()); err != nil {
+			panic(fmt.Sprintf("service desired-state hash: %v", err))
 		}
 	}
-	fmt.Fprintf(h, "runtime:%s\n", string(s.Runtime))
-
-	// Args
-	fmt.Fprintf(h, "args:[")
-	for i, arg := range s.Args {
-		if i > 0 {
-			fmt.Fprintf(h, ",")
-		}
-		fmt.Fprintf(h, "%s", arg)
-	}
-	fmt.Fprintf(h, "]\n")
-
-	// Environment variables
-	var envKeys []string
-	for k := range s.Env {
-		envKeys = append(envKeys, k)
-	}
-	sort.Strings(envKeys)
-
-	fmt.Fprintf(h, "env:{")
-	for i, k := range envKeys {
-		if i > 0 {
-			fmt.Fprintf(h, ",")
-		}
-		fmt.Fprintf(h, "%s:%s", k, s.Env[k])
-	}
-	fmt.Fprintf(h, "}\n")
-
-	// Ports
-	fmt.Fprintf(h, "ports:[")
-	for i, port := range s.Ports {
-		if i > 0 {
-			fmt.Fprintf(h, ",")
-		}
-		fmt.Fprintf(h, "%s:%d:%d:%s", port.Name, port.Port, port.TargetPort, port.Protocol)
-	}
-	fmt.Fprintf(h, "]\n")
-
-	// Resources (always include deterministically)
-	fmt.Fprintf(h, "cpu:%s:%s\n", s.Resources.CPU.Request, s.Resources.CPU.Limit)
-	fmt.Fprintf(h, "memory:%s:%s\n", s.Resources.Memory.Request, s.Resources.Memory.Limit)
-
-	// Health checks
-	if s.Health != nil {
-		if s.Health.Liveness != nil {
-			fmt.Fprintf(h, "liveness:%s:%s:%d:%d:%d:%d\n",
-				s.Health.Liveness.Type,
-				s.Health.Liveness.Path,
-				s.Health.Liveness.Port,
-				s.Health.Liveness.IntervalSeconds,
-				s.Health.Liveness.TimeoutSeconds,
-				s.Health.Liveness.FailureThreshold)
-			if len(s.Health.Liveness.Command) > 0 {
-				fmt.Fprintf(h, "liveness_cmd:[")
-				for i, cmd := range s.Health.Liveness.Command {
-					if i > 0 {
-						fmt.Fprintf(h, ",")
-					}
-					fmt.Fprintf(h, "%s", cmd)
-				}
-				fmt.Fprintf(h, "]\n")
-			}
-		}
-		if s.Health.Readiness != nil {
-			fmt.Fprintf(h, "readiness:%s:%s:%d:%d:%d:%d\n",
-				s.Health.Readiness.Type,
-				s.Health.Readiness.Path,
-				s.Health.Readiness.Port,
-				s.Health.Readiness.IntervalSeconds,
-				s.Health.Readiness.TimeoutSeconds,
-				s.Health.Readiness.FailureThreshold)
-			if len(s.Health.Readiness.Command) > 0 {
-				fmt.Fprintf(h, "readiness_cmd:[")
-				for i, cmd := range s.Health.Readiness.Command {
-					if i > 0 {
-						fmt.Fprintf(h, ",")
-					}
-					fmt.Fprintf(h, "%s", cmd)
-				}
-				fmt.Fprintf(h, "]\n")
-			}
-		}
-	} else {
-		// Explicitly include "no health checks" in the hash
-		fmt.Fprintf(h, "health:nil\n")
-	}
-
-	// Secret mounts (deterministic ordering)
-	if len(s.SecretMounts) == 0 {
-		fmt.Fprintf(h, "secret_mounts:[]\n")
-	} else {
-		// make a copy to avoid mutating original
-		secretMounts := make([]SecretMount, len(s.SecretMounts))
-		copy(secretMounts, s.SecretMounts)
-		sort.Slice(secretMounts, func(i, j int) bool {
-			if secretMounts[i].Name != secretMounts[j].Name {
-				return secretMounts[i].Name < secretMounts[j].Name
-			}
-			if secretMounts[i].MountPath != secretMounts[j].MountPath {
-				return secretMounts[i].MountPath < secretMounts[j].MountPath
-			}
-			return secretMounts[i].SecretName < secretMounts[j].SecretName
-		})
-		fmt.Fprintf(h, "secret_mounts:[")
-		for i, m := range secretMounts {
-			if i > 0 {
-				fmt.Fprintf(h, ",")
-			}
-			// sort items deterministically
-			items := make([]KeyToPath, len(m.Items))
-			copy(items, m.Items)
-			sort.Slice(items, func(a, b int) bool {
-				if items[a].Key != items[b].Key {
-					return items[a].Key < items[b].Key
-				}
-				return items[a].Path < items[b].Path
-			})
-			fmt.Fprintf(h, "%s:%s:%s:{", m.Name, m.MountPath, m.SecretName)
-			for k, it := range items {
-				if k > 0 {
-					fmt.Fprintf(h, ",")
-				}
-				fmt.Fprintf(h, "%s=%s", it.Key, it.Path)
-			}
-			fmt.Fprintf(h, "}")
-		}
-		fmt.Fprintf(h, "]\n")
-	}
-
-	// Configmap mounts (deterministic ordering)
-	if len(s.ConfigmapMounts) == 0 {
-		fmt.Fprintf(h, "configmap_mounts:[]\n")
-	} else {
-		cfgMounts := make([]ConfigmapMount, len(s.ConfigmapMounts))
-		copy(cfgMounts, s.ConfigmapMounts)
-		sort.Slice(cfgMounts, func(i, j int) bool {
-			if cfgMounts[i].Name != cfgMounts[j].Name {
-				return cfgMounts[i].Name < cfgMounts[j].Name
-			}
-			if cfgMounts[i].MountPath != cfgMounts[j].MountPath {
-				return cfgMounts[i].MountPath < cfgMounts[j].MountPath
-			}
-			return cfgMounts[i].ConfigmapName < cfgMounts[j].ConfigmapName
-		})
-		fmt.Fprintf(h, "configmap_mounts:[")
-		for i, m := range cfgMounts {
-			if i > 0 {
-				fmt.Fprintf(h, ",")
-			}
-			items := make([]KeyToPath, len(m.Items))
-			copy(items, m.Items)
-			sort.Slice(items, func(a, b int) bool {
-				if items[a].Key != items[b].Key {
-					return items[a].Key < items[b].Key
-				}
-				return items[a].Path < items[b].Path
-			})
-			fmt.Fprintf(h, "%s:%s:%s:{", m.Name, m.MountPath, m.ConfigmapName)
-			for k, it := range items {
-				if k > 0 {
-					fmt.Fprintf(h, ",")
-				}
-				fmt.Fprintf(h, "%s=%s", it.Key, it.Path)
-			}
-			fmt.Fprintf(h, "}")
-		}
-		fmt.Fprintf(h, "]\n")
-	}
-
-	// Volume mounts (deterministic ordering). Mutating any field here
-	// must roll instances — a changed mountPath, a changed claim
-	// reference, or a changed claimTemplate all need a fresh container.
-	if len(s.Volumes) == 0 {
-		fmt.Fprintf(h, "volumes:[]\n")
-	} else {
-		volMounts := make([]VolumeMount, len(s.Volumes))
-		copy(volMounts, s.Volumes)
-		sort.Slice(volMounts, func(i, j int) bool {
-			if volMounts[i].Name != volMounts[j].Name {
-				return volMounts[i].Name < volMounts[j].Name
-			}
-			return volMounts[i].MountPath < volMounts[j].MountPath
-		})
-		fmt.Fprintf(h, "volumes:[")
-		for i, m := range volMounts {
-			if i > 0 {
-				fmt.Fprintf(h, ",")
-			}
-			claimRef := ""
-			if m.Claim != nil {
-				claimRef = m.Claim.Name
-			}
-			tmpl := "nil"
-			if m.ClaimTemplate != nil {
-				// Hash-stable rendering: sort parameters by key.
-				keys := make([]string, 0, len(m.ClaimTemplate.Parameters))
-				for k := range m.ClaimTemplate.Parameters {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
-				params := ""
-				for j, k := range keys {
-					if j > 0 {
-						params += ","
-					}
-					params += k + "=" + m.ClaimTemplate.Parameters[k]
-				}
-				tmpl = fmt.Sprintf("{class:%s,size:%s,mode:%s,reclaim:%s,params:{%s}}",
-					m.ClaimTemplate.StorageClassName,
-					m.ClaimTemplate.Size,
-					m.ClaimTemplate.AccessMode,
-					m.ClaimTemplate.ReclaimPolicy,
-					params,
-				)
-			}
-			fmt.Fprintf(h, "%s:%s:ro=%t:sub=%s:claim=%s:tmpl=%s",
-				m.Name, m.MountPath, m.ReadOnly, m.SubPath, claimRef, tmpl)
-		}
-		fmt.Fprintf(h, "]\n")
-	}
-
-	// Add more fields as needed that should trigger reconciliation when changed
-
-	// Expose (deterministic)
-	if s.Expose == nil {
-		fmt.Fprintf(h, "expose:nil\n")
-	} else {
-		fmt.Fprintf(h, "expose:%s:%s:%s\n", s.Expose.Port, s.Expose.Host, s.Expose.Path)
-		if s.Expose.TLS == nil {
-			fmt.Fprintf(h, "expose.tls:nil\n")
-		} else {
-			fmt.Fprintf(h, "expose.tls:%s:%t\n", s.Expose.TLS.Secret, s.Expose.TLS.Auto)
-		}
-	}
-
-	// Dependencies (deterministic ordering)
-	if len(s.Dependencies) == 0 {
-		fmt.Fprintf(h, "dependencies:[]\n")
-	} else {
-		deps := make([]DependencyRef, len(s.Dependencies))
-		copy(deps, s.Dependencies)
-		sort.Slice(deps, func(i, j int) bool {
-			// order by namespace, then by type priority (service<configmap<secret), then name
-			if deps[i].Namespace != deps[j].Namespace {
-				return deps[i].Namespace < deps[j].Namespace
-			}
-			// type ordering
-			ti := deps[i].GetDependencyResourceType()
-			tj := deps[j].GetDependencyResourceType()
-			if ti != tj {
-				prio := func(rt ResourceType) int {
-					switch rt {
-					case ResourceTypeService:
-						return 0
-					case ResourceTypeConfigmap:
-						return 1
-					case ResourceTypeSecret:
-						return 2
-					default:
-						return 3
-					}
-				}
-				return prio(ti) < prio(tj)
-			}
-			// by name
-			return deps[i].GetDependencyResourceName() < deps[j].GetDependencyResourceName()
-		})
-		fmt.Fprintf(h, "dependencies:[")
-		for i, d := range deps {
-			if i > 0 {
-				fmt.Fprintf(h, ",")
-			}
-			fmt.Fprintf(h, "%s:%s:%s",
-				string(d.GetDependencyResourceType()),
-				d.Namespace,
-				d.GetDependencyResourceName(),
-			)
-		}
-		fmt.Fprintf(h, "]\n")
-	}
-
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func (s *Service) templateView() serviceTemplate {
+	res := s.Resources
+	if g := res.GPU; g != nil {
+		// A zero count means one device, so spelling out count: 1 must not
+		// replace anything. A nil request and an empty one stay distinct:
+		// no GPU versus one whole device.
+		res.GPU = &GPURequest{Count: g.DeviceCount(), VRAM: g.VRAM, AllowHeterogeneous: g.AllowHeterogeneous}
+	}
+	return serviceTemplate{
+		Image:           s.Image,
+		Command:         s.Command,
+		Args:            s.Args,
+		Env:             s.Env,
+		EnvFrom:         s.EnvFrom,
+		Runtime:         s.Runtime,
+		Process:         s.Process,
+		Ports:           s.Ports,
+		Resources:       res,
+		Health:          healthWithoutLivenessThreshold(s.Health),
+		SecretMounts:    sortedSecretMounts(s.SecretMounts),
+		ConfigmapMounts: sortedConfigmapMounts(s.ConfigmapMounts),
+		Volumes:         volumeMountShapes(s.Volumes),
+		InitSteps:       s.InitSteps,
+		SecurityContext: s.SecurityContext,
+	}
+}
+
+func (s *Service) desiredStateView() serviceDesiredState {
+	return serviceDesiredState{
+		Scale:              s.Scale,
+		UpdateStrategy:     s.UpdateStrategy,
+		DrainSeconds:       s.DrainSeconds,
+		ImageRegistry:      s.ImageRegistry,
+		Registry:           s.Registry,
+		ImagePull:          s.ImagePull,
+		ImagePullAnonymous: s.ImagePullAnonymous,
+		Labels:             s.Labels,
+		RestartPolicy:      s.RestartPolicy,
+		Expose:             s.Expose,
+		Dependencies:       sortedDependencies(s.Dependencies),
+		NetworkPolicy:      networkPolicyForHash(s.NetworkPolicy),
+		Discovery:          discoveryWithoutVIP(s.Discovery),
+		LivenessFailures:   livenessThreshold(s.Health),
+		ClaimTemplates:     claimTemplates(s.Volumes),
+		Affinity:           s.Affinity,
+		Autoscale:          s.Autoscale,
+	}
+}
+
+// networkPolicyForHash turns empty peer lists into nil. Their JSON has no
+// omitempty, and the proto conversion returns [] where a cast spec has nil.
+func networkPolicyForHash(np *ServiceNetworkPolicy) *ServiceNetworkPolicy {
+	if np == nil || (len(np.Ingress) == 0 && len(np.Egress) == 0) {
+		return nil
+	}
+	out := &ServiceNetworkPolicy{}
+	for _, r := range np.Ingress {
+		if len(r.From) == 0 {
+			r.From = nil
+		}
+		out.Ingress = append(out.Ingress, r)
+	}
+	for _, r := range np.Egress {
+		if len(r.To) == 0 {
+			r.To = nil
+		}
+		out.Egress = append(out.Egress, r)
+	}
+	return out
+}
+
+func healthWithoutLivenessThreshold(h *HealthCheck) *HealthCheck {
+	if h == nil || h.Liveness == nil {
+		return h
+	}
+	out := *h
+	live := *h.Liveness
+	live.FailureThreshold = 0
+	out.Liveness = &live
+	return &out
+}
+
+func livenessThreshold(h *HealthCheck) int {
+	if h == nil || h.Liveness == nil {
+		return 0
+	}
+	return h.Liveness.FailureThreshold
+}
+
+// volumeMountShapes keeps whether a mount uses a claim template, but not the
+// template itself.
+func volumeMountShapes(mounts []VolumeMount) []VolumeMount {
+	out := sortedVolumeMounts(mounts)
+	for i := range out {
+		if out[i].ClaimTemplate != nil {
+			out[i].ClaimTemplate = &VolumeClaimTemplate{}
+		}
+	}
+	return out
+}
+
+func claimTemplates(mounts []VolumeMount) []VolumeMount {
+	var out []VolumeMount
+	for _, m := range sortedVolumeMounts(mounts) {
+		if m.ClaimTemplate != nil {
+			out = append(out, VolumeMount{Name: m.Name, MountPath: m.MountPath, ClaimTemplate: m.ClaimTemplate})
+		}
+	}
+	return out
+}
+
+// discoveryWithoutVIP drops the VIP, which the server assigns: a rendered
+// spec never carries it, so hashing it would move Generation on every cast.
+func discoveryWithoutVIP(d *ServiceDiscovery) *ServiceDiscovery {
+	if d == nil {
+		return nil
+	}
+	out := *d
+	out.VIP = ""
+	if out == (ServiceDiscovery{}) {
+		return nil
+	}
+	return &out
+}
+
+func sortedKeyToPaths(items []KeyToPath) []KeyToPath {
+	out := append([]KeyToPath(nil), items...)
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].Key != out[b].Key {
+			return out[a].Key < out[b].Key
+		}
+		return out[a].Path < out[b].Path
+	})
+	return out
+}
+
+func sortedSecretMounts(mounts []SecretMount) []SecretMount {
+	out := make([]SecretMount, len(mounts))
+	for i, m := range mounts {
+		m.Items = sortedKeyToPaths(m.Items)
+		out[i] = m
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		if out[i].MountPath != out[j].MountPath {
+			return out[i].MountPath < out[j].MountPath
+		}
+		return out[i].SecretName < out[j].SecretName
+	})
+	return out
+}
+
+func sortedConfigmapMounts(mounts []ConfigmapMount) []ConfigmapMount {
+	out := make([]ConfigmapMount, len(mounts))
+	for i, m := range mounts {
+		m.Items = sortedKeyToPaths(m.Items)
+		out[i] = m
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		if out[i].MountPath != out[j].MountPath {
+			return out[i].MountPath < out[j].MountPath
+		}
+		return out[i].ConfigmapName < out[j].ConfigmapName
+	})
+	return out
+}
+
+func sortedVolumeMounts(mounts []VolumeMount) []VolumeMount {
+	out := append([]VolumeMount(nil), mounts...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].MountPath < out[j].MountPath
+	})
+	return out
+}
+
+func sortedDependencies(deps []DependencyRef) []DependencyRef {
+	out := append([]DependencyRef(nil), deps...)
+	prio := func(rt ResourceType) int {
+		switch rt {
+		case ResourceTypeService:
+			return 0
+		case ResourceTypeConfigmap:
+			return 1
+		case ResourceTypeSecret:
+			return 2
+		default:
+			return 3
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		ti, tj := out[i].GetDependencyResourceType(), out[j].GetDependencyResourceType()
+		if ti != tj {
+			return prio(ti) < prio(tj)
+		}
+		return out[i].GetDependencyResourceName() < out[j].GetDependencyResourceName()
+	})
+	return out
 }
 
 // Validate validates the health check configuration.
