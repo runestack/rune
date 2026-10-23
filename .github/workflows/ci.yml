@@ -4,8 +4,8 @@ on:
   # push on default branches only; PR updates use pull_request (avoids double runs)
   push:
     branches: [ main, master, dev ]
+  # Any base branch, so PRs stacked on another PR get CI too.
   pull_request:
-    branches: [ main, master, dev, 'feat/**' ]
   workflow_dispatch:
 
 jobs:
