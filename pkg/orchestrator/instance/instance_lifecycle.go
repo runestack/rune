@@ -165,6 +165,13 @@ func (c *Controller) RetryCreateInstance(ctx context.Context, service *types.Ser
 		log.Str("id", instance.ID),
 		log.Int("attempt", instance.CreateAttempts+1))
 
+	// A previous attempt that failed at Start left its container behind.
+	// Remove it, or every retry adds another container for the same
+	// instance and lookups by instance label pick one arbitrarily.
+	if instance.ContainerID != "" {
+		c.removeFailedAttemptContainer(ctx, instance)
+	}
+
 	applyInstanceStatus(instance, types.InstanceStatusPending, "", "")
 	instance.NextCreateAttemptAt = nil
 	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
@@ -268,6 +275,13 @@ func (c *Controller) runCreateAttempt(ctx context.Context, service *types.Servic
 		instance.ContainerEverCreatedAt = &now
 	}
 
+	// Persist ContainerID on its own before Start: a Start failure replaces
+	// the in-memory record with the stored one, and without the ID the next
+	// retry cannot find this container to remove it. The stamp above stays
+	// in memory only — persisting it would turn a stuck-in-create record
+	// into a broken one that is torn down and recreated every tick.
+	c.persistContainerID(ctx, instance)
+
 	// Start the instance
 	if err := serviceRunner.Start(ctx, instance); err != nil {
 		wrapped := fmt.Errorf("failed to start instance: %w", err)
@@ -311,6 +325,37 @@ func (c *Controller) runCreateAttempt(ctx context.Context, service *types.Servic
 	c.republishLocalInstances(ctx)
 
 	return nil
+}
+
+func (c *Controller) persistContainerID(ctx context.Context, instance *types.Instance) {
+	if instance.ContainerID == "" {
+		return
+	}
+	var fresh types.Instance
+	if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, &fresh, func() error {
+		fresh.ContainerID = instance.ContainerID
+		return nil
+	}, store.WithReconciler()); err != nil {
+		c.logger.Warn("Failed to persist container ID",
+			log.Str("instance", instance.ID),
+			log.Str("container_id", instance.ContainerID),
+			log.Err(err))
+	}
+}
+
+func (c *Controller) removeFailedAttemptContainer(ctx context.Context, instance *types.Instance) {
+	r, err := c.runnerManager.GetInstanceRunner(instance)
+	if err == nil {
+		err = r.Remove(ctx, instance, true)
+	}
+	if err != nil {
+		c.logger.Warn("Failed to remove container from failed create attempt",
+			log.Str("instance", instance.ID),
+			log.Str("container_id", instance.ContainerID),
+			log.Err(err))
+		return
+	}
+	instance.ContainerID = ""
 }
 
 // RecreateInstance destroys an existing instance and creates a new one with the same name

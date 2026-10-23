@@ -1,9 +1,13 @@
 package instance
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/runner/manager"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -182,4 +186,56 @@ func TestSnapshotInstanceLogs_NoOpForNeverCreated(t *testing.T) {
 	cc.snapshotInstanceLogs(ctx, rec)
 
 	assert.Empty(t, rec.LastLogs, "stuck-in-create records (no container) must not trigger a runner.GetLogs call")
+}
+
+// startFailingRunner creates a container (with an ID) on every Create and
+// fails every Start, tracking which containers still exist.
+type startFailingRunner struct {
+	*runner.TestRunner
+	created int
+	live    map[string]bool
+}
+
+func (r *startFailingRunner) Create(_ context.Context, instance *types.Instance) error {
+	r.created++
+	instance.ContainerID = fmt.Sprintf("container-%d", r.created)
+	r.live[instance.ContainerID] = true
+	return nil
+}
+
+func (r *startFailingRunner) Start(context.Context, *types.Instance) error {
+	return assert.AnError
+}
+
+func (r *startFailingRunner) Remove(_ context.Context, instance *types.Instance, _ bool) error {
+	delete(r.live, instance.ContainerID)
+	return nil
+}
+
+// A Start failure must not lose the container ID: retries would otherwise
+// create one more container per attempt for the same instance.
+func TestRetryCreateInstance_StartFailureDoesNotAccumulateContainers(t *testing.T) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+
+	r := &startFailingRunner{TestRunner: runner.NewTestRunner(), live: map[string]bool{}}
+	mgr := manager.NewTestRunnerManager(nil)
+	mgr.SetDockerRunner(r)
+	mgr.SetProcessRunner(r)
+	controller.runnerManager = mgr
+
+	_, err := controller.CreateInstance(ctx, service, "test-instance-0", 0)
+	require.Error(t, err)
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		var stored []types.Instance
+		require.NoError(t, testStore.List(ctx, types.ResourceTypeInstance, "default", &stored))
+		require.Len(t, stored, 1)
+		rec := stored[0]
+		assert.Equal(t, fmt.Sprintf("container-%d", attempt), rec.ContainerID, "attempt %d: container ID persisted", attempt)
+		assert.Nil(t, rec.ContainerEverCreatedAt, "attempt %d: must stay stuck-in-create, not broken", attempt)
+		assert.Len(t, r.live, 1, "attempt %d: one container per instance", attempt)
+
+		require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	}
 }
