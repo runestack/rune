@@ -297,7 +297,7 @@ type ResolvedConfigmapMount struct {
 // in-tree "local" driver that's the managed directory under
 // localVolumeRoot; for "local-host" it's the operator-declared host path;
 // for cloud block-device drivers it would be the agent's per-volume mount
-// target under /var/lib/rune/mounts/<volume-id>/.
+// target under /var/lib/rune/mounts/<namespace>/<volume-id>/.
 type ResolvedVolumeMount struct {
 	// Name is the mount's service-local identifier (matches
 	// Service.VolumeMount.Name).
