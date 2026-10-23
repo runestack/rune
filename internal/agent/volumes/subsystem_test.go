@@ -1078,19 +1078,73 @@ func TestSubsystem_LegacyPathHeldByOtherDisk(t *testing.T) {
 
 // An old-layout volume whose ID matches a namespace name occupies that
 // namespace's directory. Mounting under it would write into that disk, so
-// bring-up refuses, and leaves the device attached in case it is in use.
+// bring-up refuses. The disk is detached only if it is mounted nowhere.
 func TestSubsystem_RefusesTargetInsideOldMount(t *testing.T) {
-	sub, _, drv := newSubsystem(t, "node-a")
-	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
-	sub.cfg.MountTable = fakeMountTable{
-		stacks: map[string][]mountinfo.Dev{filepath.Join(sub.cfg.MountRoot, "prod"): {{Major: 8, Minor: 48}}},
+	for _, mountedElsewhere := range []bool{false, true} {
+		sub, _, drv := newSubsystem(t, "node-a")
+		vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+		dev := mountinfo.Dev{Major: 8, Minor: 16}
+		stacks := map[string][]mountinfo.Dev{filepath.Join(sub.cfg.MountRoot, "prod"): {{Major: 8, Minor: 48}}}
+		if mountedElsewhere {
+			stacks["/elsewhere"] = []mountinfo.Dev{dev}
+		}
+		sub.cfg.MountTable = fakeMountTable{stacks: stacks, devs: map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev}}
+		err := sub.reconcile(context.Background(), vol)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is a mount point")
+		_, d, m, _ := drv.snapshot()
+		assert.Zero(t, m)
+		if mountedElsewhere {
+			assert.Zero(t, d, "a disk mounted elsewhere stays attached")
+		} else {
+			assert.Equal(t, 1, d, "a disk mounted nowhere is not left attached")
+		}
+		_, ok := sub.MountTargetFor(vol.MountKey())
+		assert.False(t, ok)
 	}
-	err := sub.reconcile(context.Background(), vol)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is a mount point")
-	_, d, m, _ := drv.snapshot()
-	assert.Zero(t, m)
-	assert.Zero(t, d)
-	_, ok := sub.MountTargetFor(vol.MountKey())
-	assert.False(t, ok)
+}
+
+// A disk whose teardown was refused because it is still mounted is not
+// forgotten: once the disk above it is unmounted, the retry tick unmounts
+// its leftover old-path mount and detaches it.
+func TestSubsystem_ParkedDiskDetachedOnRetry(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	const id = "mongodb-data-mongodb-0"
+	prod := boundVolume(id, "prod", id, "node-a")
+	root := sub.cfg.MountRoot
+	legacy := filepath.Join(root, id)
+	prodDev, trialDev := mountinfo.Dev{Major: 8, Minor: 16}, mountinfo.Dev{Major: 8, Minor: 32}
+	table := fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{legacy: {prodDev, trialDev}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + prod.Handle: prodDev},
+	}
+	sub.cfg.MountTable = table
+	require.NoError(t, sub.reconcile(ctx, prod))
+
+	prod.BoundNode = "node-b" // unbound from this node
+	require.Error(t, sub.reconcile(ctx, prod))
+	_, d, _, _ := drv.snapshot()
+	require.Zero(t, d)
+
+	sub.retryParked(ctx) // still buried: nothing happens
+	_, d, _, _ = drv.snapshot()
+	require.Zero(t, d)
+
+	// trial's disk goes; prod's is now the visible mount at the old path.
+	table.stacks[legacy] = []mountinfo.Dev{prodDev}
+	sub.retryParked(ctx)
+	drv.mu.Lock()
+	unmounted := append([]driver.MountTarget(nil), drv.unmountCalls...)
+	drv.mu.Unlock()
+	assert.Contains(t, unmounted, driver.MountTarget(legacy), "the leftover old-path mount is unmounted")
+	// The static fake still lists the old path, so the detach is still
+	// refused here; on a real host the unmount clears it.
+	delete(table.stacks, legacy)
+	sub.retryParked(ctx)
+	_, d, _, _ = drv.snapshot()
+	assert.Equal(t, 1, d)
+	sub.stateMu.RLock()
+	assert.Empty(t, sub.parked)
+	sub.stateMu.RUnlock()
 }
