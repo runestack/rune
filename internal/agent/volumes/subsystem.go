@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,14 +118,17 @@ type Config struct {
 type MountTable interface {
 	// Stack returns the devices mounted exactly at path, bottom first.
 	Stack(path string) ([]mountinfo.Dev, error)
+	// MountPoints returns every path a device is mounted at.
+	MountPoints(dev mountinfo.Dev) ([]string, error)
 	// DeviceOf returns the device number of a block device node.
 	DeviceOf(dev string) (mountinfo.Dev, error)
 }
 
 type hostMountTable struct{}
 
-func (hostMountTable) Stack(path string) ([]mountinfo.Dev, error) { return mountinfo.Stack(path) }
-func (hostMountTable) DeviceOf(dev string) (mountinfo.Dev, error) { return mountinfo.DeviceOf(dev) }
+func (hostMountTable) Stack(path string) ([]mountinfo.Dev, error)    { return mountinfo.Stack(path) }
+func (hostMountTable) MountPoints(d mountinfo.Dev) ([]string, error) { return mountinfo.MountPoints(d) }
+func (hostMountTable) DeviceOf(dev string) (mountinfo.Dev, error)    { return mountinfo.DeviceOf(dev) }
 
 // Subsystem implements the agent.Subsystem contract:
 //
@@ -175,6 +179,9 @@ type trackedMount struct {
 	// Handle is the opaque driver handle copied from Volume.Handle at
 	// mount time.
 	Handle driver.VolumeHandle
+	// Device is the device path Attach returned, so tearDown can check
+	// whether the disk is still mounted elsewhere before detaching it.
+	Device driver.DevicePath
 	// Target is the mount target the driver returned (drivers may
 	// rewrite the proposed target).
 	Target driver.MountTarget
@@ -658,7 +665,11 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	if err != nil {
 		// Best-effort detach so we don't leave a half-attached
 		// device behind for the next reconcile.
-		if derr := drv.Detach(ctx, opctx, handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
+		if where := s.stillMounted(dev); len(where) > 0 {
+			s.log.Warn("Not detaching after failed Mount: the disk is mounted elsewhere",
+				log.Str("volume_id", id),
+				log.Str("mounted_at", strings.Join(where, ", ")))
+		} else if derr := drv.Detach(ctx, opctx, handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
 			s.log.Warn("Detach after failed Mount also failed",
 				log.Str("volume_id", id),
 				log.Err(derr))
@@ -669,6 +680,7 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	s.mounts[id] = trackedMount{
 		Driver:        drv,
 		Handle:        handle,
+		Device:        dev,
 		Target:        got,
 		OpCtx:         opctx,
 		RawParameters: rawParams,
@@ -696,6 +708,15 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 // wrong namespace's volume.
 func (s *Subsystem) mountTarget(vol *types.Volume, key string, dev driver.DevicePath) (driver.MountTarget, error) {
 	target := filepath.Join(s.cfg.MountRoot, key)
+	// Already on the new path (runed restarted without draining): stay
+	// there, even if the old path has since become free.
+	if dev != "" {
+		if own, err := s.cfg.MountTable.DeviceOf(string(dev)); err == nil {
+			if stack, err := s.cfg.MountTable.Stack(target); err == nil && len(stack) > 0 && stack[len(stack)-1] == own {
+				return driver.MountTarget(target), nil
+			}
+		}
+	}
 	if legacy, ok := s.legacyTarget(vol, key, dev); ok {
 		return driver.MountTarget(legacy), nil
 	}
@@ -740,15 +761,37 @@ func (s *Subsystem) legacyTarget(vol *types.Volume, key string, dev driver.Devic
 		return legacy, true
 	case pos == top:
 		s.log.Error("Several disks are mounted on one volume path; this volume's is on top. "+
-			"Containers started before it was mounted there may be using a disk from another namespace: restart them",
+			"Containers started before it was mounted there may be using a disk from another namespace: replace them with rune restart",
 			log.Str("volume_id", key), log.Str("path", legacy), log.Int("disks", len(stack)))
 		return legacy, true
 	case pos >= 0:
 		s.log.Error("This volume's disk is mounted at its old path, but another disk was mounted over it. "+
-			"Containers started since then that use this path see the other disk: restart them",
+			"Containers started since then that use this path see the other disk: replace them with rune restart. "+
+			"The disk stays attached until its old mount is gone",
 			log.Str("volume_id", key), log.Str("path", legacy), log.Int("disks", len(stack)))
 	}
 	return "", false
+}
+
+// stillMounted returns the paths dev is still mounted at on this host.
+// A disk can be mounted at two paths: one buried under another
+// namespace's disk at its old path, and one at its namespaced path.
+// Unmounting the second must not detach a disk the first still holds.
+// It answers only on positive evidence; if the device or the mount
+// table cannot be read it returns nothing and the detach goes ahead.
+func (s *Subsystem) stillMounted(dev driver.DevicePath) []string {
+	if dev == "" {
+		return nil
+	}
+	d, err := s.cfg.MountTable.DeviceOf(string(dev))
+	if err != nil {
+		return nil
+	}
+	where, err := s.cfg.MountTable.MountPoints(d)
+	if err != nil {
+		return nil
+	}
+	return where
 }
 
 // tearDown is the inverse: Unmount then Detach. Both are required to
@@ -780,9 +823,19 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) (de
 	var firstErr error
 	if uerr := m.Driver.Unmount(ctx, opctx, m.Target); uerr != nil {
 		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, uerr)
-		s.log.Warn("Unmount failed; will still attempt Detach",
+		s.log.Warn("Unmount failed",
 			log.Str("volume_id", id),
 			log.Err(uerr))
+	}
+	if where := s.stillMounted(m.Device); len(where) > 0 {
+		err := fmt.Errorf("agent.volumes: not detaching %s: its disk is still mounted at %s", id, strings.Join(where, ", "))
+		s.log.Error("Not detaching volume: its disk is still mounted",
+			log.Str("volume_id", id),
+			log.Str("mounted_at", strings.Join(where, ", ")))
+		if firstErr == nil {
+			firstErr = err
+		}
+		return false, firstErr
 	}
 	if derr := m.Driver.Detach(ctx, opctx, m.Handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
 		if firstErr == nil {

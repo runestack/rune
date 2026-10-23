@@ -47,3 +47,13 @@ func TestParseStack_Malformed(t *testing.T) {
 	_, err := parseStack(strings.NewReader("garbage\n"), "/m")
 	assert.Error(t, err)
 }
+
+func TestParseMountPoints(t *testing.T) {
+	got, err := parseMountPoints(strings.NewReader(table+"70 22 8:16 / /var/lib/rune/mounts/prod/data2 rw - ext4 /dev/sdb rw\n"), Dev{8, 16})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/var/lib/rune/mounts/data", "/var/lib/rune/mounts/prod/data2"}, got)
+
+	got, err = parseMountPoints(strings.NewReader(table), Dev{9, 9})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}

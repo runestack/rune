@@ -10,4 +10,6 @@ var ErrUnsupported = errors.New("mountinfo: not supported on this platform")
 
 func Stack(string) ([]Dev, error) { return nil, ErrUnsupported }
 
+func MountPoints(Dev) ([]string, error) { return nil, ErrUnsupported }
+
 func DeviceOf(string) (Dev, error) { return Dev{}, ErrUnsupported }
