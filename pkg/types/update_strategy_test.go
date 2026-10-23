@@ -84,6 +84,19 @@ func TestIsSurgeCapable(t *testing.T) {
 		assert.False(t, s.IsSurgeCapable(), "the replacement would have to mount the outgoing instance's volume")
 	})
 
+	t.Run("writable claim volume cannot", func(t *testing.T) {
+		s := base()
+		s.Volumes = []VolumeMount{{Name: "data", MountPath: "/data", Claim: &VolumeClaim{Name: "data"}}}
+		assert.False(t, s.IsSurgeCapable(), "the replacement would write to the volume the outgoing instance still writes")
+		assert.Equal(t, "a writable claim volume", surgeBlocker(s))
+	})
+
+	t.Run("read-only claim volume can", func(t *testing.T) {
+		s := base()
+		s.Volumes = []VolumeMount{{Name: "data", MountPath: "/data", ReadOnly: true, Claim: &VolumeClaim{Name: "data"}}}
+		assert.True(t, s.IsSurgeCapable(), "two readers cannot corrupt a volume")
+	})
+
 	t.Run("hostPort cannot", func(t *testing.T) {
 		s := base()
 		s.Ports = []ServicePort{{Name: "http", Port: 80, HostPort: 8080}}
@@ -117,6 +130,13 @@ func TestResolveUpdateParams_ExtraAndDipAreCoupled(t *testing.T) {
 		p := (&Service{Runtime: RuntimeTypeProcess, Scale: 4}).ResolveUpdateParams()
 		assert.Equal(t, 0, p.Extra)
 		assert.Equal(t, 1, p.Dip, "retiring before creating is the only way to make progress")
+	})
+
+	t.Run("scale-1 writable claim retires before it creates", func(t *testing.T) {
+		p := (&Service{Runtime: RuntimeTypeContainer, Scale: 1,
+			Volumes: []VolumeMount{{Name: "d", MountPath: "/d", Claim: &VolumeClaim{Name: "d"}}}}).ResolveUpdateParams()
+		assert.Equal(t, 0, p.Extra, "a second writer on the claim during the overlap")
+		assert.Equal(t, 1, p.Dip)
 	})
 
 	t.Run("never both zero", func(t *testing.T) {
@@ -356,6 +376,11 @@ func TestMinServing_RejectsTheDeadlockCombination(t *testing.T) {
 			Volumes:        []VolumeMount{{Name: "d", MountPath: "/d", ClaimTemplate: &VolumeClaimTemplate{}}},
 			UpdateStrategy: &UpdateStrategy{MinServing: &seven},
 		}, "claimTemplate volume"},
+		{"writable claim volume", &Service{
+			ID: "x", Name: "db", Runtime: RuntimeTypeContainer, Scale: 7,
+			Volumes:        []VolumeMount{{Name: "d", MountPath: "/d", Claim: &VolumeClaim{Name: "d"}}},
+			UpdateStrategy: &UpdateStrategy{MinServing: &seven},
+		}, "writable claim volume"},
 		{"hostPort", &Service{
 			ID: "x", Name: "edge", Runtime: RuntimeTypeContainer, Scale: 7,
 			Ports:          []ServicePort{{Name: "h", Port: 80, HostPort: 8080}},
