@@ -116,9 +116,9 @@ func NewController(logger log.Logger, store store.Store, runnerManager manager.I
 		logger:             logger.WithComponent("health-controller"),
 		instances:          make(map[string]*instanceHealth),
 		instanceController: instanceController,
-		client: &http.Client{
-			Timeout: 5 * time.Second,
-		},
+		// No client-wide timeout: each probe request carries its own
+		// deadline from timeoutSeconds, which a shorter cap here would cut.
+		client:        &http.Client{},
 		store:         store,
 		runnerManager: runnerManager,
 	}
@@ -605,7 +605,7 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 
 			c.logger.Warn("Liveness check failed",
 				log.Str("instance", instanceID),
-				log.Str("message", result.Message),
+				log.Str("reason", result.Message),
 				log.Int("consecutive_failures", ih.consecutiveFailures),
 				log.Duration("duration", result.Duration))
 
@@ -675,7 +675,7 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 		} else {
 			c.logger.Warn("Readiness check failed",
 				log.Str("instance", instanceID),
-				log.Str("message", result.Message),
+				log.Str("reason", result.Message),
 				log.Duration("duration", result.Duration))
 		}
 	}

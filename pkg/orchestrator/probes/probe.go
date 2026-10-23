@@ -11,6 +11,16 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
+// defaultProbeTimeout applies to every probe type when timeoutSeconds is unset.
+const defaultProbeTimeout = 5 * time.Second
+
+func probeTimeout(p *types.Probe) time.Duration {
+	if t := time.Duration(p.TimeoutSeconds) * time.Second; t > 0 {
+		return t
+	}
+	return defaultProbeTimeout
+}
+
 // ProbeResult represents the result of a health check probe
 type ProbeResult struct {
 	Success  bool
@@ -101,11 +111,7 @@ func (p *ExecProber) Execute(ctx *ProbeContext) ProbeResult {
 	// (e.g. mongosh, a Node.js binary that needs ~1-2s to boot) would
 	// otherwise be checked once, found "still running", and scored a
 	// false failure. The context also caps ExitCode()'s wait loop.
-	timeout := time.Duration(ctx.ProbeConfig.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
-	execCtx, cancel := context.WithTimeout(ctx.Ctx, timeout)
+	execCtx, cancel := context.WithTimeout(ctx.Ctx, probeTimeout(ctx.ProbeConfig))
 	defer cancel()
 
 	// Execute the command

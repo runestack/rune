@@ -35,10 +35,13 @@ func (f *JSONFormatter) Format(entry *Entry) ([]byte, error) {
 		data["caller"] = entry.Caller
 	}
 
-	// Add fields
+	// A field named like a standard key is kept under "fields.<key>" rather
+	// than dropped, so a caller's choice of key cannot lose the value.
 	for k, v := range entry.Fields {
-		// Don't overwrite standard fields
-		if k != "timestamp" && k != "level" && k != "message" && k != "caller" {
+		switch k {
+		case "timestamp", "level", "message", "caller":
+			data["fields."+k] = v
+		default:
 			data[k] = v
 		}
 	}

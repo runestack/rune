@@ -1,6 +1,7 @@
 package probes
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -24,8 +25,9 @@ func (p *HTTPProber) Execute(ctx *ProbeContext) ProbeResult {
 	endpoint := fmt.Sprintf("http://%s:%d", host, ctx.ProbeConfig.Port)
 	url := fmt.Sprintf("%s%s", endpoint, ctx.ProbeConfig.Path)
 
-	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx.Ctx, "GET", url, nil)
+	reqCtx, cancel := context.WithTimeout(ctx.Ctx, probeTimeout(ctx.ProbeConfig))
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
 	if err != nil {
 		return ProbeResult{
 			Success:  false,

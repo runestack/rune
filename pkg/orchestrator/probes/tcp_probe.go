@@ -19,7 +19,8 @@ func (p *TCPProber) Execute(ctx *ProbeContext) ProbeResult {
 	host := probeHost(ctx.ProbeConfig, ctx.Instance)
 
 	// Attempt to establish TCP connection
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, ctx.ProbeConfig.Port), 5*time.Second)
+	dialer := net.Dialer{Timeout: probeTimeout(ctx.ProbeConfig)}
+	conn, err := dialer.DialContext(ctx.Ctx, "tcp", fmt.Sprintf("%s:%d", host, ctx.ProbeConfig.Port))
 	if err != nil {
 		return ProbeResult{
 			Success:  false,
