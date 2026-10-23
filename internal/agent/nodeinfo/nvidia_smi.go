@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -90,6 +91,13 @@ func (p nvidiaSMIProvider) Probe(ctx context.Context) ([]types.GPUDevice, error)
 	return devices, nil
 }
 
+// gpuUUID is the shape nvidia-smi gives a physical GPU's UUID. The value
+// flows into DeviceRequests.DeviceIDs and NVIDIA_VISIBLE_DEVICES, where
+// "all", "none" and "void" are keywords and a comma splits one entry into
+// two, so anything else would widen or redirect a container's device grant.
+// --query-gpu never reports MIG devices, so the MIG- form is not accepted.
+var gpuUUID = regexp.MustCompile(`^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 // parseNVIDIACSV turns `--format=csv,noheader,nounits` rows into devices.
 // Field order is nvidiaSMIQuery's; a row that does not match is an error,
 // not a skip, because CSV drift on a new driver version is one of the
@@ -115,6 +123,9 @@ func parseNVIDIACSV(out string) ([]types.GPUDevice, error) {
 		uuid := strings.TrimSpace(rec[0])
 		if uuid == "" {
 			return nil, fmt.Errorf("nvidia-smi CSV: device with empty uuid")
+		}
+		if !gpuUUID.MatchString(uuid) {
+			return nil, fmt.Errorf("nvidia-smi CSV: uuid %q is not a GPU UUID", uuid)
 		}
 		index, err := strconv.Atoi(strings.TrimSpace(rec[1]))
 		if err != nil {
