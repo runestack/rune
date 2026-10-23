@@ -140,57 +140,73 @@ func Prepare(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live Li
 
 	applies, prunes := splitForExecution(plan)
 
-	exec := func(ctx context.Context, applier Applier) (*types.Release, error) {
-		// done logs every change in execution order so atomic rollback can
-		// revert in reverse. The failing change is included: it may have
-		// half-applied, and Revert tolerates a change that never landed.
-		var done []PlannedChange
-
-		fail := func(cause error) (*types.Release, error) {
-			if spec.Atomic {
-				if rerr := revertChanges(ctx, applier, done); rerr != nil {
-					cause = errors.Join(cause,
-						fmt.Errorf("atomic rollback incomplete: %w", rerr))
-				} else {
-					// Live state is back to the previous revision's; make the
-					// failed record's owned set reflect that reality.
-					if prev != nil {
-						rel.Owns, rel.References = prev.Owns, prev.References
-					} else {
-						rel.Owns, rel.References = nil, nil
-					}
-					cause = fmt.Errorf("%w (atomic: this revision's changes were rolled back)", cause)
-				}
-			}
-			return failRelease(ctx, recs, rel, cause)
-		}
-
-		// Apply create/update/adopt/reference in dependency order.
-		for _, change := range applies {
-			done = append(done, change)
-			if err := applier.Apply(ctx, change); err != nil {
-				return fail(err)
-			}
-		}
-		// Verify owned resources are healthy before any destructive step.
-		if err := applier.Verify(ctx, owns); err != nil {
-			return fail(err)
-		}
-		// Prune last (never reached on a failed apply/verify).
-		for _, change := range prunes {
-			done = append(done, change)
-			if err := applier.Prune(ctx, change.Ref); err != nil {
-				return fail(err)
-			}
-		}
-		rel.Status = types.ReleaseStatusDeployed
-		if err := recs.Save(ctx, rel); err != nil {
-			return rel, err
-		}
-		return rel, nil
+	exec := &execution{
+		spec: spec, recs: recs, rel: rel, prev: prev, owns: owns,
+		applies: applies, prunes: prunes,
 	}
 
-	return &PreparedCast{Release: rel, Plan: plan, Execute: exec}, nil
+	return &PreparedCast{Release: rel, Plan: plan, Execute: exec.run}, nil
+}
+
+// execution is a prepared cast's apply → verify → prune-last run.
+type execution struct {
+	spec    ReleaseSpec
+	recs    ReleaseRecords
+	rel     *types.Release
+	prev    *types.Release
+	owns    []types.OwnerRef
+	applies []PlannedChange
+	prunes  []PlannedChange
+}
+
+func (e *execution) run(ctx context.Context, applier Applier) (*types.Release, error) {
+	// done logs every change in execution order so atomic rollback can
+	// revert in reverse. The failing change is included: it may have
+	// half-applied, and Revert tolerates a change that never landed.
+	var done []PlannedChange
+
+	// Apply create/update/adopt/reference in dependency order.
+	for _, change := range e.applies {
+		done = append(done, change)
+		if err := applier.Apply(ctx, change); err != nil {
+			return e.fail(ctx, applier, done, err)
+		}
+	}
+	// Verify owned resources are healthy before any destructive step.
+	if err := applier.Verify(ctx, e.owns); err != nil {
+		return e.fail(ctx, applier, done, err)
+	}
+	// Prune last (never reached on a failed apply/verify).
+	for _, change := range e.prunes {
+		done = append(done, change)
+		if err := applier.Prune(ctx, change.Ref); err != nil {
+			return e.fail(ctx, applier, done, err)
+		}
+	}
+	e.rel.Status = types.ReleaseStatusDeployed
+	if err := e.recs.Save(ctx, e.rel); err != nil {
+		return e.rel, err
+	}
+	return e.rel, nil
+}
+
+func (e *execution) fail(ctx context.Context, applier Applier, done []PlannedChange, cause error) (*types.Release, error) {
+	if e.spec.Atomic {
+		if rerr := revertChanges(ctx, applier, done); rerr != nil {
+			cause = errors.Join(cause,
+				fmt.Errorf("atomic rollback incomplete: %w", rerr))
+		} else {
+			// Live state is back to the previous revision's; make the
+			// failed record's owned set reflect that reality.
+			if e.prev != nil {
+				e.rel.Owns, e.rel.References = e.prev.Owns, e.prev.References
+			} else {
+				e.rel.Owns, e.rel.References = nil, nil
+			}
+			cause = fmt.Errorf("%w (atomic: this revision's changes were rolled back)", cause)
+		}
+	}
+	return failRelease(ctx, e.recs, e.rel, cause)
 }
 
 // Reconcile executes a release spec end to end (synchronous):
