@@ -199,6 +199,9 @@ type startFailingRunner struct {
 	running   map[string]bool
 	removeErr error
 	removed   []string
+	// healIP, when set, makes Status behave like the docker runner's
+	// label self-heal: it rewrites the instance's IP.
+	healIP string
 }
 
 func newStartFailingRunner() *startFailingRunner {
@@ -217,6 +220,9 @@ func (r *startFailingRunner) Start(context.Context, *types.Instance) error {
 }
 
 func (r *startFailingRunner) Status(_ context.Context, instance *types.Instance) (types.InstanceStatus, error) {
+	if r.healIP != "" && instance.Metadata != nil {
+		instance.Metadata.ContainerIP = r.healIP
+	}
 	if !r.live[instance.ContainerID] {
 		return "", errdefs.ErrNotFound
 	}
@@ -330,4 +336,37 @@ func TestRetryCreateInstance_RemoveFailureKeepsRecordedID(t *testing.T) {
 	require.Error(t, controller.RetryCreateInstance(ctx, service, &got))
 	assert.Equal(t, []string{"container-1"}, r.removed, "the next retry removes it")
 	assert.Equal(t, "container-2", storedOnly(ctx, t, testStore).ContainerID)
+}
+
+// An operator restart resets the attempt budget even when the old
+// container cannot be removed, so the record is not straight back to Stalled.
+func TestRestartInstance_RemoveFailureStillResetsAttempts(t *testing.T) {
+	ctx, testStore, controller, _, r := setupStartFailing(t)
+	rec := storedOnly(ctx, t, testStore)
+	require.NoError(t, testStore.UpdateFunc(ctx, types.ResourceTypeInstance, "default", rec.ID, &rec, func() error {
+		rec.Status = types.InstanceStatusStalled
+		rec.CreateAttempts = maxCreateAttempts
+		rec.NextCreateAttemptAt = nil
+		return nil
+	}))
+	r.removeErr = assert.AnError
+
+	_ = controller.RestartInstance(ctx, &rec, RestartReasonManual)
+	got := storedOnly(ctx, t, testStore)
+	assert.Equal(t, 1, got.CreateAttempts)
+	assert.Equal(t, types.InstanceStatusFailed, got.Status)
+	assert.Equal(t, "container-1", got.ContainerID)
+}
+
+// The running check must not leak a label-healed container's IP onto the
+// instance being retried.
+func TestRetryCreateInstance_StatusProbeDoesNotMutateInstance(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+	r.healIP = "10.9.9.9"
+
+	rec := storedOnly(ctx, t, testStore)
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	got := storedOnly(ctx, t, testStore)
+	require.NotNil(t, got.Metadata)
+	assert.NotEqual(t, "10.9.9.9", got.Metadata.ContainerIP)
 }

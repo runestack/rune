@@ -166,21 +166,23 @@ func (c *Controller) RetryCreateInstance(ctx context.Context, service *types.Ser
 		log.Str("id", instance.ID),
 		log.Int("attempt", instance.CreateAttempts+1))
 
+	applyInstanceStatus(instance, types.InstanceStatusPending, "", "")
+	instance.NextCreateAttemptAt = nil
+	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
+		return fmt.Errorf("reset instance for retry: %w", err)
+	}
+
 	// A previous attempt that failed at Start left its container behind.
 	// Remove it before creating another, or every retry adds a container
 	// for the same instance. If it cannot be removed, give up on this
 	// attempt with the ID still recorded, so the next retry tries again.
+	// This runs after the reset write so a failure counts against the
+	// attempt budget the caller set (an operator restart resets it to 0).
 	if instance.ContainerID != "" {
 		if err := c.removeFailedAttemptContainer(ctx, instance); err != nil {
 			c.recordCreateFailure(ctx, instance, err, err.reason)
 			return err
 		}
-	}
-
-	applyInstanceStatus(instance, types.InstanceStatusPending, "", "")
-	instance.NextCreateAttemptAt = nil
-	if err := c.store.Update(ctx, types.ResourceTypeInstance, instance.Namespace, instance.ID, instance); err != nil {
-		return fmt.Errorf("reset instance for retry: %w", err)
 	}
 
 	return c.runCreateAttempt(ctx, service, instance)
@@ -370,9 +372,14 @@ func (c *Controller) removeFailedAttemptContainer(ctx context.Context, instance 
 		return &staleContainerError{"PreviousContainerRemoveFailed", fmt.Errorf("remove container %s from failed attempt: %w", containerID, err)}
 	}
 
-	// Status may re-resolve the container through its instance label, so
-	// ask on a copy: a changed ID means the recorded container is gone.
+	// Status may re-resolve the container through its instance label and
+	// rewrite the ID and IP, so ask on a copy: a changed ID means the
+	// recorded container is gone.
 	probe := *instance
+	if instance.Metadata != nil {
+		md := *instance.Metadata
+		probe.Metadata = &md
+	}
 	if status, err := r.Status(ctx, &probe); err == nil &&
 		status == types.InstanceStatusRunning && probe.ContainerID == containerID {
 		return &staleContainerError{"PreviousContainerRunning", fmt.Errorf(
