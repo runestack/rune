@@ -45,10 +45,17 @@ func TestParseNVIDIACSV_Rejects(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"too few fields", "GPU-1, 0, NVIDIA L40S\n", "nvidia-smi CSV"},
-		{"non-numeric index", "GPU-1, zero, NVIDIA L40S, 46068, 550.54.15\n", "index"},
-		{"non-numeric memory", "GPU-1, 0, NVIDIA L40S, lots, 550.54.15\n", "memory.total"},
+		{"too few fields", "GPU-8f6a1234-5678-90ab-cdef-1234567890ab, 0, NVIDIA L40S\n", "nvidia-smi CSV"},
+		{"non-numeric index", "GPU-8f6a1234-5678-90ab-cdef-1234567890ab, zero, NVIDIA L40S, 46068, 550.54.15\n", "index"},
+		{"non-numeric memory", "GPU-8f6a1234-5678-90ab-cdef-1234567890ab, 0, NVIDIA L40S, lots, 550.54.15\n", "memory.total"},
 		{"empty uuid", " , 0, NVIDIA L40S, 46068, 550.54.15\n", "empty uuid"},
+		// Keywords and separators the device-request sinks interpret.
+		{"keyword all", "all, 0, NVIDIA L40S, 46068, 550.54.15\n", "not a GPU UUID"},
+		{"keyword none", "none, 0, NVIDIA L40S, 46068, 550.54.15\n", "not a GPU UUID"},
+		{"keyword void", "void, 0, NVIDIA L40S, 46068, 550.54.15\n", "not a GPU UUID"},
+		{"embedded comma", "\"GPU-8f6a1234-5678-90ab-cdef-1234567890ab,all\", 0, NVIDIA L40S, 46068, 550.54.15\n", "not a GPU UUID"},
+		{"short uuid", "GPU-8f6a, 0, NVIDIA L40S, 46068, 550.54.15\n", "not a GPU UUID"},
+		{"mig uuid", "MIG-8f6a1234-5678-90ab-cdef-1234567890ab, 0, NVIDIA L40S, 46068, 550.54.15\n", "not a GPU UUID"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -64,7 +71,7 @@ func TestParseNVIDIACSV_Rejects(t *testing.T) {
 func TestParseNVIDIACSV_RejectsRatherThanTruncates(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i <= maxProbeRows; i++ {
-		b.WriteString("GPU-x, 0, NVIDIA L40S, 46068, 550.54.15\n")
+		b.WriteString("GPU-8f6a1234-5678-90ab-cdef-1234567890ab, 0, NVIDIA L40S, 46068, 550.54.15\n")
 	}
 	_, err := parseNVIDIACSV(b.String())
 	require.Error(t, err)
@@ -94,13 +101,13 @@ func TestNVIDIASMIProvider_SurfacesStderr(t *testing.T) {
 
 func TestNVIDIASMIProvider_ParsesRealInvocation(t *testing.T) {
 	dir := t.TempDir()
-	writeFakeSMI(t, dir, "#!/bin/sh\necho 'GPU-8f6a, 0, NVIDIA L40S, 46068, 550.54.15'\n")
+	writeFakeSMI(t, dir, "#!/bin/sh\necho 'GPU-8f6a1234-5678-90ab-cdef-1234567890ab, 0, NVIDIA L40S, 46068, 550.54.15'\n")
 	t.Setenv("PATH", dir)
 
 	devices, err := NVIDIASMIProvider().Probe(context.Background())
 	require.NoError(t, err)
 	require.Len(t, devices, 1)
-	assert.Equal(t, "GPU-8f6a", devices[0].UUID)
+	assert.Equal(t, "GPU-8f6a1234-5678-90ab-cdef-1234567890ab", devices[0].UUID)
 }
 
 func TestSelectProvider(t *testing.T) {
