@@ -398,3 +398,29 @@ func TestReconcile_StalledUpdateSurfacesAsFailed(t *testing.T) {
 		"an update that stops progressing must surface as Failed so --atomic can revert it")
 	assert.Equal(t, types.ServiceReasonUpdateStalled, got.StatusReason)
 }
+
+// High-water marks belong to one template generation. Carrying them into
+// the next roll would make it look stalled until it beat the old roll's peak.
+func TestComputeUpdateStatus_PeaksResetOnNewTemplate(t *testing.T) {
+	ctx, st, tr, r := updateFixture(t)
+	svc := updateSvc(t, ctx, st, 3, 3)
+	seedInstance(t, ctx, st, tr, svc, "api-old-a", 2, 60*time.Second)
+	seedInstance(t, ctx, st, tr, svc, "api-old-b", 2, 60*time.Second)
+	seedInstance(t, ctx, st, tr, svc, "api-new-a", 3, 60*time.Second)
+
+	// The previous roll (generation 2) wedged after getting two replicas ready.
+	svc.Update = &types.UpdateStatus{
+		TemplateGeneration: 2,
+		PeakUpdated:        2,
+		PeakUpdatedReady:   2,
+		PeakAvailable:      3,
+	}
+
+	data, err := r.getServiceInstances(ctx, svc)
+	require.NoError(t, err)
+	next, _ := r.computeUpdateStatus(ctx, svc, data)
+	require.NotNil(t, next)
+	assert.Equal(t, 1, next.UpdatedReady)
+	assert.Equal(t, 1, next.PeakUpdatedReady, "peak must not carry over from generation 2")
+	assert.Equal(t, 1, next.PeakUpdated)
+}

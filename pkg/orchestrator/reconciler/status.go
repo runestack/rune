@@ -292,10 +292,16 @@ func (r *Reconciler) computeUpdateStatus(ctx context.Context, service *types.Ser
 		return nil, false
 	}
 
+	// A block from another template generation describes a different roll:
+	// inherit nothing from it, including its peaks, or this roll reads as
+	// stalled until it beats the old one's high-water marks.
 	prev := service.Update
+	if prev != nil && prev.TemplateGeneration != templateGen {
+		prev = nil
+	}
 	next.StartedAt = now
 	next.LastProgressAt = now
-	if prev != nil && prev.TemplateGeneration == templateGen {
+	if prev != nil {
 		next.StartedAt = prev.StartedAt
 		next.LastProgressAt = prev.LastProgressAt
 		// Ask BEFORE raising the marks, or every tick would trivially match
