@@ -63,23 +63,24 @@ func TestImmediateScaling(t *testing.T) {
 	err = controller.CreateScalingOperation(ctx, service, params)
 	require.NoError(t, err)
 
-	// check if the operation is created
+	// Only the end state is asserted: whether the operation is still
+	// in progress when the test first looks depends on scheduling.
 	var ops []types.ScalingOperation
 	err = testStore.List(ctx, types.ResourceTypeScalingOperation, service.Namespace, &ops)
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(ops), "Operation should be created")
-	assert.Equal(t, types.ScalingOperationStatusInProgress, ops[0].Status, "Operation should be in progress")
 
-	// Wait a short time for the operation to be processed
-	time.Sleep(2 * time.Second)
-
-	// Get the service and verify it has been scaled
-	var updatedService types.Service
-	err = testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &updatedService)
-	require.NoError(t, err)
-
-	t.Logf("Service scale after operation: %d (target was %d)", updatedService.Scale, params.TargetScale)
-	assert.Equal(t, params.TargetScale, updatedService.Scale, "Service should be scaled immediately to target")
+	require.Eventually(t, func() bool {
+		var updatedService types.Service
+		if err := testStore.Get(ctx, types.ResourceTypeService, service.Namespace, service.Name, &updatedService); err != nil {
+			return false
+		}
+		var ops []types.ScalingOperation
+		if err := testStore.List(ctx, types.ResourceTypeScalingOperation, service.Namespace, &ops); err != nil || len(ops) != 1 {
+			return false
+		}
+		return updatedService.Scale == params.TargetScale && ops[0].Status == types.ScalingOperationStatusCompleted
+	}, 5*time.Second, 20*time.Millisecond, "service should reach the target scale and the operation complete")
 }
 
 // TestImmediateScaling_BumpsGeneration is the scaling-controller half of the
