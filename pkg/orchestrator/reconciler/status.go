@@ -167,7 +167,7 @@ func (r *Reconciler) updateServiceStatus(ctx context.Context, service *types.Ser
 				// Without this the planner's actual sentence ("waiting for
 				// replacements to become ready") never reached the log, and a
 				// held update was undiagnosable from logs alone.
-				log.Str("message", newMessage))
+				log.Str("detail", newMessage))
 		}
 
 		// Apply ONLY the status fields (+ ObservedGeneration), atomically, on the

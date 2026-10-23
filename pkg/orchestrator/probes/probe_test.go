@@ -3,16 +3,20 @@ package probes
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockRunnerProvider implements runner.RunnerProvider for testing
@@ -117,11 +121,58 @@ func TestHTTPProber_Execute(t *testing.T) {
 	}
 }
 
-// TestTCPProber_Execute tests the TCP prober implementation
 func TestTCPProber_Execute(t *testing.T) {
-	// Skip detailed test implementation for TCP
-	// In a real test, we'd set up an actual TCP server to test against
-	t.Skip("TCP probe tests would require setting up a real TCP server")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	probe := func(port int) ProbeResult {
+		return (&TCPProber{}).Execute(&ProbeContext{
+			Ctx:         context.Background(),
+			Logger:      log.NewLogger(),
+			Instance:    &types.Instance{},
+			ProbeConfig: &types.Probe{Type: "tcp", Host: "127.0.0.1", Port: port, TimeoutSeconds: 1},
+		})
+	}
+	assert.True(t, probe(port).Success)
+
+	ln.Close()
+	assert.False(t, probe(port).Success)
+}
+
+func TestProbeTimeout(t *testing.T) {
+	assert.Equal(t, defaultProbeTimeout, probeTimeout(&types.Probe{}))
+	assert.Equal(t, 2*time.Second, probeTimeout(&types.Probe{TimeoutSeconds: 2}))
+}
+
+// The HTTP probe gives up after timeoutSeconds, not after a fixed client
+// timeout.
+func TestHTTPProber_HonoursTimeoutSeconds(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(u.Port())
+	require.NoError(t, err)
+
+	start := time.Now()
+	result := (&HTTPProber{}).Execute(&ProbeContext{
+		Ctx:         context.Background(),
+		Logger:      log.NewLogger(),
+		Instance:    &types.Instance{},
+		ProbeConfig: &types.Probe{Type: "http", Host: "127.0.0.1", Port: port, Path: "/", TimeoutSeconds: 1},
+		HTTPClient:  &http.Client{},
+	})
+	assert.False(t, result.Success)
+	assert.Less(t, time.Since(start), 3*time.Second)
 }
 
 func TestExecProber_Execute(t *testing.T) {
