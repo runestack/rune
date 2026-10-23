@@ -76,10 +76,16 @@ func (v *instanceView) serving() bool {
 // A nil LastTransitionAt counts as available: instances predating that field
 // must not wedge the first update after an upgrade.
 func newInstanceView(inst *types.Instance, class instancectl.CompatClass, minReady time.Duration, now time.Time) instanceView {
-	ready := inst.Status == types.InstanceStatusRunning
+	ready := inst.Status == types.InstanceStatusRunning && inst.IsReady()
 	available := ready
-	if ready && minReady > 0 && inst.LastTransitionAt != nil {
-		available = now.Sub(*inst.LastTransitionAt) >= minReady
+	// The minimum-ready window restarts when readiness comes back, not only
+	// when Status last changed.
+	since := inst.LastTransitionAt
+	if inst.ReadyChangedAt != nil && (since == nil || inst.ReadyChangedAt.After(*since)) {
+		since = inst.ReadyChangedAt
+	}
+	if ready && minReady > 0 && since != nil {
+		available = now.Sub(*since) >= minReady
 	}
 	return instanceView{
 		Instance:    inst,

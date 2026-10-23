@@ -89,8 +89,14 @@ type instanceHealth struct {
 	monitoring          bool // true while monitorInstance goroutine is running
 	lastCheck           time.Time
 	consecutiveFailures int
-	healthRestartCount  int // Separate count for health check restarts (backoff calculation)
-	lastRestartTime     time.Time
+	livenessSuccesses   int // consecutive liveness passes, for successThreshold
+	// ready mirrors the instance's persisted readiness verdict
+	// (Instance.IsReady) and moves only when a threshold is crossed.
+	ready              bool
+	readinessFailures  int
+	readinessSuccesses int
+	healthRestartCount int // Separate count for health check restarts (backoff calculation)
+	lastRestartTime    time.Time
 }
 
 // NewController creates a new health controller
@@ -215,6 +221,7 @@ func (c *healthController) AddInstance(service *types.Service, instance *types.I
 		livenessResults:     make([]types.HealthCheckResult, 0),
 		readinessResults:    make([]types.HealthCheckResult, 0),
 		lastCheck:           time.Now(),
+		ready:               instance.IsReady(),
 		consecutiveFailures: 0,
 		healthRestartCount:  priorRestarts,
 		lastRestartTime:     lastRestart,
@@ -597,10 +604,14 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 				log.Str("instance", instanceID),
 				log.Duration("duration", result.Duration))
 
-			// Reset failure counter on success
-			ih.consecutiveFailures = 0
+			// A flapping probe must pass successThreshold times in a row
+			// before its failures are forgiven.
+			ih.livenessSuccesses++
+			if ih.livenessSuccesses >= successThreshold(probeOf(ih.service, "liveness")) {
+				ih.consecutiveFailures = 0
+			}
 		} else {
-			// Increment consecutive failures counter
+			ih.livenessSuccesses = 0
 			ih.consecutiveFailures++
 
 			c.logger.Warn("Liveness check failed",
@@ -635,6 +646,15 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 		}
 
 		ih.readinessStatus = result.Success
+		if result.Success {
+			ih.readinessSuccesses++
+			ih.readinessFailures = 0
+		} else {
+			ih.readinessFailures++
+			ih.readinessSuccesses = 0
+		}
+		c.applyReadinessThresholdsLocked(ih, instanceID)
+
 		// A successful readiness pass promotes the instance from
 		// Starting to Running. Fire-and-forget so the store I/O
 		// doesn't block the c.mu we're currently holding (otherwise
@@ -650,6 +670,7 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 		// wedged in Starting forever.
 		if result.Success && !ih.promoted {
 			ih.promoted = true // optimistic; reset below if it fails
+			ih.ready = true    // promotion records Ready
 			namespace := ""
 			if ih.instance != nil {
 				namespace = ih.instance.Namespace
@@ -721,6 +742,8 @@ func (c *healthController) promoteToRunningOnReady(namespace, instanceID string)
 		// for exactly the probe-gated services it matters most for
 		// (RUNE-042 §8.5).
 		current.LastTransitionAt = &now
+		current.Ready = true
+		current.ReadyChangedAt = &now
 		promoted = true
 		return nil
 	}, store.WithHealthController())
@@ -742,6 +765,107 @@ func (c *healthController) promoteToRunningOnReady(namespace, instanceID string)
 	return nil
 }
 
+// applyReadinessThresholdsLocked flips a Running instance's readiness once
+// failureThreshold consecutive failures or successThreshold consecutive
+// passes are reached. The store write runs in a goroutine so a slow store
+// does not stall every probe behind c.mu. Caller must hold c.mu.
+func (c *healthController) applyReadinessThresholdsLocked(ih *instanceHealth, instanceID string) {
+	if ih.instance == nil || ih.instance.Status != types.InstanceStatusRunning {
+		// Before promotion readiness gates Starting→Running instead.
+		return
+	}
+	probe := probeOf(ih.service, "readiness")
+	var want bool
+	switch {
+	case ih.ready && ih.readinessFailures >= failureThreshold(probe):
+		want = false
+	case !ih.ready && ih.readinessSuccesses >= successThreshold(probe):
+		want = true
+	default:
+		return
+	}
+	ih.ready = want
+	namespace := ih.instance.Namespace
+	go func() {
+		if err := c.setReady(namespace, instanceID, want); err != nil {
+			c.mu.Lock()
+			if ih2, ok := c.instances[instanceID]; ok {
+				ih2.ready = !want // the next probe result retries
+			}
+			c.mu.Unlock()
+			c.logger.Warn("Failed to record instance readiness",
+				log.Str("instance", instanceID),
+				log.Bool("ready", want),
+				log.Err(err))
+		}
+	}()
+}
+
+// setReady persists a readiness flip and republishes the service's
+// endpoints, which carry it as Endpoint.Healthy.
+func (c *healthController) setReady(namespace, instanceID string, ready bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var current types.Instance
+	changed := false
+	err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, namespace, instanceID, &current, func() error {
+		changed = false
+		if current.Status != types.InstanceStatusRunning ||
+			(current.ReadyChangedAt != nil && current.Ready == ready) {
+			return store.ErrSkipUpdate
+		}
+		now := time.Now()
+		current.Ready = ready
+		current.ReadyChangedAt = &now
+		current.UpdatedAt = now
+		changed = true
+		return nil
+	}, store.WithHealthController())
+	if err != nil {
+		return fmt.Errorf("record readiness: %w", err)
+	}
+	if !changed {
+		return nil
+	}
+	c.instanceController.RepublishServiceByInstance(ctx, &current)
+	if ready {
+		c.logger.Info("Instance ready again; restored to endpoints", log.Str("instance", instanceID))
+	} else {
+		c.logger.Warn("Instance not ready; withdrawn from endpoints", log.Str("instance", instanceID))
+	}
+	return nil
+}
+
+// probeOf returns the service's liveness or readiness probe, or nil. The
+// service spec on a monitored instance can be refreshed to one without
+// health checks while its monitor is still running.
+func probeOf(service *types.Service, checkType string) *types.Probe {
+	if service == nil || service.Health == nil {
+		return nil
+	}
+	if checkType == "liveness" {
+		return service.Health.Liveness
+	}
+	return service.Health.Readiness
+}
+
+// failureThreshold returns a probe's failureThreshold, defaulting to 3.
+func failureThreshold(probe *types.Probe) int {
+	if probe != nil && probe.FailureThreshold > 0 {
+		return probe.FailureThreshold
+	}
+	return 3
+}
+
+// successThreshold returns a probe's successThreshold, defaulting to 1.
+func successThreshold(probe *types.Probe) int {
+	if probe != nil && probe.SuccessThreshold > 0 {
+		return probe.SuccessThreshold
+	}
+	return 1
+}
+
 // errRestartBackoff marks a restart deferred by CrashLoopBackoff — a
 // normal pacing condition, not a failure. Callers match with errors.Is.
 var errRestartBackoff = errors.New("restart deferred by backoff")
@@ -756,11 +880,7 @@ const healthBackoffResetWindow = 10 * time.Minute
 // livenessFailureThreshold returns the service's configured liveness
 // failureThreshold, defaulting to 3 (K8s default) when unset.
 func livenessFailureThreshold(service *types.Service) int {
-	if service != nil && service.Health != nil && service.Health.Liveness != nil &&
-		service.Health.Liveness.FailureThreshold > 0 {
-		return service.Health.Liveness.FailureThreshold
-	}
-	return 3
+	return failureThreshold(probeOf(service, "liveness"))
 }
 
 // restartInstanceWithBackoff restarts an instance with exponential backoff

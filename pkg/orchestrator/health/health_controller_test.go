@@ -384,6 +384,8 @@ func TestReadinessPassPromotesInstanceToRunning(t *testing.T) {
 		"promotion to Running must stamp LastTransitionAt, or minReady is measured from container start")
 	assert.WithinDuration(t, time.Now(), *got.LastTransitionAt, 6*time.Second,
 		"LastTransitionAt must mark the readiness promotion, not an earlier transition")
+	assert.True(t, got.Ready, "promotion records the instance as ready")
+	assert.NotNil(t, got.ReadyChangedAt)
 }
 
 // TestTCPHealthCheck tests the TCP health check functionality

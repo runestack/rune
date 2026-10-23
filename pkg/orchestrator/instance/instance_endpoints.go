@@ -197,7 +197,10 @@ func (c *Controller) republishService(ctx context.Context, service *types.Servic
 			Port:       primaryPort,
 			Protocol:   primaryProto,
 			Metadata:   md,
-			Healthy:    true,
+			// An unready instance stays published but unhealthy: the
+			// dataplane routes only to healthy endpoints, so it is withdrawn
+			// from traffic without changing its lifecycle Status.
+			Healthy: inst.IsReady(),
 		})
 	}
 	// Skip the publish when the endpoint set is byte-identical to the

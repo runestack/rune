@@ -330,6 +330,25 @@ func TestNewInstanceView_MinReadyGate(t *testing.T) {
 	assert.True(t, v.Available, "a nil LastTransitionAt must count as available")
 }
 
+// An instance withdrawn by its readiness probe is not serving, and when it
+// comes back the minimum-ready window runs from the moment it became ready.
+func TestNewInstanceView_ReadinessWithdrawal(t *testing.T) {
+	old := planBase.Add(-30 * time.Second)
+	justNow := planBase.Add(-1 * time.Second)
+
+	unready := &types.Instance{ID: "u", Status: types.InstanceStatusRunning, LastTransitionAt: &old,
+		Ready: false, ReadyChangedAt: &justNow}
+	v := newInstanceView(unready, instancectl.CompatOK, 5*time.Second, planBase)
+	assert.False(t, v.Ready)
+	assert.False(t, v.serving())
+
+	back := &types.Instance{ID: "b", Status: types.InstanceStatusRunning, LastTransitionAt: &old,
+		Ready: true, ReadyChangedAt: &justNow}
+	v = newInstanceView(back, instancectl.CompatOK, 5*time.Second, planBase)
+	assert.True(t, v.Ready)
+	assert.False(t, v.Available, "ready again 1s ago with a 5s window is not yet serving")
+}
+
 // --- the property that matters -------------------------------------------
 
 // The safety claim of the whole feature, checked mechanically rather than by
