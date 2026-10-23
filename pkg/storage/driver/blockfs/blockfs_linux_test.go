@@ -46,9 +46,6 @@ func TestLinux_EnsureFormatted(t *testing.T) {
 
 	t.Run("partitioned disk is refused", func(t *testing.T) {
 		dev, _ := loopImage(t)
-		if _, err := exec.LookPath("sfdisk"); err != nil {
-			t.Skip("needs sfdisk")
-		}
 		cmd := exec.Command("sfdisk", "-q", dev)
 		cmd.Stdin = strings.NewReader("label: gpt\n")
 		out, err := cmd.CombinedOutput()
@@ -56,6 +53,41 @@ func TestLinux_EnsureFormatted(t *testing.T) {
 		err = EnsureFormatted(ctx, "test", dev, "ext4")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "partition table")
+	})
+
+	// blkid exits 2 without a word for both of these.
+	t.Run("damaged ext4 superblock is refused", func(t *testing.T) {
+		dev, _ := loopImage(t)
+		run(t, "mkfs.ext4", "-q", "-F", dev)
+		// Flip a byte inside the primary superblock (at 1024) so its
+		// metadata checksum no longer matches.
+		f, err := os.OpenFile(dev, os.O_WRONLY, 0)
+		require.NoError(t, err)
+		_, err = f.WriteAt([]byte{0xff, 0xff, 0xff, 0xff}, 1024+0x20)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		// Whether or not this blkid still names it ext4, it must not be
+		// reformatted: the damaged bytes are still there afterwards.
+		_ = EnsureFormatted(ctx, "test", dev, "ext4")
+		got := make([]byte, 4)
+		g, err := os.Open(dev)
+		require.NoError(t, err)
+		_, err = g.ReadAt(got, 1024+0x20)
+		require.NoError(t, err)
+		require.NoError(t, g.Close())
+		assert.Equal(t, []byte{0xff, 0xff, 0xff, 0xff}, got, "the disk must not have been reformatted")
+	})
+
+	t.Run("unrecognised data is refused", func(t *testing.T) {
+		dev, _ := loopImage(t)
+		f, err := os.OpenFile(dev, os.O_WRONLY, 0)
+		require.NoError(t, err)
+		_, err = f.WriteAt([]byte("application data, no filesystem"), 0)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		err = EnsureFormatted(ctx, "test", dev, "ext4")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "holds data")
 	})
 
 	t.Run("missing device is an error, not blank", func(t *testing.T) {
@@ -96,7 +128,7 @@ func requireLoop(t *testing.T) {
 	if unix.Geteuid() != 0 {
 		skip("needs root for loop devices")
 	}
-	for _, bin := range []string{"mkfs.ext4", "losetup", "blkid"} {
+	for _, bin := range []string{"mkfs.ext4", "losetup", "blkid", "sfdisk"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			skip("needs %s", bin)
 		}

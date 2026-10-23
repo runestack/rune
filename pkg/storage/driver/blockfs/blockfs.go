@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -55,6 +56,39 @@ var statFunc = func(dev string) error {
 		return fmt.Errorf("%s is not a device", dev)
 	}
 	return nil
+}
+
+// zeroFunc reports whether the device's first and last zeroSpan bytes
+// are all zero; replaced in tests.
+var zeroFunc = edgesZero
+
+// zeroSpan covers every superblock and partition-table location a
+// filesystem or label keeps at either end of a disk.
+const zeroSpan = 1 << 20
+
+func edgesZero(dev string) (bool, error) {
+	f, err := os.Open(dev)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return false, err
+	}
+	buf := make([]byte, zeroSpan)
+	for _, off := range []int64{0, max(size-zeroSpan, 0)} {
+		n, err := f.ReadAt(buf[:min(int64(zeroSpan), size)], off)
+		if err != nil && !(errors.Is(err, io.EOF) && int64(n) == min(int64(zeroSpan), size)) {
+			return false, err
+		}
+		for _, b := range buf[:n] {
+			if b != 0 {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 // mkfsFunc formats the device; replaced in tests.
@@ -112,6 +146,18 @@ func isEmpty(ctx context.Context, dev string) (bool, error) {
 	case 2:
 		if msg := strings.TrimSpace(string(r.stderr)); msg != "" {
 			return false, fmt.Errorf("blkid: %s", msg)
+		}
+		// blkid also exits 2, silently, when a read fails mid-probe, when
+		// an ext4 superblock fails its checksum, and for data it does not
+		// recognise. A new cloud disk reads as zeros; anything else is
+		// left alone.
+		zero, err := zeroFunc(dev)
+		if err != nil {
+			return false, fmt.Errorf("cannot read device to confirm it is blank: %w", err)
+		}
+		if !zero {
+			return false, errors.New("blkid found no filesystem but the device holds data; refusing to format it " +
+				"(a damaged superblock or an unrecognised format; check it, or wipe it by hand if it really is unused)")
 		}
 		return true, nil
 	default:
