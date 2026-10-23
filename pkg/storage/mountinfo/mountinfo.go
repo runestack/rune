@@ -33,6 +33,10 @@ type entry struct {
 // parseStack reads mountinfo-format text and returns the devices mounted
 // exactly at path, bottom of the stack first.
 func parseStack(r io.Reader, path string) ([]Dev, error) {
+	// mountinfo records resolved paths.
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		path = p
+	}
 	path = filepath.Clean(path)
 	var at []entry
 	sc := bufio.NewScanner(r)

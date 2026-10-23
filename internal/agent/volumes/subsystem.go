@@ -162,6 +162,17 @@ type Subsystem struct {
 	// the actual cause instead of a bare "not yet mounted (will retry)".
 	// Cleared when the volume comes up. Guarded by stateMu.
 	lastErr map[string]mountFailure
+
+	// parked holds disks whose teardown left them attached (still
+	// mounted somewhere, or the detach failed), keyed by handle. Once
+	// untracked, nothing else would ever retry them, so the retry tick
+	// does. Guarded by stateMu.
+	parked map[driver.VolumeHandle]parkedDisk
+}
+
+type parkedDisk struct {
+	id string
+	m  trackedMount
 }
 
 // mountFailure is the most recent reason a volume failed to come up on
@@ -221,6 +232,10 @@ func New(cfg Config) (*Subsystem, error) {
 	if cfg.MountRoot == "" {
 		cfg.MountRoot = DefaultMountRoot
 	}
+	// The mount table records resolved paths; compare like with like.
+	if r, err := filepath.EvalSymlinks(cfg.MountRoot); err == nil {
+		cfg.MountRoot = r
+	}
 	if cfg.RetryInterval <= 0 {
 		cfg.RetryInterval = DefaultRetryInterval
 	}
@@ -238,6 +253,7 @@ func New(cfg Config) (*Subsystem, error) {
 		readyCh: make(chan struct{}),
 		mounts:  make(map[string]trackedMount),
 		lastErr: make(map[string]mountFailure),
+		parked:  make(map[driver.VolumeHandle]parkedDisk),
 	}, nil
 }
 
@@ -305,10 +321,14 @@ func (s *Subsystem) Stop(ctx context.Context) error {
 	// outer agent shutdown deadline applies.
 	s.stateMu.Lock()
 	tracked := make(map[string]trackedMount, len(s.mounts))
+	for _, p := range s.parked {
+		tracked[p.id] = p.m
+	}
 	for k, v := range s.mounts {
 		tracked[k] = v
 	}
 	s.mounts = make(map[string]trackedMount)
+	s.parked = make(map[driver.VolumeHandle]parkedDisk)
 	s.stateMu.Unlock()
 
 	s.drainMounts(ctx, tracked)
@@ -466,6 +486,7 @@ func (s *Subsystem) run(ctx context.Context, initial <-chan store.WatchEvent) {
 					log.Err(err))
 			}
 		case <-retry.C:
+			s.retryParked(ctx)
 			if err := s.initialReconcile(ctx); err != nil {
 				s.log.Debug("Periodic volume re-reconcile had errors",
 					log.Err(err))
@@ -526,8 +547,7 @@ func (s *Subsystem) handle(ctx context.Context, ev store.WatchEvent) error {
 		if !tracked {
 			return nil
 		}
-		_, err := s.tearDown(ctx, id, m)
-		return err
+		return s.release(ctx, id, m)
 	default:
 		return nil
 	}
@@ -551,8 +571,7 @@ func (s *Subsystem) reconcile(ctx context.Context, vol *types.Volume) error {
 		s.stateMu.Lock()
 		delete(s.mounts, id)
 		s.stateMu.Unlock()
-		_, err := s.tearDown(ctx, id, tracked)
-		return err
+		return s.release(ctx, id, tracked)
 	case want && isTracked:
 		// Already mounted. If the handle changed under us (the
 		// controller re-provisioned), tear the old mount down and
@@ -561,7 +580,7 @@ func (s *Subsystem) reconcile(ctx context.Context, vol *types.Volume) error {
 			s.stateMu.Lock()
 			delete(s.mounts, id)
 			s.stateMu.Unlock()
-			if _, err := s.tearDown(ctx, id, tracked); err != nil {
+			if err := s.release(ctx, id, tracked); err != nil {
 				s.log.Warn("Tear-down before re-mount failed",
 					log.Str("volume_id", id),
 					log.Err(err))
@@ -649,10 +668,17 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	if err != nil {
 		return fmt.Errorf("agent.volumes: attach %s: %w", vol.String(), err)
 	}
-	// No detach on refusal: the device may already be mounted, and in
-	// use, at a path from before mount paths carried the namespace.
 	target, err := s.mountTarget(vol, id, dev)
 	if err != nil {
+		// The disk may already be mounted, and in use, at a path from
+		// before mount paths carried the namespace.
+		if len(s.stillMounted(dev)) == 0 {
+			if derr := drv.Detach(ctx, opctx, handle, driver.NodeID(s.cfg.NodeID)); derr != nil {
+				s.log.Warn("Detach after refused mount target also failed",
+					log.Str("volume_id", id),
+					log.Err(derr))
+			}
+		}
 		return err
 	}
 	got, err := drv.Mount(ctx, opctx, driver.MountOpts{
@@ -687,6 +713,7 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 		VolumeNS:      vol.Namespace,
 		VolumeName:    vol.Name,
 	}
+	delete(s.parked, handle)
 	s.stateMu.Unlock()
 	s.log.Info("Volume mounted",
 		log.Str("volume_id", id),
@@ -767,10 +794,102 @@ func (s *Subsystem) legacyTarget(vol *types.Volume, key string, dev driver.Devic
 	case pos >= 0:
 		s.log.Error("This volume's disk is mounted at its old path, but another disk was mounted over it. "+
 			"Containers started since then that use this path see the other disk: replace them with rune restart. "+
-			"The disk stays attached until its old mount is gone",
+			"When this volume is torn down its disk stays attached until the disk above it is unmounted",
 			log.Str("volume_id", key), log.Str("path", legacy), log.Int("disks", len(stack)))
 	}
 	return "", false
+}
+
+// release tears a volume down and, if its disk stays attached, parks it
+// for the retry tick.
+func (s *Subsystem) release(ctx context.Context, id string, m trackedMount) error {
+	detached, err := s.tearDown(ctx, id, m)
+	if !detached {
+		s.stateMu.Lock()
+		s.parked[m.Handle] = parkedDisk{id: id, m: m}
+		s.stateMu.Unlock()
+	}
+	return err
+}
+
+// retryParked retries teardown for parked disks. A disk still buried
+// under another disk's mount is skipped quietly until that mount goes.
+func (s *Subsystem) retryParked(ctx context.Context) {
+	s.stateMu.Lock()
+	parked := make([]parkedDisk, 0, len(s.parked))
+	for h, p := range s.parked {
+		delete(s.parked, h)
+		parked = append(parked, p)
+	}
+	s.stateMu.Unlock()
+	for _, p := range parked {
+		if s.buried(p.m.Device) {
+			s.stateMu.Lock()
+			if _, again := s.parked[p.m.Handle]; !again {
+				s.parked[p.m.Handle] = p
+			}
+			s.stateMu.Unlock()
+			continue
+		}
+		if err := s.release(ctx, p.id, p.m); err != nil {
+			s.log.Debug("Retry of parked volume teardown failed",
+				log.Str("volume_id", p.id), log.Err(err))
+		}
+	}
+}
+
+// ownMounts returns the paths under MountRoot where the disk is mounted,
+// split by whether it is the visible (top) mount there.
+func (s *Subsystem) ownMounts(dev driver.DevicePath) (top, buried []string) {
+	if dev == "" {
+		return nil, nil
+	}
+	d, err := s.cfg.MountTable.DeviceOf(string(dev))
+	if err != nil {
+		return nil, nil
+	}
+	where, err := s.cfg.MountTable.MountPoints(d)
+	if err != nil {
+		return nil, nil
+	}
+	root := s.cfg.MountRoot + string(filepath.Separator)
+	for _, p := range where {
+		if !strings.HasPrefix(p, root) {
+			continue
+		}
+		stack, err := s.cfg.MountTable.Stack(p)
+		if err != nil || len(stack) == 0 {
+			continue
+		}
+		if stack[len(stack)-1] == d {
+			top = append(top, p)
+		} else {
+			buried = append(buried, p)
+		}
+	}
+	return top, buried
+}
+
+func (s *Subsystem) buried(dev driver.DevicePath) bool {
+	_, b := s.ownMounts(dev)
+	return len(b) > 0
+}
+
+// unmountLeftovers unmounts the volume's own disk wherever else it is the
+// visible mount under MountRoot: its pre-namespace path, once a disk
+// stacked over it has gone. The volume is being torn down, so those
+// mounts go with it.
+func (s *Subsystem) unmountLeftovers(ctx context.Context, id string, m trackedMount, opctx driver.OpContext) {
+	top, _ := s.ownMounts(m.Device)
+	for _, p := range top {
+		if p == string(m.Target) {
+			continue
+		}
+		if err := m.Driver.Unmount(ctx, opctx, driver.MountTarget(p)); err != nil {
+			s.log.Warn("Unmounting the volume's leftover mount failed",
+				log.Str("volume_id", id), log.Str("path", p), log.Err(err))
+		}
+	}
 }
 
 // stillMounted returns the paths dev is still mounted at on this host.
@@ -827,6 +946,7 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) (de
 			log.Str("volume_id", id),
 			log.Err(uerr))
 	}
+	s.unmountLeftovers(ctx, id, m, opctx)
 	if where := s.stillMounted(m.Device); len(where) > 0 {
 		err := fmt.Errorf("agent.volumes: not detaching %s: its disk is still mounted at %s", id, strings.Join(where, ", "))
 		s.log.Error("Not detaching volume: its disk is still mounted",

@@ -16,11 +16,11 @@ import (
 // volumes Subsystem. The runed agent supplies an implementation
 // backed by internal/agent/volumes.Subsystem.
 type MountResolver interface {
-	// MountTargetFor returns the host-side mount target for the named
-	// volume on this node, plus a presence flag. A false return means
+	// MountTargetFor returns the host-side mount target on this node for
+	// the volume with this Volume.MountKey(), plus a presence flag. A false return means
 	// the subsystem has not (yet) mounted the volume locally; callers
 	// should treat this as a transient "not ready" condition.
-	MountTargetFor(volumeID string) (string, bool)
+	MountTargetFor(mountKey string) (string, bool)
 }
 
 // MountErrorReporter is an optional companion to MountResolver that explains
@@ -31,7 +31,7 @@ type MountResolver interface {
 // visible only in the agent's startup log — undiagnosable from the CLI.
 // Implementations return the most recent bring-up failure for the volume.
 type MountErrorReporter interface {
-	MountErrorFor(volumeID string) (string, bool)
+	MountErrorFor(mountKey string) (string, bool)
 }
 
 // EndpointPublisher is the orchestrator-side surface of the
