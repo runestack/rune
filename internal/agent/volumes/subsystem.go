@@ -6,7 +6,7 @@
 // the controller decides where a volume is bound
 // (and is the only writer of Volume.BoundNode); this subsystem watches
 // those bindings and turns them into real node-local mounts under
-// `<MountRoot>/<volume.ID>/` (default `/var/lib/rune/mounts`).
+// `<MountRoot>/<namespace>/<volume.ID>/` (default `/var/lib/rune/mounts`).
 //
 // Scope intentionally narrow for the first agent-side slice of RUNE-069:
 //
@@ -18,7 +18,7 @@
 //   - For previously-tracked volumes that no longer match (BoundNode
 //     changed, status regressed, deleted), calls Unmount then Detach
 //     and drops the entry.
-//   - Public accessor MountTargetFor(volumeID) lets the runner-side
+//   - Public accessor MountTargetFor(Volume.MountKey()) lets the runner-side
 //     resolver swap the bare Volume.Handle for the agent-driven mount
 //     target once the instance controller is updated to consult it.
 //
@@ -43,13 +43,13 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/storage/driverparams"
+	"github.com/runestack/rune/pkg/storage/mountinfo"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 )
 
 // DefaultMountRoot is the per-node directory under which the subsystem
-// nests one subdirectory per Volume.ID. It mirrors the layout called out
-// in the RUNE-069 design.
+// nests one <namespace>/<Volume.ID> subdirectory per volume.
 const DefaultMountRoot = "/var/lib/rune/mounts"
 
 // DefaultRetryInterval is the period at which the subsystem re-walks
@@ -104,10 +104,27 @@ type Config struct {
 	// without a runed restart. Defaults to DefaultRetryInterval.
 	RetryInterval time.Duration
 
+	// MountTable reports which devices are mounted at a path. Defaults
+	// to the host's /proc/self/mountinfo.
+	MountTable MountTable
+
 	// Logger; defaults to the global logger with component
 	// "agent.volumes".
 	Logger log.Logger
 }
+
+// MountTable is the read side of the host mount table.
+type MountTable interface {
+	// Stack returns the devices mounted exactly at path, bottom first.
+	Stack(path string) ([]mountinfo.Dev, error)
+	// DeviceOf returns the device number of a block device node.
+	DeviceOf(dev string) (mountinfo.Dev, error)
+}
+
+type hostMountTable struct{}
+
+func (hostMountTable) Stack(path string) ([]mountinfo.Dev, error) { return mountinfo.Stack(path) }
+func (hostMountTable) DeviceOf(dev string) (mountinfo.Dev, error) { return mountinfo.DeviceOf(dev) }
 
 // Subsystem implements the agent.Subsystem contract:
 //
@@ -130,14 +147,14 @@ type Subsystem struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 
-	// mounts is the in-memory record of (volumeID -> tracked mount
-	// state). Protected by stateMu rather than mu so reads from
+	// mounts is the in-memory record of (Volume.MountKey() -> tracked
+	// mount state). Protected by stateMu rather than mu so reads from
 	// MountTargetFor don't contend with lifecycle calls.
 	stateMu sync.RWMutex
 	mounts  map[string]trackedMount
 
-	// lastErr records why a volume is NOT mounted (volumeID -> most
-	// recent bring-up failure), so the orchestrator can tell an operator
+	// lastErr records why a volume is NOT mounted (Volume.MountKey() ->
+	// most recent bring-up failure), so the orchestrator can tell an operator
 	// the actual cause instead of a bare "not yet mounted (will retry)".
 	// Cleared when the volume comes up. Guarded by stateMu.
 	lastErr map[string]mountFailure
@@ -199,6 +216,9 @@ func New(cfg Config) (*Subsystem, error) {
 	}
 	if cfg.RetryInterval <= 0 {
 		cfg.RetryInterval = DefaultRetryInterval
+	}
+	if cfg.MountTable == nil {
+		cfg.MountTable = hostMountTable{}
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = log.GetDefaultLogger().WithComponent("agent.volumes")
@@ -383,14 +403,14 @@ func (s *Subsystem) drainMounts(ctx context.Context, tracked map[string]trackedM
 		log.Int("total", total))
 }
 
-// MountTargetFor returns the host path the named volume is currently
-// mounted at on this node (or false if the subsystem has not mounted
-// it). Called by the instance controller's resolveVolumeMount via the
+// MountTargetFor returns the host path the volume with this
+// Volume.MountKey() is currently mounted at on this node (or false if the
+// subsystem has not mounted it). Called by the instance controller's resolveVolumeMount via the
 // MountResolver hook; the controller falls back to Volume.Handle when
 // this returns false.
-func (s *Subsystem) MountTargetFor(volumeID string) (string, bool) {
+func (s *Subsystem) MountTargetFor(key string) (string, bool) {
 	s.stateMu.RLock()
-	m, ok := s.mounts[volumeID]
+	m, ok := s.mounts[key]
 	s.stateMu.RUnlock()
 	if !ok {
 		return "", false
@@ -480,7 +500,7 @@ func (s *Subsystem) handle(ctx context.Context, ev store.WatchEvent) error {
 		// reclaim, but the node-local mount must come down.
 		id := ""
 		if vol, ok := ev.Resource.(*types.Volume); ok {
-			id = vol.ID
+			id = vol.MountKey()
 		}
 		if id == "" {
 			// Some backends omit the body; fall back to looking up
@@ -509,13 +529,7 @@ func (s *Subsystem) handle(ctx context.Context, ev store.WatchEvent) error {
 // reconcile owns the per-volume decision: should this node have it
 // mounted, and is the in-memory tracker in agreement?
 func (s *Subsystem) reconcile(ctx context.Context, vol *types.Volume) error {
-	id := vol.ID
-	if id == "" {
-		// Defensive: pre-RUNE-069 rows or test fixtures may not have
-		// stamped an ID. Fall back to "<ns>/<name>" so the tracking
-		// key is at least stable.
-		id = vol.Namespace + "/" + vol.Name
-	}
+	id := vol.MountKey()
 
 	want := s.shouldMount(vol)
 
@@ -570,9 +584,9 @@ func (s *Subsystem) recordBringUp(id string, err error) error {
 // "not yet mounted (will retry)" into an actionable message — the incident
 // that motivated this had a volume attached and mounted the whole time
 // while an expired provider token made the reconcile fail invisibly.
-func (s *Subsystem) MountErrorFor(volumeID string) (string, bool) {
+func (s *Subsystem) MountErrorFor(key string) (string, bool) {
 	s.stateMu.RLock()
-	f, ok := s.lastErr[volumeID]
+	f, ok := s.lastErr[key]
 	s.stateMu.RUnlock()
 	if !ok || f.Err == nil {
 		return "", false
@@ -628,7 +642,12 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 	if err != nil {
 		return fmt.Errorf("agent.volumes: attach %s: %w", vol.String(), err)
 	}
-	target := driver.MountTarget(filepath.Join(s.cfg.MountRoot, id))
+	// No detach on refusal: the device may already be mounted, and in
+	// use, at a path from before mount paths carried the namespace.
+	target, err := s.mountTarget(vol, id, dev)
+	if err != nil {
+		return err
+	}
 	got, err := drv.Mount(ctx, opctx, driver.MountOpts{
 		Handle:   handle,
 		Node:     driver.NodeID(s.cfg.NodeID),
@@ -664,6 +683,72 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 		log.Str("driver", drv.Name()),
 		log.Str("target", string(got)))
 	return nil
+}
+
+// mountTarget picks where to mount vol: <MountRoot>/<namespace>/<id>.
+//
+// Mount paths used to omit the namespace (<MountRoot>/<id>), so the same
+// service cast into two namespaces put two disks on one path, the second
+// mounted over the first. Containers already running are bound to that
+// old path, so a volume whose disk is still the one visible there keeps
+// it. The disk, not the namespace, decides: it is what a container bound
+// to the path actually sees, so the path can never be handed to the
+// wrong namespace's volume.
+func (s *Subsystem) mountTarget(vol *types.Volume, key string, dev driver.DevicePath) (driver.MountTarget, error) {
+	target := filepath.Join(s.cfg.MountRoot, key)
+	if legacy, ok := s.legacyTarget(vol, key, dev); ok {
+		return driver.MountTarget(legacy), nil
+	}
+	// A volume mounted under the old layout whose ID equals this
+	// namespace's name sits exactly where the namespace directory goes.
+	// Creating the target there would write into that volume's disk.
+	nsDir := filepath.Dir(target)
+	if stack, err := s.cfg.MountTable.Stack(nsDir); err == nil && len(stack) > 0 {
+		return "", fmt.Errorf("agent.volumes: %s: %s is a mount point, so the mount path %s would land inside another volume; "+
+			"it clears when that volume is unmounted", vol.String(), nsDir, target)
+	}
+	return driver.MountTarget(target), nil
+}
+
+// legacyTarget reports whether vol's disk is the visible mount at its
+// pre-namespace path, and logs when that path has more than one disk
+// stacked on it.
+func (s *Subsystem) legacyTarget(vol *types.Volume, key string, dev driver.DevicePath) (string, bool) {
+	if vol.ID == "" || dev == "" {
+		return "", false
+	}
+	legacy := filepath.Join(s.cfg.MountRoot, vol.ID)
+	stack, err := s.cfg.MountTable.Stack(legacy)
+	if err != nil || len(stack) == 0 {
+		return "", false
+	}
+	own, err := s.cfg.MountTable.DeviceOf(string(dev))
+	if err != nil {
+		s.log.Warn("Cannot identify the volume's device; not reusing the old mount path",
+			log.Str("volume_id", key), log.Str("device", string(dev)), log.Err(err))
+		return "", false
+	}
+	pos := -1
+	for i, d := range stack {
+		if d == own {
+			pos = i
+		}
+	}
+	top := len(stack) - 1
+	switch {
+	case pos == top && top == 0:
+		return legacy, true
+	case pos == top:
+		s.log.Error("Several disks are mounted on one volume path; this volume's is on top. "+
+			"Containers started before it was mounted there may be using a disk from another namespace: restart them",
+			log.Str("volume_id", key), log.Str("path", legacy), log.Int("disks", len(stack)))
+		return legacy, true
+	case pos >= 0:
+		s.log.Error("This volume's disk is mounted at its old path, but another disk was mounted over it. "+
+			"Containers started since then that use this path see the other disk: restart them",
+			log.Str("volume_id", key), log.Str("path", legacy), log.Int("disks", len(stack)))
+	}
+	return "", false
 }
 
 // tearDown is the inverse: Unmount then Detach. Both are required to

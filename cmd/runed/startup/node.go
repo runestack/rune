@@ -151,7 +151,7 @@ func mustStartNode(b *boot, cp *controlPlane) *node {
 		// Per-node storage subsystem (RUNE-069). Watches Volume rows
 		// and, for each volume the orchestrator has bound to this
 		// node, calls the registered driver's Attach + Mount under
-		// /var/lib/rune/mounts/<volume.ID>/. Symmetrically Unmount +
+		// /var/lib/rune/mounts/<namespace>/<volume.ID>/. Symmetrically Unmount +
 		// Detach on unbind/delete and on agent Stop. The instance
 		// controller's resolveVolumeMount consults the subsystem's
 		// MountTargetFor() and falls back to Volume.Handle when no

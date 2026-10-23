@@ -281,7 +281,7 @@ func TestResolveVolumeMount_ResolverPreferredOverHandle(t *testing.T) {
 	ts, ic := newInstanceControllerForVolumeTests(t)
 	putVolume(t, ts, "default", "data", "do-vol-abc123", types.VolumeStatusAvailable)
 	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{
-		"vol-data": "/var/lib/rune/mounts/vol-data",
+		"default/vol-data": "/var/lib/rune/mounts/default/vol-data",
 	}})
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
@@ -291,8 +291,32 @@ func TestResolveVolumeMount_ResolverPreferredOverHandle(t *testing.T) {
 		Claim:     &types.VolumeClaim{Name: "data"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "/var/lib/rune/mounts/vol-data", got.Source,
+	assert.Equal(t, "/var/lib/rune/mounts/default/vol-data", got.Source,
 		"resolver-reported target must win over Volume.Handle")
+}
+
+// The same service cast into two namespaces produces two volumes with
+// one ID. Each instance must get its own namespace's mount, never the
+// other's.
+func TestResolveVolumeMount_SameIDInTwoNamespaces(t *testing.T) {
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	putVolume(t, ts, "prod", "data", "rune-prod-data", types.VolumeStatusAvailable)
+	putVolume(t, ts, "trial", "data", "rune-trial-data", types.VolumeStatusAvailable)
+	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{
+		"prod/vol-data":  "/var/lib/rune/mounts/prod/vol-data",
+		"trial/vol-data": "/var/lib/rune/mounts/trial/vol-data",
+	}})
+
+	for _, ns := range []string{"prod", "trial"} {
+		svc := &types.Service{Name: "api", Namespace: ns}
+		got, err := ic.resolveVolumeMount(context.Background(), svc, &types.Instance{Name: "api-0"}, types.VolumeMount{
+			Name:      "data",
+			MountPath: "/data",
+			Claim:     &types.VolumeClaim{Name: "data"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "/var/lib/rune/mounts/"+ns+"/vol-data", got.Source)
+	}
 }
 
 // When the controller has a nodeID wired (production runed) and the
@@ -306,7 +330,7 @@ func TestResolveVolumeMount_StampsBoundNode(t *testing.T) {
 	putVolume(t, ts, "default", "data", "do-vol-abc123", types.VolumeStatusAvailable)
 	ic.SetEndpointPublisher(nil, "node-a")
 	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{
-		"vol-data": "/var/lib/rune/mounts/vol-data",
+		"default/vol-data": "/var/lib/rune/mounts/default/vol-data",
 	}})
 
 	svc := &types.Service{Name: "api", Namespace: "default"}
@@ -344,7 +368,7 @@ func TestResolveVolumeMount_RefreshesBoundClaimOnRestart(t *testing.T) {
 
 	ic.SetEndpointPublisher(nil, "node-a")
 	ic.SetMountResolver(&fakeMountResolver{targets: map[string]string{
-		"vol-data": "/var/lib/rune/mounts/vol-data",
+		"default/vol-data": "/var/lib/rune/mounts/default/vol-data",
 	}})
 
 	// New instance with the same name (api-0 again, but a different
@@ -449,8 +473,7 @@ func TestResolveVolumeMount_SurfacesAgentMountError(t *testing.T) {
 		"GET /v2/volumes/abc -> HTTP 401 (check the storage class's apiToken)"
 	ic.SetMountResolver(&reportingMountResolver{
 		targets: map[string]string{},
-		// keyed by volumeMountKey(), which prefers Volume.ID
-		errs: map[string]string{"vol-data": cause},
+		errs:    map[string]string{"default/vol-data": cause},
 	})
 
 	svc := &types.Service{Name: "api", Namespace: "default"}

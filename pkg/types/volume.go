@@ -171,6 +171,20 @@ func (v *Volume) GetResourceType() ResourceType { return ResourceTypeVolume }
 // String returns the namespaced identifier "<namespace>/<name>".
 func (v *Volume) String() string { return v.Namespace + "/" + v.Name }
 
+// MountKey identifies the volume on a node: "<namespace>/<id>", falling
+// back to the name when no ID is stamped. The agent keys its mount table
+// and mount paths by it, and the orchestrator looks mounts up by it. The
+// ID alone is not enough: a claim-template volume's ID is its name, so
+// the same service cast into two namespaces yields two volumes with one
+// ID.
+func (v *Volume) MountKey() string {
+	id := v.ID
+	if id == "" {
+		id = v.Name
+	}
+	return NS(v.Namespace) + "/" + id
+}
+
 // Equals reports whether two Volume resources are functionally equivalent
 // for watch purposes.
 func (v *Volume) Equals(other Resource) bool {
