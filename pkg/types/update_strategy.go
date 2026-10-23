@@ -289,7 +289,9 @@ func (svc *Service) UpdateWarnings() []string {
 
 	// update-needs-readiness: without a probe, an update advances on
 	// "the runner accepted the container", not "the app is serving".
-	if len(svc.Ports) > 0 && !svc.HasReadinessProbe() {
+	// Stateful services are excluded: their recreate path has no readiness
+	// gate and no per-replacement wait, so the advice would be false.
+	if !stateful && len(svc.Ports) > 0 && !svc.HasReadinessProbe() {
 		warns = append(warns, "update-needs-readiness: updates advance on \"container started\", not "+
 			"\"app serving\" — add health.readiness so replacements are gated on a real signal "+
 			fmt.Sprintf("(until then Rune waits a flat %ds per replacement, which is slower and weaker)",

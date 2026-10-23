@@ -104,6 +104,15 @@ func TestLintWarnings_StatefulIsRecreatedNotStepped(t *testing.T) {
 	stateless.UpdateStrategy = &UpdateStrategy{Type: UpdateRolling}
 	stateless.Volumes = nil
 	assert.NotContains(t, warnsFor(&stateless), "update-recreates-stateful")
+
+	// A readiness probe gates nothing on the stateful path, so the advice to
+	// add one for gated replacements must not be given.
+	exposed := *svc
+	exposed.UpdateStrategy = nil
+	exposed.Ports = []ServicePort{{Name: "pg", Port: 5432}}
+	assert.NotContains(t, warnsFor(&exposed), "update-needs-readiness")
+	stateless.Ports = exposed.Ports
+	assert.Contains(t, warnsFor(&stateless), "update-needs-readiness")
 }
 
 // A plain multi-replica container service with a probe is the happy path and
