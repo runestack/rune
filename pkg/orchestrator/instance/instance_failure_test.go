@@ -202,6 +202,9 @@ type startFailingRunner struct {
 	// healIP, when set, makes Status behave like the docker runner's
 	// label self-heal: it rewrites the instance's IP.
 	healIP string
+	// startsAfterCheck holds containers that Status reports as not
+	// running but that are running by the time Remove is called.
+	startsAfterCheck map[string]bool
 }
 
 func newStartFailingRunner() *startFailingRunner {
@@ -239,7 +242,7 @@ func (r *startFailingRunner) Remove(_ context.Context, instance *types.Instance,
 	if !r.live[instance.ContainerID] {
 		return fmt.Errorf("failed to remove container: %w", errdefs.ErrNotFound)
 	}
-	if r.running[instance.ContainerID] && !force {
+	if (r.running[instance.ContainerID] || r.startsAfterCheck[instance.ContainerID]) && !force {
 		return fmt.Errorf("cannot remove running container")
 	}
 	r.removed = append(r.removed, instance.ContainerID)
@@ -369,4 +372,20 @@ func TestRetryCreateInstance_StatusProbeDoesNotMutateInstance(t *testing.T) {
 	got := storedOnly(ctx, t, testStore)
 	require.NotNil(t, got.Metadata)
 	assert.NotEqual(t, "10.9.9.9", got.Metadata.ContainerIP)
+}
+
+// A container that starts between the running check and Remove must survive:
+// the runtime only refuses to remove it because Remove is not forced.
+func TestRetryCreateInstance_ContainerStartingAfterCheckIsKept(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+	r.startsAfterCheck = map[string]bool{"container-1": true}
+
+	rec := storedOnly(ctx, t, testStore)
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	assert.Empty(t, r.removed)
+	assert.True(t, r.live["container-1"])
+	assert.Equal(t, 1, r.created, "no new container while the old one runs")
+	got := storedOnly(ctx, t, testStore)
+	assert.Equal(t, "container-1", got.ContainerID)
+	assert.Equal(t, "PreviousContainerRemoveFailed", got.FailureReason)
 }
