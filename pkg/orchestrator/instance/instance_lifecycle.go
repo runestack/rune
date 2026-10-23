@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
@@ -166,10 +167,14 @@ func (c *Controller) RetryCreateInstance(ctx context.Context, service *types.Ser
 		log.Int("attempt", instance.CreateAttempts+1))
 
 	// A previous attempt that failed at Start left its container behind.
-	// Remove it, or every retry adds another container for the same
-	// instance and lookups by instance label pick one arbitrarily.
+	// Remove it before creating another, or every retry adds a container
+	// for the same instance. If it cannot be removed, give up on this
+	// attempt with the ID still recorded, so the next retry tries again.
 	if instance.ContainerID != "" {
-		c.removeFailedAttemptContainer(ctx, instance)
+		if err := c.removeFailedAttemptContainer(ctx, instance); err != nil {
+			c.recordCreateFailure(ctx, instance, err, err.reason)
+			return err
+		}
 	}
 
 	applyInstanceStatus(instance, types.InstanceStatusPending, "", "")
@@ -343,19 +348,44 @@ func (c *Controller) persistContainerID(ctx context.Context, instance *types.Ins
 	}
 }
 
-func (c *Controller) removeFailedAttemptContainer(ctx context.Context, instance *types.Instance) {
+// staleContainerError is why a retry could not clear the previous
+// attempt's container.
+type staleContainerError struct {
+	reason string
+	err    error
+}
+
+func (e *staleContainerError) Error() string { return e.err.Error() }
+func (e *staleContainerError) Unwrap() error { return e.err }
+
+// removeFailedAttemptContainer removes the container recorded on
+// instance.ContainerID, and only that one. A container that no longer
+// exists counts as removed; a running one is left alone, since a failed
+// Start should never have produced one and deleting it would kill
+// whatever it is doing.
+func (c *Controller) removeFailedAttemptContainer(ctx context.Context, instance *types.Instance) *staleContainerError {
+	containerID := instance.ContainerID
 	r, err := c.runnerManager.GetInstanceRunner(instance)
-	if err == nil {
-		err = r.Remove(ctx, instance, true)
-	}
 	if err != nil {
-		c.logger.Warn("Failed to remove container from failed create attempt",
-			log.Str("instance", instance.ID),
-			log.Str("container_id", instance.ContainerID),
-			log.Err(err))
-		return
+		return &staleContainerError{"PreviousContainerRemoveFailed", fmt.Errorf("remove container %s from failed attempt: %w", containerID, err)}
+	}
+
+	// Status may re-resolve the container through its instance label, so
+	// ask on a copy: a changed ID means the recorded container is gone.
+	probe := *instance
+	if status, err := r.Status(ctx, &probe); err == nil &&
+		status == types.InstanceStatusRunning && probe.ContainerID == containerID {
+		return &staleContainerError{"PreviousContainerRunning", fmt.Errorf(
+			"container %s from a failed start attempt is running; stop or remove it to let the instance retry", containerID)}
+	}
+
+	// force=false: the runtime refuses to remove a container that started
+	// after the check above.
+	if err := r.Remove(ctx, instance, false); err != nil && !errdefs.IsNotFound(err) {
+		return &staleContainerError{"PreviousContainerRemoveFailed", fmt.Errorf("remove container %s from failed attempt: %w", containerID, err)}
 	}
 	instance.ContainerID = ""
+	return nil
 }
 
 // RecreateInstance destroys an existing instance and creates a new one with the same name
