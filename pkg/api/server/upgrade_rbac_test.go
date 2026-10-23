@@ -39,7 +39,7 @@ func TestUpgradeServerRBAC(t *testing.T) {
 }
 
 // TestUpgradeServerRBAC_BuiltinGrants asserts only the *:* builtins (root,
-// admin) hold system:upgrade; the fixed-verb builtins are denied.
+// admin) hold server:upgrade; the fixed-verb builtins are denied.
 func TestUpgradeServerRBAC_BuiltinGrants(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewTestStore()
