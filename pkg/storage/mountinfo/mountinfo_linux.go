@@ -20,6 +20,17 @@ func Stack(path string) ([]Dev, error) {
 	return parseStack(f, path)
 }
 
+// MountPoints returns every path dev is mounted at in this mount
+// namespace.
+func MountPoints(dev Dev) ([]string, error) {
+	f, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		return nil, fmt.Errorf("mountinfo: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return parseMountPoints(f, dev)
+}
+
 // DeviceOf returns the major:minor of a block device node, following
 // symlinks such as /dev/disk/by-id/*.
 func DeviceOf(path string) (Dev, error) {

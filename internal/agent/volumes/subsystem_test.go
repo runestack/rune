@@ -905,13 +905,25 @@ func TestSubsystem_DetachedCountExcludesUnmountOnlyFailures(t *testing.T) {
 
 // fakeMountTable serves a canned mount table: stacks maps a path to the
 // devices mounted there (bottom first), devs maps a device node path to
-// its number.
+// its number. It is static: unmounting through the driver does not
+// change it.
 type fakeMountTable struct {
 	stacks map[string][]mountinfo.Dev
 	devs   map[string]mountinfo.Dev
 }
 
 func (f fakeMountTable) Stack(path string) ([]mountinfo.Dev, error) { return f.stacks[path], nil }
+func (f fakeMountTable) MountPoints(d mountinfo.Dev) ([]string, error) {
+	var out []string
+	for p, stack := range f.stacks {
+		for _, x := range stack {
+			if x == d {
+				out = append(out, p)
+			}
+		}
+	}
+	return out, nil
+}
 func (f fakeMountTable) DeviceOf(dev string) (mountinfo.Dev, error) {
 	d, ok := f.devs[dev]
 	if !ok {
@@ -985,6 +997,52 @@ func TestSubsystem_LegacyPathAdoptedOnlyByVisibleDisk(t *testing.T) {
 		"prod's disk is buried under trial's; prod must not be handed the old path")
 	assert.Equal(t, driver.MountTarget(legacy), got["trial-disk"],
 		"trial's disk is the one visible at the old path, so trial keeps it")
+
+	// prod's disk is now mounted twice. Tearing down the namespaced
+	// mount must not detach a disk the buried mount still holds.
+	sub.stateMu.Lock()
+	m := sub.mounts[prod.MountKey()]
+	delete(sub.mounts, prod.MountKey())
+	sub.stateMu.Unlock()
+	detached, err := sub.tearDown(ctx, prod.MountKey(), m)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "still mounted at "+legacy)
+	assert.False(t, detached)
+	_, d, _, u := drv.snapshot()
+	assert.Equal(t, 1, u, "the namespaced mount is still unmounted")
+	assert.Zero(t, d, "a disk still mounted at the old path must not be detached")
+}
+
+// After a crash with no drain, a disk mounted at its namespaced path
+// stays there on restart, even if its old path now shows only that disk.
+func TestSubsystem_NamespacedPathWinsOverLegacy(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+	root := sub.cfg.MountRoot
+	dev := mountinfo.Dev{Major: 8, Minor: 16}
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{
+			filepath.Join(root, vol.ID):         {dev},
+			filepath.Join(root, "prod", vol.ID): {dev},
+		},
+		devs: map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev},
+	}
+	require.NoError(t, sub.reconcile(context.Background(), vol))
+	assert.Equal(t, driver.MountTarget(filepath.Join(root, "prod", vol.ID)),
+		mountTargets(drv)[driver.VolumeHandle(vol.Handle)])
+}
+
+// A failed Mount must not detach a disk that is mounted somewhere else.
+func TestSubsystem_NoDetachAfterFailedMountWhileMountedElsewhere(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	vol := boundVolume("data-db-0", "trial", "data-db-0", "node-a")
+	dev := mountinfo.Dev{Major: 8, Minor: 16}
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{"/somewhere/else": {dev}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev},
+	}
+	drv.mountErr = errors.New("mount failed")
+	require.Error(t, sub.reconcile(context.Background(), vol))
 	_, d, _, _ := drv.snapshot()
 	assert.Zero(t, d)
 }

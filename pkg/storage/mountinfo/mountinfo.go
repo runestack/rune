@@ -52,6 +52,27 @@ func parseStack(r io.Reader, path string) ([]Dev, error) {
 	return order(at), nil
 }
 
+// parseMountPoints reads mountinfo-format text and returns every path
+// dev is mounted at.
+func parseMountPoints(r io.Reader, dev Dev) ([]string, error) {
+	var out []string
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		e, err := parseLine(sc.Text())
+		if err != nil {
+			return nil, err
+		}
+		if e.dev == dev {
+			out = append(out, e.mountPoint)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("mountinfo: read: %w", err)
+	}
+	return out, nil
+}
+
 // order sorts the mounts at one path bottom-to-top. A mount stacked on
 // another has the lower one as its parent, so the bottom is the entry
 // whose parent is not itself mounted at this path.
