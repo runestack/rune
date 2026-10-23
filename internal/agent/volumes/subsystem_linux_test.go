@@ -96,6 +96,7 @@ func TestLinux_UpgradeWithStackedOldPath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(legacy, 0o750))
 
 	imgs := map[string]string{}
+	prodCtr := ""
 	for _, ns := range []string{"prod", "trial"} {
 		img := filepath.Join(dir, ns+".img")
 		makeImage(t, img)
@@ -104,6 +105,11 @@ func TestLinux_UpgradeWithStackedOldPath(t *testing.T) {
 		t.Cleanup(func() { _ = exec.Command("losetup", "-d", dev).Run() })
 		run(t, "mount", dev, legacy)
 		require.NoError(t, os.WriteFile(filepath.Join(legacy, "owner"), []byte(ns), 0o644))
+		if ns == "prod" && dockerOK(t) {
+			// A prod container started before trial's disk was mounted
+			// over the path: its bind holds prod's disk.
+			prodCtr = startContainer(t, legacy)
+		}
 	}
 	t.Cleanup(func() {
 		for i := 0; i < 4; i++ {
@@ -144,6 +150,11 @@ func TestLinux_UpgradeWithStackedOldPath(t *testing.T) {
 	tt, _ := sub.MountTargetFor(vols["trial"].MountKey())
 	assert.Equal(t, filepath.Join(sub.cfg.MountRoot, "prod", id), pt)
 	assert.Equal(t, filepath.Join(sub.cfg.MountRoot, id), tt, "trial's disk is on top of the old path, so it keeps it")
+	if prodCtr != "" {
+		assert.Equal(t, "prod", ctrRead(t, prodCtr), "the running prod container still sees prod's disk")
+		assert.Equal(t, "prod", ctrRead(t, startContainer(t, pt)), "a new prod container gets prod's disk")
+		assert.Equal(t, "trial", ctrRead(t, startContainer(t, tt)), "a new trial container gets trial's disk")
+	}
 
 	// Unbind prod. Its disk is still buried at the old path: no detach.
 	vols["prod"].BoundNode = "node-b"
@@ -151,6 +162,10 @@ func TestLinux_UpgradeWithStackedOldPath(t *testing.T) {
 	assert.NotEmpty(t, loopOf(imgs["prod"]), "prod's disk must stay attached while still mounted")
 	sub.retryParked(ctx)
 	assert.NotEmpty(t, loopOf(imgs["prod"]))
+	if prodCtr != "" {
+		run(t, "docker", "exec", prodCtr, "sh", "-c", "echo after > /data/write && sync")
+		assert.Equal(t, "prod", ctrRead(t, prodCtr), "the prod container keeps working while its disk stays attached")
+	}
 
 	// Unbind trial; prod's disk surfaces at the old path. The next retry
 	// unmounts it there and detaches it.
@@ -162,6 +177,78 @@ func TestLinux_UpgradeWithStackedOldPath(t *testing.T) {
 	stack, err := mountinfo.Stack(filepath.Join(sub.cfg.MountRoot, id))
 	require.NoError(t, err)
 	assert.Empty(t, stack)
+}
+
+// The common upgrade case: one disk alone on its old path keeps that
+// path, and a container bound there before the upgrade keeps its data.
+func TestLinux_UpgradeWithSingleOldPath(t *testing.T) {
+	requireLoop(t)
+	dir := t.TempDir()
+	root := filepath.Join(dir, "mounts")
+	const id = "data-db-0"
+	legacy := filepath.Join(root, id)
+	require.NoError(t, os.MkdirAll(legacy, 0o750))
+	img := filepath.Join(dir, "prod.img")
+	makeImage(t, img)
+	dev := run(t, "losetup", "--find", "--show", img)
+	t.Cleanup(func() { _ = exec.Command("losetup", "-d", dev).Run() })
+	run(t, "mount", dev, legacy)
+	t.Cleanup(func() { _ = exec.Command("umount", "-l", legacy).Run() })
+	require.NoError(t, os.WriteFile(filepath.Join(legacy, "owner"), []byte("prod"), 0o644))
+	ctr := ""
+	if dockerOK(t) {
+		ctr = startContainer(t, legacy)
+	}
+
+	drv := &loopDriver{fakeDriver{name: "fake"}}
+	sub, err := New(Config{
+		Store:     store.NewTestStore(),
+		NodeID:    "node-a",
+		Lookup:    func(context.Context, *types.Volume) (driver.Driver, error) { return drv, nil },
+		MountRoot: root,
+		Logger:    log.NewLogger(),
+	})
+	require.NoError(t, err)
+	v := boundVolume(id, "prod", id, "node-a")
+	v.Handle = img
+	require.NoError(t, sub.reconcile(context.Background(), v))
+
+	target, ok := sub.MountTargetFor(v.MountKey())
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(sub.cfg.MountRoot, id), target)
+	stack, err := mountinfo.Stack(target)
+	require.NoError(t, err)
+	assert.Len(t, stack, 1, "adoption must not mount the disk a second time")
+	if ctr != "" {
+		assert.Equal(t, "prod", ctrRead(t, ctr))
+	}
+}
+
+// dockerOK reports whether a Docker daemon is usable. RUNE_REQUIRE_DOCKER
+// makes its absence a failure.
+func dockerOK(t *testing.T) bool {
+	t.Helper()
+	if exec.Command("docker", "info").Run() == nil {
+		return true
+	}
+	if os.Getenv("RUNE_REQUIRE_DOCKER") != "" {
+		t.Fatal("RUNE_REQUIRE_DOCKER is set but docker is not usable")
+	}
+	return false
+}
+
+// startContainer runs a container that binds src at /data, as the Docker
+// runner does for a volume.
+func startContainer(t *testing.T, src string) string {
+	t.Helper()
+	id := run(t, "docker", "run", "-d", "--rm", "-v", src+":/data", "alpine:latest", "sleep", "600")
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", id).Run() })
+	return id
+}
+
+func ctrRead(t *testing.T, ctr string) string {
+	t.Helper()
+	return run(t, "docker", "exec", ctr, "cat", "/data/owner")
 }
 
 // requireLoop skips unless loop mounts work here. In the privileged CI

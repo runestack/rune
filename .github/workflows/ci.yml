@@ -58,6 +58,15 @@ jobs:
           fi
       - name: Run unit tests with race detection
         run: make test-unit-race
+      # Replays a volume upgrade on loop devices with real Docker binds:
+      # needs root, losetup and a Docker daemon, which the runner has and the
+      # privileged container below does not. Root gets its own Go cache so
+      # the runner's cache is not left root-owned.
+      - name: Volume upgrade drill (root, Docker)
+        run: |
+          sudo -E env "PATH=$PATH" GOCACHE=/tmp/gocache-root GOMODCACHE=/tmp/gomod-root \
+            RUNE_REQUIRE_PRIVILEGED_MOUNT=1 RUNE_REQUIRE_DOCKER=1 \
+            go test ./internal/agent/volumes -run Linux -count=1 -v
       - name: Check Coverage
         env:
           COVERAGE_THRESHOLD: ${{ secrets.COVERAGE_THRESHOLD }}
