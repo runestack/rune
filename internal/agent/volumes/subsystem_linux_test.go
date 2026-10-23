@@ -150,10 +150,12 @@ func TestLinux_UpgradeWithStackedOldPath(t *testing.T) {
 	tt, _ := sub.MountTargetFor(vols["trial"].MountKey())
 	assert.Equal(t, filepath.Join(sub.cfg.MountRoot, "prod", id), pt)
 	assert.Equal(t, filepath.Join(sub.cfg.MountRoot, id), tt, "trial's disk is on top of the old path, so it keeps it")
+	var ctrs []string
 	if prodCtr != "" {
 		assert.Equal(t, "prod", ctrRead(t, prodCtr), "the running prod container still sees prod's disk")
-		assert.Equal(t, "prod", ctrRead(t, startContainer(t, pt)), "a new prod container gets prod's disk")
-		assert.Equal(t, "trial", ctrRead(t, startContainer(t, tt)), "a new trial container gets trial's disk")
+		ctrs = append(ctrs, prodCtr, startContainer(t, pt), startContainer(t, tt))
+		assert.Equal(t, "prod", ctrRead(t, ctrs[1]), "a new prod container gets prod's disk")
+		assert.Equal(t, "trial", ctrRead(t, ctrs[2]), "a new trial container gets trial's disk")
 	}
 
 	// Unbind prod. Its disk is still buried at the old path: no detach.
@@ -165,6 +167,12 @@ func TestLinux_UpgradeWithStackedOldPath(t *testing.T) {
 	if prodCtr != "" {
 		run(t, "docker", "exec", prodCtr, "sh", "-c", "echo after > /data/write && sync")
 		assert.Equal(t, "prod", ctrRead(t, prodCtr), "the prod container keeps working while its disk stays attached")
+	}
+	// From here nothing may hold the disks. A container's bind lives in its
+	// own mount namespace, which the detach guard cannot see; that gap is
+	// #272.
+	for _, c := range ctrs {
+		run(t, "docker", "rm", "-f", c)
 	}
 
 	// Unbind trial; prod's disk surfaces at the old path. The next retry
