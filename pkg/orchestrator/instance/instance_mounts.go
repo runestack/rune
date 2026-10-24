@@ -236,6 +236,10 @@ func (b *mountBinder) resolveVolumeMount(ctx context.Context, service *types.Ser
 		// parsed back out of the name — so the name format is free to change.
 		ordinal := instance.Ordinal
 		name = fmt.Sprintf("%s-%s-%d", m.Name, service.Name, ordinal)
+		// The name is also the volume's ID, which becomes a host mount path.
+		if err := types.ValidateVolumeID(name); err != nil {
+			return types.ResolvedVolumeMount{}, fmt.Errorf("claim template %q: %w", m.Name, err)
+		}
 		if err := b.ensureClaimTemplateVolume(ctx, service, m, name, ordinal); err != nil {
 			return types.ResolvedVolumeMount{}, fmt.Errorf("ensure claim-template volume %s/%s: %w", ns, name, err)
 		}
