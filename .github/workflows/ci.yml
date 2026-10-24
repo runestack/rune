@@ -71,8 +71,8 @@ jobs:
         run: |
           docker run --rm --privileged -e RUNE_REQUIRE_PRIVILEGED_MOUNT=1 \
             -v "$PWD":/src -w /src golang:1.25 sh -c '
-            apt-get -qq update && apt-get -qq install -y e2fsprogs >/dev/null &&
-            go test ./pkg/storage/driver/mountsync/... -v'
+            apt-get -qq update && apt-get -qq install -y e2fsprogs fdisk >/dev/null &&
+            go test ./pkg/storage/... ./internal/agent/volumes/... -v'
 
   build:
     name: Build

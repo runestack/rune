@@ -2,12 +2,11 @@ package dovolume
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+
+	"github.com/runestack/rune/pkg/storage/driver/blockfs"
 )
 
 // mountExec is the small abstraction over the bits of the OS the
@@ -64,26 +63,10 @@ func (execMounter) DeviceExists(dev string) bool {
 	return err == nil
 }
 
-// EnsureFormatted: lsblk reports the current FSTYPE; if non-empty,
-// we leave it alone. Otherwise we run `mkfs.<fsType> <dev>`.
+// EnsureFormatted formats dev only if blkid shows it carries nothing;
+// see pkg/storage/driver/blockfs.
 func (execMounter) EnsureFormatted(ctx context.Context, dev, fsType string) error {
-	if fsType == "" {
-		return errors.New("dovolume: EnsureFormatted called with empty fsType")
-	}
-	out, err := exec.CommandContext(ctx, "lsblk", "-no", "FSTYPE", dev).Output()
-	if err == nil && strings.TrimSpace(string(out)) != "" {
-		// Already formatted (any fs).
-		return nil
-	}
-	mkfs := "mkfs." + fsType
-	if _, err := exec.LookPath(mkfs); err != nil {
-		return fmt.Errorf("dovolume: %s not in PATH: %w", mkfs, err)
-	}
-	cmd := exec.CommandContext(ctx, mkfs, dev)
-	if combined, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("dovolume: %s %s: %w (%s)", mkfs, dev, err, strings.TrimSpace(string(combined)))
-	}
-	return nil
+	return blockfs.EnsureFormatted(ctx, "dovolume", dev, fsType)
 }
 
 func alreadyMounted(ctx context.Context, target string) bool {

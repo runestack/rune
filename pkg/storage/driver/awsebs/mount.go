@@ -2,12 +2,11 @@ package awsebs
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+
+	"github.com/runestack/rune/pkg/storage/driver/blockfs"
 )
 
 // mountExec is the small abstraction over the bits of the OS the driver
@@ -41,25 +40,10 @@ func (execMounter) MkdirAll(target string, mode os.FileMode) error {
 	return os.MkdirAll(filepath.Clean(target), mode)
 }
 
-// EnsureFormatted: lsblk reports the current FSTYPE; if non-empty, leave
-// it alone. Otherwise run `mkfs.<fsType> <dev>`.
+// EnsureFormatted formats dev only if blkid shows it carries nothing;
+// see pkg/storage/driver/blockfs.
 func (execMounter) EnsureFormatted(ctx context.Context, dev, fsType string) error {
-	if fsType == "" {
-		return errors.New("awsebs: EnsureFormatted called with empty fsType")
-	}
-	out, err := exec.CommandContext(ctx, "lsblk", "-no", "FSTYPE", dev).Output()
-	if err == nil && strings.TrimSpace(string(out)) != "" {
-		return nil // already formatted (any fs)
-	}
-	mkfs := "mkfs." + fsType
-	if _, err := exec.LookPath(mkfs); err != nil {
-		return fmt.Errorf("awsebs: %s not in PATH: %w", mkfs, err)
-	}
-	cmd := exec.CommandContext(ctx, mkfs, dev)
-	if combined, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("awsebs: %s %s: %w (%s)", mkfs, dev, err, strings.TrimSpace(string(combined)))
-	}
-	return nil
+	return blockfs.EnsureFormatted(ctx, "awsebs", dev, fsType)
 }
 
 func alreadyMounted(ctx context.Context, target string) bool {
