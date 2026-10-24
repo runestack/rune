@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -406,7 +408,7 @@ func (c *Config) KEKOptions() *crypto.KEKOptions {
 }
 
 // Load reads the runefile at path into Default(). A missing file is not an
-// error; a file that does not decode into Config is.
+// error; a file that does not parse, or does not decode into Config, is.
 func Load(path string) (*Config, error) {
 	cfg, _, err := LoadWithUnknownKeys(path)
 	return cfg, err
@@ -428,12 +430,12 @@ var readElsewhere = map[string]bool{
 	"docker.disable_ambient_registry_auth": true,
 }
 
+var sliceIndex = regexp.MustCompile(`\[\d+\]`)
+
 // LoadWithUnknownKeys is Load, plus the keys in the file that nothing reads,
 // sorted. A misspelled key otherwise falls back to its default with no sign
 // anything is wrong. Unknown keys are not an error: a rolled-back runed must
 // still start on a runefile written for a newer one.
-var sliceIndex = regexp.MustCompile(`\[\d+\]`)
-
 func LoadWithUnknownKeys(path string) (*Config, []string, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
@@ -445,7 +447,13 @@ func LoadWithUnknownKeys(path string) (*Config, []string, error) {
 	}
 	cfg := Default()
 	if err := v.ReadInConfig(); err != nil {
-		return cfg, nil, nil
+		// Only absence means "use the defaults". A file that is there but
+		// does not parse must not quietly become a default config, TLS off.
+		var notFound viper.ConfigFileNotFoundError
+		if errors.As(err, &notFound) || errors.Is(err, fs.ErrNotExist) {
+			return cfg, nil, nil
+		}
+		return nil, nil, fmt.Errorf("runefile %s: %w", path, err)
 	}
 	// Decode against the `yaml` struct tags — they are the runefile
 	// schema-of-record. Viper's default decoder matches `mapstructure`

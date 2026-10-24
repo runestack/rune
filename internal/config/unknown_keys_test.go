@@ -69,3 +69,20 @@ func TestLoad_DecodeErrorNamesTheFile(t *testing.T) {
 	assert.Nil(t, cfg)
 	assert.Contains(t, err.Error(), p)
 }
+
+// Startup also reads the runefile through the global viper, which exits on a
+// syntax error first. Load must not depend on that ordering.
+func TestLoad_SyntaxErrorIsAnError(t *testing.T) {
+	for name, body := range map[string]string{
+		"runefile.toml": "[server]\nrequire_tls = true\n[server\n",
+		"runefile.yaml": "server:\n  require_tls: true\nlog:\n  level: info\n   bad: [x\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := writeRunefile(t, name, body)
+			cfg, err := Load(p)
+			require.Error(t, err)
+			assert.Nil(t, cfg)
+			assert.Contains(t, err.Error(), p)
+		})
+	}
+}
