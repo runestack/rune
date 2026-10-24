@@ -318,3 +318,44 @@ func TestRBACReadonlyInstancesWeakerThanReveal(t *testing.T) {
 		}
 	}
 }
+
+// --abandon-finalizers skips the dependents check, so it must not widen what
+// a plain services:delete grant reaches: it is authorized against the
+// request's namespace like any delete.
+func TestRBACAbandonFinalizersNamespaceScoped(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewTestStore()
+	_ = st.Open("")
+	_ = SeedBuiltinPolicies(ctx, st)
+
+	pr := repos.NewPolicyRepo(st)
+	_ = pr.Create(ctx, &types.Policy{
+		Name:  "app-deleter",
+		Rules: []types.PolicyRule{{Resource: "services", Verbs: []string{"delete"}, Namespace: "app"}},
+	})
+	u := &types.User{Name: "ops", ID: "ops", Policies: []string{"app-deleter"}}
+	_ = st.Create(ctx, types.ResourceTypeUser, "system", "ops", u)
+
+	s, err := New(WithAuth(nil), WithStore(st))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	call := func(ns string) error {
+		c := context.WithValue(ctx, authCtxKey, &AuthInfo{SubjectID: "ops", SubjectType: "service"})
+		info := &grpc.UnaryServerInfo{FullMethod: "/rune.api.ServiceService/DeleteService"}
+		h := func(context.Context, interface{}) (interface{}, error) { return nil, nil }
+		req := &generated.DeleteServiceRequest{Name: "api", Namespace: ns, AbandonFinalizers: true}
+		_, e := s.rbacUnaryInterceptor()(c, req, info, h)
+		return e
+	}
+
+	if err := call("app"); err != nil {
+		t.Fatalf("services:delete in its own namespace must allow abandoning finalizers: %v", err)
+	}
+	for _, ns := range []string{"other", ""} {
+		if err := call(ns); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("namespace %q: expected PermissionDenied, got %v", ns, err)
+		}
+	}
+}
