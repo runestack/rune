@@ -6,25 +6,57 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	apiclient "github.com/runestack/rune/pkg/api/client"
+	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/runestack/rune/test/e2e/harness"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// pinnedCastToken mints a cast-permission service account pinned to one
-// namespace.
-func pinnedCastToken(t *testing.T, ctx *harness.Context, name, namespace string) *harness.CLI {
+// mintCastToken mints a cast-permission service account, pinned to
+// namespace when it is non-empty, and returns its bearer token.
+func mintCastToken(t *testing.T, ctx *harness.Context, name, namespace string) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "token")
-	res := ctx.CLI.Run(t, "admin", "service", "create", name, "--namespace", namespace, "--permissions", "cast", "--out-file", out)
-	if !res.Succeeded() {
-		t.Fatalf("mint pinned token: %s", res)
+	args := []string{"admin", "service", "create", name, "--permissions", "cast", "--out-file", out}
+	if namespace != "" {
+		args = append(args, "--namespace", namespace)
+	}
+	if res := ctx.CLI.Run(t, args...); !res.Succeeded() {
+		t.Fatalf("mint token: %s", res)
 	}
 	b, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatalf("read minted token: %v", err)
 	}
-	return ctx.CLIAs(t, string(b))
+	return strings.TrimSpace(string(b))
+}
+
+// pinnedCastToken returns a CLI authenticated as a cast token pinned to
+// namespace.
+func pinnedCastToken(t *testing.T, ctx *harness.Context, name, namespace string) *harness.CLI {
+	t.Helper()
+	return ctx.CLIAs(t, mintCastToken(t, ctx, name, namespace))
+}
+
+// connAs dials the server as token.
+func connAs(t *testing.T, ctx *harness.Context, token string) *grpc.ClientConn {
+	t.Helper()
+	c, err := apiclient.NewClient(&apiclient.ClientOptions{
+		Address: ctx.Server.GRPCAddr, Token: token,
+		DialTimeout: 15 * time.Second, CallTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("dial as token: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c.Conn()
 }
 
 // A token pinned to one namespace must not pull another namespace's secret
@@ -64,4 +96,43 @@ service:
 
 	// The admin token, which holds reveal everywhere, may cast it.
 	ctx.CLI.MustRun(t, "cast", thief, "--detach", "--release", "thief", "--namespace", "trial")
+}
+
+// VolumeService writes go through reference admission: the builtin cast
+// role can create volumes anywhere but holds neither snapshots:get nor
+// secrets:reveal, so a volume parameter naming another namespace's snapshot
+// or secret is refused.
+func TestCrossNamespaceRefs_VolumeParametersNeedTargetGrant(t *testing.T) {
+	ctx := harness.New(t)
+	vols := generated.NewVolumeServiceClient(connAs(t, ctx, mintCastToken(t, ctx, "ci-vol", "")))
+	for name, params := range map[string]map[string]string{
+		"snapshot restore": {types.RestoreFromSnapshotParam: "prod/nightly"},
+		"secret param":     {"token": "secret:db.prod.rune/password"},
+	} {
+		c, cancel := ctx.Ctx()
+		_, err := vols.CreateVolume(c, &generated.CreateVolumeRequest{Volume: &generated.Volume{
+			Name: "v-" + strings.ReplaceAll(name, " ", "-"), Namespace: "trial",
+			StorageClassName: "local", Size: "1Gi", AccessMode: "ReadWriteOnce", Parameters: params,
+		}, EnsureNamespace: true})
+		cancel()
+		if status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s: want PermissionDenied, got %v", name, err)
+		}
+	}
+}
+
+// RestoreVolume stamps the restore parameter itself, so it is admitted too,
+// before the snapshot is even looked up.
+func TestCrossNamespaceRefs_RestoreFromAnotherNamespaceNeedsGet(t *testing.T) {
+	ctx := harness.New(t)
+	c, cancel := ctx.Ctx()
+	defer cancel()
+	snaps := generated.NewSnapshotServiceClient(connAs(t, ctx, mintCastToken(t, ctx, "ci-restore", "")))
+	_, err := snaps.RestoreVolume(c, &generated.RestoreVolumeRequest{
+		SnapshotName: "nightly", SnapshotNamespace: "prod",
+		TargetVolumeName: "stolen", TargetNamespace: "trial",
+	})
+	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "snapshots") {
+		t.Fatalf("want a snapshots:get denial, got %v", err)
+	}
 }

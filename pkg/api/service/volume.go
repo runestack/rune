@@ -89,14 +89,15 @@ func (s *VolumeService) CreateVolume(ctx context.Context, req *generated.CreateV
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume: %v", err)
 	}
 	v.Namespace = types.NS(v.Namespace)
+	// Before ensureNamespaceExists, so a denied request creates nothing.
+	if err := admitVolume(ctx, s.admission, v); err != nil {
+		return nil, err
+	}
 	if err := ensureNamespaceExists(ctx, s.nsRepo, v.Namespace, req.EnsureNamespace); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "ensure namespace: %v", err)
 	}
 	if err := s.validateAgainstStorageClass(ctx, v); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	if err := admitVolume(ctx, s.admission, v); err != nil {
-		return nil, err
 	}
 	if err := s.repo.Create(ctx, v); err != nil {
 		if store.IsAlreadyExistsError(err) {

@@ -200,6 +200,18 @@ func (s *SnapshotService) RestoreVolume(ctx context.Context, req *generated.Rest
 		return nil, status.Error(codes.InvalidArgument, "target_volume_name is required")
 	}
 	snapNS := types.NS(req.SnapshotNamespace)
+	targetNS := req.TargetNamespace
+	if targetNS == "" {
+		targetNS = snapNS
+	}
+	// Admit the snapshot reference before looking it up, so a denied caller
+	// learns nothing about whether it exists or is ready.
+	if err := admitVolume(ctx, s.admission, &types.Volume{
+		Namespace:  targetNS,
+		Parameters: map[string]string{RestoreFromSnapshotParam: snapNS + "/" + req.SnapshotName},
+	}); err != nil {
+		return nil, err
+	}
 	snap, err := s.repo.Get(ctx, snapNS, req.SnapshotName)
 	if err != nil {
 		if store.IsNotFoundError(err) {
@@ -218,10 +230,6 @@ func (s *SnapshotService) RestoreVolume(ctx context.Context, req *generated.Rest
 	scName := req.StorageClassName
 	if scName == "" && src != nil {
 		scName = src.StorageClassName
-	}
-	targetNS := req.TargetNamespace
-	if targetNS == "" {
-		targetNS = snapNS
 	}
 	params := map[string]string{RestoreFromSnapshotParam: snap.Namespace + "/" + snap.Name}
 	if src != nil {
