@@ -132,9 +132,10 @@ func NewGate(auth Authorizer) *Gate {
 	return &Gate{auth: auth}
 }
 
-// AdmitService checks svc against the service admission requirements.
-// It fails closed: with a gate installed, a payload that needs the
-// privileged verb and a context with no subject is denied.
+// AdmitService checks svc against the service admission requirements: the
+// privileged verb in its own namespace, and read access in every other
+// namespace it references. It fails closed: with a gate installed, a payload
+// that needs either and a context with no subject is denied.
 func (g *Gate) AdmitService(ctx context.Context, svc *types.Service) error {
 	if g == nil || IsSystem(ctx) {
 		return nil
@@ -145,6 +146,11 @@ func (g *Gate) AdmitService(ctx context.Context, svc *types.Service) error {
 	}
 	for _, r := range ServiceRequirements(svc) {
 		if err := g.require(ctx, r, ns); err != nil {
+			return err
+		}
+	}
+	for _, r := range ServiceReferenceRequirements(svc) {
+		if err := g.require(ctx, r.Requirement, r.Namespace); err != nil {
 			return err
 		}
 	}
