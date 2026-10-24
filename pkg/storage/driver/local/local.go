@@ -211,16 +211,12 @@ func (d *managedDriver) Delete(ctx context.Context, opctx driver.OpContext, hand
 		return nil
 	}
 	// Bounded rm -rf: refuse to touch anything outside LocalVolumeRoot.
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return fmt.Errorf("local: resolve %q: %w", dir, err)
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	rootAbs, err := filepath.Abs(d.cfg.LocalVolumeRoot)
+	abs, err := d.volumePath(dir)
 	if err != nil {
-		return fmt.Errorf("local: resolve root %q: %w", d.cfg.LocalVolumeRoot, err)
-	}
-	if !pathHasPrefix(abs, rootAbs) {
-		return fmt.Errorf("local: refusing to delete %q outside localVolumeRoot %q: %w", abs, rootAbs, driver.ErrInvalidConfig)
+		return fmt.Errorf("local: refusing to delete: %w", err)
 	}
 	if err := os.RemoveAll(abs); err != nil {
 		return fmt.Errorf("local: rm -rf %q: %w", abs, err)
@@ -244,7 +240,14 @@ func (d *managedDriver) Mount(ctx context.Context, opctx driver.OpContext, opts 
 	if opts.Handle == "" {
 		return "", fmt.Errorf("local: Mount called with empty handle: %w", driver.ErrInvalidConfig)
 	}
-	return driver.MountTarget(string(opts.Handle)), nil
+	// The handle becomes a container bind source, so it must be one of
+	// this driver's volume directories. The resolved path is returned so
+	// a symlink swapped in after the check cannot redirect the bind.
+	dir, err := d.volumePath(string(opts.Handle))
+	if err != nil {
+		return "", fmt.Errorf("local: refusing to mount: %w", err)
+	}
+	return driver.MountTarget(dir), nil
 }
 
 func (d *managedDriver) Unmount(ctx context.Context, opctx driver.OpContext, target driver.MountTarget) error {
@@ -255,9 +258,12 @@ func (d *managedDriver) Snapshot(ctx context.Context, opctx driver.OpContext, re
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	src := string(req.Handle)
-	if src == "" {
+	if req.Handle == "" {
 		return "", fmt.Errorf("local: Snapshot called with empty handle: %w", driver.ErrInvalidConfig)
+	}
+	src, err := d.volumePath(string(req.Handle))
+	if err != nil {
+		return "", fmt.Errorf("local: refusing to snapshot: %w", err)
 	}
 	if req.Snapshot == nil {
 		return "", fmt.Errorf("local: Snapshot called with nil Snapshot: %w", driver.ErrInvalidConfig)
@@ -282,13 +288,17 @@ func (d *managedDriver) RestoreFromSnapshot(ctx context.Context, opctx driver.Op
 	if opctx.Volume == nil {
 		return "", fmt.Errorf("local: RestoreFromSnapshot: OpContext.Volume (target) is required: %w", driver.ErrInvalidConfig)
 	}
+	src, err := within(string(req.SourceHandle), d.cfg.SnapshotRoot)
+	if err != nil {
+		return "", fmt.Errorf("local: refusing to restore: source %w", err)
+	}
 	dst := d.volumeDir(opctx.Volume)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return "", fmt.Errorf("local: mkdir target parent %q: %w", filepath.Dir(dst), err)
 	}
 	// Remove any partial directory from a prior failed restore.
 	_ = os.RemoveAll(dst)
-	if err := copyTree(string(req.SourceHandle), dst); err != nil {
+	if err := copyTree(src, dst); err != nil {
 		return "", fmt.Errorf("local: restore copy %q -> %q: %w", req.SourceHandle, dst, err)
 	}
 	return driver.VolumeHandle(dst), nil
@@ -322,6 +332,21 @@ func (d *managedDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpConte
 		return fmt.Errorf("local: rm -rf snapshot %q: %w", abs, err)
 	}
 	return nil
+}
+
+// volumePath resolves handle and checks it is a volume directory of this
+// driver: strictly inside LocalVolumeRoot, and not in the snapshot store.
+// Symlinks are resolved first, since a container can plant one inside its
+// own volume directory.
+func (d *managedDriver) volumePath(handle string) (string, error) {
+	p, err := within(handle, d.cfg.LocalVolumeRoot)
+	if err != nil {
+		return "", err
+	}
+	if snap, serr := filepath.EvalSymlinks(d.cfg.SnapshotRoot); serr == nil && pathHasPrefix(p, snap) {
+		return "", fmt.Errorf("%q is in the snapshot store, not a volume: %w", handle, driver.ErrInvalidConfig)
+	}
+	return p, nil
 }
 
 func (d *managedDriver) volumeDir(v *types.Volume) string {
@@ -412,7 +437,17 @@ func (d *hostDriver) Mount(ctx context.Context, opctx driver.OpContext, opts dri
 	if _, err := os.Stat(string(opts.Handle)); err != nil {
 		return "", fmt.Errorf("local-host: stat mount source %q: %w", opts.Handle, err)
 	}
-	return driver.MountTarget(string(opts.Handle)), nil
+	// The allowlist was checked at provision, but the handle is what gets
+	// bound, so it is checked again here, after resolving symlinks.
+	resolved, err := filepath.EvalSymlinks(string(opts.Handle))
+	if err != nil {
+		return "", fmt.Errorf("local-host: resolve mount source %q: %w", opts.Handle, err)
+	}
+	if !d.allowedResolved(resolved) {
+		return "", fmt.Errorf("local-host: refusing to mount %q (resolves to %q): not in hostPathAllowlist: %w",
+			opts.Handle, resolved, driver.ErrInvalidConfig)
+	}
+	return driver.MountTarget(resolved), nil
 }
 
 func (d *hostDriver) Unmount(ctx context.Context, opctx driver.OpContext, target driver.MountTarget) error {
@@ -437,6 +472,41 @@ func (d *hostDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpContext,
 
 func (d *hostDriver) allowed(abs string) bool {
 	return IsHostPathAllowed(abs, d.cfg.HostPathAllowlist)
+}
+
+// allowedResolved checks an already symlink-resolved path against the
+// allowlist with its entries resolved the same way, so an allowlisted
+// directory reached through a symlink still matches.
+func (d *hostDriver) allowedResolved(resolved string) bool {
+	for _, prefix := range d.cfg.HostPathAllowlist {
+		p, err := filepath.EvalSymlinks(prefix)
+		if err != nil {
+			if p, err = filepath.Abs(prefix); err != nil {
+				continue
+			}
+		}
+		if pathHasPrefix(resolved, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// within resolves path through symlinks and checks it lies strictly
+// inside root, also resolved. It returns the resolved path.
+func within(path, root string) (string, error) {
+	r, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root %q: %w", root, err)
+	}
+	p, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %q: %w", path, err)
+	}
+	if p == r || !pathHasPrefix(p, r) {
+		return "", fmt.Errorf("%q (resolves to %q) is outside %q: %w", path, p, r, driver.ErrInvalidConfig)
+	}
+	return p, nil
 }
 
 // IsHostPathAllowed reports whether abs is inside any prefix in

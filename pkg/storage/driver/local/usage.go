@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,7 +15,11 @@ import (
 // reported as 0 (unknown) — directory-backed volumes have no device
 // boundary, so callers fall back to the volume's declared spec size.
 func (d *managedDriver) Usage(ctx context.Context, _ driver.OpContext, handle driver.VolumeHandle) (uint64, uint64, error) {
-	used, err := duDir(ctx, string(handle))
+	dir, err := d.volumePath(string(handle))
+	if err != nil {
+		return 0, 0, err
+	}
+	used, err := duDir(ctx, dir)
 	return used, 0, err
 }
 
@@ -22,7 +27,14 @@ func (d *managedDriver) Usage(ctx context.Context, _ driver.OpContext, handle dr
 // directory-walk semantics as the managed driver — the handle is the
 // operator-owned host path.
 func (d *hostDriver) Usage(ctx context.Context, _ driver.OpContext, handle driver.VolumeHandle) (uint64, uint64, error) {
-	used, err := duDir(ctx, string(handle))
+	dir, err := filepath.EvalSymlinks(string(handle))
+	if err != nil {
+		return 0, 0, err
+	}
+	if !d.allowedResolved(dir) {
+		return 0, 0, fmt.Errorf("local-host: %q is not in hostPathAllowlist: %w", handle, driver.ErrInvalidConfig)
+	}
+	used, err := duDir(ctx, dir)
 	return used, 0, err
 }
 
