@@ -135,6 +135,13 @@ message GetServerVersionResponse {
 
   // Architecture the server is running on (GOARCH).
   string arch = 6;
+
+  // Ready reports that startup completed through the node phase — the
+  // control plane serves before the dataplane/volumes/ingress start, so
+  // version alone does not mean healthy. This is an atomic read of an
+  // in-memory flag, never a store or subsystem probe: the RPC is public
+  // on every transport precisely because it is free to serve.
+  bool ready = 7;
 }
 
 // HealthService provides health status information about platform components.

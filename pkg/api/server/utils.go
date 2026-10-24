@@ -183,6 +183,22 @@ func methodToAction(method string) (string, string) {
 		return "*", "get"
 	case strings.HasPrefix(method, "/rune.api.AuthService/WhoAmI"):
 		return "auth", "get"
+	case strings.HasPrefix(method, "/rune.api.AdminService/UpgradeServer"):
+		// Deliberately NOT ("admin","*"): resource "admin" carries the
+		// localhost-only gate (adminUnaryInterceptor), and a remote
+		// operator upgrading without SSH is the point of the feature —
+		// the alternative, auth.allow_remote_admin, would open the entire
+		// admin surface to the network to enable one RPC.
+		//
+		// "server" rather than "system": "system" is already the built-in
+		// namespace name, and a policy author writing rules should not
+		// have to hold two meanings for one word. Of the shipped builtins
+		// only root and admin (both *:*) grant it, but the authorizer
+		// matches any rule naming the resource, so a custom policy can
+		// grant it too. Must never be added to publicMethodSuffixes;
+		// TestUpgradeServerRBAC pins this case and its methodToResource
+		// twin in sync.
+		return "server", "upgrade"
 	case strings.HasPrefix(method, "/rune.api.AdminService/"):
 		return "admin", "*"
 	default:
@@ -193,6 +209,10 @@ func methodToAction(method string) (string, string) {
 // methodToResource maps a gRPC method to a resource
 func methodToResource(method string) string {
 	switch {
+	case strings.HasPrefix(method, "/rune.api.AdminService/UpgradeServer"):
+		// Must stay in sync with methodToAction's case above — resource
+		// "admin" would re-arm the localhost-only gate.
+		return "server"
 	case strings.HasPrefix(method, "/rune.api.AdminService/"):
 		return "admin"
 	default:

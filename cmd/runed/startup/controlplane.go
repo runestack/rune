@@ -119,7 +119,12 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 			log.Str("backend", observeStore.Capabilities().Backend))
 	}
 
-	apiServer, err := server.New(buildServerOptions(b.flags.GRPCAddr, b.flags.HTTPAddr, stateStore, appCfg, logger, b.identity.NodeID, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)...)
+	serverOpts := buildServerOptions(b.flags.GRPCAddr, b.flags.HTTPAddr, stateStore, appCfg, logger, b.identity.NodeID, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)
+	if stager := newUpgradeStager(b.flags.DataDir, b.identity.NodeID, eventLog, logger); stager != nil {
+		serverOpts = append(serverOpts, server.WithUpgradeStager(stager))
+		go watchUpgradeResult(b.ctx, eventLog, b.identity.NodeID, logger)
+	}
+	apiServer, err := server.New(serverOpts...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)

@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -178,4 +179,96 @@ func TestRecorder_EmitRejectsBadInput(t *testing.T) {
 	require.Error(t, err)
 	err = r.Emit(context.Background(), types.Event{Kind: "x"})
 	require.Error(t, err)
+}
+
+// ListSince is the ascending outbox view, so asking it for "the newest" by
+// passing cursor 0 hands back the OLDEST events. ListLatest exists because
+// the CLI's event views want recency; a caller that confuses the two shows
+// a stale window on exactly the busy box where it matters.
+func TestListLatest_ReturnsNewestNotOldest(t *testing.T) {
+	r := newTestRecorder(t)
+	ctx := context.Background()
+	for i := 0; i < 30; i++ {
+		if err := r.Emit(ctx, mkEvent("Reason", fmt.Sprintf("event-%02d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	latest, err := r.ListLatest(ctx, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest) != 5 {
+		t.Fatalf("want 5 events, got %d", len(latest))
+	}
+	if latest[0].Message != "event-29" {
+		t.Fatalf("newest first: got %q, want event-29", latest[0].Message)
+	}
+	if latest[4].Message != "event-25" {
+		t.Fatalf("descending: got %q, want event-25", latest[4].Message)
+	}
+
+	// The distinction this function exists for: the ascending view with a
+	// zero cursor starts at the other end of the log.
+	oldest, err := r.ListSince(ctx, 0, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldest[0].Message != "event-00" {
+		t.Fatalf("ListSince(0) must start at the oldest, got %q", oldest[0].Message)
+	}
+	if latest[0].Seq <= oldest[0].Seq {
+		t.Fatalf("ListLatest must return higher sequences than ListSince(0): %d vs %d", latest[0].Seq, oldest[0].Seq)
+	}
+}
+
+// A request field must never size an allocation. ListEvents takes its limit
+// off the wire from a caller any readonly token can be, so an unclamped
+// value reaching make() is a remote OOM of the control plane.
+func TestListLatestFiltered_BoundsAllocationAndScan(t *testing.T) {
+	r := newTestRecorder(t)
+	ctx := context.Background()
+	for i := 0; i < 20; i++ {
+		e := mkEvent("Reason", fmt.Sprintf("event-%02d", i))
+		e.Namespace = "busy"
+		if i%10 == 0 {
+			e.Namespace = "quiet"
+		}
+		if err := r.Emit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// An absurd limit must not be honoured as a capacity.
+	got, err := r.ListLatestFiltered(ctx, "", 1<<30, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap(got) > maxEventScan {
+		t.Fatalf("capacity %d exceeds the scan bound %d", cap(got), maxEventScan)
+	}
+
+	// A quiet namespace is still found behind busier ones, because the
+	// filter runs inside the scan rather than over a fixed window.
+	quiet, err := r.ListLatestFiltered(ctx, "quiet", 5, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(quiet) == 0 {
+		t.Fatal("a quiet namespace must not be starved by busier ones")
+	}
+	for _, e := range quiet {
+		if e.Namespace != "quiet" {
+			t.Fatalf("filter leaked %q", e.Namespace)
+		}
+	}
+
+	// maxScan is a real budget: examining one key cannot return more.
+	capped, err := r.ListLatestFiltered(ctx, "", 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) > 1 {
+		t.Fatalf("maxScan=1 returned %d events", len(capped))
+	}
 }

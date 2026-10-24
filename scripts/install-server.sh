@@ -379,9 +379,42 @@ UNIT
   # above; no drop-in override is needed.
 
 
+  install_upgrade_units
   systemctl daemon-reload
   systemctl enable --now runed
   log "Systemd service installed and enabled"
+}
+
+# RUNE-321: in-band upgrade units + version floor, so upgrades after this
+# one can be `rune upgrade` instead of SSH. Rendered by the installed
+# binary — no second template to drift. Skipped on builds that predate it.
+install_upgrade_units() {
+  local bin=/usr/local/bin/runed staging="$DATA_DIR/upgrade" floor_version
+  if ! "$bin" print-systemd --upgrade-units --staging "$staging" </dev/null >/dev/null 2>&1; then
+    return
+  fi
+  # A build with no release version cannot seed a floor, and arming the
+  # units without one leaves the host downgrade-open until its first
+  # successful in-band upgrade seeds one.
+  floor_version="${RUNE_VERSION:-$("$bin" --version 2>/dev/null | grep -oE 'v[0-9][^ )]*' | head -1 || true)}"
+  if [ -z "$floor_version" ] && [ ! -f /etc/rune/version-floor ]; then
+    log "⚠️  this build reports no release version; skipping in-band upgrade units"
+    log "    (re-run with --version vX.Y.Z to enable 'rune upgrade')"
+    return
+  fi
+  "$bin" print-systemd --upgrade-units --staging "$staging" --binary "$bin" --config /etc/rune/runefile.toml > /etc/systemd/system/runed-upgrade.service
+  "$bin" print-systemd --upgrade-path-unit --staging "$staging" > /etc/systemd/system/runed-upgrade.path
+  systemctl daemon-reload
+  systemctl enable --now runed-upgrade.path 2>/dev/null || true
+  # Seed the downgrade floor. Without it the applier allows any version —
+  # so a source build with no tag and no existing floor gets no units at
+  # all (see the guard above).
+  if [ ! -f /etc/rune/version-floor ]; then
+    mkdir -p /etc/rune
+    printf '%s\n' "$floor_version" > /etc/rune/version-floor
+    log "Seeded version floor at /etc/rune/version-floor ($floor_version)"
+  fi
+  log "Installed in-band upgrade units (rune upgrade)"
 }
 
 verify_installation() {

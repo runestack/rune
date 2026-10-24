@@ -2550,6 +2550,123 @@ func (x *NetworkStatusResponse) GetCapacity() uint32 {
 	return 0
 }
 
+// UpgradeServerRequest asks the server to stage an upgrade of its own
+// binaries to a published release (RUNE-321). The server downloads the
+// artifact itself from the pinned release host; a root systemd oneshot
+// applies it after independently re-verifying against the release's
+// checksums.
+type UpgradeServerRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Release tag, e.g. "v0.0.1-dev.150".
+	Version string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	// Advisory: the digest the CLI resolved from checksums.txt for this
+	// server's os/arch. The stager enforces it so bad bytes fail early, but
+	// the applier trusts only its own independent re-verification.
+	Sha256 string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// Explicit opt-in when the target is older than the running version.
+	// The root-owned version floor on the host still applies.
+	AllowDowngrade bool `protobuf:"varint,3,opt,name=allow_downgrade,json=allowDowngrade,proto3" json:"allow_downgrade,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *UpgradeServerRequest) Reset() {
+	*x = UpgradeServerRequest{}
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpgradeServerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpgradeServerRequest) ProtoMessage() {}
+
+func (x *UpgradeServerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpgradeServerRequest.ProtoReflect.Descriptor instead.
+func (*UpgradeServerRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_admin_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *UpgradeServerRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *UpgradeServerRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *UpgradeServerRequest) GetAllowDowngrade() bool {
+	if x != nil {
+		return x.AllowDowngrade
+	}
+	return false
+}
+
+type UpgradeServerResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Echo of the staged version; the connection drops shortly after this
+	// reply while the server restarts.
+	StagedVersion string `protobuf:"bytes,1,opt,name=staged_version,json=stagedVersion,proto3" json:"staged_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpgradeServerResponse) Reset() {
+	*x = UpgradeServerResponse{}
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpgradeServerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpgradeServerResponse) ProtoMessage() {}
+
+func (x *UpgradeServerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_api_proto_admin_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpgradeServerResponse.ProtoReflect.Descriptor instead.
+func (*UpgradeServerResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_api_proto_admin_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *UpgradeServerResponse) GetStagedVersion() string {
+	if x != nil {
+		return x.StagedVersion
+	}
+	return ""
+}
+
 var File_pkg_api_proto_admin_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_admin_proto_rawDesc = "" +
@@ -2722,9 +2839,16 @@ const file_pkg_api_proto_admin_proto_rawDesc = "" +
 	"\vallocations\x18\x02 \x03(\v2\x1b.rune.api.NetworkAllocationR\vallocations\x12$\n" +
 	"\x0efree_list_size\x18\x03 \x01(\rR\ffreeListSize\x12)\n" +
 	"\x10pending_releases\x18\x04 \x01(\rR\x0fpendingReleases\x12\x1a\n" +
-	"\bcapacity\x18\x05 \x01(\rR\bcapacity2\xf0\f\n" +
+	"\bcapacity\x18\x05 \x01(\rR\bcapacity\"q\n" +
+	"\x14UpgradeServerRequest\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12'\n" +
+	"\x0fallow_downgrade\x18\x03 \x01(\bR\x0eallowDowngrade\">\n" +
+	"\x15UpgradeServerResponse\x12%\n" +
+	"\x0estaged_version\x18\x01 \x01(\tR\rstagedVersion2\xc2\r\n" +
 	"\fAdminService\x12S\n" +
-	"\x0eAdminBootstrap\x12\x1f.rune.api.AdminBootstrapRequest\x1a .rune.api.AdminBootstrapResponse\x12M\n" +
+	"\x0eAdminBootstrap\x12\x1f.rune.api.AdminBootstrapRequest\x1a .rune.api.AdminBootstrapResponse\x12P\n" +
+	"\rUpgradeServer\x12\x1e.rune.api.UpgradeServerRequest\x1a\x1f.rune.api.UpgradeServerResponse\x12M\n" +
 	"\fPolicyCreate\x12\x1d.rune.api.PolicyCreateRequest\x1a\x1e.rune.api.PolicyCreateResponse\x12M\n" +
 	"\fPolicyUpdate\x12\x1d.rune.api.PolicyUpdateRequest\x1a\x1e.rune.api.PolicyUpdateResponse\x12M\n" +
 	"\fPolicyDelete\x12\x1d.rune.api.PolicyDeleteRequest\x1a\x1e.rune.api.PolicyDeleteResponse\x12D\n" +
@@ -2759,7 +2883,7 @@ func file_pkg_api_proto_admin_proto_rawDescGZIP() []byte {
 	return file_pkg_api_proto_admin_proto_rawDescData
 }
 
-var file_pkg_api_proto_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 49)
+var file_pkg_api_proto_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 51)
 var file_pkg_api_proto_admin_proto_goTypes = []any{
 	(*Subject)(nil),                         // 0: rune.api.Subject
 	(*AdminBootstrapRequest)(nil),           // 1: rune.api.AdminBootstrapRequest
@@ -2809,7 +2933,9 @@ var file_pkg_api_proto_admin_proto_goTypes = []any{
 	(*NetworkStatusRequest)(nil),            // 45: rune.api.NetworkStatusRequest
 	(*NetworkAllocation)(nil),               // 46: rune.api.NetworkAllocation
 	(*NetworkStatusResponse)(nil),           // 47: rune.api.NetworkStatusResponse
-	nil,                                     // 48: rune.api.RegistryAuthConfig.DataEntry
+	(*UpgradeServerRequest)(nil),            // 48: rune.api.UpgradeServerRequest
+	(*UpgradeServerResponse)(nil),           // 49: rune.api.UpgradeServerResponse
+	nil,                                     // 50: rune.api.RegistryAuthConfig.DataEntry
 }
 var file_pkg_api_proto_admin_proto_depIdxs = []int32{
 	3,  // 0: rune.api.Policy.rules:type_name -> rune.api.PolicyRule
@@ -2822,7 +2948,7 @@ var file_pkg_api_proto_admin_proto_depIdxs = []int32{
 	0,  // 7: rune.api.UserCreateResponse.user:type_name -> rune.api.Subject
 	0,  // 8: rune.api.UserListResponse.users:type_name -> rune.api.Subject
 	23, // 9: rune.api.TokenListResponse.tokens:type_name -> rune.api.TokenInfo
-	48, // 10: rune.api.RegistryAuthConfig.data:type_name -> rune.api.RegistryAuthConfig.DataEntry
+	50, // 10: rune.api.RegistryAuthConfig.data:type_name -> rune.api.RegistryAuthConfig.DataEntry
 	26, // 11: rune.api.RegistryConfig.auth:type_name -> rune.api.RegistryAuthConfig
 	27, // 12: rune.api.ListRegistriesResponse.registries:type_name -> rune.api.RegistryConfig
 	27, // 13: rune.api.GetRegistryResponse.registry:type_name -> rune.api.RegistryConfig
@@ -2833,47 +2959,49 @@ var file_pkg_api_proto_admin_proto_depIdxs = []int32{
 	42, // 18: rune.api.RegistriesStatusResponse.registries:type_name -> rune.api.RegistryRuntimeStatus
 	46, // 19: rune.api.NetworkStatusResponse.allocations:type_name -> rune.api.NetworkAllocation
 	1,  // 20: rune.api.AdminService.AdminBootstrap:input_type -> rune.api.AdminBootstrapRequest
-	5,  // 21: rune.api.AdminService.PolicyCreate:input_type -> rune.api.PolicyCreateRequest
-	7,  // 22: rune.api.AdminService.PolicyUpdate:input_type -> rune.api.PolicyUpdateRequest
-	9,  // 23: rune.api.AdminService.PolicyDelete:input_type -> rune.api.PolicyDeleteRequest
-	11, // 24: rune.api.AdminService.PolicyGet:input_type -> rune.api.PolicyGetRequest
-	13, // 25: rune.api.AdminService.PolicyList:input_type -> rune.api.PolicyListRequest
-	15, // 26: rune.api.AdminService.PolicyAttachToSubject:input_type -> rune.api.PolicyAttachToSubjectRequest
-	17, // 27: rune.api.AdminService.PolicyDetachFromSubject:input_type -> rune.api.PolicyDetachFromSubjectRequest
-	19, // 28: rune.api.AdminService.UserCreate:input_type -> rune.api.UserCreateRequest
-	21, // 29: rune.api.AdminService.UserList:input_type -> rune.api.UserListRequest
-	24, // 30: rune.api.AdminService.TokenList:input_type -> rune.api.TokenListRequest
-	28, // 31: rune.api.AdminService.ListRegistries:input_type -> rune.api.ListRegistriesRequest
-	30, // 32: rune.api.AdminService.GetRegistry:input_type -> rune.api.GetRegistryRequest
-	32, // 33: rune.api.AdminService.AddRegistry:input_type -> rune.api.AddRegistryRequest
-	34, // 34: rune.api.AdminService.UpdateRegistry:input_type -> rune.api.UpdateRegistryRequest
-	36, // 35: rune.api.AdminService.RemoveRegistry:input_type -> rune.api.RemoveRegistryRequest
-	38, // 36: rune.api.AdminService.BootstrapAuth:input_type -> rune.api.BootstrapAuthRequest
-	40, // 37: rune.api.AdminService.TestRegistry:input_type -> rune.api.TestRegistryRequest
-	43, // 38: rune.api.AdminService.RegistriesStatus:input_type -> rune.api.RegistriesStatusRequest
-	45, // 39: rune.api.AdminService.NetworkStatus:input_type -> rune.api.NetworkStatusRequest
-	2,  // 40: rune.api.AdminService.AdminBootstrap:output_type -> rune.api.AdminBootstrapResponse
-	6,  // 41: rune.api.AdminService.PolicyCreate:output_type -> rune.api.PolicyCreateResponse
-	8,  // 42: rune.api.AdminService.PolicyUpdate:output_type -> rune.api.PolicyUpdateResponse
-	10, // 43: rune.api.AdminService.PolicyDelete:output_type -> rune.api.PolicyDeleteResponse
-	12, // 44: rune.api.AdminService.PolicyGet:output_type -> rune.api.PolicyGetResponse
-	14, // 45: rune.api.AdminService.PolicyList:output_type -> rune.api.PolicyListResponse
-	16, // 46: rune.api.AdminService.PolicyAttachToSubject:output_type -> rune.api.PolicyAttachToSubjectResponse
-	18, // 47: rune.api.AdminService.PolicyDetachFromSubject:output_type -> rune.api.PolicyDetachFromSubjectResponse
-	20, // 48: rune.api.AdminService.UserCreate:output_type -> rune.api.UserCreateResponse
-	22, // 49: rune.api.AdminService.UserList:output_type -> rune.api.UserListResponse
-	25, // 50: rune.api.AdminService.TokenList:output_type -> rune.api.TokenListResponse
-	29, // 51: rune.api.AdminService.ListRegistries:output_type -> rune.api.ListRegistriesResponse
-	31, // 52: rune.api.AdminService.GetRegistry:output_type -> rune.api.GetRegistryResponse
-	33, // 53: rune.api.AdminService.AddRegistry:output_type -> rune.api.AddRegistryResponse
-	35, // 54: rune.api.AdminService.UpdateRegistry:output_type -> rune.api.UpdateRegistryResponse
-	37, // 55: rune.api.AdminService.RemoveRegistry:output_type -> rune.api.RemoveRegistryResponse
-	39, // 56: rune.api.AdminService.BootstrapAuth:output_type -> rune.api.BootstrapAuthResponse
-	41, // 57: rune.api.AdminService.TestRegistry:output_type -> rune.api.TestRegistryResponse
-	44, // 58: rune.api.AdminService.RegistriesStatus:output_type -> rune.api.RegistriesStatusResponse
-	47, // 59: rune.api.AdminService.NetworkStatus:output_type -> rune.api.NetworkStatusResponse
-	40, // [40:60] is the sub-list for method output_type
-	20, // [20:40] is the sub-list for method input_type
+	48, // 21: rune.api.AdminService.UpgradeServer:input_type -> rune.api.UpgradeServerRequest
+	5,  // 22: rune.api.AdminService.PolicyCreate:input_type -> rune.api.PolicyCreateRequest
+	7,  // 23: rune.api.AdminService.PolicyUpdate:input_type -> rune.api.PolicyUpdateRequest
+	9,  // 24: rune.api.AdminService.PolicyDelete:input_type -> rune.api.PolicyDeleteRequest
+	11, // 25: rune.api.AdminService.PolicyGet:input_type -> rune.api.PolicyGetRequest
+	13, // 26: rune.api.AdminService.PolicyList:input_type -> rune.api.PolicyListRequest
+	15, // 27: rune.api.AdminService.PolicyAttachToSubject:input_type -> rune.api.PolicyAttachToSubjectRequest
+	17, // 28: rune.api.AdminService.PolicyDetachFromSubject:input_type -> rune.api.PolicyDetachFromSubjectRequest
+	19, // 29: rune.api.AdminService.UserCreate:input_type -> rune.api.UserCreateRequest
+	21, // 30: rune.api.AdminService.UserList:input_type -> rune.api.UserListRequest
+	24, // 31: rune.api.AdminService.TokenList:input_type -> rune.api.TokenListRequest
+	28, // 32: rune.api.AdminService.ListRegistries:input_type -> rune.api.ListRegistriesRequest
+	30, // 33: rune.api.AdminService.GetRegistry:input_type -> rune.api.GetRegistryRequest
+	32, // 34: rune.api.AdminService.AddRegistry:input_type -> rune.api.AddRegistryRequest
+	34, // 35: rune.api.AdminService.UpdateRegistry:input_type -> rune.api.UpdateRegistryRequest
+	36, // 36: rune.api.AdminService.RemoveRegistry:input_type -> rune.api.RemoveRegistryRequest
+	38, // 37: rune.api.AdminService.BootstrapAuth:input_type -> rune.api.BootstrapAuthRequest
+	40, // 38: rune.api.AdminService.TestRegistry:input_type -> rune.api.TestRegistryRequest
+	43, // 39: rune.api.AdminService.RegistriesStatus:input_type -> rune.api.RegistriesStatusRequest
+	45, // 40: rune.api.AdminService.NetworkStatus:input_type -> rune.api.NetworkStatusRequest
+	2,  // 41: rune.api.AdminService.AdminBootstrap:output_type -> rune.api.AdminBootstrapResponse
+	49, // 42: rune.api.AdminService.UpgradeServer:output_type -> rune.api.UpgradeServerResponse
+	6,  // 43: rune.api.AdminService.PolicyCreate:output_type -> rune.api.PolicyCreateResponse
+	8,  // 44: rune.api.AdminService.PolicyUpdate:output_type -> rune.api.PolicyUpdateResponse
+	10, // 45: rune.api.AdminService.PolicyDelete:output_type -> rune.api.PolicyDeleteResponse
+	12, // 46: rune.api.AdminService.PolicyGet:output_type -> rune.api.PolicyGetResponse
+	14, // 47: rune.api.AdminService.PolicyList:output_type -> rune.api.PolicyListResponse
+	16, // 48: rune.api.AdminService.PolicyAttachToSubject:output_type -> rune.api.PolicyAttachToSubjectResponse
+	18, // 49: rune.api.AdminService.PolicyDetachFromSubject:output_type -> rune.api.PolicyDetachFromSubjectResponse
+	20, // 50: rune.api.AdminService.UserCreate:output_type -> rune.api.UserCreateResponse
+	22, // 51: rune.api.AdminService.UserList:output_type -> rune.api.UserListResponse
+	25, // 52: rune.api.AdminService.TokenList:output_type -> rune.api.TokenListResponse
+	29, // 53: rune.api.AdminService.ListRegistries:output_type -> rune.api.ListRegistriesResponse
+	31, // 54: rune.api.AdminService.GetRegistry:output_type -> rune.api.GetRegistryResponse
+	33, // 55: rune.api.AdminService.AddRegistry:output_type -> rune.api.AddRegistryResponse
+	35, // 56: rune.api.AdminService.UpdateRegistry:output_type -> rune.api.UpdateRegistryResponse
+	37, // 57: rune.api.AdminService.RemoveRegistry:output_type -> rune.api.RemoveRegistryResponse
+	39, // 58: rune.api.AdminService.BootstrapAuth:output_type -> rune.api.BootstrapAuthResponse
+	41, // 59: rune.api.AdminService.TestRegistry:output_type -> rune.api.TestRegistryResponse
+	44, // 60: rune.api.AdminService.RegistriesStatus:output_type -> rune.api.RegistriesStatusResponse
+	47, // 61: rune.api.AdminService.NetworkStatus:output_type -> rune.api.NetworkStatusResponse
+	41, // [41:62] is the sub-list for method output_type
+	20, // [20:41] is the sub-list for method input_type
 	20, // [20:20] is the sub-list for extension type_name
 	20, // [20:20] is the sub-list for extension extendee
 	0,  // [0:20] is the sub-list for field type_name
@@ -2890,7 +3018,7 @@ func file_pkg_api_proto_admin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_api_proto_admin_proto_rawDesc), len(file_pkg_api_proto_admin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   49,
+			NumMessages:   51,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

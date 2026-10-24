@@ -38,6 +38,9 @@ func NewEventService(eventLog events.EventLog, logger log.Logger) *EventService 
 // EventLog has no namespace-wide indexed view yet, so we fall back to
 // the global Seq cursor and filter by namespace in process). Limit
 // defaults to 20 when zero.
+// maxEventLimit bounds what one request may ask for.
+const maxEventLimit = 1000
+
 func (s *EventService) ListEvents(ctx context.Context, req *generated.ListEventsRequest) (*generated.ListEventsResponse, error) {
 	if s.log == nil {
 		return nil, status.Error(codes.Unavailable, "event log not configured on this server")
@@ -45,6 +48,13 @@ func (s *EventService) ListEvents(ctx context.Context, req *generated.ListEvents
 	limit := int(req.Limit)
 	if limit <= 0 {
 		limit = 20
+	}
+	// Clamp at the boundary: req.Limit is an int32 off the wire, and
+	// EventService maps to ("*","get") — which the builtin readonly policy
+	// grants — so an unclamped value would let any authenticated caller
+	// size an allocation inside the control plane.
+	if limit > maxEventLimit {
+		limit = maxEventLimit
 	}
 
 	var (
@@ -71,19 +81,14 @@ func (s *EventService) ListEvents(ctx context.Context, req *generated.ListEvents
 		}
 		out, err = s.log.ListByResource(ctx, ns, canonKind, name, limit)
 	} else {
-		// Namespace-wide view: scan the cursor index and filter. Cheap
-		// for typical TTL windows (~1h of state-transition events).
-		var all []types.Event
-		all, err = s.log.ListSince(ctx, 0, 1000)
-		if err == nil {
-			// Newest first, filter by namespace.
-			for i := len(all) - 1; i >= 0 && len(out) < limit; i-- {
-				if req.Namespace != "" && all[i].Namespace != req.Namespace {
-					continue
-				}
-				out = append(out, all[i])
-			}
-		}
+		// Namespace-wide view: newest first, filtered inside the scan.
+		//
+		// Reading the sequence index in reverse rather than taking the
+		// first N of the ascending outbox view, which returns the OLDEST
+		// events — so on a busy box the newest never reached the response
+		// at all. The namespace filter runs inside the recorder so this
+		// request's limit sizes the result and not the scan.
+		out, err = s.log.ListLatestFiltered(ctx, req.Namespace, limit, 0)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list events: %v", err)

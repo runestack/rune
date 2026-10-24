@@ -48,6 +48,8 @@ type EventLog interface {
 	Emit(ctx context.Context, e types.Event) error
 	ListByResource(ctx context.Context, namespace, kind, name string, limit int) ([]types.Event, error)
 	ListSince(ctx context.Context, cursor int64, limit int) ([]types.Event, error)
+	ListLatest(ctx context.Context, limit int) ([]types.Event, error)
+	ListLatestFiltered(ctx context.Context, ns string, limit, maxScan int) ([]types.Event, error)
 	LoadCursor(ctx context.Context, consumerID string) (int64, error)
 	SaveCursor(ctx context.Context, consumerID string, seq int64) error
 }
@@ -247,8 +249,91 @@ func (r *Recorder) ListByResource(ctx context.Context, ns, kind, name string, li
 	return out, err
 }
 
+// ListLatestFiltered returns up to limit events in descending Seq order,
+// keeping only those in ns (all namespaces when ns is empty), examining at
+// most maxScan keys.
+//
+// The filter runs inside the scan rather than over its result for two
+// reasons. The output slice is sized by limit, so a caller's requested
+// limit cannot become the allocation — filtering afterwards meant sizing by
+// the scan window, which turned a request field into an unbounded make().
+// And a quiet namespace is found as long as its events are within maxScan
+// keys, where filtering a fixed window returns nothing once busier
+// namespaces fill it. maxScan remains a budget: a namespace silent for
+// longer than that many events still comes back empty.
+func (r *Recorder) ListLatestFiltered(ctx context.Context, ns string, limit, maxScan int) ([]types.Event, error) {
+	if limit <= 0 || limit > maxEventScan {
+		limit = defaultEventLimit
+	}
+	if maxScan <= 0 || maxScan > maxEventScan {
+		maxScan = maxEventScan
+	}
+	prefix := []byte(bySeqPrefix)
+	out := make([]types.Event, 0, limit)
+	err := r.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.IteratorOptions{Prefix: prefix, Reverse: true, PrefetchValues: true, PrefetchSize: limit})
+		defer it.Close()
+		// Reverse iteration needs a seek past the upper bound.
+		seekKey := append(append([]byte{}, prefix...), 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)
+		examined := 0
+		for it.Seek(seekKey); it.ValidForPrefix(prefix) && len(out) < limit && examined < maxScan; it.Next() {
+			examined++
+			var ev types.Event
+			if err := it.Item().Value(func(v []byte) error { return json.Unmarshal(v, &ev) }); err != nil {
+				return err
+			}
+			if ns != "" && ev.Namespace != ns {
+				continue
+			}
+			out = append(out, ev)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// Bounds on any caller-influenced event scan. A request field must never
+// size an allocation: ListEvents takes its limit from the wire, and an
+// int32 there would otherwise reach make() unclamped.
+const (
+	defaultEventLimit = 100
+	maxEventScan      = 10000
+)
+
+// ListLatest returns up to limit events in descending Seq order — the
+// newest events in the log.
+//
+// ListSince is the outbox view and iterates forward from a cursor, so
+// asking it for "the newest" by passing cursor 0 returns the OLDEST limit
+// events instead. A caller that wants recency (the CLI's event views) has
+// to scan the sequence index in reverse, which is what this does.
+func (r *Recorder) ListLatest(ctx context.Context, limit int) ([]types.Event, error) {
+	if limit <= 0 || limit > maxEventScan {
+		limit = defaultEventLimit
+	}
+	prefix := []byte(bySeqPrefix)
+	out := make([]types.Event, 0, limit)
+	err := r.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.IteratorOptions{Prefix: prefix, Reverse: true, PrefetchValues: true, PrefetchSize: limit})
+		defer it.Close()
+		// Reverse iteration needs a seek past the upper bound.
+		seekKey := append(append([]byte{}, prefix...), 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)
+		for it.Seek(seekKey); it.ValidForPrefix(prefix) && len(out) < limit; it.Next() {
+			var ev types.Event
+			if err := it.Item().Value(func(v []byte) error { return json.Unmarshal(v, &ev) }); err != nil {
+				return err
+			}
+			out = append(out, ev)
+		}
+		return nil
+	})
+	return out, err
+}
+
 // ListSince returns up to limit events with Seq > cursor, in ascending
-// Seq order. This is the outbox view RUNE-0XX consumers use; see
+// Seq order. No in-tree caller today — it is the outbox contract an
+// external consumer tracks with a single cursor; callers wanting recency
+// want ListLatest. This is the outbox view RUNE-0XX consumers use; see
 // RUNE-126 §5.6.
 func (r *Recorder) ListSince(ctx context.Context, cursor int64, limit int) ([]types.Event, error) {
 	if limit <= 0 {

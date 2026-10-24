@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0
 	connectrpc.com/vanguard v0.4.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
+	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/aws/aws-sdk-go-v2 v1.41.8
 	github.com/aws/aws-sdk-go-v2/config v1.30.3
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.3
