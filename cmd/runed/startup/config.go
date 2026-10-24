@@ -366,6 +366,9 @@ func resolveRuntimeConfig(f *Flags) {
 	if !cmdFlags["ui-require-tls"] && v.IsSet("ui.require_tls") {
 		f.UIRequireTLS = v.GetBool("ui.require_tls")
 	}
+	if !cmdFlags["grpc-require-tls"] && v.IsSet("server.require_tls") {
+		f.GRPCRequireTLS = v.GetBool("server.require_tls")
+	}
 
 	// Final validation and defaults for required parameters
 	if f.DataDir == "" {
