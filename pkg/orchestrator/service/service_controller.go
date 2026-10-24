@@ -61,8 +61,6 @@ type serviceController struct {
 	// Reconciliation system
 	rec *reconciler.Reconciler
 
-	events events.EventLog
-
 	// Context for background operations
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -113,7 +111,6 @@ func NewController(
 // SetEventLog wires the persisted event log into the reconciler, which emits
 // the update lifecycle (RUNE-042). Nil-safe; call once at startup.
 func (sc *serviceController) SetEventLog(eventLog events.EventLog) {
-	sc.events = eventLog
 	if sc.rec != nil {
 		sc.rec.SetEventLog(eventLog)
 	}
@@ -1105,21 +1102,37 @@ func (sc *serviceController) handleRealDeletion(ctx context.Context, service *ty
 // reconciler removes the record without completing that cleanup. What is
 // abandoned is logged and recorded as a Warn event, since the operator now
 // owns any resources it leaves behind.
+//
+// Instance cleanup cannot be abandoned. It never gets stuck — it removes the
+// records even when a container fails to stop — and abandoning it would leave
+// instances that nothing reaps once the record is gone, and that a later cast
+// of the same name would adopt.
 func (sc *serviceController) abandonFinalizers(ctx context.Context, service *types.Service, dryRun bool) (*types.DeletionResponse, error) {
 	ns, name := service.Namespace, service.Name
-	if service.Metadata == nil || service.Metadata.DeletionTimestamp == nil {
-		return nil, types.NewValidationError(fmt.Sprintf(
-			"service %s/%s is not being deleted; run `rune delete service %s` first", ns, name, name))
+	check := func(svc *types.Service) error {
+		if svc.Metadata == nil || svc.Metadata.DeletionTimestamp == nil {
+			return types.NewValidationError(fmt.Sprintf(
+				"service %s/%s is not being deleted; run `rune delete service %s -n %s` first", ns, name, name, ns))
+		}
+		if fins := svc.Metadata.Finalizers; len(fins) > 0 && fins[0] == types.FinalizerTypeInstanceCleanup {
+			return types.NewValidationError(fmt.Sprintf(
+				"service %s/%s is still removing its instances; wait for that to finish, then retry", ns, name))
+		}
+		return nil
+	}
+	if err := check(service); err != nil {
+		return nil, err
 	}
 
 	var abandoned []types.FinalizerType
 	if dryRun {
 		abandoned = service.Metadata.Finalizers
 	} else {
+		var checkErr error
 		var fresh types.Service
 		if err := sc.store.UpdateFunc(ctx, types.ResourceTypeService, ns, name, &fresh, func() error {
 			abandoned = nil
-			if fresh.Metadata == nil || fresh.Metadata.DeletionTimestamp == nil || len(fresh.Metadata.Finalizers) == 0 {
+			if checkErr = check(&fresh); checkErr != nil || len(fresh.Metadata.Finalizers) == 0 {
 				return store.ErrSkipUpdate
 			}
 			abandoned = fresh.Metadata.Finalizers
@@ -1128,6 +1141,19 @@ func (sc *serviceController) abandonFinalizers(ctx context.Context, service *typ
 		}, store.WithOrchestrator()); err != nil {
 			return nil, fmt.Errorf("failed to clear finalizers for %s/%s: %w", ns, name, err)
 		}
+		if checkErr != nil {
+			return nil, checkErr
+		}
+	}
+
+	resp := sc.inProgressDeletionResponse(ctx, service)
+	resp.Finalizers = nil
+	if dryRun {
+		resp.Status = "dry_run"
+	}
+	if len(abandoned) == 0 {
+		resp.Warnings = []string{"no finalizers left to abandon"}
+		return resp, nil
 	}
 
 	finalizers := make([]string, len(abandoned))
@@ -1135,26 +1161,18 @@ func (sc *serviceController) abandonFinalizers(ctx context.Context, service *typ
 		finalizers[i] = string(f)
 	}
 	msg := fmt.Sprintf("finalizers abandoned by operator: %s", strings.Join(finalizers, ", "))
-	if len(abandoned) == 0 {
-		msg = "no finalizers left to abandon"
-	}
 	if vols := sc.ownedVolumeNames(ctx, service); len(vols) > 0 {
 		msg += fmt.Sprintf("; owned volumes left for the operator: %s", strings.Join(vols, ", "))
 	}
+	resp.Warnings = []string{msg}
 
-	status := "dry_run"
 	if !dryRun {
-		status = "in_progress"
 		sc.logger.Warn("Abandoning service finalizers",
 			log.Str("service", name), log.Str("namespace", ns), log.Str("detail", msg))
-		sc.emitServiceEvent(ctx, service, types.EventLevelWarn, "FinalizersAbandoned", msg)
+		sc.rec.EmitServiceEvent(ctx, service, types.EventLevelWarn, "FinalizersAbandoned", msg)
 		sc.rec.Enqueue(ns, name)
 	}
-	return &types.DeletionResponse{
-		DeletionID: fmt.Sprintf("delete-%s-%s", ns, name),
-		Status:     status,
-		Warnings:   []string{msg},
-	}, nil
+	return resp, nil
 }
 
 // ownedVolumeNames lists the volume rows the service auto-provisioned that
@@ -1172,23 +1190,6 @@ func (sc *serviceController) ownedVolumeNames(ctx context.Context, service *type
 		}
 	}
 	return names
-}
-
-func (sc *serviceController) emitServiceEvent(ctx context.Context, service *types.Service, level types.EventLevel, reason, message string) {
-	if sc.events == nil {
-		return
-	}
-	if err := sc.events.Emit(ctx, types.Event{
-		Namespace: service.Namespace,
-		Kind:      "Service",
-		Name:      service.Name,
-		UID:       service.ID,
-		Level:     level,
-		Reason:    reason,
-		Message:   message,
-	}); err != nil {
-		sc.logger.Warn("Failed to emit service event", log.Str("service", service.Name), log.Err(err))
-	}
 }
 
 // deletionFinalizerList returns the ordered finalizers the reconciler runs when

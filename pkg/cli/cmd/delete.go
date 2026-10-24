@@ -429,7 +429,11 @@ func runServiceDelete(ctx context.Context, serviceName string, opts *deleteOptio
 
 	// Handle confirmation unless force is specified
 	if !opts.force && !opts.dryRun {
-		if err := confirmDeletion(ctx, serviceClient, serviceName, opts.namespace); err != nil {
+		confirm := confirmDeletion
+		if opts.abandonFinalizers {
+			confirm = confirmAbandonFinalizers
+		}
+		if err := confirm(ctx, serviceClient, serviceName, opts.namespace); err != nil {
 			return err
 		}
 	}
@@ -538,6 +542,21 @@ func confirmDeletion(ctx context.Context, serviceClient *client.ServiceClient, s
 	return nil
 }
 
+// confirmAbandonFinalizers asks before skipping a stuck teardown's remaining
+// cleanup, which cannot be undone.
+func confirmAbandonFinalizers(_ context.Context, _ *client.ServiceClient, serviceName, namespace string) error {
+	fmt.Printf("Service %s/%s will be removed without finishing its cleanup.\n", namespace, serviceName)
+	fmt.Println("Anything that cleanup would have removed (e.g. owned volumes) is left for you.")
+	fmt.Print("Abandon the remaining cleanup? (y/N): ")
+	var response string
+	fmt.Scanln(&response)
+	if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
+		fmt.Println("Cancelled.")
+		os.Exit(0)
+	}
+	return nil
+}
+
 // handleDryRun handles dry run mode
 func handleDryRun(ctx context.Context, serviceClient *client.ServiceClient, serviceName string, opts *deleteOptions) error {
 	// Create the deletion request with dry run enabled
@@ -552,6 +571,8 @@ func handleDryRun(ctx context.Context, serviceClient *client.ServiceClient, serv
 		Now:            opts.now,
 		IgnoreNotFound: opts.ignoreNotFound,
 		Finalizers:     opts.finalizers,
+
+		AbandonFinalizers: opts.abandonFinalizers,
 	}
 
 	// Execute dry run deletion
@@ -656,6 +677,13 @@ func handleTextOutput(ctx context.Context, serviceClient *client.ServiceClient, 
 		for i, finalizer := range resp.Finalizers {
 			fmt.Printf("  %d. %s\n", i+1, finalizer.Type)
 		}
+	}
+
+	// Abandoning finalizers has no deletion operation of its own to follow:
+	// the record is removed on the next reconcile.
+	if opts.abandonFinalizers {
+		fmt.Println("\nRemaining cleanup abandoned; the service record will be removed shortly.")
+		return nil
 	}
 
 	// If detach mode, just return

@@ -46,22 +46,46 @@ func TestAbandonFinalizers_RejectedUnlessBeingDeleted(t *testing.T) {
 	assert.Nil(t, got.Metadata.DeletionTimestamp, "a live service must not be touched")
 }
 
-// A teardown stuck on its finalizers can be cleared by the operator; the
-// reconciler then removes the record, and what was abandoned is named.
-func TestAbandonFinalizers_ClearsAndRemovesRecord(t *testing.T) {
-	ctx, testStore, _, _, controller := setupTestServiceController(t)
-	sc := controller.(*serviceController)
-	events := &eventCapture{}
-	sc.SetEventLog(events)
-
-	svc := createTestService(ctx, t, testStore, "stuck")
+func tombstone(ctx context.Context, t *testing.T, st *store.TestStore, svc *types.Service, fins ...types.FinalizerType) {
+	t.Helper()
 	now := time.Now()
-	require.NoError(t, testStore.UpdateFunc(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc, func() error {
+	require.NoError(t, st.UpdateFunc(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, svc, func() error {
 		svc.Metadata.DeletionTimestamp = &now
-		svc.Metadata.Finalizers = []types.FinalizerType{types.FinalizerTypeVolumeCleanup}
+		svc.Metadata.Finalizers = fins
 		svc.Status = types.ServiceStatusDeleted
 		return nil
 	}))
+}
+
+// Instance cleanup never gets stuck, and abandoning it would leave instances
+// that nothing reaps once the record is gone.
+func TestAbandonFinalizers_RefusedDuringInstanceCleanup(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+	svc := createTestService(ctx, t, testStore, "tearing")
+	tombstone(ctx, t, testStore, svc, types.FinalizerTypeInstanceCleanup, types.FinalizerTypeVolumeCleanup)
+
+	_, err := controller.DeleteService(ctx, &types.DeletionRequest{
+		Namespace: svc.Namespace, Name: svc.Name, AbandonFinalizers: true,
+	})
+	require.Error(t, err)
+	assert.True(t, types.IsValidationError(err))
+
+	var got types.Service
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, &got))
+	assert.Len(t, got.Metadata.Finalizers, 2, "nothing may be cleared")
+}
+
+// A teardown stuck on volume cleanup can be cleared by the operator; the
+// owned volume is left in place and named, and the reconciler then removes
+// the record. The controller only starts after the abandon, so the record's
+// removal can only come from it.
+func TestAbandonFinalizers_ClearsAndRemovesRecord(t *testing.T) {
+	ctx, testStore, _, _, controller := setupTestServiceController(t)
+	events := &eventCapture{}
+	controller.(*serviceController).SetEventLog(events)
+
+	svc := createTestService(ctx, t, testStore, "stuck")
+	tombstone(ctx, t, testStore, svc, types.FinalizerTypeVolumeCleanup)
 	vol := &types.Volume{Name: "data-stuck-0", Namespace: svc.Namespace, OwnerService: svc.Namespace + "/" + svc.Name}
 	require.NoError(t, testStore.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 
@@ -74,9 +98,6 @@ func TestAbandonFinalizers_ClearsAndRemovesRecord(t *testing.T) {
 	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, &got))
 	assert.NotEmpty(t, got.Metadata.Finalizers, "a dry run must not clear anything")
 
-	require.NoError(t, controller.Start(ctx))
-	defer func() { _ = controller.Stop() }()
-
 	resp, err := controller.DeleteService(ctx, &types.DeletionRequest{
 		Namespace: svc.Namespace, Name: svc.Name, AbandonFinalizers: true,
 	})
@@ -84,11 +105,19 @@ func TestAbandonFinalizers_ClearsAndRemovesRecord(t *testing.T) {
 	require.Len(t, resp.Warnings, 1)
 	assert.Contains(t, resp.Warnings[0], string(types.FinalizerTypeVolumeCleanup))
 	assert.Contains(t, resp.Warnings[0], "data-stuck-0")
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, &got))
+	assert.Empty(t, got.Metadata.Finalizers)
 
+	require.NoError(t, controller.Start(ctx))
+	defer func() { _ = controller.Stop() }()
 	require.Eventually(t, func() bool {
 		var got types.Service
 		return store.IsNotFoundError(testStore.Get(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, &got))
 	}, 10*time.Second, 20*time.Millisecond, "the reconciler removes the record once its finalizers are cleared")
+
+	var left types.Volume
+	require.NoError(t, testStore.Get(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &left),
+		"an abandoned volume cleanup leaves the volume for the operator")
 
 	events.mu.Lock()
 	defer events.mu.Unlock()
