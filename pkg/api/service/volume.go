@@ -99,6 +99,10 @@ func (s *VolumeService) CreateVolume(ctx context.Context, req *generated.CreateV
 	if err := s.validateAgainstStorageClass(ctx, v); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+	// Handle, Status and the binding fields are the control plane's to set:
+	// a client-chosen Handle on an Available volume skips provisioning and
+	// is bind-mounted verbatim. Clear them so the controller provisions.
+	types.ZeroServerOwnedVolumeFields(v)
 	if err := s.repo.Create(ctx, v); err != nil {
 		if store.IsAlreadyExistsError(err) {
 			return nil, status.Errorf(codes.AlreadyExists, "volume already exists: %s/%s", v.Namespace, v.Name)
@@ -145,6 +149,17 @@ func (s *VolumeService) UpdateVolume(ctx context.Context, req *generated.UpdateV
 	if err := admitVolume(ctx, s.admission, v); err != nil {
 		return nil, err
 	}
+	// The control-plane fields are the server's: take them from the stored
+	// volume, never the request, so an update cannot rewrite the Handle or
+	// flip Status to Available.
+	stored, err := s.repo.Get(ctx, v.Namespace, v.Name)
+	if err != nil {
+		if store.IsNotFoundError(err) {
+			return nil, status.Errorf(codes.NotFound, "volume not found: %s/%s", v.Namespace, v.Name)
+		}
+		return nil, status.Errorf(codes.Internal, "get: %v", err)
+	}
+	types.CarryServerOwnedVolumeFields(stored, v)
 	if err := s.repo.Update(ctx, v, store.WithSource(store.EventSourceAPI)); err != nil {
 		if store.IsNotFoundError(err) {
 			return nil, status.Errorf(codes.NotFound, "volume not found: %s/%s", v.Namespace, v.Name)

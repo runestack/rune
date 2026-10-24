@@ -420,9 +420,14 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 		v.OwnedBy = &stamp
 		if existing, err := a.c.volumes.Get(ctx, ref.Namespace, ref.Name); err == nil {
 			a.capture(ref, preImage{Existed: true, Volume: deepCopy(existing)})
+			// Control-plane fields (Handle, Status, bindings) are the
+			// server's; a cast must not set them (a client-chosen Handle on
+			// an Available volume is bind-mounted verbatim).
+			types.CarryServerOwnedVolumeFields(existing, v)
 			return a.c.volumes.Update(ctx, v)
 		}
 		a.capture(ref, preImage{})
+		types.ZeroServerOwnedVolumeFields(v)
 		return a.c.volumes.Create(ctx, v)
 	default:
 		// ActionReference for shared cluster kinds (Namespace, StorageClass):

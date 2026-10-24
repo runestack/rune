@@ -22,6 +22,19 @@ func newVolumeTestService(t *testing.T) *VolumeService {
 	return NewVolumeService(st, log.GetDefaultLogger())
 }
 
+// seedVolume writes a volume straight to the store, including control-plane
+// fields that CreateVolume now refuses from a client, so a test can set up a
+// Failed/Bound/Available volume to exercise.
+func seedRawVolume(t *testing.T, svc *VolumeService, v *types.Volume) {
+	t.Helper()
+	if err := svc.nsRepo.Create(context.Background(), &types.Namespace{Name: v.Namespace}); err != nil && !store.IsAlreadyExistsError(err) {
+		t.Fatalf("seed namespace %s: %v", v.Namespace, err)
+	}
+	if err := svc.repo.Create(context.Background(), v); err != nil {
+		t.Fatalf("seed volume %s/%s: %v", v.Namespace, v.Name, err)
+	}
+}
+
 func TestVolumeServiceCRUD(t *testing.T) {
 	ctx := context.Background()
 	svc := newVolumeTestService(t)
@@ -74,14 +87,12 @@ func TestVolumeServiceListSelectors(t *testing.T) {
 	ctx := context.Background()
 	svc := newVolumeTestService(t)
 
-	for _, v := range []*generated.Volume{
-		{Name: "a", Namespace: "ns1", StorageClassName: "local", Size: "1Gi", AccessMode: "ReadWriteOnce", Labels: map[string]string{"tier": "fast"}, Status: "Available"},
-		{Name: "b", Namespace: "ns1", StorageClassName: "local", Size: "1Gi", AccessMode: "ReadWriteOnce", Labels: map[string]string{"tier": "slow"}, Status: "Pending"},
+	for _, v := range []*types.Volume{
+		{Name: "a", Namespace: "ns1", StorageClassName: "local", Size: "1Gi", AccessMode: "ReadWriteOnce", Labels: map[string]string{"tier": "fast"}, Status: types.VolumeStatusAvailable},
+		{Name: "b", Namespace: "ns1", StorageClassName: "local", Size: "1Gi", AccessMode: "ReadWriteOnce", Labels: map[string]string{"tier": "slow"}, Status: types.VolumeStatusPending},
 		{Name: "c", Namespace: "ns2", StorageClassName: "local", Size: "1Gi", AccessMode: "ReadWriteOnce"},
 	} {
-		if _, err := svc.CreateVolume(ctx, &generated.CreateVolumeRequest{Volume: v, EnsureNamespace: true}); err != nil {
-			t.Fatalf("create %s: %v", v.Name, err)
-		}
+		seedRawVolume(t, svc, v)
 	}
 
 	resp, err := svc.ListVolumes(ctx, &generated.ListVolumesRequest{Namespace: "ns1"})
@@ -162,20 +173,15 @@ func TestVolumeServiceRetryProvision(t *testing.T) {
 	ctx := context.Background()
 	svc := newVolumeTestService(t)
 
-	mk := func(name, st string) {
-		if _, err := svc.CreateVolume(ctx, &generated.CreateVolumeRequest{
-			Volume: &generated.Volume{
-				Name: name, Namespace: "ns", StorageClassName: "local",
-				Size: "1Gi", AccessMode: "ReadWriteOnce", Status: st,
-			},
-			EnsureNamespace: true,
-		}); err != nil {
-			t.Fatalf("seed %s: %v", name, err)
-		}
+	mk := func(name string, st types.VolumeStatus) {
+		seedRawVolume(t, svc, &types.Volume{
+			Name: name, Namespace: "ns", StorageClassName: "local",
+			Size: "1Gi", AccessMode: types.AccessModeRWO, Status: st,
+		})
 	}
-	mk("failed-vol", "Failed")
-	mk("stalled-vol", "Stalled")
-	mk("avail-vol", "Available")
+	mk("failed-vol", types.VolumeStatusFailed)
+	mk("stalled-vol", types.VolumeStatusStalled)
+	mk("avail-vol", types.VolumeStatusAvailable)
 
 	// Failed → Pending.
 	resp, err := svc.RetryProvisionVolume(ctx, &generated.RetryProvisionVolumeRequest{Name: "failed-vol", Namespace: "ns"})
@@ -214,17 +220,12 @@ func TestVolumeServiceDetach(t *testing.T) {
 	ctx := context.Background()
 	svc := newVolumeTestService(t)
 
-	if _, err := svc.CreateVolume(ctx, &generated.CreateVolumeRequest{
-		Volume: &generated.Volume{
-			Name: "bound", Namespace: "ns", StorageClassName: "local",
-			Size: "1Gi", AccessMode: "ReadWriteOnce",
-			Status: "Bound", BoundClaim: "svc/data/0", BoundNode: "n1",
-			Handle: "/var/lib/rune/v/ns/bound", OwnerService: "ns/svc",
-		},
-		EnsureNamespace: true,
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	seedRawVolume(t, svc, &types.Volume{
+		Name: "bound", Namespace: "ns", StorageClassName: "local",
+		Size: "1Gi", AccessMode: types.AccessModeRWO,
+		Status: types.VolumeStatusBound, BoundClaim: "svc/data/0", BoundNode: "n1",
+		Handle: "/var/lib/rune/v/ns/bound", OwnerService: "ns/svc",
+	})
 
 	// Soft detach refused.
 	_, err := svc.DetachVolume(ctx, &generated.DetachVolumeRequest{Name: "bound", Namespace: "ns"})
@@ -295,5 +296,58 @@ func TestVolumeService_AdmitsParameterReferences(t *testing.T) {
 	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("update referencing prod's secret: want PermissionDenied, got %v", err)
+	}
+}
+
+// The core escape: a client must not create a volume already Available with
+// a chosen Handle (which the reconciler would skip and the driver bind-mount
+// verbatim). CreateVolume clears the control-plane fields.
+func TestVolumeService_CreateClearsClientHandleAndStatus(t *testing.T) {
+	ctx := context.Background()
+	svc := newVolumeTestService(t)
+	resp, err := svc.CreateVolume(ctx, &generated.CreateVolumeRequest{
+		Volume: &generated.Volume{
+			Name: "evil", Namespace: "ns", StorageClassName: "local",
+			Size: "1Gi", AccessMode: "ReadWriteOnce",
+			Status: "Available", Handle: "/etc", BoundClaim: "x/y/0", OwnerService: "ns/x",
+		},
+		EnsureNamespace: true,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if resp.Volume.Handle != "" || resp.Volume.Status == string(types.VolumeStatusAvailable) {
+		t.Fatalf("client Handle/Available survived create: handle=%q status=%q", resp.Volume.Handle, resp.Volume.Status)
+	}
+	stored, err := svc.repo.Get(ctx, "ns", "evil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Handle != "" || stored.Status == types.VolumeStatusAvailable || stored.BoundClaim != "" || stored.OwnerService != "" {
+		t.Fatalf("control-plane fields stored from client: %+v", stored)
+	}
+}
+
+// An update must not rewrite the Handle or flip Status: the stored values win.
+func TestVolumeService_UpdatePreservesServerFields(t *testing.T) {
+	ctx := context.Background()
+	svc := newVolumeTestService(t)
+	seedRawVolume(t, svc, &types.Volume{
+		Name: "data", Namespace: "ns", StorageClassName: "local", Size: "1Gi",
+		AccessMode: types.AccessModeRWO, Status: types.VolumeStatusAvailable,
+		Handle: "/var/lib/rune/v/ns/data",
+	})
+	resp, err := svc.UpdateVolume(ctx, &generated.UpdateVolumeRequest{Volume: &generated.Volume{
+		Name: "data", Namespace: "ns", StorageClassName: "local", Size: "2Gi",
+		AccessMode: "ReadWriteOnce", Status: "Available", Handle: "/etc/shadow",
+	}})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if resp.Volume.Handle != "/var/lib/rune/v/ns/data" {
+		t.Fatalf("client rewrote Handle to %q", resp.Volume.Handle)
+	}
+	if resp.Volume.Size != "2Gi" {
+		t.Fatalf("legitimate Size change was lost: %q", resp.Volume.Size)
 	}
 }

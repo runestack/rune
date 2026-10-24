@@ -518,3 +518,46 @@ func ValidateProcessRuntimeVolumes(owner string, runtime RuntimeType, vols []Vol
 	}
 	return nil
 }
+
+// serverOwnedVolumeFields are the Volume fields the control plane and the
+// storage driver own: a client that sets them on a write is ignored. Handle
+// and Status are the load-bearing pair — a client-chosen Handle on a volume
+// written already Available skips provisioning and is bind-mounted verbatim,
+// so a caller with volumes:create could mount an arbitrary host path. The
+// binding and driver-output fields travel with them.
+
+// ZeroServerOwnedVolumeFields clears the control-plane fields on a volume a
+// client is creating, so provisioning assigns them. A zero Status reconciles
+// as Pending.
+func ZeroServerOwnedVolumeFields(v *Volume) {
+	if v == nil {
+		return
+	}
+	v.Handle = ""
+	v.DriverParameters = nil
+	v.OwnerService = ""
+	v.BoundNode = ""
+	v.BoundClaim = ""
+	v.Status = ""
+	v.StatusReason = ""
+	v.Message = ""
+	v.InitializedFor = nil
+}
+
+// CarryServerOwnedVolumeFields copies the control-plane fields from the
+// stored volume onto an incoming update, so a client update cannot rewrite
+// them (e.g. flip a provisioning volume to Available with a chosen Handle).
+func CarryServerOwnedVolumeFields(stored, v *Volume) {
+	if stored == nil || v == nil {
+		return
+	}
+	v.Handle = stored.Handle
+	v.DriverParameters = stored.DriverParameters
+	v.OwnerService = stored.OwnerService
+	v.BoundNode = stored.BoundNode
+	v.BoundClaim = stored.BoundClaim
+	v.Status = stored.Status
+	v.StatusReason = stored.StatusReason
+	v.Message = stored.Message
+	v.InitializedFor = stored.InitializedFor
+}
