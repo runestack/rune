@@ -154,3 +154,24 @@ func TestLoad_MissingFileReturnsDefaults(t *testing.T) {
 	assert.Equal(t, def.UI.HandoffTTL, cfg.UI.HandoffTTL)
 	assert.Equal(t, def.Namespace, cfg.Namespace)
 }
+
+// The documented snake_case limit keys must reach the store options; they
+// were silently ignored when store.Limits had no yaml tags.
+func TestLoad_DecodesSecretAndConfigLimits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runefile.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[secret.limits]
+max_object_bytes = 2048
+max_key_name_length = 64
+
+[config.limits]
+max_object_bytes = 4096
+max_key_name_length = 128
+`), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, 2048, cfg.Secret.Limits.MaxObjectBytes)
+	require.Equal(t, 64, cfg.Secret.Limits.MaxKeyNameLength)
+	require.Equal(t, 4096, cfg.ConfigResource.Limits.MaxObjectBytes)
+	require.Equal(t, 128, cfg.ConfigResource.Limits.MaxKeyNameLength)
+}
