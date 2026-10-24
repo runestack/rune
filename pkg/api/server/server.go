@@ -64,6 +64,9 @@ type APIServer struct {
 
 	// gRPC server
 	grpcServer *grpc.Server
+	// grpcListenAddr is where gRPC actually bound, which grpcBindAddr may
+	// have narrowed to loopback; the exec bridge dials it.
+	grpcListenAddr string
 
 	// HTTP server for the embedded dashboard + gRPC-Web transcoder (RUNE-200)
 	httpServer *http.Server
@@ -309,10 +312,12 @@ func (s *APIServer) Start() error {
 // startGRPCServer starts the gRPC server.
 func (s *APIServer) startGRPCServer() error {
 	// Create listener
-	lis, err := net.Listen("tcp", s.options.GRPCAddr)
+	addr := s.grpcBindAddr()
+	lis, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", s.options.GRPCAddr, err)
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
+	s.grpcListenAddr = addr
 
 	// Set up server options
 	var opts []grpc.ServerOption
