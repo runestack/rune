@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/containerd/errdefs"
+
 	"github.com/google/uuid"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
@@ -245,14 +247,26 @@ func (r *ProcessRunner) Create(ctx context.Context, instance *types.Instance) er
 }
 
 // Start starts an existing process instance
-func (r *ProcessRunner) Start(ctx context.Context, instance *types.Instance) error {
+func (r *ProcessRunner) Start(ctx context.Context, instance *types.Instance) (err error) {
 	r.mu.RLock()
 	proc, exists := r.processes[instance.ID]
 	r.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("instance with ID %s not found", instance.ID)
+		return fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
+
+	// An exec.Cmd can only be started once, so an instance whose start
+	// failed can never start; the caller's retry is Create then Start.
+	// Release it so that Create does not find it "already exists".
+	// Registered before the unlock below, so it runs after it: release
+	// takes r.mu, which is always taken before proc.mu.
+	startFailed := false
+	defer func() {
+		if startFailed {
+			r.release(instance.ID, proc)
+		}
+	}()
 
 	proc.mu.Lock()
 	defer proc.mu.Unlock()
@@ -271,6 +285,10 @@ func (r *ProcessRunner) Start(ctx context.Context, instance *types.Instance) err
 	if err := proc.cmd.Start(); err != nil {
 		proc.status.State = types.InstanceStatusFailed
 		proc.status.ErrorMessage = err.Error()
+		// Only a Cmd that never ran is released. Starting a Stopped
+		// instance also fails here ("already started"), but that one
+		// holds the previous run's log, which must survive.
+		startFailed = proc.cmd.Process == nil
 		return fmt.Errorf("failed to start process: %w", err)
 	}
 
@@ -342,7 +360,7 @@ func (r *ProcessRunner) Stop(ctx context.Context, instance *types.Instance, time
 	r.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("instance with ID %s not found", instance.ID)
+		return fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	proc.mu.Lock()
@@ -427,7 +445,7 @@ func (r *ProcessRunner) Remove(ctx context.Context, instance *types.Instance, fo
 
 	proc, exists := r.processes[instance.ID]
 	if !exists {
-		return fmt.Errorf("instance with ID %s not found", instance.ID)
+		return fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	proc.mu.Lock()
@@ -449,31 +467,7 @@ func (r *ProcessRunner) Remove(ctx context.Context, instance *types.Instance, fo
 		}
 	}
 
-	// Close log file
-	if proc.logFile != nil {
-		_ = proc.logFile.Close()
-	}
-
-	// Cleanup resource controller cgroup
-	if proc.rc != nil {
-		_ = proc.rc.cleanup()
-		proc.rc = nil
-	}
-
-	// Remove files created under workDir
-	for _, fp := range proc.cleanupFiles {
-		// Best-effort remove only files inside workDir
-		if strings.HasPrefix(fp, proc.workDir+string(os.PathSeparator)) || fp == proc.workDir {
-			_ = os.Remove(fp)
-		}
-	}
-
-	// Remove workspace directory
-	if err := os.RemoveAll(proc.workDir); err != nil {
-		r.logger.Warn("Failed to remove workspace directory",
-			log.Str("instance_id", proc.instance.ID),
-			log.Err(err))
-	}
+	r.cleanupLocked(proc)
 
 	// Remove from process map
 	delete(r.processes, instance.ID)
@@ -485,6 +479,43 @@ func (r *ProcessRunner) Remove(ctx context.Context, instance *types.Instance, fo
 	return nil
 }
 
+// cleanupLocked releases what Create allocated for proc: its log file,
+// cgroup, materialised files and workspace. Caller holds proc.mu.
+func (r *ProcessRunner) cleanupLocked(proc *managedProcess) {
+	if proc.logFile != nil {
+		_ = proc.logFile.Close()
+	}
+	if proc.rc != nil {
+		_ = proc.rc.cleanup()
+		proc.rc = nil
+	}
+	for _, fp := range proc.cleanupFiles {
+		// Best-effort remove only files inside workDir
+		if strings.HasPrefix(fp, proc.workDir+string(os.PathSeparator)) || fp == proc.workDir {
+			_ = os.Remove(fp)
+		}
+	}
+	if err := os.RemoveAll(proc.workDir); err != nil {
+		r.logger.Warn("Failed to remove workspace directory",
+			log.Str("instance_id", proc.instance.ID),
+			log.Err(err))
+	}
+}
+
+// release drops an instance whose start failed, if it is still the one
+// registered under id.
+func (r *ProcessRunner) release(id string, proc *managedProcess) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.processes[id] != proc {
+		return
+	}
+	proc.mu.Lock()
+	r.cleanupLocked(proc)
+	proc.mu.Unlock()
+	delete(r.processes, id)
+}
+
 // GetLogs retrieves logs from a process instance
 func (r *ProcessRunner) GetLogs(ctx context.Context, instance *types.Instance, options runner.LogOptions) (io.ReadCloser, error) {
 	r.mu.RLock()
@@ -492,7 +523,7 @@ func (r *ProcessRunner) GetLogs(ctx context.Context, instance *types.Instance, o
 	r.mu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("instance with ID %s not found", instance.ID)
+		return nil, fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	proc.mu.RLock()
@@ -1010,7 +1041,7 @@ func (r *ProcessRunner) Status(ctx context.Context, instance *types.Instance) (t
 	r.mu.RUnlock()
 
 	if !exists {
-		return types.InstanceStatusFailed, fmt.Errorf("instance with ID %s not found", instance.ID)
+		return types.InstanceStatusFailed, fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	proc.mu.RLock()
