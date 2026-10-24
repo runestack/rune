@@ -23,8 +23,10 @@ type StoreOptions struct {
 	ConfigLimits Limits
 }
 
-// Limits defines per-resource limits
+// Limits defines per-resource limits. The yaml tags are the runefile keys
+// under [secret.limits] and [config.limits]; without them the decoder only
+// matched the run-together field names, so the documented keys were ignored.
 type Limits struct {
-	MaxObjectBytes   int
-	MaxKeyNameLength int
+	MaxObjectBytes   int `yaml:"max_object_bytes"`
+	MaxKeyNameLength int `yaml:"max_key_name_length"`
 }
