@@ -54,7 +54,6 @@ docker:
         type: "basic"
         username: ""
         password: ""
-        insecure: true      # HTTP registry
 
 # Secret encryption configuration
 secret:

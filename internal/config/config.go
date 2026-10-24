@@ -1,9 +1,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -403,7 +407,36 @@ func (c *Config) KEKOptions() *crypto.KEKOptions {
 	}
 }
 
+// Load reads the runefile at path into Default(). A missing file is not an
+// error; a file that does not parse, or does not decode into Config, is.
 func Load(path string) (*Config, error) {
+	cfg, _, err := LoadWithUnknownKeys(path)
+	return cfg, err
+}
+
+// readElsewhere are runefile keys with no Config field, read through viper
+// elsewhere: the docker modes by pkg/runner/manager, debug and pretty by
+// runed's flag resolution, and from_secret (an alias of fromSecret) by the
+// registry bootstrap in pkg/api/service. They are valid, so they must not be
+// reported as unknown. Slice indexes are dropped before the lookup.
+var readElsewhere = map[string]bool{
+	"debug":                                true,
+	"pretty":                               true,
+	"docker.registries.auth.from_secret":   true,
+	"docker.secret_dir_mode":               true,
+	"docker.secret_file_mode":              true,
+	"docker.config_dir_mode":               true,
+	"docker.config_file_mode":              true,
+	"docker.disable_ambient_registry_auth": true,
+}
+
+var sliceIndex = regexp.MustCompile(`\[\d+\]`)
+
+// LoadWithUnknownKeys is Load, plus the keys in the file that nothing reads,
+// sorted. A misspelled key otherwise falls back to its default with no sign
+// anything is wrong. Unknown keys are not an error: a rolled-back runed must
+// still start on a runefile written for a newer one.
+func LoadWithUnknownKeys(path string) (*Config, []string, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
 	if path == "" {
@@ -413,19 +446,35 @@ func Load(path string) (*Config, error) {
 		v.AddConfigPath("/etc/rune/") // System-wide production config
 	}
 	cfg := Default()
-	if err := v.ReadInConfig(); err == nil {
-		// Decode against the `yaml` struct tags — they are the runefile
-		// schema-of-record. Viper's default decoder matches `mapstructure`
-		// tags (which these structs don't declare) and falls back to
-		// case-insensitive field-name matching, which silently drops every
-		// multi-word snake_case key (handoff_ttl, retention_days, data_dir,
-		// ...). Viper's default decode hooks (string→duration, string→slice)
-		// are preserved; only the tag name changes.
-		if err := v.Unmarshal(cfg, func(dc *mapstructure.DecoderConfig) {
-			dc.TagName = "yaml"
-		}); err != nil {
-			return nil, err
+	if err := v.ReadInConfig(); err != nil {
+		// Only absence means "use the defaults". A file that is there but
+		// does not parse must not quietly become a default config, TLS off.
+		var notFound viper.ConfigFileNotFoundError
+		if errors.As(err, &notFound) || errors.Is(err, fs.ErrNotExist) {
+			return cfg, nil, nil
+		}
+		return nil, nil, fmt.Errorf("runefile %s: %w", path, err)
+	}
+	// Decode against the `yaml` struct tags — they are the runefile
+	// schema-of-record. Viper's default decoder matches `mapstructure`
+	// tags (which these structs don't declare) and falls back to
+	// case-insensitive field-name matching, which silently drops every
+	// multi-word snake_case key (handoff_ttl, retention_days, data_dir,
+	// ...). Viper's default decode hooks (string→duration, string→slice)
+	// are preserved; only the tag name changes.
+	var md mapstructure.Metadata
+	if err := v.Unmarshal(cfg, func(dc *mapstructure.DecoderConfig) {
+		dc.TagName = "yaml"
+		dc.Metadata = &md
+	}); err != nil {
+		return nil, nil, fmt.Errorf("runefile %s: %w", v.ConfigFileUsed(), err)
+	}
+	var unknown []string
+	for _, k := range md.Unused {
+		if !readElsewhere[sliceIndex.ReplaceAllString(k, "")] {
+			unknown = append(unknown, k)
 		}
 	}
-	return cfg, nil
+	sort.Strings(unknown)
+	return cfg, unknown, nil
 }
