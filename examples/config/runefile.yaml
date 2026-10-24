@@ -8,11 +8,18 @@ server:
   # HTTP endpoint for REST gateway
   http_address: ":7861"
   
-  # TLS configuration (for future use)
+  # TLS for gRPC and the dashboard. With enabled: true and no cert_file /
+  # key_file, runed generates a self-signed certificate under
+  # <data_dir>/tls and logs its fingerprint for clients to pin.
   tls:
     enabled: false
-    cert_file: "/path/to/cert.pem"
-    key_file: "/path/to/key.pem"
+    # cert_file: "/etc/rune/tls/server.crt"
+    # key_file: "/etc/rune/tls/server.key"
+    # hosts: ["rune.example.com"]   # extra names for the self-signed cert
+
+  # With TLS off, bind gRPC to 127.0.0.1 instead of serving plaintext
+  # on a public address.
+  require_tls: false
 
 # Data directory for persistent storage
 # If not specified, a default OS-specific path will be used

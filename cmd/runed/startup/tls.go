@@ -46,7 +46,14 @@ func serverTLSOptions(t config.TLS, requireTLS bool, dataDir string, logger log.
 		if err != nil {
 			return nil, fmt.Errorf("self-signed TLS certificate: %w", err)
 		}
-		if sc.NewKey {
+		for _, p := range sc.Tightened {
+			logger.Warn("TLS file permissions were too wide; narrowed", log.Str("path", p))
+		}
+		switch {
+		case sc.ReplacedKey:
+			logger.Warn("TLS key was missing and has been regenerated: every client pinned to the old fingerprint must re-pin",
+				log.Str("key", sc.KeyFile), log.Str("fingerprint", sc.Fingerprint))
+		case sc.NewKey:
 			logger.Info("Generated a self-signed TLS key", log.Str("key", sc.KeyFile))
 		}
 		certFile, keyFile, fingerprint = sc.CertFile, sc.KeyFile, sc.Fingerprint

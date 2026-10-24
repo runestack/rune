@@ -123,3 +123,67 @@ func TestCertFileFingerprintMatchesGenerated(t *testing.T) {
 		t.Fatalf("fingerprint %q, %v; want %q", fp, err, sc.Fingerprint)
 	}
 }
+
+func TestLoadOrCreateServerCert_NarrowsWidePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tls")
+	sc, err := LoadOrCreateServerCert(dir, []string{"a"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sc.KeyFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	again, err := LoadOrCreateServerCert(dir, []string{"a"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Tightened) != 2 {
+		t.Errorf("Tightened = %v, want the dir and the key", again.Tightened)
+	}
+	for path, want := range map[string]os.FileMode{dir: 0o700, sc.KeyFile: 0o600} {
+		fi, _ := os.Stat(path)
+		if got := fi.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %o, want %o", path, got, want)
+		}
+	}
+}
+
+// A key regenerated next to an existing certificate breaks every pin, so
+// the caller must be told it happened.
+func TestLoadOrCreateServerCert_ReportsReplacedKey(t *testing.T) {
+	dir := t.TempDir()
+	first, err := LoadOrCreateServerCert(dir, []string{"a"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ReplacedKey {
+		t.Fatal("first generation is not a replacement")
+	}
+	if err := os.Remove(first.KeyFile); err != nil {
+		t.Fatal(err)
+	}
+	again, err := LoadOrCreateServerCert(dir, []string{"a"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.ReplacedKey || again.Fingerprint == first.Fingerprint {
+		t.Fatalf("ReplacedKey=%v, fingerprint changed=%v", again.ReplacedKey, again.Fingerprint != first.Fingerprint)
+	}
+}
+
+func TestLoadOrCreateServerCert_IsNotACA(t *testing.T) {
+	sc, err := LoadOrCreateServerCert(t.TempDir(), []string{"a"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.LoadX509KeyPair(sc.CertFile, sc.KeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pair.Leaf.BasicConstraintsValid || pair.Leaf.IsCA {
+		t.Fatalf("BasicConstraintsValid=%v IsCA=%v", pair.Leaf.BasicConstraintsValid, pair.Leaf.IsCA)
+	}
+}

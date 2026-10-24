@@ -19,6 +19,9 @@ func TestGRPCBindAddr(t *testing.T) {
 		{"plaintext specific host, required: loopback", "10.0.0.5:7863", false, true, "127.0.0.1:7863"},
 		{"plaintext loopback, required: unchanged", "127.0.0.1:7863", false, true, "127.0.0.1:7863"},
 		{"TLS public, required: unchanged", "0.0.0.0:7863", true, true, "0.0.0.0:7863"},
+		{"plaintext IPv6 any, required: loopback", "[::]:7863", false, true, "127.0.0.1:7863"},
+		{"plaintext IPv6 any, not required: serves as asked", "[::]:7863", false, false, "[::]:7863"},
+		{"plaintext IPv6 loopback, required: unchanged", "[::1]:7863", false, true, "[::1]:7863"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

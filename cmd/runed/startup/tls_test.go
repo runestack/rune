@@ -81,3 +81,40 @@ func TestServerTLSOptions_FailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestServerTLSOptions_UnwritableTLSDirErrors(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.Chmod(dataDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o700) })
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if _, err := serverTLSOptions(config.TLS{Enabled: true}, false, dataDir, log.NewTestLogger()); err == nil {
+		t.Fatal("an unwritable data_dir/tls was accepted")
+	}
+}
+
+// A typo under [server.tls] decodes as TLS off. With require_tls set, the
+// result must still be a loopback-only gRPC bind (see grpcBindAddr), never
+// plaintext on a public address.
+func TestServerTLSOptions_TypoWithRequireTLSStaysLoopback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runefile.toml")
+	body := "[server]\ngrpc_address = \":7863\"\nrequire_tls = true\n\n[server.tls]\nenabeld = true\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := serverTLSOptions(cfg.Server.TLS, cfg.Server.RequireTLS, dir, log.NewTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := applied(opts); o.EnableTLS || !o.GRPCRequireTLS {
+		t.Fatalf("EnableTLS=%v GRPCRequireTLS=%v; want TLS off and require on", o.EnableTLS, o.GRPCRequireTLS)
+	}
+}

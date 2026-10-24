@@ -34,9 +34,14 @@ type ServerCert struct {
 	CertFile    string
 	KeyFile     string
 	Fingerprint string
-	// NewKey reports that this call generated the key, so any pin made
-	// against an earlier key no longer matches.
+	// NewKey reports that this call generated the key.
 	NewKey bool
+	// ReplacedKey reports a new key where a certificate already existed:
+	// the key file was missing, so every client's pin is now wrong.
+	ReplacedKey bool
+	// Tightened lists paths whose permissions were wider than 0700/0600
+	// and have been narrowed; the caller should say so.
+	Tightened []string
 }
 
 // LoadOrCreateServerCert returns the self-signed server certificate in dir,
@@ -50,6 +55,13 @@ func LoadOrCreateServerCert(dir string, hosts []string, now time.Time) (*ServerC
 	certPath := filepath.Join(dir, serverCertFile)
 	keyPath := filepath.Join(dir, serverKeyFile)
 	dns, ips := splitHosts(hosts)
+
+	tightened, err := tightenModes(map[string]os.FileMode{dir: 0o700, keyPath: 0o600})
+	if err != nil {
+		return nil, err
+	}
+	_, certErr := os.Stat(certPath)
+	certExisted := certErr == nil
 
 	key, err := readECKey(keyPath)
 	newKey := false
@@ -80,7 +92,14 @@ func LoadOrCreateServerCert(dir string, hosts []string, now time.Time) (*ServerC
 			return nil, err
 		}
 	}
-	return &ServerCert{CertFile: certPath, KeyFile: keyPath, Fingerprint: SPKIFingerprint(cert), NewKey: newKey}, nil
+	return &ServerCert{
+		CertFile:    certPath,
+		KeyFile:     keyPath,
+		Fingerprint: SPKIFingerprint(cert),
+		NewKey:      newKey,
+		ReplacedKey: newKey && certExisted,
+		Tightened:   tightened,
+	}, nil
 }
 
 // SPKIFingerprint is the SHA-256 of the certificate's public key, as
@@ -139,8 +158,12 @@ func issueServerCert(key *ecdsa.PrivateKey, dns []string, ips []net.IP, now time
 		NotAfter:     now.Add(serverCertValidity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     dns,
-		IPAddresses:  ips,
+		// A leaf, never a CA: a client that trusts it via --ca-file must
+		// not accept certificates it signs.
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+		DNSNames:              dns,
+		IPAddresses:           ips,
 	}
 	return x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 }
@@ -201,6 +224,41 @@ func writePEM(path, typ string, der []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// tightenModes applies tighten to each path and returns the ones it narrowed.
+func tightenModes(modes map[string]os.FileMode) ([]string, error) {
+	var narrowed []string
+	for path, want := range modes {
+		ok, err := tighten(path, want)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			narrowed = append(narrowed, path)
+		}
+	}
+	slices.Sort(narrowed)
+	return narrowed, nil
+}
+
+// tighten narrows path to want when its mode is wider, and reports whether
+// it did. A missing path is left alone.
+func tighten(path string, want os.FileMode) (bool, error) {
+	fi, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if fi.Mode().Perm()&^want == 0 {
+		return false, nil
+	}
+	if err := os.Chmod(path, want); err != nil {
+		return false, fmt.Errorf("narrow %s to %o: %w", path, want, err)
+	}
+	return true, nil
 }
 
 func ipStrings(ips []net.IP) []string {

@@ -385,7 +385,7 @@ func (s *APIServer) startGRPCServer() error {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.logger.Info("Starting gRPC server", log.Str("address", s.options.GRPCAddr))
+		s.logger.Info("Starting gRPC server", log.Str("address", addr), log.Bool("tls", s.options.EnableTLS))
 		if err := s.grpcServer.Serve(lis); err != nil {
 			s.logger.Error("gRPC server error", log.Err(err))
 		}
