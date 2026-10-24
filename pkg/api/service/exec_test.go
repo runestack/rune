@@ -3,12 +3,18 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -255,4 +261,66 @@ func waitForStreamFlush(t *testing.T, stream *MockExecServiceStream) {
 		return stdout && stderr && exit
 	}, 2*time.Second, 10*time.Millisecond,
 		"stdout/stderr/exit frames were not all sent; stream goroutines had not flushed")
+}
+
+// The exec stream keeps using the context it was created with for the
+// whole session (exit code, resize), so initialisation must not cancel
+// it on return.
+func TestInitializeExecSession_ContextOutlivesInit(t *testing.T) {
+	testOrchestrator, _, _ := setupTestEnvironment(t)
+	mockStream := NewMockExecServiceStream(metadata.NewIncomingContext(context.Background(), metadata.New(nil)))
+	mockStream.On("Recv").Return(&generated.ExecRequest{
+		Request: &generated.ExecRequest_Init{Init: &generated.ExecInitRequest{
+			Target:  &generated.ExecInitRequest_InstanceId{InstanceId: "instance123"},
+			Command: []string{"true"},
+		}},
+	}, nil).Once()
+
+	svc := NewExecService(log.NewLogger(), testOrchestrator)
+	_, _, err := svc.initializeExecSession(mockStream)
+	assert.NoError(t, err)
+	if assert.Len(t, testOrchestrator.ExecInInstanceCalls, 1) {
+		assert.NoError(t, testOrchestrator.ExecInInstanceCalls[0].Ctx.Err(),
+			"the exec stream's context must still be live after initialisation")
+	}
+}
+
+type exitCodeErrStream struct{ types.ExecStream }
+
+func (exitCodeErrStream) ExitCode() (int, error) { return 0, errors.New("inspect failed") }
+
+// An unknown exit code must not be reported as success.
+func TestSendExitCode_UnknownIsNotZero(t *testing.T) {
+	mockStream := NewMockExecServiceStream(context.Background())
+	mockStream.On("Send", mock.MatchedBy(func(resp *generated.ExecResponse) bool {
+		st, ok := resp.Response.(*generated.ExecResponse_Status)
+		return ok && st.Status.Code == int32(codes.Unknown)
+	})).Return(nil).Once()
+
+	svc := NewExecService(log.NewLogger(), orchestrator.NewFakeOrchestrator())
+	svc.sendExitCode(mockStream, exitCodeErrStream{})
+	mockStream.AssertExpectations(t)
+	for _, c := range mockStream.Calls {
+		if c.Method == "Send" {
+			_, isExit := c.Arguments.Get(0).(*generated.ExecResponse).Response.(*generated.ExecResponse_Exit)
+			assert.False(t, isExit, "no exit response may be sent when the code is unknown")
+		}
+	}
+}
+
+func TestIsBenignStreamError(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("write: %w", io.ErrClosedPipe), true},
+		{fmt.Errorf("read: %w", net.ErrClosed), true},
+		{&os.PathError{Op: "write", Path: "|1", Err: os.ErrClosed}, true},
+		{&net.OpError{Op: "write", Err: &os.SyscallError{Syscall: "write", Err: syscall.EPIPE}}, true},
+		{&net.OpError{Op: "read", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}, false},
+		{errors.New("connection reset by peer"), false},
+		{nil, false},
+	} {
+		assert.Equal(t, c.want, isBenignStreamError(c.err), "%v", c.err)
+	}
 }

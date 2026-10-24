@@ -243,10 +243,7 @@ func TestProcessExecStreamExitCodeError(t *testing.T) {
 	stream, err := NewProcessExecStream(ctx, "test-instance", options, logger)
 	assert.NoError(t, err)
 
-	// Wait for the process to complete
-	time.Sleep(100 * time.Millisecond)
-
-	// Check exit code
+	// ExitCode waits for the process; no sleep needed.
 	exitCode, err := stream.ExitCode()
 	assert.NoError(t, err) // No error, but non-zero exit code
 	assert.Equal(t, 1, exitCode)
@@ -331,4 +328,16 @@ func TestProcessExecStreamStderr(t *testing.T) {
 	// Close and cleanup
 	err = stream.Close()
 	assert.NoError(t, err)
+}
+
+// A process killed by a signal reports 128+signal, as a shell does, not
+// the -1 Go gives for "no exit status".
+func TestProcessExecStreamSignalledExitCode(t *testing.T) {
+	stream, err := NewProcessExecStream(context.Background(), "test-instance",
+		runner.ExecOptions{Command: []string{"sh", "-c", "kill -9 $$"}}, log.NewLogger())
+	require.NoError(t, err)
+	defer stream.Close()
+	code, err := stream.ExitCode()
+	require.NoError(t, err)
+	assert.Equal(t, 137, code)
 }

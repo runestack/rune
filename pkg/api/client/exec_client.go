@@ -2,11 +2,11 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -52,10 +52,9 @@ type ExecOptions struct {
 
 // ExecSession represents an active exec session.
 type ExecSession struct {
-	stream    generated.ExecService_StreamExecClient
-	client    *ExecClient
-	logger    log.Logger
-	exitState int // Track exit command state
+	stream generated.ExecService_StreamExecClient
+	client *ExecClient
+	logger log.Logger
 }
 
 // NewExecSession creates a new exec session.
@@ -189,28 +188,9 @@ func (s *ExecSession) RunInteractive() error {
 			}
 
 			if n > 0 {
-				input := string(buffer[:n])
-
-				// Check if this is an exit command or Ctrl+D
-				if s.isExitCommand(input) {
-					// Send the input first, then close
-					req := &generated.ExecRequest{
-						Request: &generated.ExecRequest_Stdin{
-							Stdin: buffer[:n],
-						},
-					}
-					if err := s.stream.Send(req); err != nil {
-						errChan <- fmt.Errorf("failed to send stdin: %w", err)
-						return
-					}
-
-					// Wait a moment for the server to process, then close
-					time.Sleep(100 * time.Millisecond)
-					close(doneChan)
-					errChan <- nil
-					return
-				}
-
+				// Everything, including "exit" and Ctrl-D, goes to the remote
+				// terminal: the shell decides whether to end, and its exit
+				// frame ends the session with its real code.
 				req := &generated.ExecRequest{
 					Request: &generated.ExecRequest_Stdin{
 						Stdin: buffer[:n],
@@ -230,9 +210,10 @@ func (s *ExecSession) RunInteractive() error {
 		for {
 			resp, err := s.stream.Recv()
 			if err != nil {
-				s.logger.Debug("CLIENT: Stream recv error", log.Err(err), log.Bool("isEOF", err == io.EOF), log.Bool("isBenign", isBenignStreamError(err)))
-				if err == io.EOF || isBenignStreamError(err) {
-					// graceful end of stream or benign transport close
+				s.logger.Debug("CLIENT: Stream recv error", log.Err(err), log.Bool("isEOF", err == io.EOF))
+				// Only EOF ends a session cleanly. A reset or dropped
+				// connection mid-session is a failure, not an ending.
+				if err == io.EOF {
 					s.logger.Debug("CLIENT: Stream ended gracefully")
 					close(doneChan) // Signal stdin to stop
 					errChan <- nil
@@ -247,13 +228,7 @@ func (s *ExecSession) RunInteractive() error {
 				s.logger.Debug("CLIENT: Received exit response", log.Int("code", int(exitResp.Code)), log.Bool("signaled", exitResp.Signaled))
 				// Signal stdin goroutine to stop
 				close(doneChan)
-				if exitResp.Signaled {
-					errChan <- fmt.Errorf("process exited due to signal: %s", exitResp.Signal)
-				} else {
-					// Any exit code (including non-zero) should be treated as successful completion
-					s.logger.Debug("CLIENT: Process exited with code, treating as success", log.Int("code", int(exitResp.Code)))
-					errChan <- nil
-				}
+				errChan <- exitResult(exitResp)
 				return
 			}
 
@@ -316,32 +291,6 @@ func (s *ExecSession) RunInteractive() error {
 	return err
 }
 
-// isExitCommand checks if the input represents an exit command or Ctrl+D
-func (s *ExecSession) isExitCommand(input string) bool {
-	// Check for Ctrl+D (EOF character)
-	if input == "\x04" {
-		return true
-	}
-
-	// State machine to detect "exit" followed by newline
-	if input == "e" {
-		s.exitState = 1
-	} else if input == "x" && s.exitState == 1 {
-		s.exitState = 2
-	} else if input == "i" && s.exitState == 2 {
-		s.exitState = 3
-	} else if input == "t" && s.exitState == 3 {
-		s.exitState = 4
-	} else if (input == "\n" || input == "\r") && s.exitState == 4 {
-		s.exitState = 0 // Reset state
-		return true
-	} else {
-		s.exitState = 0 // Reset state on any other input
-	}
-
-	return false
-}
-
 // RunNonInteractive runs a non-interactive exec session.
 func (s *ExecSession) RunNonInteractive() error {
 	// Handle responses
@@ -356,12 +305,7 @@ func (s *ExecSession) RunNonInteractive() error {
 
 		// Check if this is an exit response
 		if exitResp := resp.GetExit(); exitResp != nil {
-			// Process has exited - return to terminate the session
-			if exitResp.Signaled {
-				return fmt.Errorf("process exited due to signal: %s", exitResp.Signal)
-			}
-			// For non-interactive sessions, treat any exit as successful completion
-			return nil
+			return exitResult(exitResp)
 		}
 
 		// Handle other responses
@@ -388,24 +332,38 @@ func (s *ExecSession) handleResponse(resp *generated.ExecResponse) error {
 
 // Close closes the exec session.
 func (s *ExecSession) Close() error {
-	// Best-effort close; ignore benign errors
-	if err := s.stream.CloseSend(); err != nil {
-		if isBenignStreamError(err) {
-			return nil
-		}
+	if err := s.stream.CloseSend(); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 	return nil
 }
 
-// isBenignStreamError detects transport-layer errors that happen on normal closure
-func isBenignStreamError(err error) bool {
-	if err == nil {
-		return false
+// ExitError carries a remote command's non-zero exit code, so the CLI
+// can exit with it.
+type ExitError struct {
+	Code   int
+	Signal string
+}
+
+func (e *ExitError) Error() string {
+	if e.Signal != "" {
+		return fmt.Sprintf("command terminated by signal %s (exit code %d)", e.Signal, e.Code)
 	}
-	msg := err.Error()
-	// Docker hijacked connection often reports use of closed network connection on normal close
-	return strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(strings.ToLower(msg), "client disconnected") ||
-		strings.Contains(strings.ToLower(msg), "broken pipe")
+	return fmt.Sprintf("command exited with code %d", e.Code)
+}
+
+// ExitCode is the code the CLI process should exit with.
+func (e *ExitError) ExitCode() int { return e.Code }
+
+// exitResult turns the server's exit report into the session's result:
+// nil for 0, an *ExitError otherwise.
+func exitResult(exit *generated.ExitInfo) error {
+	if exit.Code == 0 && !exit.Signaled {
+		return nil
+	}
+	code := int(exit.Code)
+	if code == 0 {
+		code = 1
+	}
+	return &ExitError{Code: code, Signal: exit.Signal}
 }

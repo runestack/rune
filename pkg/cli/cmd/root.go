@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
+	"github.com/runestack/rune/pkg/api/client"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/version"
 	"github.com/spf13/cobra"
@@ -39,6 +41,12 @@ without unnecessary complexity.`,
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		// A remote command's exit code is passed through, without a
+		// message: `rune exec svc -- false` exits 1 like `false` does.
+		var exit *client.ExitError
+		if errors.As(err, &exit) {
+			os.Exit(exit.ExitCode())
+		}
 		if st, ok := status.FromError(err); ok {
 			fmt.Printf("Error: %s\n", st.Message())
 		} else {

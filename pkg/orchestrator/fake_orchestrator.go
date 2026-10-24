@@ -48,6 +48,9 @@ type FakeOrchestrator struct {
 
 // ExecInInstanceCall tracks ExecInInstance calls
 type ExecInInstanceCall struct {
+	// Ctx is the context the exec was started with; the stream keeps
+	// using it for the whole session.
+	Ctx        context.Context
 	Namespace  string
 	ServiceID  string
 	InstanceID string
@@ -337,6 +340,7 @@ func (fo *FakeOrchestrator) ExecInInstance(ctx context.Context, namespace, insta
 	}
 
 	call := ExecInInstanceCall{
+		Ctx:        ctx,
 		Namespace:  namespace,
 		InstanceID: instanceID,
 		Options:    options,

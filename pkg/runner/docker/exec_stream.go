@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -40,11 +41,16 @@ type DockerExecStream struct {
 	combined      io.Reader
 	mutex         sync.Mutex
 	tty           bool
-	closed        bool
+	closed        atomic.Bool
 	exitCodeMutex sync.Mutex
 	exitCode      int
+	exitKnown     bool // exitCode came from a finished exec
 	exitErr       error
 }
+
+// errStreamClosed wraps io.ErrClosedPipe so callers can recognise a
+// local close with errors.Is.
+var errStreamClosed = fmt.Errorf("exec stream is closed: %w", io.ErrClosedPipe)
 
 // NewDockerExecStream creates a new DockerExecStream.
 func NewDockerExecStream(
@@ -146,22 +152,21 @@ func NewDockerExecStream(
 	return stream, nil
 }
 
-// Write sends data to the standard input of the process.
+// Write sends data to the standard input of the process. It does not
+// hold the mutex while writing: a process that is not reading stdin
+// blocks the write, and Close, which unblocks it by closing the
+// connection, must still be able to run.
 func (s *DockerExecStream) Write(p []byte) (n int, err error) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	if s.closed {
-		return 0, fmt.Errorf("exec stream is closed")
+	if s.closed.Load() {
+		return 0, errStreamClosed
 	}
-
 	return s.hijackedResp.Conn.Write(p)
 }
 
 // Read reads data from the standard output of the process.
 func (s *DockerExecStream) Read(p []byte) (n int, err error) {
-	if s.closed {
-		return 0, fmt.Errorf("exec stream is closed")
+	if s.closed.Load() {
+		return 0, errStreamClosed
 	}
 
 	return s.stdout.Read(p)
@@ -177,8 +182,8 @@ func (s *DockerExecStream) ResizeTerminal(width, height uint32) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.closed {
-		return fmt.Errorf("exec stream is closed")
+	if s.closed.Load() {
+		return errStreamClosed
 	}
 
 	if !s.tty {
@@ -194,15 +199,13 @@ func (s *DockerExecStream) ResizeTerminal(width, height uint32) error {
 
 // Signal sends a signal to the process.
 func (s *DockerExecStream) Signal(sigName string) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	if s.closed {
-		return fmt.Errorf("exec stream is closed")
+	if s.closed.Load() {
+		return errStreamClosed
 	}
 
 	// Docker doesn't have a direct way to send signals to exec processes
-	// For SIGINT, we can send Ctrl+C if TTY is enabled
+	// For SIGINT, we can send Ctrl+C if TTY is enabled. Written like
+	// Write, without the mutex, for the same reason.
 	if s.tty && strings.ToUpper(sigName) == "SIGINT" {
 		_, err := s.hijackedResp.Conn.Write([]byte{3}) // Ctrl+C
 		return err
@@ -219,6 +222,10 @@ func (s *DockerExecStream) Signal(sigName string) error {
 // blocking wait for exec instances, so polling is the only option.
 const execInspectPollInterval = 50 * time.Millisecond
 
+// execInspectAfterClose bounds the exit-code lookup once the stream's own
+// context is gone.
+const execInspectAfterClose = 2 * time.Second
+
 // ExitCode blocks until the exec process completes, then returns its
 // exit code. The wait is bounded by the stream's context (s.ctx) — a
 // probe timeout or Close() unblocks it — so a hung command surfaces as
@@ -227,32 +234,39 @@ func (s *DockerExecStream) ExitCode() (int, error) {
 	s.exitCodeMutex.Lock()
 	defer s.exitCodeMutex.Unlock()
 
+	if s.exitKnown {
+		return s.exitCode, nil
+	}
 	if s.exitErr != nil {
 		return s.exitCode, s.exitErr
 	}
 
-	// If exit code is already known, return it
-	if s.exitCode != 0 || s.closed {
-		return s.exitCode, nil
+	// After Close s.ctx is cancelled, but the exec may well have
+	// finished: ask once more on a short budget rather than reporting 0.
+	ctx := s.ctx
+	if s.closed.Load() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(s.ctx), execInspectAfterClose)
+		defer cancel()
 	}
 
 	for {
-		resp, err := s.cli.ContainerExecInspect(s.ctx, s.execID)
+		resp, err := s.cli.ContainerExecInspect(ctx, s.execID)
 		if err != nil {
 			s.exitErr = fmt.Errorf("failed to inspect exec: %w", err)
 			return 0, s.exitErr
 		}
 
 		if !resp.Running {
-			s.exitCode = resp.ExitCode
+			s.exitCode, s.exitKnown = resp.ExitCode, true
 			return s.exitCode, nil
 		}
 
 		// Process still running — wait briefly and retry, unless the
 		// context (probe timeout / Close) has fired.
 		select {
-		case <-s.ctx.Done():
-			s.exitErr = fmt.Errorf("exec did not complete: %w", s.ctx.Err())
+		case <-ctx.Done():
+			s.exitErr = fmt.Errorf("exec did not complete: %w", ctx.Err())
 			return 0, s.exitErr
 		case <-time.After(execInspectPollInterval):
 		}
@@ -264,12 +278,9 @@ func (s *DockerExecStream) Close() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.closed {
+	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-
-	// Mark as closed
-	s.closed = true
 
 	// Cancel context to stop all operations
 	s.cancel()
@@ -325,12 +336,17 @@ func (s *DockerExecStream) startIOCopy() {
 		s.exitCodeMutex.Lock()
 		defer s.exitCodeMutex.Unlock()
 
-		resp, err := s.cli.ContainerExecInspect(context.Background(), s.execID)
+		ctx, cancel := context.WithTimeout(context.Background(), execInspectAfterClose)
+		defer cancel()
+		resp, err := s.cli.ContainerExecInspect(ctx, s.execID)
 		if err != nil {
-			s.exitErr = fmt.Errorf("failed to inspect exec after completion: %w", err)
+			// Not cached as exitErr: ExitCode can still ask again.
+			s.logger.Debug("Inspect after exec output ended failed", log.Err(err))
 			return
 		}
-		s.exitCode = resp.ExitCode
+		if !resp.Running {
+			s.exitCode, s.exitKnown = resp.ExitCode, true
+		}
 	}()
 }
 

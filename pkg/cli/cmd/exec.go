@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -244,8 +245,14 @@ func runExec(cmd *cobra.Command, args []string, opts *execOptions) error {
 	case <-ctx.Done():
 		return fmt.Errorf("exec session timed out after %v", parsedOpts.timeout)
 	default:
-		return sessionErr
 	}
+	// The remote command's own exit code is the result, not an error to
+	// print: Execute exits with it.
+	var exitErr *client.ExitError
+	if errors.As(sessionErr, &exitErr) {
+		cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	}
+	return sessionErr
 }
 
 func initializeExecSession(session *client.ExecSession, resolvedTarget *resolvedResourceTarget, execOptions *client.ExecOptions) error {
