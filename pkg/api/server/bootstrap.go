@@ -50,15 +50,17 @@ func SeedBuiltinPolicies(ctx context.Context, st store.Store) error {
 			{Resource: "ui", Verbs: []string{"access"}, Namespace: "*"}, // dashboard access (RUNE-200)
 		}},
 		// `cast` is the minimum permission set needed by `rune cast`:
-		// it can create/update/scale services and the configmaps/secrets
-		// they reference, read instances/logs to confirm rollout, and
-		// get/create namespaces (so --create-namespace works). It cannot
-		// delete services or exec into them. Designed for CI tokens.
+		// it can create/update/scale services and the configmaps, secrets
+		// and volumes they reference, read instances/logs to confirm
+		// rollout, and get/create namespaces (so --create-namespace works).
+		// It cannot delete anything or exec into services, so a cast that
+		// would prune a resource is denied. Designed for CI tokens.
 		{Name: "cast", Description: "Cast services (CI deploy)", Builtin: true, Rules: []types.PolicyRule{
 			{Resource: "services", Verbs: []string{"get", "list", "create", "update", "scale"}, Namespace: "*"},
 			{Resource: "instances", Verbs: []string{"get", "list", "watch"}, Namespace: "*"},
 			{Resource: "configmaps", Verbs: []string{"get", "list", "create", "update"}, Namespace: "*"},
 			{Resource: "secrets", Verbs: []string{"get", "list", "create", "update"}, Namespace: "*"},
+			{Resource: "volumes", Verbs: []string{"get", "list", "create", "update"}, Namespace: "*"},
 			{Resource: "namespaces", Verbs: []string{"get", "list", "create"}, Namespace: "*"},
 			// `rune cast` always goes through ReleaseService now (every cast is a
 			// release revision), so the minimum cast permission must include the

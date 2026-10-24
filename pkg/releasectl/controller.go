@@ -72,6 +72,14 @@ func (c *Controller) admit(ctx context.Context, p Payloads) error {
 	return nil
 }
 
+// admitPlan checks every planned change against the verb its direct RPC
+// would need, in the change's own namespace. Prepare calls it before the
+// pending record is written, with the caller's context, so the --detach
+// path is denied synchronously too.
+func (c *Controller) admitPlan(ctx context.Context, plan *release.Plan) error {
+	return c.admission.AdmitReleaseChanges(ctx, plan.Changes)
+}
+
 // sortedServiceKeys gives admission a deterministic order so a release
 // with several offending services always reports the same one.
 func sortedServiceKeys(m map[string]*types.Service) []string {
@@ -142,7 +150,7 @@ func (c *Controller) cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 	live := &liveLookup{c: c}
 
 	if !spec.Detach {
-		return release.Reconcile(ctx, spec, recs, live, a)
+		return release.Reconcile(ctx, spec, recs, live, a, c.admitPlan)
 	}
 
 	// Detach (C3-a): plan + record the pending intent synchronously, then hand
@@ -150,7 +158,7 @@ func (c *Controller) cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 	// context (the request ctx is cancelled once Cast returns), and return the
 	// pending release immediately. Prepare already rejects a detach plan that
 	// prunes (ErrDetachWouldPrune), so the background half is never destructive.
-	prep, err := release.Prepare(ctx, spec, recs, live)
+	prep, err := release.Prepare(ctx, spec, recs, live, c.admitPlan)
 	if err != nil {
 		if prep != nil {
 			return nil, prep.Plan, err

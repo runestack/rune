@@ -75,3 +75,46 @@ func TestReleaseHistoryRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// Authorization checks a payload's key while the applier writes the payload
+// itself, so a payload filed under one namespace must not describe another.
+func TestProtoToPayloadsRejectsKeyMismatch(t *testing.T) {
+	ok := types.OwnerRef{ResourceType: types.ResourceTypeService, Namespace: "default", Name: "web"}.Key()
+	cases := []struct {
+		name    string
+		payload *generated.RenderedPayloads
+		wantErr bool
+	}{
+		{"matching service", &generated.RenderedPayloads{Services: map[string]string{
+			ok: `{"name":"web","namespace":"default"}`}}, false},
+		{"service in another namespace", &generated.RenderedPayloads{Services: map[string]string{
+			ok: `{"name":"web","namespace":"prod"}`}}, true},
+		{"service with another name", &generated.RenderedPayloads{Services: map[string]string{
+			ok: `{"name":"db","namespace":"default"}`}}, true},
+		{"configmap filed as a service key", &generated.RenderedPayloads{Configmaps: map[string]string{
+			ok: `{"name":"web","namespace":"default"}`}}, true},
+		{"secret in another namespace", &generated.RenderedPayloads{Secrets: map[string]string{
+			"secret/default/creds": secretPayload(t, "creds", "prod")}}, true},
+		{"matching secret", &generated.RenderedPayloads{Secrets: map[string]string{
+			"secret/default/creds": secretPayload(t, "creds", "default")}}, false},
+		{"volume in another namespace", &generated.RenderedPayloads{Volumes: map[string]string{
+			"volume/default/data": `{"name":"data","namespace":"prod"}`}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := protoToPayloads(tc.payload)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func secretPayload(t *testing.T, name, ns string) string {
+	t.Helper()
+	b, err := types.MarshalSecretPayload(&types.Secret{Name: name, Namespace: ns, Data: map[string]string{"k": "v"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

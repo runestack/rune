@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
@@ -83,6 +84,9 @@ func (s *ReleaseService) Plan(ctx context.Context, req *generated.PlanRequest) (
 	}
 	plan, err := s.ctl.Plan(ctx, spec)
 	if err != nil {
+		if authz.IsDenied(err) {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
 		return nil, status.Errorf(codes.Internal, "plan: %v", err)
 	}
 	return &generated.PlanResponse{Plan: toProtoPlan(plan), Status: &generated.Status{Code: int32(codes.OK)}}, nil
@@ -211,6 +215,9 @@ func (s *ReleaseService) DeleteRelease(ctx context.Context, req *generated.Delet
 		Purge:       req.GetPurge(),
 	})
 	if err != nil {
+		if authz.IsDenied(err) {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
 		return nil, status.Errorf(codes.Internal, "uninstall: %v", err)
 	}
 	return &generated.Status{Code: int32(codes.OK)}, nil
@@ -272,6 +279,9 @@ func protoToPayloads(p *generated.RenderedPayloads) (releasectl.Payloads, error)
 		if err := json.Unmarshal([]byte(v), &svc); err != nil {
 			return out, err
 		}
+		if err := payloadMatchesKey(k, types.ResourceTypeService, svc.Namespace, svc.Name); err != nil {
+			return out, err
+		}
 		out.Services[k] = &svc
 	}
 	for k, v := range p.GetSecrets() {
@@ -281,11 +291,17 @@ func protoToPayloads(p *generated.RenderedPayloads) (releasectl.Payloads, error)
 		if err != nil {
 			return out, err
 		}
+		if err := payloadMatchesKey(k, types.ResourceTypeSecret, sec.Namespace, sec.Name); err != nil {
+			return out, err
+		}
 		out.Secrets[k] = sec
 	}
 	for k, v := range p.GetConfigmaps() {
 		var cm types.Configmap
 		if err := json.Unmarshal([]byte(v), &cm); err != nil {
+			return out, err
+		}
+		if err := payloadMatchesKey(k, types.ResourceTypeConfigmap, cm.Namespace, cm.Name); err != nil {
 			return out, err
 		}
 		out.Configmaps[k] = &cm
@@ -295,9 +311,23 @@ func protoToPayloads(p *generated.RenderedPayloads) (releasectl.Payloads, error)
 		if err := json.Unmarshal([]byte(v), &vol); err != nil {
 			return out, err
 		}
+		if err := payloadMatchesKey(k, types.ResourceTypeVolume, vol.Namespace, vol.Name); err != nil {
+			return out, err
+		}
 		out.Volumes[k] = &vol
 	}
 	return out, nil
+}
+
+// payloadMatchesKey rejects a payload whose own namespace or name differs
+// from the ref it is filed under. Authorization checks the ref's namespace
+// while the applier writes the payload, so the two must name the same
+// object or a namespace-pinned caller could write outside its namespace.
+func payloadMatchesKey(key string, rt types.ResourceType, ns, name string) error {
+	if want := (types.OwnerRef{ResourceType: rt, Namespace: ns, Name: name}).Key(); key != want {
+		return fmt.Errorf("payload %q describes %q", key, want)
+	}
+	return nil
 }
 
 func protoToSource(p *generated.ReleaseSource) types.ReleaseSource {
