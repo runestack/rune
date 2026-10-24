@@ -48,8 +48,3 @@ func (execMounter) EnsureFormatted(ctx context.Context, dev, fsType string) erro
 	}
 	return nil
 }
-
-func alreadyMounted(ctx context.Context, target string) bool {
-	cmd := exec.CommandContext(ctx, "findmnt", "-n", target)
-	return cmd.Run() == nil
-}
