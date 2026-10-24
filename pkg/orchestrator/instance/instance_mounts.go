@@ -184,19 +184,10 @@ func (b *mountBinder) waitForVolumeReady(ctx context.Context, ns, name string) (
 	}
 }
 
-// volumeMountKey matches the tracking key used by the agent volumes
-// Subsystem (see internal/agent/volumes reconcile).
-func volumeMountKey(vol types.Volume) string {
-	if vol.ID != "" {
-		return vol.ID
-	}
-	return vol.Namespace + "/" + vol.Name
-}
-
 // waitForMountTarget polls the agent MountResolver until the volume is
 // mounted on this node or the timeout fires.
 func (b *mountBinder) waitForMountTarget(ctx context.Context, vol types.Volume, ns, name string) (string, error) {
-	key := volumeMountKey(vol)
+	key := vol.MountKey()
 	deadline := time.Now().Add(mountTargetTimeout)
 	for {
 		if target, ok := b.resolver().MountTargetFor(key); ok && target != "" {
@@ -340,6 +331,13 @@ func (b *mountBinder) ensureClaimTemplateVolume(ctx context.Context, service *ty
 	var existing types.Volume
 	if err := b.store.Get(ctx, types.ResourceTypeVolume, ns, name, &existing); err == nil {
 		return nil
+	}
+	// The name is also the new volume's ID, which becomes a host mount
+	// path segment. Checked only here, at creation: existing volumes keep
+	// mounting, and a legacy name such as "data_dir-api-0" can still be
+	// re-created; only path-unsafe names are refused.
+	if err := types.ValidateVolumePathSegment(name); err != nil {
+		return fmt.Errorf("claim template %q: %w", m.Name, err)
 	}
 
 	tpl := m.ClaimTemplate

@@ -529,3 +529,18 @@ func TestServiceSpec_Validate_NegativeResources(t *testing.T) {
 		})
 	}
 }
+
+// A claim template's mount name becomes part of a host mount path, so
+// cast requires a DNS-1123 label.
+func TestServiceSpec_VolumeMountNameMustBeLabel(t *testing.T) {
+	for _, name := range []string{"Data", "data_dir", "../x"} {
+		spec := ServiceSpec{Name: "api", Volumes: []VolumeMount{{Name: name, MountPath: "/data", Claim: &VolumeClaim{Name: "c"}}}}
+		if err := spec.validateMounts(); err == nil {
+			t.Errorf("%q: expected an error", name)
+		}
+	}
+	spec := ServiceSpec{Name: "api", Volumes: []VolumeMount{{Name: "data", MountPath: "/data", Claim: &VolumeClaim{Name: "c"}}}}
+	if err := spec.validateMounts(); err != nil {
+		t.Errorf("data: unexpected error %v", err)
+	}
+}

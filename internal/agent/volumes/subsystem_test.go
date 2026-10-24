@@ -2,8 +2,10 @@ package volumes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -13,6 +15,7 @@ import (
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/storage/driverparams"
+	"github.com/runestack/rune/pkg/storage/mountinfo"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -45,14 +48,14 @@ func (f *fakeDriver) Provision(context.Context, driver.OpContext, driver.Provisi
 func (f *fakeDriver) Delete(context.Context, driver.OpContext, driver.VolumeHandle) error {
 	return nil
 }
-func (f *fakeDriver) Attach(_ context.Context, _ driver.OpContext, _ driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
+func (f *fakeDriver) Attach(_ context.Context, _ driver.OpContext, handle driver.VolumeHandle, node driver.NodeID) (driver.DevicePath, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.attachCalls = append(f.attachCalls, node)
 	if f.attachErr != nil {
 		return "", f.attachErr
 	}
-	return "/dev/fake", nil
+	return driver.DevicePath("/dev/" + handle), nil
 }
 func (f *fakeDriver) Detach(_ context.Context, _ driver.OpContext, _ driver.VolumeHandle, node driver.NodeID) error {
 	f.mu.Lock()
@@ -192,9 +195,9 @@ func TestSubsystem_AttachMountOnBind(t *testing.T) {
 	vol := boundVolume("v-1", "default", "data", nodeID)
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 
-	expectedTarget := filepath.Join(sub.cfg.MountRoot, vol.ID)
+	expectedTarget := filepath.Join(sub.cfg.MountRoot, vol.Namespace, vol.ID)
 	waitFor(t, 2*time.Second, func() error {
-		got, ok := sub.MountTargetFor(vol.ID)
+		got, ok := sub.MountTargetFor(vol.MountKey())
 		if !ok {
 			return errors.New("not yet mounted")
 		}
@@ -227,7 +230,7 @@ func TestSubsystem_IgnoresOtherNodes(t *testing.T) {
 
 	// Give the watch loop time to (not) act.
 	time.Sleep(100 * time.Millisecond)
-	_, ok := sub.MountTargetFor(vol.ID)
+	_, ok := sub.MountTargetFor(vol.MountKey())
 	assert.False(t, ok, "volume bound to another node must not be tracked")
 	a, _, m, _ := drv.snapshot()
 	assert.Zero(t, a)
@@ -254,8 +257,8 @@ func TestSubsystem_IgnoresUnboundOrPending(t *testing.T) {
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, "default", "no-handle", noHandle))
 
 	time.Sleep(100 * time.Millisecond)
-	_, okP := sub.MountTargetFor(pending.ID)
-	_, okH := sub.MountTargetFor(noHandle.ID)
+	_, okP := sub.MountTargetFor(pending.MountKey())
+	_, okH := sub.MountTargetFor(noHandle.MountKey())
 	assert.False(t, okP)
 	assert.False(t, okH)
 	a, _, m, _ := drv.snapshot()
@@ -279,7 +282,7 @@ func TestSubsystem_UnmountDetachOnUnbind(t *testing.T) {
 	vol := boundVolume("v-1", "default", "data", nodeID)
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 	waitFor(t, 2*time.Second, func() error {
-		if _, ok := sub.MountTargetFor(vol.ID); ok {
+		if _, ok := sub.MountTargetFor(vol.MountKey()); ok {
 			return nil
 		}
 		return errors.New("not yet mounted")
@@ -320,7 +323,7 @@ func TestSubsystem_DeleteEvent(t *testing.T) {
 	vol := boundVolume("v-1", "default", "data", nodeID)
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 	waitFor(t, 2*time.Second, func() error {
-		if _, ok := sub.MountTargetFor(vol.ID); ok {
+		if _, ok := sub.MountTargetFor(vol.MountKey()); ok {
 			return nil
 		}
 		return errors.New("not yet mounted")
@@ -355,14 +358,14 @@ func TestSubsystem_StopUnmountsTracked(t *testing.T) {
 	vol := boundVolume("v-1", "default", "data", nodeID)
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 	waitFor(t, 2*time.Second, func() error {
-		if _, ok := sub.MountTargetFor(vol.ID); ok {
+		if _, ok := sub.MountTargetFor(vol.MountKey()); ok {
 			return nil
 		}
 		return errors.New("not yet mounted")
 	})
 
 	require.NoError(t, sub.Stop(context.Background()))
-	_, ok := sub.MountTargetFor(vol.ID)
+	_, ok := sub.MountTargetFor(vol.MountKey())
 	assert.False(t, ok, "Stop must drop tracked entries")
 	_, d, _, u := drv.snapshot()
 	assert.Equal(t, 1, d)
@@ -387,7 +390,7 @@ func TestSubsystem_AttachFailureLeavesUntracked(t *testing.T) {
 
 	// Give the watch loop time to react.
 	time.Sleep(100 * time.Millisecond)
-	_, ok := sub.MountTargetFor(vol.ID)
+	_, ok := sub.MountTargetFor(vol.MountKey())
 	assert.False(t, ok)
 	a, _, m, _ := drv.snapshot()
 	assert.Equal(t, 1, a)
@@ -418,7 +421,7 @@ func TestSubsystem_MountFailureDetaches(t *testing.T) {
 		}
 		return errors.New("not yet attempted")
 	})
-	_, ok := sub.MountTargetFor(vol.ID)
+	_, ok := sub.MountTargetFor(vol.MountKey())
 	assert.False(t, ok, "failed mount must not appear in the table")
 }
 
@@ -439,7 +442,7 @@ func TestSubsystem_DriverRewritesTarget(t *testing.T) {
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 
 	waitFor(t, 2*time.Second, func() error {
-		got, ok := sub.MountTargetFor(vol.ID)
+		got, ok := sub.MountTargetFor(vol.MountKey())
 		if !ok {
 			return errors.New("not yet mounted")
 		}
@@ -470,21 +473,21 @@ func TestSubsystem_RecordsAndClearsMountError(t *testing.T) {
 
 	// Failing bring-up records the cause.
 	require.Error(t, s.reconcile(ctx, vol))
-	cause, ok := s.MountErrorFor("vol-1")
+	cause, ok := s.MountErrorFor("default/vol-1")
 	require.True(t, ok, "a failed bring-up must record its cause")
 	require.Contains(t, cause, "HTTP 401")
 
 	// Nothing is mounted, so the resolver still reports absent.
-	_, mounted := s.MountTargetFor("vol-1")
+	_, mounted := s.MountTargetFor("default/vol-1")
 	require.False(t, mounted)
 
 	// Once the underlying problem is fixed, the next reconcile clears it.
 	drv.attachErr = nil
 	require.NoError(t, s.reconcile(ctx, vol))
-	if _, still := s.MountErrorFor("vol-1"); still {
+	if _, still := s.MountErrorFor("default/vol-1"); still {
 		t.Fatal("a successful bring-up must clear the recorded failure")
 	}
-	if _, mounted := s.MountTargetFor("vol-1"); !mounted {
+	if _, mounted := s.MountTargetFor("default/vol-1"); !mounted {
 		t.Fatal("volume should be tracked as mounted after a successful bring-up")
 	}
 }
@@ -601,7 +604,7 @@ func mountN(t *testing.T, sub *Subsystem, ts *store.TestStore, ctx context.Conte
 		vols = append(vols, v)
 	}
 	for _, v := range vols {
-		id := v.ID
+		id := v.MountKey()
 		waitFor(t, 3*time.Second, func() error {
 			if _, ok := sub.MountTargetFor(id); ok {
 				return nil
@@ -728,7 +731,7 @@ func TestSubsystem_TeardownReresolvesSecrets(t *testing.T) {
 	vol := boundVolume("v-1", "default", "data", nodeID)
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 	waitFor(t, 3*time.Second, func() error {
-		if _, ok := sub.MountTargetFor(vol.ID); ok {
+		if _, ok := sub.MountTargetFor(vol.MountKey()); ok {
 			return nil
 		}
 		return errors.New("not yet mounted")
@@ -777,7 +780,7 @@ func TestSubsystem_TeardownFallsBackWhenResolveFails(t *testing.T) {
 	vol := boundVolume("v-1", "default", "data", nodeID)
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 	waitFor(t, 3*time.Second, func() error {
-		if _, ok := sub.MountTargetFor(vol.ID); ok {
+		if _, ok := sub.MountTargetFor(vol.MountKey()); ok {
 			return nil
 		}
 		return errors.New("not yet mounted")
@@ -882,7 +885,7 @@ func TestSubsystem_DetachedCountExcludesUnmountOnlyFailures(t *testing.T) {
 	vol := boundVolume("v-1", "default", "data", nodeID)
 	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
 	waitFor(t, 3*time.Second, func() error {
-		if _, ok := sub.MountTargetFor(vol.ID); ok {
+		if _, ok := sub.MountTargetFor(vol.MountKey()); ok {
 			return nil
 		}
 		return errors.New("not yet mounted")
@@ -892,7 +895,7 @@ func TestSubsystem_DetachedCountExcludesUnmountOnlyFailures(t *testing.T) {
 	detached, err := sub.tearDown(context.Background(), vol.ID, func() trackedMount {
 		sub.stateMu.RLock()
 		defer sub.stateMu.RUnlock()
-		return sub.mounts[vol.ID]
+		return sub.mounts[vol.MountKey()]
 	}())
 	require.Error(t, err, "an unmount failure must still surface as an error")
 	assert.True(t, detached,
@@ -900,4 +903,437 @@ func TestSubsystem_DetachedCountExcludesUnmountOnlyFailures(t *testing.T) {
 
 	_, d, _, _ := drv.snapshot()
 	assert.Equal(t, 1, d, "Detach must be attempted despite the unmount failure")
+}
+
+// fakeMountTable serves a canned mount table: stacks maps a path to the
+// devices mounted there (bottom first), devs maps a device node path to
+// its number. It is static: unmounting through the driver does not
+// change it.
+type fakeMountTable struct {
+	stacks map[string][]mountinfo.Dev
+	devs   map[string]mountinfo.Dev
+}
+
+func (f fakeMountTable) Stack(path string) ([]mountinfo.Dev, error) { return f.stacks[path], nil }
+func (f fakeMountTable) MountPoints(d mountinfo.Dev) ([]string, error) {
+	var out []string
+	for p, stack := range f.stacks {
+		for _, x := range stack {
+			if x == d {
+				out = append(out, p)
+			}
+		}
+	}
+	return out, nil
+}
+func (f fakeMountTable) DeviceOf(dev string) (mountinfo.Dev, error) {
+	d, ok := f.devs[dev]
+	if !ok {
+		return mountinfo.Dev{}, errors.New("no such device: " + dev)
+	}
+	return d, nil
+}
+
+func mountTargets(drv *fakeDriver) map[driver.VolumeHandle]driver.MountTarget {
+	drv.mu.Lock()
+	defer drv.mu.Unlock()
+	out := map[driver.VolumeHandle]driver.MountTarget{}
+	for _, m := range drv.mountCalls {
+		out[m.Handle] = m.Target
+	}
+	return out
+}
+
+// The same claim-template volume in two namespaces has one ID. Each must
+// get its own mount path and its own tracking entry.
+func TestSubsystem_SameIDInTwoNamespaces(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	prod := boundVolume("mongodb-data-mongodb-0", "prod", "mongodb-data-mongodb-0", "node-a")
+	prod.Handle = "rune-prod-mongodb-data-mongodb-0"
+	trial := boundVolume("mongodb-data-mongodb-0", "trial", "mongodb-data-mongodb-0", "node-a")
+	trial.Handle = "rune-trial-mongodb-data-mongodb-0"
+
+	require.NoError(t, sub.reconcile(ctx, prod))
+	require.NoError(t, sub.reconcile(ctx, trial))
+
+	root := sub.cfg.MountRoot
+	pt, ok := sub.MountTargetFor(prod.MountKey())
+	require.True(t, ok)
+	tt, ok := sub.MountTargetFor(trial.MountKey())
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(root, "prod", prod.ID), pt)
+	assert.Equal(t, filepath.Join(root, "trial", trial.ID), tt)
+	assert.Equal(t, map[driver.VolumeHandle]driver.MountTarget{
+		"rune-prod-mongodb-data-mongodb-0":  driver.MountTarget(pt),
+		"rune-trial-mongodb-data-mongodb-0": driver.MountTarget(tt),
+	}, mountTargets(drv))
+}
+
+// A node upgraded from the namespace-blind layout has both namespaces'
+// disks stacked on one old path, trial's mounted over prod's. Only the
+// volume whose disk is visible there may keep the path; the other gets a
+// fresh mount at its namespaced path rather than the other's data.
+func TestSubsystem_LegacyPathAdoptedOnlyByVisibleDisk(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	const id = "mongodb-data-mongodb-0"
+	prod := boundVolume(id, "prod", id, "node-a")
+	prod.Handle = "prod-disk"
+	trial := boundVolume(id, "trial", id, "node-a")
+	trial.Handle = "trial-disk"
+
+	root := sub.cfg.MountRoot
+	legacy := filepath.Join(root, id)
+	prodDev, trialDev := mountinfo.Dev{Major: 8, Minor: 16}, mountinfo.Dev{Major: 8, Minor: 32}
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{legacy: {prodDev, trialDev}},
+		devs:   map[string]mountinfo.Dev{"/dev/prod-disk": prodDev, "/dev/trial-disk": trialDev},
+	}
+
+	require.NoError(t, sub.reconcile(ctx, prod))
+	require.NoError(t, sub.reconcile(ctx, trial))
+
+	got := mountTargets(drv)
+	assert.Equal(t, driver.MountTarget(filepath.Join(root, "prod", id)), got["prod-disk"],
+		"prod's disk is buried under trial's; prod must not be handed the old path")
+	assert.Equal(t, driver.MountTarget(legacy), got["trial-disk"],
+		"trial's disk is the one visible at the old path, so trial keeps it")
+
+	// prod's disk is now mounted twice. Tearing down the namespaced
+	// mount must not detach a disk the buried mount still holds.
+	sub.stateMu.Lock()
+	m := sub.mounts[prod.MountKey()]
+	delete(sub.mounts, prod.MountKey())
+	sub.stateMu.Unlock()
+	detached, err := sub.tearDown(ctx, prod.MountKey(), m)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "still mounted at "+legacy)
+	assert.False(t, detached)
+	_, d, _, u := drv.snapshot()
+	assert.Equal(t, 1, u, "the namespaced mount is still unmounted")
+	assert.Zero(t, d, "a disk still mounted at the old path must not be detached")
+}
+
+// After a crash with no drain, a disk mounted at its namespaced path
+// stays there on restart, even if its old path now shows only that disk.
+func TestSubsystem_NamespacedPathWinsOverLegacy(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+	root := sub.cfg.MountRoot
+	dev := mountinfo.Dev{Major: 8, Minor: 16}
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{
+			filepath.Join(root, vol.ID):         {dev},
+			filepath.Join(root, "prod", vol.ID): {dev},
+		},
+		devs: map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev},
+	}
+	require.NoError(t, sub.reconcile(context.Background(), vol))
+	assert.Equal(t, driver.MountTarget(filepath.Join(root, "prod", vol.ID)),
+		mountTargets(drv)[driver.VolumeHandle(vol.Handle)])
+}
+
+// A failed Mount must not detach a disk that is mounted somewhere else.
+func TestSubsystem_NoDetachAfterFailedMountWhileMountedElsewhere(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	vol := boundVolume("data-db-0", "trial", "data-db-0", "node-a")
+	dev := mountinfo.Dev{Major: 8, Minor: 16}
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{"/somewhere/else": {dev}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev},
+	}
+	drv.mountErr = errors.New("mount failed")
+	require.Error(t, sub.reconcile(context.Background(), vol))
+	_, d, _, _ := drv.snapshot()
+	assert.Zero(t, d)
+}
+
+// A volume alone on its old path keeps it, so running containers bound
+// there keep working across the upgrade.
+func TestSubsystem_LegacyPathAdopted(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+	legacy := filepath.Join(sub.cfg.MountRoot, vol.ID)
+	dev := mountinfo.Dev{Major: 8, Minor: 16}
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{legacy: {dev}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev},
+	}
+	require.NoError(t, sub.reconcile(context.Background(), vol))
+	assert.Equal(t, driver.MountTarget(legacy), mountTargets(drv)[driver.VolumeHandle(vol.Handle)])
+}
+
+// Another namespace's disk on the old path is not ours to take.
+func TestSubsystem_LegacyPathHeldByOtherDisk(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	vol := boundVolume("data-db-0", "trial", "data-db-0", "node-a")
+	legacy := filepath.Join(sub.cfg.MountRoot, vol.ID)
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{legacy: {{Major: 8, Minor: 16}}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + vol.Handle: {Major: 8, Minor: 32}},
+	}
+	require.NoError(t, sub.reconcile(context.Background(), vol))
+	assert.Equal(t, driver.MountTarget(filepath.Join(sub.cfg.MountRoot, "trial", vol.ID)),
+		mountTargets(drv)[driver.VolumeHandle(vol.Handle)])
+}
+
+// An old-layout volume whose ID matches a namespace name occupies that
+// namespace's directory. Mounting under it would write into that disk, so
+// bring-up refuses. The disk is detached only if it is mounted nowhere.
+func TestSubsystem_RefusesTargetInsideOldMount(t *testing.T) {
+	for _, mountedElsewhere := range []bool{false, true} {
+		sub, _, drv := newSubsystem(t, "node-a")
+		vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+		dev := mountinfo.Dev{Major: 8, Minor: 16}
+		stacks := map[string][]mountinfo.Dev{filepath.Join(sub.cfg.MountRoot, "prod"): {{Major: 8, Minor: 48}}}
+		if mountedElsewhere {
+			stacks["/elsewhere"] = []mountinfo.Dev{dev}
+		}
+		sub.cfg.MountTable = fakeMountTable{stacks: stacks, devs: map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev}}
+		err := sub.reconcile(context.Background(), vol)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is a mount point")
+		_, d, m, _ := drv.snapshot()
+		assert.Zero(t, m)
+		if mountedElsewhere {
+			assert.Zero(t, d, "a disk mounted elsewhere stays attached")
+		} else {
+			assert.Equal(t, 1, d, "a disk mounted nowhere is not left attached")
+		}
+		_, ok := sub.MountTargetFor(vol.MountKey())
+		assert.False(t, ok)
+	}
+}
+
+// A disk whose teardown was refused because it is still mounted is not
+// forgotten: once the disk above it is unmounted, the retry tick unmounts
+// its leftover old-path mount and detaches it.
+func TestSubsystem_ParkedDiskDetachedOnRetry(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	const id = "mongodb-data-mongodb-0"
+	prod := boundVolume(id, "prod", id, "node-a")
+	root := sub.cfg.MountRoot
+	legacy := filepath.Join(root, id)
+	prodDev, trialDev := mountinfo.Dev{Major: 8, Minor: 16}, mountinfo.Dev{Major: 8, Minor: 32}
+	table := fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{legacy: {prodDev, trialDev}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + prod.Handle: prodDev},
+	}
+	sub.cfg.MountTable = table
+	require.NoError(t, sub.reconcile(ctx, prod))
+
+	prod.BoundNode = "node-b" // unbound from this node
+	require.Error(t, sub.reconcile(ctx, prod))
+	_, d, _, _ := drv.snapshot()
+	require.Zero(t, d)
+
+	_, _, _, u0 := drv.snapshot()
+	sub.retryParked(ctx) // still buried: nothing happens, not even an unmount
+	_, d, _, u := drv.snapshot()
+	require.Zero(t, d)
+	require.Equal(t, u0, u, "a buried disk is not retried at all")
+
+	// trial's disk goes; prod's is now the visible mount at the old path.
+	table.stacks[legacy] = []mountinfo.Dev{prodDev}
+	sub.retryParked(ctx)
+	drv.mu.Lock()
+	unmounted := append([]driver.MountTarget(nil), drv.unmountCalls...)
+	drv.mu.Unlock()
+	assert.Contains(t, unmounted, driver.MountTarget(legacy), "the leftover old-path mount is unmounted")
+	// The static fake still lists the old path, so the detach is still
+	// refused here; on a real host the unmount clears it.
+	delete(table.stacks, legacy)
+	sub.retryParked(ctx)
+	_, d, _, _ = drv.snapshot()
+	assert.Equal(t, 1, d)
+	sub.stateMu.RLock()
+	assert.Empty(t, sub.parked)
+	sub.stateMu.RUnlock()
+}
+
+// The handle changed and the new disk now sits on the old disk's path.
+// Retrying the old disk's teardown must not unmount the new one.
+func TestSubsystem_ParkedRetryLeavesNewDiskOnSharedPath(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+	vol.Handle = "old"
+	target := filepath.Join(sub.cfg.MountRoot, "prod", vol.ID)
+	oldDev, newDev := mountinfo.Dev{Major: 8, Minor: 16}, mountinfo.Dev{Major: 8, Minor: 32}
+	table := fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{},
+		devs:   map[string]mountinfo.Dev{"/dev/old": oldDev, "/dev/new": newDev},
+	}
+	sub.cfg.MountTable = table
+	require.NoError(t, sub.reconcile(ctx, vol))
+
+	// The old disk is also mounted outside the mount root, so its
+	// detach is refused and it is parked.
+	table.stacks["/elsewhere"] = []mountinfo.Dev{oldDev}
+	vol.Handle = "new"
+	require.NoError(t, sub.reconcile(ctx, vol))
+	got, ok := sub.MountTargetFor(vol.MountKey())
+	require.True(t, ok)
+	require.Equal(t, target, got)
+	table.stacks[target] = []mountinfo.Dev{newDev}
+
+	_, _, _, u0 := drv.snapshot()
+	sub.retryParked(ctx)
+	drv.mu.Lock()
+	later := append([]driver.MountTarget(nil), drv.unmountCalls[u0:]...)
+	drv.mu.Unlock()
+	assert.NotContains(t, later, driver.MountTarget(target), "the new disk's mount must not be taken down")
+	_, d, _, _ := drv.snapshot()
+	assert.Zero(t, d)
+}
+
+// A disk parked when runed stops is retried by the next run.
+func TestSubsystem_ParkedDiskSurvivesRestart(t *testing.T) {
+	sub, ts, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+	dev := mountinfo.Dev{Major: 8, Minor: 16}
+	table := fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{"/elsewhere": {dev}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev},
+	}
+	sub.cfg.MountTable = table
+	require.NoError(t, sub.reconcile(ctx, vol))
+	vol.BoundNode = "node-b"
+	require.Error(t, sub.reconcile(ctx, vol))
+	cause, ok := sub.MountErrorFor(vol.MountKey())
+	require.True(t, ok)
+	assert.Contains(t, cause, "still attached")
+	_, err := os.Stat(filepath.Join(sub.cfg.MountRoot, parkedFile))
+	require.NoError(t, err, "the parked disk is recorded on disk")
+
+	// A new run over the same mount root, with the disk now free.
+	next, err := New(Config{
+		Store:      ts,
+		NodeID:     "node-a",
+		Lookup:     func(context.Context, *types.Volume) (driver.Driver, error) { return drv, nil },
+		MountRoot:  sub.cfg.MountRoot,
+		MountTable: fakeMountTable{devs: table.devs},
+		Logger:     log.NewLogger(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, next.Start(ctx))
+	t.Cleanup(func() { _ = next.Stop(context.Background()) })
+	next.retryParked(ctx)
+	_, d, _, _ := drv.snapshot()
+	assert.Equal(t, 1, d, "the next run detaches it")
+	_, err = os.Stat(filepath.Join(sub.cfg.MountRoot, parkedFile))
+	assert.True(t, os.IsNotExist(err), "and forgets it")
+}
+
+// A parked disk that comes back into use is not torn down.
+func TestSubsystem_ParkedDiskInUseAgainIsKept(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+	dev := mountinfo.Dev{Major: 8, Minor: 16}
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{"/elsewhere": {dev}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev},
+	}
+	require.NoError(t, sub.reconcile(ctx, vol))
+	vol.BoundNode = "node-b"
+	require.Error(t, sub.reconcile(ctx, vol))
+	vol.BoundNode = "node-a"
+	require.NoError(t, sub.reconcile(ctx, vol))
+	sub.cfg.MountTable = fakeMountTable{devs: map[string]mountinfo.Dev{"/dev/" + vol.Handle: dev}}
+	sub.retryParked(ctx)
+	_, d, _, _ := drv.snapshot()
+	assert.Zero(t, d)
+	_, ok := sub.MountTargetFor(vol.MountKey())
+	assert.True(t, ok)
+}
+
+// IDs and namespaces that would walk out of the mount root are refused
+// before anything is mounted.
+func TestSubsystem_RefusesUnsafeMountKeys(t *testing.T) {
+	for _, id := range []string{"../prod/data-api-0", "a/b", "..", "."} {
+		sub, _, drv := newSubsystem(t, "node-a")
+		vol := boundVolume(id, "trial", "data", "node-a")
+		err := sub.reconcile(context.Background(), vol)
+		require.Error(t, err, id)
+		assert.Contains(t, err.Error(), "unsafe mount key", id)
+		_, _, m, _ := drv.snapshot()
+		assert.Zero(t, m, id)
+	}
+}
+
+// Another disk on the target path is refused: the driver would see "a
+// mount is there" and report success with the wrong disk.
+func TestSubsystem_RefusesForeignDiskAtTarget(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	vol := boundVolume("data-db-0", "trial", "data-db-0", "node-a")
+	sub.cfg.MountTable = fakeMountTable{
+		stacks: map[string][]mountinfo.Dev{filepath.Join(sub.cfg.MountRoot, "trial", vol.ID): {{Major: 8, Minor: 16}}},
+		devs:   map[string]mountinfo.Dev{"/dev/" + vol.Handle: {Major: 8, Minor: 32}},
+	}
+	err := sub.reconcile(context.Background(), vol)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "another disk")
+	_, _, m, _ := drv.snapshot()
+	assert.Zero(t, m)
+}
+
+// Stop's drain parks disks from several goroutines at once. Every one of
+// them must end up in the parked file.
+func TestSubsystem_ConcurrentParksAllSaved(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	const n = 32
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("prod/v-%d", i)
+			sub.park(id, trackedMount{Driver: drv, Handle: driver.VolumeHandle(fmt.Sprintf("h-%d", i)), VolumeNS: "prod", VolumeName: fmt.Sprintf("v-%d", i)}, nil)
+		}(i)
+	}
+	wg.Wait()
+	b, err := os.ReadFile(filepath.Join(sub.cfg.MountRoot, parkedFile))
+	require.NoError(t, err)
+	var recs []parkedRecord
+	require.NoError(t, json.Unmarshal(b, &recs))
+	assert.Len(t, recs, n)
+}
+
+// A parked disk the store still binds to this node is wanted; its
+// bring-up is what is failing. The retry must not tear it down.
+func TestSubsystem_ParkedDiskStillBoundIsNotTornDown(t *testing.T) {
+	sub, ts, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+	sub.park(vol.MountKey(), trackedMount{Driver: drv, Handle: driver.VolumeHandle(vol.Handle),
+		Target: driver.MountTarget(filepath.Join(sub.cfg.MountRoot, "prod", vol.ID)), VolumeNS: "prod", VolumeName: vol.Name}, nil)
+
+	sub.retryParked(ctx)
+	_, d, _, u := drv.snapshot()
+	assert.Zero(t, u, "no unmount while the volume is still bound here")
+	assert.Zero(t, d, "no detach while the volume is still bound here")
+
+	// Unbound: now it goes.
+	vol.BoundNode = "node-b"
+	require.NoError(t, ts.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+	sub.retryParked(ctx)
+	_, d, _, _ = drv.snapshot()
+	assert.Equal(t, 1, d)
+}
+
+// If this disk's device cannot be identified but something is mounted at
+// its path, that mount may be another disk's: leave it.
+func TestSubsystem_UnknownDeviceDoesNotUnmountOccupiedPath(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	target := filepath.Join(sub.cfg.MountRoot, "prod", "data-db-0")
+	sub.cfg.MountTable = fakeMountTable{stacks: map[string][]mountinfo.Dev{target: {{Major: 8, Minor: 32}}}}
+	_, _ = sub.tearDown(context.Background(), "prod/data-db-0", trackedMount{
+		Driver: drv, Handle: "h", Device: "/dev/gone", Target: driver.MountTarget(target)})
+	_, _, _, u := drv.snapshot()
+	assert.Zero(t, u)
 }
