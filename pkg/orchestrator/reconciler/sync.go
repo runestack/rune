@@ -237,10 +237,11 @@ func (r *Reconciler) reconcileExistingInstance(ctx context.Context, service *typ
 	// IsInstanceCompatibleWithService gate already routed it here
 	// (the slot is held). Two branches:
 	//
-	//   * Status=Stalled       — retries exhausted; operator must
-	//                            run `rune restart instance` or
-	//                            `rune cast` (new generation) to
-	//                            re-arm. Do nothing this tick.
+	//   * Status=Stalled       — retries exhausted. `rune restart <service>`
+	//                            re-arms the slot; a cast will not, because
+	//                            the stuck-in-create gate reports compatible
+	//                            before any generation comparison. Do nothing
+	//                            this tick.
 	//   * Status=Failed        — backoff schedule controls the next
 	//                            attempt. If NextCreateAttemptAt
 	//                            has not yet passed, leave alone.

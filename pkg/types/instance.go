@@ -350,7 +350,8 @@ const (
 	// missing, image-pull error) and the reconciler has stopped
 	// auto-retrying until an operator intervenes. The slot is still
 	// held by this record; operators unstick it with
-	// `rune restart instance` or `rune cast` (new service generation).
+	// `rune restart <service>`; a cast will not, because the compatibility
+	// gate reports these records compatible before comparing generations.
 	// Mirrors the volume controller's ProvisionRetriesExhausted shape.
 	InstanceStatusStalled InstanceStatus = "Stalled"
 

@@ -380,7 +380,7 @@ func (s *ServiceService) UpdateService(ctx context.Context, req *generated.Updat
 
 	// Cast/update payloads never carry VIP; merge operator discovery
 	// fields with the persisted control-plane VIP.
-	updatedService.Discovery = mergeServiceDiscovery(existingService.Discovery, updatedService.Discovery)
+	updatedService.Discovery = types.MergeServiceDiscovery(existingService.Discovery, updatedService.Discovery)
 	if err := s.ensureServiceDiscoveryVIP(ctx, updatedService); err != nil {
 		s.logger.Error("Failed to ensure service VIP", log.Err(err))
 		return nil, status.Errorf(codes.Internal, "failed to ensure service VIP: %v", err)
@@ -1337,30 +1337,6 @@ func summarizeInstances(instances []*types.Instance) instanceSummary {
 		}
 	}
 
-	return out
-}
-
-// mergeServiceDiscovery applies operator discovery fields from updated
-// onto the persisted record, always keeping the control-plane VIP.
-func mergeServiceDiscovery(existing, updated *types.ServiceDiscovery) *types.ServiceDiscovery {
-	if existing == nil && updated == nil {
-		return nil
-	}
-	out := &types.ServiceDiscovery{}
-	if existing != nil {
-		*out = *existing
-	}
-	if updated != nil {
-		if updated.Mode != "" {
-			out.Mode = updated.Mode
-		}
-		if updated.LocalityPreference != "" {
-			out.LocalityPreference = updated.LocalityPreference
-		}
-	}
-	if out.Mode == "" && out.LocalityPreference == "" && out.VIP == "" {
-		return nil
-	}
 	return out
 }
 
