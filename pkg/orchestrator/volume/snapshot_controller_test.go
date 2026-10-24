@@ -84,9 +84,10 @@ func seedProvisionedVolume(t *testing.T, ts *store.TestStore, ns, name, scName, 
 }
 
 func TestSnapshotController_PendingToReady(t *testing.T) {
-	ctx, ts, _, _ := setupSnapshotController(t)
+	ctx, ts, _, snapRoot := setupSnapshotController(t)
 	putStorageClass(t, ts, "sc-snap", local.DriverNameLocal)
-	seedProvisionedVolume(t, ts, "default", "data", "sc-snap", t.TempDir())
+	// The local driver only snapshots directories inside its own root.
+	seedProvisionedVolume(t, ts, "default", "data", "sc-snap", filepath.Dir(snapRoot))
 
 	snap := &types.Snapshot{
 		ID:           "snap-1",
@@ -139,7 +140,7 @@ func TestSnapshotController_FailsOnMissingSourceVolume(t *testing.T) {
 func TestSnapshotController_DeletingDrivesDriverThenRemovesRow(t *testing.T) {
 	ctx, ts, _, snapRoot := setupSnapshotController(t)
 	putStorageClass(t, ts, "sc-snap", local.DriverNameLocal)
-	seedProvisionedVolume(t, ts, "default", "data", "sc-snap", t.TempDir())
+	seedProvisionedVolume(t, ts, "default", "data", "sc-snap", filepath.Dir(snapRoot))
 
 	snap := &types.Snapshot{
 		ID:           "snap-3",
