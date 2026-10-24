@@ -34,6 +34,17 @@ type Context struct {
 	client *apiclient.Client
 }
 
+// StartServer starts runed without bootstrapping a CLI, for tests that
+// talk to it over gRPC directly.
+func StartServer(t *testing.T, options ...Option) *Server {
+	t.Helper()
+	var opts Options
+	for _, o := range options {
+		o(&opts)
+	}
+	return startServer(t, opts)
+}
+
 // New builds the binaries (once per process), starts an isolated
 // dev-mode runed, bootstraps the admin token, and returns a Context
 // ready for CLI, gRPC, and HTTP traffic.

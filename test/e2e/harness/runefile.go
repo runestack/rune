@@ -18,6 +18,9 @@ type Options struct {
 	// streams only.
 	ObservabilityBackend string
 
+	// TLS turns on [server.tls] with runed's self-signed certificate.
+	TLS bool
+
 	// RunefileExtra is appended verbatim to the generated
 	// runefile.toml for knobs the harness has no first-class option
 	// for. Sections must not collide with the generated ones.
@@ -33,6 +36,13 @@ func WithObservability(backend string) Option {
 	return func(o *Options) { o.ObservabilityBackend = backend }
 }
 
+// WithTLS serves gRPC and the dashboard over runed's self-signed TLS
+// certificate. Use it with StartServer: the CLI that New bootstraps does
+// not speak TLS yet.
+func WithTLS() Option {
+	return func(o *Options) { o.TLS = true }
+}
+
 // WithRunefileExtra appends raw TOML to the generated runefile.
 func WithRunefileExtra(toml string) Option {
 	return func(o *Options) { o.RunefileExtra = toml }
@@ -43,6 +53,9 @@ func renderRunefile(o Options, dataDir, grpcAddr, httpAddr string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "data_dir = %q\n\n", dataDir)
 	fmt.Fprintf(&b, "[server]\ngrpc_address = %q\nhttp_address = %q\n\n", grpcAddr, httpAddr)
+	if o.TLS {
+		b.WriteString("[server.tls]\nenabled = true\n\n")
+	}
 	// debug level so a failure dump carries maximum signal; the log
 	// only surfaces when a test fails.
 	b.WriteString("[log]\nlevel = \"debug\"\nformat = \"json\"\n\n")
