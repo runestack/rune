@@ -54,6 +54,7 @@ type PlannedChange struct {
 	Name         string
 	Action       string
 	Conflict     string
+	Notes        []string
 }
 
 // Plan is the render-friendly projection of a reconcile plan (diff).
@@ -451,6 +452,7 @@ func protoToPlan(p *generated.Plan) *Plan {
 		pc := PlannedChange{
 			Action:   actionString(ch.GetAction()),
 			Conflict: ch.GetConflictReason(),
+			Notes:    ch.GetNotes(),
 		}
 		if ref := ch.GetRef(); ref != nil {
 			pc.ResourceType = ref.GetResourceType()

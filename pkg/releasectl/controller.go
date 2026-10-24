@@ -101,8 +101,17 @@ func NewController(orch orchestrator.Orchestrator, st store.Store, logger log.Lo
 	}
 }
 
-// Cast runs a full reconcile for the given spec + rendered payloads.
+// Cast runs a full reconcile for the given spec + rendered payloads. The
+// returned plan carries notes for service updates that running instances
+// will not pick up; they are read before anything is applied.
 func (c *Controller) Cast(ctx context.Context, spec release.ReleaseSpec, p Payloads) (*types.Release, *release.Plan, error) {
+	notes := c.serviceNotes(ctx, p)
+	rel, plan, err := c.cast(ctx, spec, p)
+	annotatePlan(plan, notes)
+	return rel, plan, err
+}
+
+func (c *Controller) cast(ctx context.Context, spec release.ReleaseSpec, p Payloads) (*types.Release, *release.Plan, error) {
 	// Admit before planning: nothing in this release reaches the store
 	// unless every payload passes.
 	if err := c.admit(ctx, p); err != nil {

@@ -640,8 +640,11 @@ type PlannedChange struct {
 	Ref            *OwnerRef              `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
 	Action         Action                 `protobuf:"varint,2,opt,name=action,proto3,enum=rune.api.Action" json:"action,omitempty"`
 	ConflictReason string                 `protobuf:"bytes,3,opt,name=conflict_reason,json=conflictReason,proto3" json:"conflict_reason,omitempty"` // empty unless the change conflicts (needs --adopt)
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Caveats about the change, e.g. parts of a service update that running
+	// instances only pick up when they are next replaced.
+	Notes         []string `protobuf:"bytes,4,rep,name=notes,proto3" json:"notes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PlannedChange) Reset() {
@@ -693,6 +696,13 @@ func (x *PlannedChange) GetConflictReason() string {
 		return x.ConflictReason
 	}
 	return ""
+}
+
+func (x *PlannedChange) GetNotes() []string {
+	if x != nil {
+		return x.Notes
+	}
+	return nil
 }
 
 // Plan is the full set of changes a cast revision would make, in apply order.
@@ -1605,11 +1615,12 @@ const file_pkg_api_proto_release_proto_rawDesc = "" +
 	"\x06detach\x18\t \x01(\bR\x06detach\x126\n" +
 	"\bpayloads\x18\n" +
 	" \x01(\v2\x1a.rune.api.RenderedPayloadsR\bpayloads\x12\x16\n" +
-	"\x06atomic\x18\v \x01(\bR\x06atomic\"\x88\x01\n" +
+	"\x06atomic\x18\v \x01(\bR\x06atomic\"\x9e\x01\n" +
 	"\rPlannedChange\x12$\n" +
 	"\x03ref\x18\x01 \x01(\v2\x12.rune.api.OwnerRefR\x03ref\x12(\n" +
 	"\x06action\x18\x02 \x01(\x0e2\x10.rune.api.ActionR\x06action\x12'\n" +
-	"\x0fconflict_reason\x18\x03 \x01(\tR\x0econflictReason\"\x8f\x01\n" +
+	"\x0fconflict_reason\x18\x03 \x01(\tR\x0econflictReason\x12\x14\n" +
+	"\x05notes\x18\x04 \x03(\tR\x05notes\"\x8f\x01\n" +
 	"\x04Plan\x12\x18\n" +
 	"\arelease\x18\x01 \x01(\tR\arelease\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x121\n" +

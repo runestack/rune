@@ -112,6 +112,9 @@ message PlannedChange {
   OwnerRef ref = 1;
   Action action = 2;
   string conflict_reason = 3; // empty unless the change conflicts (needs --adopt)
+  // Caveats about the change, e.g. parts of a service update that running
+  // instances only pick up when they are next replaced.
+  repeated string notes = 4;
 }
 
 // Plan is the full set of changes a cast revision would make, in apply order.

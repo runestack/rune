@@ -409,6 +409,7 @@ func toProtoPlan(p *release.Plan) *generated.Plan {
 		pc := &generated.PlannedChange{
 			Ref:    toProtoOwnerRef(ch.Ref),
 			Action: toProtoAction(ch.Action),
+			Notes:  ch.Notes,
 		}
 		if ch.Conflict != nil {
 			pc.ConflictReason = ch.Conflict.Reason
