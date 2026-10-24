@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/store"
@@ -28,7 +29,15 @@ type SnapshotService struct {
 	scRepo        *repos.StorageClassRepo
 	driverConfigs map[string]map[string]any
 	logger        log.Logger
+
+	// admission checks the snapshot and secret references of a restored
+	// Volume. Nil (auth off) admits everything.
+	admission *authz.Gate
 }
+
+// SetAdmission installs the reference admission gate. Wired by the API
+// server when authentication is on.
+func (s *SnapshotService) SetAdmission(g *authz.Gate) { s.admission = g }
 
 // SnapshotServiceOption configures optional SnapshotService behaviour.
 type SnapshotServiceOption func(*SnapshotService)
@@ -191,6 +200,18 @@ func (s *SnapshotService) RestoreVolume(ctx context.Context, req *generated.Rest
 		return nil, status.Error(codes.InvalidArgument, "target_volume_name is required")
 	}
 	snapNS := types.NS(req.SnapshotNamespace)
+	targetNS := req.TargetNamespace
+	if targetNS == "" {
+		targetNS = snapNS
+	}
+	// Admit the snapshot reference before looking it up, so a denied caller
+	// learns nothing about whether it exists or is ready.
+	if err := admitVolume(ctx, s.admission, &types.Volume{
+		Namespace:  targetNS,
+		Parameters: map[string]string{RestoreFromSnapshotParam: snapNS + "/" + req.SnapshotName},
+	}); err != nil {
+		return nil, err
+	}
 	snap, err := s.repo.Get(ctx, snapNS, req.SnapshotName)
 	if err != nil {
 		if store.IsNotFoundError(err) {
@@ -209,10 +230,6 @@ func (s *SnapshotService) RestoreVolume(ctx context.Context, req *generated.Rest
 	scName := req.StorageClassName
 	if scName == "" && src != nil {
 		scName = src.StorageClassName
-	}
-	targetNS := req.TargetNamespace
-	if targetNS == "" {
-		targetNS = snapNS
 	}
 	params := map[string]string{RestoreFromSnapshotParam: snap.Namespace + "/" + snap.Name}
 	if src != nil {
@@ -243,6 +260,9 @@ func (s *SnapshotService) RestoreVolume(ctx context.Context, req *generated.Rest
 	}
 	if err := ensureNamespaceExists(ctx, s.nsRepo, targetNS, false); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "ensure target namespace: %v", err)
+	}
+	if err := admitVolume(ctx, s.admission, target); err != nil {
+		return nil, err
 	}
 	if err := s.volRepo.Create(ctx, target); err != nil {
 		if store.IsAlreadyExistsError(err) {

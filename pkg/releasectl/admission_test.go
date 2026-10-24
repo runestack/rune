@@ -338,3 +338,60 @@ func TestPlan_NeedsReadInEachNamespace(t *testing.T) {
 		t.Fatalf("plan in an allowed namespace denied: %v", err)
 	}
 }
+
+// A cast that references another namespace's secret needs secrets:reveal
+// there, checked before anything is applied.
+func TestCast_CrossNamespaceSecretRefNeedsReveal(t *testing.T) {
+	c, _ := newTestController(t)
+	c.SetAdmission(authz.NewGate(castScoped{}))
+	web := svcRef("default", "web")
+	_, _, err := c.Cast(authctx.WithSubject(context.Background(), "ci"), release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: web}},
+	}, Payloads{Services: map[string]*types.Service{web.Key(): {
+		Name: "web", Namespace: "default",
+		Env: map[string]string{"DB": "{{secret:db.prod.rune/password}}"},
+	}}})
+	if !authz.IsDenied(err) {
+		t.Fatalf("expected a secrets:reveal denial in prod, got %v", err)
+	}
+	if _, err := c.releases.GetByName(context.Background(), "default", "app"); err == nil {
+		t.Fatal("a denied cast recorded a release")
+	}
+}
+
+// A release's Volume payload is a direct Volume write: its parameters can
+// restore another namespace's snapshot, which needs snapshots:get there.
+func TestCast_VolumePayloadSnapshotRestoreNeedsGet(t *testing.T) {
+	c, _ := newTestController(t)
+	c.SetAdmission(authz.NewGate(castScoped{}))
+	vol := types.OwnerRef{ResourceType: types.ResourceTypeVolume, Namespace: "default", Name: "data"}
+	_, _, err := c.Cast(authctx.WithSubject(context.Background(), "ci"), release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: vol}},
+	}, Payloads{Volumes: map[string]*types.Volume{vol.Key(): {
+		Name: "data", Namespace: "default", StorageClassName: "local", Size: "1Gi",
+		Parameters: map[string]string{types.RestoreFromSnapshotParam: "prod/nightly"},
+	}}})
+	if !authz.IsDenied(err) {
+		t.Fatalf("expected a snapshots:get denial in prod, got %v", err)
+	}
+}
+
+// A secret ref in a release Volume payload's parameters is handed to the
+// driver, so another namespace's secret needs secrets:reveal there.
+func TestCast_VolumePayloadSecretParamNeedsReveal(t *testing.T) {
+	c, _ := newTestController(t)
+	c.SetAdmission(authz.NewGate(castScoped{}))
+	vol := types.OwnerRef{ResourceType: types.ResourceTypeVolume, Namespace: "default", Name: "data"}
+	_, _, err := c.Cast(authctx.WithSubject(context.Background(), "ci"), release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: vol}},
+	}, Payloads{Volumes: map[string]*types.Volume{vol.Key(): {
+		Name: "data", Namespace: "default", StorageClassName: "local", Size: "1Gi",
+		Parameters: map[string]string{"token": "secret:do.prod.rune/token"},
+	}}})
+	if !authz.IsDenied(err) {
+		t.Fatalf("expected a secrets:reveal denial in prod, got %v", err)
+	}
+}

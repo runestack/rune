@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -66,6 +68,11 @@ func (c *Controller) SetAdmission(gate *authz.Gate) { c.admission = gate }
 func (c *Controller) admit(ctx context.Context, p Payloads) error {
 	for _, key := range sortedServiceKeys(p.Services) {
 		if err := c.admission.AdmitService(ctx, p.Services[key]); err != nil {
+			return err
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(p.Volumes)) {
+		if err := c.admission.AdmitVolume(ctx, p.Volumes[key]); err != nil {
 			return err
 		}
 	}

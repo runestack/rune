@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/store"
@@ -30,6 +31,25 @@ type VolumeService struct {
 	// enrichment (see volume_usage.go). Guarded by driverMu.
 	driverMu sync.Mutex
 	drivers  map[string]driver.Driver
+
+	// admission checks the references a Volume's parameters make into other
+	// namespaces. Nil (auth off) admits everything.
+	admission *authz.Gate
+}
+
+// SetAdmission installs the reference admission gate. Wired by the API
+// server when authentication is on.
+func (s *VolumeService) SetAdmission(g *authz.Gate) { s.admission = g }
+
+// admitVolume maps an admission denial onto PermissionDenied.
+func admitVolume(ctx context.Context, g *authz.Gate, v *types.Volume) error {
+	if err := g.AdmitVolume(ctx, v); err != nil {
+		if authz.IsDenied(err) {
+			return status.Error(codes.PermissionDenied, err.Error())
+		}
+		return status.Errorf(codes.Internal, "admission: %v", err)
+	}
+	return nil
 }
 
 // VolumeServiceOption configures optional VolumeService behaviour.
@@ -69,6 +89,10 @@ func (s *VolumeService) CreateVolume(ctx context.Context, req *generated.CreateV
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume: %v", err)
 	}
 	v.Namespace = types.NS(v.Namespace)
+	// Before ensureNamespaceExists, so a denied request creates nothing.
+	if err := admitVolume(ctx, s.admission, v); err != nil {
+		return nil, err
+	}
 	if err := ensureNamespaceExists(ctx, s.nsRepo, v.Namespace, req.EnsureNamespace); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "ensure namespace: %v", err)
 	}
@@ -117,6 +141,9 @@ func (s *VolumeService) UpdateVolume(ctx context.Context, req *generated.UpdateV
 	v.Namespace = types.NS(v.Namespace)
 	if err := s.validateAgainstStorageClass(ctx, v); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := admitVolume(ctx, s.admission, v); err != nil {
+		return nil, err
 	}
 	if err := s.repo.Update(ctx, v, store.WithSource(store.EventSourceAPI)); err != nil {
 		if store.IsNotFoundError(err) {

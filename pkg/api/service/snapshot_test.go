@@ -4,11 +4,15 @@ import (
 	"context"
 	"testing"
 
+	"github.com/runestack/rune/pkg/api/authctx"
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/store/repos"
 	"github.com/runestack/rune/pkg/types"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func newSnapshotTestServices(t *testing.T) (*SnapshotService, *VolumeService, store.Store) {
@@ -213,5 +217,42 @@ func TestSnapshotServiceRestoreNotReady(t *testing.T) {
 		TargetVolumeName:  "data-restored",
 	}); err == nil {
 		t.Fatalf("expected restore to fail when snapshot not Ready")
+	}
+}
+
+// Restoring another namespace's snapshot into your own copies its data, so
+// it needs snapshots:get in the snapshot's namespace.
+func TestSnapshotServiceRestoreVolume_CrossNamespaceNeedsGet(t *testing.T) {
+	ctx := context.Background()
+	svc, _, st := newSnapshotTestServices(t)
+	seedVolume(t, st, "prod", "data")
+	if _, err := svc.CreateSnapshot(ctx, &generated.CreateSnapshotRequest{
+		Snapshot:        &generated.Snapshot{Name: "snap1", Namespace: "prod", SourceVolume: "data"},
+		EnsureNamespace: true,
+	}); err != nil {
+		t.Fatalf("create snap: %v", err)
+	}
+	repo := repos.NewSnapshotRepo(st)
+	cur, err := repo.Get(ctx, "prod", "snap1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur.Phase = types.SnapshotPhaseReady
+	if err := repo.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repos.NewNamespaceRepo(st).Create(ctx, &types.Namespace{Name: "trial"}); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAdmission(authz.NewGate(denyAuth{}))
+	_, err = svc.RestoreVolume(authctx.WithSubject(ctx, "ci"), &generated.RestoreVolumeRequest{
+		SnapshotName:      "snap1",
+		SnapshotNamespace: "prod",
+		TargetVolumeName:  "stolen",
+		TargetNamespace:   "trial",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("want PermissionDenied, got %v", err)
 	}
 }

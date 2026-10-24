@@ -241,6 +241,10 @@ func (s *APIServer) Start() error {
 		service.WithDriverConfigs(s.options.StorageDriverConfigs))
 	s.snapshotService = service.NewSnapshotService(s.store, s.logger,
 		service.WithSnapshotDriverConfigs(s.options.StorageDriverConfigs))
+	// Volume parameters can reference another namespace's snapshot or
+	// secret; the RBAC interceptor sees only the volume's own namespace.
+	s.volumeService.SetAdmission(admissionGate)
+	s.snapshotService.SetAdmission(admissionGate)
 	s.describeService = service.NewDescribeService(s.store, s.options.EventLog, s.logger)
 	s.eventService = service.NewEventService(s.options.EventLog, s.logger)
 	// Stateful runeset releases (RUNESET_STATEFUL_RELEASES.md). The controller
