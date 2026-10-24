@@ -20,12 +20,15 @@ func MakeVersionKey(resourceType types.ResourceType, namespace, name, version st
 }
 
 // MakePrefix creates a prefix for listing resources by type and namespace.
+// An empty namespace, "all" and "*" list every namespace, which callers such
+// as ListAll rely on. A named namespace ends in the separator, so "prod" does
+// not also match "production".
 func MakePrefix(resourceType types.ResourceType, namespace string) []byte {
-	if namespace == "all" || namespace == "*" {
+	if namespace == "" || namespace == "all" || namespace == "*" {
 		return []byte(fmt.Sprintf("%s/", resourceType))
 	}
 
-	return []byte(fmt.Sprintf("%s/%s", resourceType, namespace))
+	return []byte(fmt.Sprintf("%s/%s/", resourceType, namespace))
 }
 
 // MakeVersionPrefix creates a prefix for listing resource versions.
