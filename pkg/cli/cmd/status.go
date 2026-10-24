@@ -218,8 +218,6 @@ type statusSummary struct {
 	Configmaps int `json:"configmaps" yaml:"configmaps"`
 }
 
-// instanceStateCounts buckets non-deleted instances by status for the
-// summary. Starting folds in Pending/Created (all "coming up" states).
 // bucketInstances counts ready instances per service and every instance by
 // lifecycle state. An instance withdrawn by its readiness probe is Running
 // but not ready.
@@ -249,6 +247,8 @@ func bucketInstances(insts []*types.Instance) (ready map[string]int, total int, 
 	return ready, total, states
 }
 
+// instanceStateCounts buckets non-deleted instances by status for the
+// summary. Starting folds in Pending/Created (all "coming up" states).
 type instanceStateCounts struct {
 	Running     int `json:"running" yaml:"running"`
 	Starting    int `json:"starting" yaml:"starting"`
