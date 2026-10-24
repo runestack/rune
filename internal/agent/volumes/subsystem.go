@@ -166,13 +166,9 @@ type Subsystem struct {
 	// parked holds disks whose teardown left them attached (still
 	// mounted somewhere, or the detach failed), keyed by handle. Once
 	// untracked, nothing else would ever retry them, so the retry tick
-	// does. Guarded by stateMu.
-	parked map[driver.VolumeHandle]parkedDisk
-}
-
-type parkedDisk struct {
-	id string
-	m  trackedMount
+	// does. Mirrored to parkedFile so a restart does not forget them.
+	// Guarded by stateMu.
+	parked map[driver.VolumeHandle]*parkedDisk
 }
 
 // mountFailure is the most recent reason a volume failed to come up on
@@ -215,6 +211,10 @@ type trackedMount struct {
 	// VolumeNS / VolumeName are kept so logs read sensibly.
 	VolumeNS   string
 	VolumeName string
+	// VolumeID and StorageClass let a parked disk be rebuilt after a
+	// restart.
+	VolumeID     string
+	StorageClass string
 }
 
 // New constructs a Subsystem. It does not touch the store or filesystem
@@ -253,7 +253,7 @@ func New(cfg Config) (*Subsystem, error) {
 		readyCh: make(chan struct{}),
 		mounts:  make(map[string]trackedMount),
 		lastErr: make(map[string]mountFailure),
-		parked:  make(map[driver.VolumeHandle]parkedDisk),
+		parked:  make(map[driver.VolumeHandle]*parkedDisk),
 	}, nil
 }
 
@@ -287,6 +287,7 @@ func (s *Subsystem) Start(ctx context.Context) error {
 		return fmt.Errorf("agent.volumes: watch: %w", err)
 	}
 
+	s.loadParked()
 	if err := s.initialReconcile(runCtx); err != nil {
 		s.log.Warn("Initial volume reconcile had errors", log.Err(err))
 	}
@@ -321,14 +322,10 @@ func (s *Subsystem) Stop(ctx context.Context) error {
 	// outer agent shutdown deadline applies.
 	s.stateMu.Lock()
 	tracked := make(map[string]trackedMount, len(s.mounts))
-	for _, p := range s.parked {
-		tracked[p.id] = p.m
-	}
 	for k, v := range s.mounts {
 		tracked[k] = v
 	}
 	s.mounts = make(map[string]trackedMount)
-	s.parked = make(map[driver.VolumeHandle]parkedDisk)
 	s.stateMu.Unlock()
 
 	s.drainMounts(ctx, tracked)
@@ -400,6 +397,10 @@ func (s *Subsystem) drainMounts(ctx context.Context, tracked map[string]trackedM
 			ok, err := s.tearDown(tdCtx, id, m)
 			if ok {
 				detached.Add(1)
+			} else {
+				// Recorded so the next start retries it if the volume is
+				// no longer wanted on this node.
+				s.park(id, m, err)
 			}
 			if err != nil {
 				s.log.Warn("Volume teardown failed during Stop",
@@ -712,9 +713,11 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 		RawParameters: rawParams,
 		VolumeNS:      vol.Namespace,
 		VolumeName:    vol.Name,
+		VolumeID:      vol.ID,
+		StorageClass:  vol.StorageClassName,
 	}
-	delete(s.parked, handle)
 	s.stateMu.Unlock()
+	s.unpark(handle)
 	s.log.Info("Volume mounted",
 		log.Str("volume_id", id),
 		log.Str("namespace", vol.Namespace),
@@ -734,13 +737,21 @@ func (s *Subsystem) bringUp(ctx context.Context, vol *types.Volume, id string) e
 // to the path actually sees, so the path can never be handed to the
 // wrong namespace's volume.
 func (s *Subsystem) mountTarget(vol *types.Volume, key string, dev driver.DevicePath) (driver.MountTarget, error) {
+	if err := pathSafeKey(key); err != nil {
+		return "", fmt.Errorf("agent.volumes: %s: %w", vol.String(), err)
+	}
 	target := filepath.Join(s.cfg.MountRoot, key)
 	// Already on the new path (runed restarted without draining): stay
-	// there, even if the old path has since become free.
+	// there, even if the old path has since become free. Another disk
+	// there is refused: a driver's Mount sees "something is mounted" and
+	// would report success with the wrong disk.
 	if dev != "" {
 		if own, err := s.cfg.MountTable.DeviceOf(string(dev)); err == nil {
-			if stack, err := s.cfg.MountTable.Stack(target); err == nil && len(stack) > 0 && stack[len(stack)-1] == own {
-				return driver.MountTarget(target), nil
+			if stack, err := s.cfg.MountTable.Stack(target); err == nil && len(stack) > 0 {
+				if stack[len(stack)-1] == own {
+					return driver.MountTarget(target), nil
+				}
+				return "", fmt.Errorf("agent.volumes: %s: another disk (%s) is mounted at %s", vol.String(), stack[len(stack)-1], target)
 			}
 		}
 	}
@@ -756,6 +767,22 @@ func (s *Subsystem) mountTarget(vol *types.Volume, key string, dev driver.Device
 			"it clears when that volume is unmounted", vol.String(), nsDir, target)
 	}
 	return driver.MountTarget(target), nil
+}
+
+// pathSafeKey checks a MountKey is exactly "<namespace>/<id>" with no
+// segment that could walk out of the mount root. IDs are validated where
+// they are created; this holds for rows that predate that.
+func pathSafeKey(key string) error {
+	parts := strings.Split(key, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("unsafe mount key %q", key)
+	}
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." || strings.ContainsAny(p, "\\\x00") {
+			return fmt.Errorf("unsafe mount key %q", key)
+		}
+	}
+	return nil
 }
 
 // legacyTarget reports whether vol's disk is the visible mount at its
@@ -798,44 +825,6 @@ func (s *Subsystem) legacyTarget(vol *types.Volume, key string, dev driver.Devic
 			log.Str("volume_id", key), log.Str("path", legacy), log.Int("disks", len(stack)))
 	}
 	return "", false
-}
-
-// release tears a volume down and, if its disk stays attached, parks it
-// for the retry tick.
-func (s *Subsystem) release(ctx context.Context, id string, m trackedMount) error {
-	detached, err := s.tearDown(ctx, id, m)
-	if !detached {
-		s.stateMu.Lock()
-		s.parked[m.Handle] = parkedDisk{id: id, m: m}
-		s.stateMu.Unlock()
-	}
-	return err
-}
-
-// retryParked retries teardown for parked disks. A disk still buried
-// under another disk's mount is skipped quietly until that mount goes.
-func (s *Subsystem) retryParked(ctx context.Context) {
-	s.stateMu.Lock()
-	parked := make([]parkedDisk, 0, len(s.parked))
-	for h, p := range s.parked {
-		delete(s.parked, h)
-		parked = append(parked, p)
-	}
-	s.stateMu.Unlock()
-	for _, p := range parked {
-		if s.buried(p.m.Device) {
-			s.stateMu.Lock()
-			if _, again := s.parked[p.m.Handle]; !again {
-				s.parked[p.m.Handle] = p
-			}
-			s.stateMu.Unlock()
-			continue
-		}
-		if err := s.release(ctx, p.id, p.m); err != nil {
-			s.log.Debug("Retry of parked volume teardown failed",
-				log.Str("volume_id", p.id), log.Err(err))
-		}
-	}
 }
 
 // ownMounts returns the paths under MountRoot where the disk is mounted,
@@ -904,13 +893,35 @@ func (s *Subsystem) stillMounted(dev driver.DevicePath) []string {
 	}
 	d, err := s.cfg.MountTable.DeviceOf(string(dev))
 	if err != nil {
+		s.log.Warn("Cannot tell whether the disk is still mounted; detaching anyway",
+			log.Str("device", string(dev)), log.Err(err))
 		return nil
 	}
 	where, err := s.cfg.MountTable.MountPoints(d)
 	if err != nil {
+		s.log.Warn("Cannot read the mount table; detaching anyway",
+			log.Str("device", string(dev)), log.Err(err))
 		return nil
 	}
 	return where
+}
+
+// topIsOther reports positive evidence that a disk other than dev is the
+// visible mount at path, so unmounting path would take down someone
+// else's mount. Unknown answers report false.
+func (s *Subsystem) topIsOther(dev driver.DevicePath, path string) bool {
+	if dev == "" {
+		return false
+	}
+	own, err := s.cfg.MountTable.DeviceOf(string(dev))
+	if err != nil {
+		return false
+	}
+	stack, err := s.cfg.MountTable.Stack(path)
+	if err != nil || len(stack) == 0 {
+		return false
+	}
+	return stack[len(stack)-1] != own
 }
 
 // tearDown is the inverse: Unmount then Detach. Both are required to
@@ -940,7 +951,12 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) (de
 		log.Str("name", m.VolumeName),
 		log.Str("target", string(m.Target)))
 	var firstErr error
-	if uerr := m.Driver.Unmount(ctx, opctx, m.Target); uerr != nil {
+	// The path may since have been given to another disk (the handle
+	// changed and the new disk mounted there): leave that mount alone.
+	if s.topIsOther(m.Device, string(m.Target)) {
+		s.log.Warn("Not unmounting: another disk is now mounted at this volume's path",
+			log.Str("volume_id", id), log.Str("target", string(m.Target)))
+	} else if uerr := m.Driver.Unmount(ctx, opctx, m.Target); uerr != nil {
 		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, uerr)
 		s.log.Warn("Unmount failed",
 			log.Str("volume_id", id),

@@ -278,3 +278,25 @@ func TestServiceSpecValidate_VolumesAccepted(t *testing.T) {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 }
+
+func TestValidateVolumeID(t *testing.T) {
+	for _, ok := range []string{"data-db-0", "0b7c1e9e-3f2a-4b8c-9d1e-2f3a4b5c6d7e", "a"} {
+		if err := ValidateVolumeID(ok); err != nil {
+			t.Errorf("%q: unexpected error %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "../prod/data", "a/b", "..", ".", "Data", "data_1", "-a", "a-", "a.b", strings.Repeat("a", 254)} {
+		if err := ValidateVolumeID(bad); err == nil {
+			t.Errorf("%q: expected an error", bad)
+		}
+	}
+}
+
+func TestValidateVolumeMounts_PathUnsafeName(t *testing.T) {
+	for _, name := range []string{"../x", "a/b", "..", "."} {
+		err := ValidateVolumeMounts([]VolumeMount{{Name: name, MountPath: "/data", Claim: &VolumeClaim{Name: "c"}}})
+		if err == nil {
+			t.Errorf("%q: expected an error", name)
+		}
+	}
+}

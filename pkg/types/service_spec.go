@@ -546,6 +546,11 @@ func (s *ServiceSpec) validateMounts() error {
 	if err := ValidateVolumeMounts(s.Volumes); err != nil {
 		return err
 	}
+	for _, m := range s.Volumes {
+		if !isDNS1123Label(m.Name) {
+			return NewValidationError(fmt.Sprintf("volume mount %q: name must be a DNS-1123 label (lowercase letters, digits, '-', at most 63)", m.Name))
+		}
+	}
 
 	// Shared paths, system blocklist, and RWO volumes on a scaled-up service.
 	owner := fmt.Sprintf("service %q", s.Name)
