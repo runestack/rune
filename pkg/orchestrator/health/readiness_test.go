@@ -21,10 +21,6 @@ func readinessResult(ok bool) types.HealthCheckResult {
 	return types.HealthCheckResult{Success: ok, CheckTime: time.Now(), CheckType: "readiness"}
 }
 
-func livenessResult(ok bool) types.HealthCheckResult {
-	return types.HealthCheckResult{Success: ok, CheckTime: time.Now(), CheckType: "liveness"}
-}
-
 func storedReady(ctx context.Context, t *testing.T, c *healthController, inst *types.Instance) (ready bool, recorded bool) {
 	t.Helper()
 	var got types.Instance
