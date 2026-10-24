@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/runestack/rune/internal/config"
 	"github.com/runestack/rune/pkg/log"
@@ -22,8 +23,13 @@ func mustOpenStore(b *boot) *controlPlane {
 	resolvedRunefile := b.runefile
 	closers := b.closers
 
-	// Open state store via helper
-	stateStore, appCfg, _, err := openStateStore(logger, resolvedRunefile, b.flags.DataDir)
+	appCfg, err := loadRunefile(logger, resolvedRunefile)
+	if err != nil {
+		logger.Error("Runefile does not decode", log.Str("path", resolvedRunefile), log.Err(err))
+		os.Exit(1)
+	}
+
+	stateStore, _, err := openStateStore(logger, appCfg, b.flags.DataDir)
 	if err != nil {
 		logger.Error("Failed to open state store", log.Err(err))
 		os.Exit(1)
@@ -49,12 +55,25 @@ func mustOpenStore(b *boot) *controlPlane {
 	return &controlPlane{store: stateStore, cfg: appCfg}
 }
 
-func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store, *config.Config, string, error) {
+// loadRunefile decodes the runefile. A key nothing reads is logged, not
+// fatal: it is usually a typo, and the setting it meant is at its default.
+func loadRunefile(logger log.Logger, path string) (*config.Config, error) {
+	appCfg, unknown, err := config.LoadWithUnknownKeys(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(unknown) > 0 {
+		logger.Error("Runefile keys are not recognised and have no effect; check their spelling",
+			log.Str("path", path), log.Str("keys", strings.Join(unknown, ", ")))
+	}
+	return appCfg, nil
+}
+
+func openStateStore(logger log.Logger, appCfg *config.Config, dataDirPath string) (store.Store, string, error) {
 	storeDir := filepath.Join(dataDirPath, "store")
 	if err := os.MkdirAll(storeDir, 0755); err != nil {
-		return nil, nil, storeDir, fmt.Errorf("create data dir: %w", err)
+		return nil, storeDir, fmt.Errorf("create data dir: %w", err)
 	}
-	appCfg, _ := config.Load(cfgFile)
 	if appCfg.Secret.Encryption.KEK.Source == "file" && appCfg.Secret.Encryption.KEK.File == "" {
 		appCfg.Secret.Encryption.KEK.File = filepath.Join(dataDirPath, "kek.b64")
 	}
@@ -66,9 +85,9 @@ func openStateStore(logger log.Logger, cfgFile, dataDirPath string) (store.Store
 		ConfigLimits:            appCfg.ConfigResource.Limits,
 	})
 	if err := st.Open(storeDir); err != nil {
-		return nil, nil, storeDir, err
+		return nil, storeDir, err
 	}
-	return st, appCfg, storeDir, nil
+	return st, storeDir, nil
 }
 
 // applyDevModeStorageOverlay mutates the operator-provided Storage
