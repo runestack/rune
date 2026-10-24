@@ -200,3 +200,41 @@ func TestDeleteService_BlocksWhenDependentsExist(t *testing.T) {
 	_, err = svc.DeleteService(ctx, &generated.DeleteServiceRequest{Name: "db", Namespace: "default", Force: true})
 	require.NoError(t, err)
 }
+
+type abandonRecordingOrchestrator struct {
+	*orchestrator.FakeOrchestrator
+	got *types.DeletionRequest
+	err error
+}
+
+func (o *abandonRecordingOrchestrator) DeleteService(_ context.Context, req *types.DeletionRequest) (*types.DeletionResponse, error) {
+	o.got = req
+	if o.err != nil {
+		return nil, o.err
+	}
+	return &types.DeletionResponse{Status: "in_progress"}, nil
+}
+
+// Abandoning finalizers acts on a deletion that already passed the
+// dependents check, so it must not be blocked by it; a service that is not
+// being deleted comes back as FailedPrecondition, not Internal.
+func TestDeleteService_AbandonFinalizers(t *testing.T) {
+	ctx := context.Background()
+	fake := &abandonRecordingOrchestrator{FakeOrchestrator: orchestrator.NewFakeOrchestrator()}
+	svc := NewServiceService(store.NewTestStore(), fake, nil, log.NewTestLogger())
+
+	require.NoError(t, fake.CreateService(ctx, &types.Service{Name: "db", Namespace: "default"}))
+	require.NoError(t, fake.CreateService(ctx, &types.Service{Name: "api", Namespace: "default",
+		Dependencies: []types.DependencyRef{{Service: "db", Namespace: "default"}}}))
+
+	_, err := svc.DeleteService(ctx, &generated.DeleteServiceRequest{Name: "db", Namespace: "default", AbandonFinalizers: true})
+	require.NoError(t, err)
+	require.NotNil(t, fake.got)
+	assert.True(t, fake.got.AbandonFinalizers)
+
+	fake.err = types.NewValidationError("service default/db is not being deleted")
+	_, err = svc.DeleteService(ctx, &generated.DeleteServiceRequest{Name: "db", Namespace: "default", AbandonFinalizers: true})
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
+}

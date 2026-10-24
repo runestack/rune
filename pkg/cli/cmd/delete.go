@@ -27,6 +27,8 @@ type deleteOptions struct {
 	finalizers     []string
 	output         string
 	noDependencies bool
+
+	abandonFinalizers bool
 }
 
 // newDeleteCmd creates the delete command
@@ -286,6 +288,9 @@ Examples:
 	// Add flags
 	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace of the service")
 	cmd.Flags().BoolVarP(&opts.force, "force", "f", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&opts.abandonFinalizers, "abandon-finalizers", false,
+		"For a service already being deleted: skip its remaining cleanup and remove the record. "+
+			"Anything that cleanup would have removed (e.g. owned volumes) is left for you")
 	cmd.Flags().Int32VarP(&opts.timeoutSeconds, "timeout", "t", 30, "Graceful shutdown timeout in seconds")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start deletion and return immediately")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would be deleted without actually deleting")
@@ -431,16 +436,18 @@ func runServiceDelete(ctx context.Context, serviceName string, opts *deleteOptio
 
 	// Create the deletion request
 	deleteReq := &generated.DeleteServiceRequest{
-		Name:           serviceName,
-		Namespace:      opts.namespace,
-		Force:          opts.force || opts.noDependencies,
-		TimeoutSeconds: opts.timeoutSeconds,
-		Detach:         opts.detach,
-		DryRun:         opts.dryRun,
-		GracePeriod:    opts.gracePeriod,
-		Now:            opts.now,
-		IgnoreNotFound: opts.ignoreNotFound,
-		Finalizers:     opts.finalizers,
+		Name:      serviceName,
+		Namespace: opts.namespace,
+		Force:     opts.force || opts.noDependencies,
+
+		AbandonFinalizers: opts.abandonFinalizers,
+		TimeoutSeconds:    opts.timeoutSeconds,
+		Detach:            opts.detach,
+		DryRun:            opts.dryRun,
+		GracePeriod:       opts.gracePeriod,
+		Now:               opts.now,
+		IgnoreNotFound:    opts.ignoreNotFound,
+		Finalizers:        opts.finalizers,
 	}
 
 	// Execute deletion

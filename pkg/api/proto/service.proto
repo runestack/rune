@@ -559,6 +559,11 @@ message DeleteServiceRequest {
 
   // Ignore dependents and proceed with deletion (MVP override)
   bool no_dependencies = 11;
+
+  // Clear the remaining finalizers of a service that is already being
+  // deleted, so its record is removed without finishing that cleanup.
+  // Rejected for a service that is not being deleted.
+  bool abandon_finalizers = 12;
 }
 
 // DeleteServiceResponse returns the result of a service deletion.

@@ -582,8 +582,9 @@ func (s *ServiceService) DeleteService(ctx context.Context, req *generated.Delet
 		}
 	}
 
-	// If not forced, block deletion when dependents exist
-	if !req.Force {
+	// If not forced, block deletion when dependents exist. Abandoning
+	// finalizers acts on a service whose deletion already passed this check.
+	if !req.Force && !req.AbandonFinalizers {
 		dependents, err := s.findDependents(ctx, namespace, req.Name)
 		if err != nil {
 			s.logger.Error("Failed to check dependents", log.Err(err))
@@ -610,6 +611,8 @@ func (s *ServiceService) DeleteService(ctx context.Context, req *generated.Delet
 		Now:            req.Now,
 		IgnoreNotFound: req.IgnoreNotFound,
 		Finalizers:     req.Finalizers,
+
+		AbandonFinalizers: req.AbandonFinalizers,
 	}
 
 	// Use the deletion controller to handle the deletion
@@ -618,6 +621,9 @@ func (s *ServiceService) DeleteService(ctx context.Context, req *generated.Delet
 	}
 
 	deletionResponse, err := s.orchestrator.DeleteService(ctx, deletionRequest)
+	if types.IsValidationError(err) {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	if err != nil {
 		s.logger.Error("Failed to delete service", log.Err(err), log.Str("name", req.Name))
 		return nil, status.Errorf(codes.Internal, "failed to delete service: %v", err)
