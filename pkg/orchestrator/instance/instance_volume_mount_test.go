@@ -513,3 +513,41 @@ func TestResolveVolumeMount_NoReporterKeepsTransientMessage(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not yet mounted")
 }
+
+// A service stored before mount names were validated (here "data_dir")
+// owns a volume whose ID is not a DNS label. It must keep mounting after
+// the upgrade; only creation checks the name.
+func TestResolveVolumeMount_LegacyClaimTemplateIDStillMounts(t *testing.T) {
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	pre := &types.Volume{
+		ID: "data_dir-api-0", Name: "data_dir-api-0", Namespace: "default",
+		StorageClassName: "fast", Size: "5Gi", AccessMode: types.AccessModeRWO,
+		OwnerService: "default/api", Status: types.VolumeStatusAvailable,
+		Handle: "/var/lib/rune/volumes/default/data_dir-api-0", CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, ts.Create(context.Background(), types.ResourceTypeVolume, "default", pre.Name, pre))
+
+	got, err := ic.resolveVolumeMount(context.Background(), &types.Service{Name: "api", Namespace: "default"},
+		&types.Instance{Name: "api-0"}, types.VolumeMount{
+			Name: "data_dir", MountPath: "/data",
+			ClaimTemplate: &types.VolumeClaimTemplate{StorageClassName: "fast", Size: "5Gi", AccessMode: types.AccessModeRWO},
+		})
+	require.NoError(t, err)
+	assert.Equal(t, "data_dir-api-0", got.VolumeName)
+}
+
+// A claim-template name that could walk out of the mount root is refused
+// before any volume is created.
+func TestResolveVolumeMount_ClaimTemplateRefusesUnsafeName(t *testing.T) {
+	ts, ic := newInstanceControllerForVolumeTests(t)
+	_, err := ic.resolveVolumeMount(context.Background(), &types.Service{Name: "api", Namespace: "default"},
+		&types.Instance{Name: "api-0"}, types.VolumeMount{
+			Name: "../../prod/data", MountPath: "/data",
+			ClaimTemplate: &types.VolumeClaimTemplate{StorageClassName: "fast", Size: "5Gi", AccessMode: types.AccessModeRWO},
+		})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path segment")
+	var vols []types.Volume
+	require.NoError(t, ts.ListAll(context.Background(), types.ResourceTypeVolume, &vols))
+	assert.Empty(t, vols, "no volume may be created")
+}

@@ -2,6 +2,7 @@ package volumes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1278,4 +1279,61 @@ func TestSubsystem_RefusesForeignDiskAtTarget(t *testing.T) {
 	assert.Contains(t, err.Error(), "another disk")
 	_, _, m, _ := drv.snapshot()
 	assert.Zero(t, m)
+}
+
+// Stop's drain parks disks from several goroutines at once. Every one of
+// them must end up in the parked file.
+func TestSubsystem_ConcurrentParksAllSaved(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	const n = 32
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("prod/v-%d", i)
+			sub.park(id, trackedMount{Driver: drv, Handle: driver.VolumeHandle(fmt.Sprintf("h-%d", i)), VolumeNS: "prod", VolumeName: fmt.Sprintf("v-%d", i)}, nil)
+		}(i)
+	}
+	wg.Wait()
+	b, err := os.ReadFile(filepath.Join(sub.cfg.MountRoot, parkedFile))
+	require.NoError(t, err)
+	var recs []parkedRecord
+	require.NoError(t, json.Unmarshal(b, &recs))
+	assert.Len(t, recs, n)
+}
+
+// A parked disk the store still binds to this node is wanted; its
+// bring-up is what is failing. The retry must not tear it down.
+func TestSubsystem_ParkedDiskStillBoundIsNotTornDown(t *testing.T) {
+	sub, ts, drv := newSubsystem(t, "node-a")
+	ctx := context.Background()
+	vol := boundVolume("data-db-0", "prod", "data-db-0", "node-a")
+	require.NoError(t, ts.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+	sub.park(vol.MountKey(), trackedMount{Driver: drv, Handle: driver.VolumeHandle(vol.Handle),
+		Target: driver.MountTarget(filepath.Join(sub.cfg.MountRoot, "prod", vol.ID)), VolumeNS: "prod", VolumeName: vol.Name}, nil)
+
+	sub.retryParked(ctx)
+	_, d, _, u := drv.snapshot()
+	assert.Zero(t, u, "no unmount while the volume is still bound here")
+	assert.Zero(t, d, "no detach while the volume is still bound here")
+
+	// Unbound: now it goes.
+	vol.BoundNode = "node-b"
+	require.NoError(t, ts.Update(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+	sub.retryParked(ctx)
+	_, d, _, _ = drv.snapshot()
+	assert.Equal(t, 1, d)
+}
+
+// If this disk's device cannot be identified but something is mounted at
+// its path, that mount may be another disk's: leave it.
+func TestSubsystem_UnknownDeviceDoesNotUnmountOccupiedPath(t *testing.T) {
+	sub, _, drv := newSubsystem(t, "node-a")
+	target := filepath.Join(sub.cfg.MountRoot, "prod", "data-db-0")
+	sub.cfg.MountTable = fakeMountTable{stacks: map[string][]mountinfo.Dev{target: {{Major: 8, Minor: 32}}}}
+	_, _ = sub.tearDown(context.Background(), "prod/data-db-0", trackedMount{
+		Driver: drv, Handle: "h", Device: "/dev/gone", Target: driver.MountTarget(target)})
+	_, _, _, u := drv.snapshot()
+	assert.Zero(t, u)
 }
