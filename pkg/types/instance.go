@@ -430,7 +430,8 @@ func (i *Instance) Equals(other Resource) bool {
 		i.Namespace == otherInstance.Namespace &&
 		i.ServiceID == otherInstance.ServiceID &&
 		i.NodeID == otherInstance.NodeID &&
-		i.Status == otherInstance.Status
+		i.Status == otherInstance.Status &&
+		i.IsReady() == otherInstance.IsReady()
 }
 
 // InstanceUsage is a point-in-time resource-usage sample for one instance,

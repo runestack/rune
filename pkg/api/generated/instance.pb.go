@@ -144,9 +144,17 @@ type Instance struct {
 	// runners only — currently docker). Absent when the runner cannot report
 	// usage or the instance is not running. Mirrors the NodeResources pattern
 	// on HealthService.
-	Usage         *InstanceUsage `protobuf:"bytes,21,opt,name=usage,proto3" json:"usage,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Usage *InstanceUsage `protobuf:"bytes,21,opt,name=usage,proto3" json:"usage,omitempty"`
+	// Ready is the readiness probe's verdict once the instance is RUNNING. An
+	// instance withdrawn by its probe stays RUNNING but is not ready and
+	// receives no traffic. Meaningful only with ready_changed_at set.
+	Ready bool `protobuf:"varint,22,opt,name=ready,proto3" json:"ready,omitempty"`
+	// When the readiness verdict last changed (RFC 3339). Empty when none has
+	// been recorded, which means ready: the service has no readiness probe, or
+	// the server predates the field.
+	ReadyChangedAt string `protobuf:"bytes,23,opt,name=ready_changed_at,json=readyChangedAt,proto3" json:"ready_changed_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Instance) Reset() {
@@ -317,6 +325,20 @@ func (x *Instance) GetUsage() *InstanceUsage {
 		return x.Usage
 	}
 	return nil
+}
+
+func (x *Instance) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
+func (x *Instance) GetReadyChangedAt() string {
+	if x != nil {
+		return x.ReadyChangedAt
+	}
+	return ""
 }
 
 // InstanceUsage is a point-in-time resource usage sample for one instance.
@@ -1154,7 +1176,7 @@ var File_pkg_api_proto_instance_proto protoreflect.FileDescriptor
 
 const file_pkg_api_proto_instance_proto_rawDesc = "" +
 	"\n" +
-	"\x1cpkg/api/proto/instance.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\xff\x05\n" +
+	"\x1cpkg/api/proto/instance.proto\x12\brune.api\x1a\x1apkg/api/proto/common.proto\"\xbf\x06\n" +
 	"\bInstance\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06runner\x18\x02 \x01(\tR\x06runner\x12\x1c\n" +
@@ -1179,7 +1201,9 @@ const file_pkg_api_proto_instance_proto_rawDesc = "" +
 	"\tfailed_at\x18\x12 \x01(\tR\bfailedAt\x12%\n" +
 	"\x0efailure_reason\x18\x13 \x01(\tR\rfailureReason\x126\n" +
 	"\x06labels\x18\x14 \x03(\v2\x1e.rune.api.Instance.LabelsEntryR\x06labels\x12-\n" +
-	"\x05usage\x18\x15 \x01(\v2\x17.rune.api.InstanceUsageR\x05usage\x1a9\n" +
+	"\x05usage\x18\x15 \x01(\v2\x17.rune.api.InstanceUsageR\x05usage\x12\x14\n" +
+	"\x05ready\x18\x16 \x01(\bR\x05ready\x12(\n" +
+	"\x10ready_changed_at\x18\x17 \x01(\tR\x0ereadyChangedAt\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x10\x10\x11R\venvironment\"~\n" +

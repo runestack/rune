@@ -225,9 +225,9 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 	// Set default headers if not provided
 	if len(t.Headers) == 0 {
 		if t.AllNamespaces {
-			t.Headers = []string{"NAMESPACE", "NAME", "INSTANCE ID", "SERVICE", "NODE", "STATUS", "RESTARTS", "AGE"}
+			t.Headers = []string{"NAMESPACE", "NAME", "INSTANCE ID", "SERVICE", "NODE", "STATUS", "READY", "RESTARTS", "AGE"}
 		} else {
-			t.Headers = []string{"NAME", "INSTANCE ID", "SERVICE", "NODE", "STATUS", "RESTARTS", "AGE"}
+			t.Headers = []string{"NAME", "INSTANCE ID", "SERVICE", "NODE", "STATUS", "READY", "RESTARTS", "AGE"}
 		}
 	}
 
@@ -247,6 +247,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 
 		// Calculate age
 		age := formatAgeTable(instance.CreatedAt)
+		ready := instanceReadyCell(instance)
 
 		// Create the row
 		var row []string
@@ -258,6 +259,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 				instance.ServiceName,
 				instance.NodeID,
 				status,
+				ready,
 				restarts,
 				age,
 			}
@@ -268,6 +270,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 				instance.ServiceName,
 				instance.NodeID,
 				status,
+				ready,
 				restarts,
 				age,
 			}
@@ -278,6 +281,19 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 
 	// Render the table with pterm
 	return t.tableRenderer.WithData(rows).Render()
+}
+
+// instanceReadyCell is the READY column: whether a Running instance is
+// receiving traffic. A failing readiness probe withdraws it while Status
+// stays Running; "-" for anything not Running.
+func instanceReadyCell(instance *types.Instance) string {
+	if instance.Status != types.InstanceStatusRunning {
+		return "-"
+	}
+	if instance.IsReady() {
+		return "yes"
+	}
+	return "no"
 }
 
 // RenderNamespaces renders a table of namespaces

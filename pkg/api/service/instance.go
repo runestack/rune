@@ -330,6 +330,10 @@ func (s *InstanceService) instanceModelToProto(instance *types.Instance) (*gener
 		protoInstance.FailedAt = instance.FailedAt.Format(time.RFC3339)
 	}
 	protoInstance.FailureReason = instance.FailureReason
+	protoInstance.Ready = instance.Ready
+	if instance.ReadyChangedAt != nil {
+		protoInstance.ReadyChangedAt = instance.ReadyChangedAt.Format(time.RFC3339)
+	}
 
 	// Convert status
 	protoInstance.Status = s.instanceStatusToProto(instance.Status)

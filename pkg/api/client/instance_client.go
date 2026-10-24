@@ -477,6 +477,12 @@ func (i *InstanceClient) protoToInstance(proto *generated.Instance) (*types.Inst
 		}
 	}
 	instance.FailureReason = proto.FailureReason
+	instance.Ready = proto.Ready
+	if proto.ReadyChangedAt != "" {
+		if t, perr := parseTimestamp(proto.ReadyChangedAt); perr == nil {
+			instance.ReadyChangedAt = t
+		}
+	}
 
 	// Convert status
 	switch proto.Status {
