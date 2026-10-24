@@ -216,6 +216,9 @@ func surgeBlocker(svc *Service) string {
 	if svc.HasClaimTemplateVolume() {
 		return "a per-replica claimTemplate volume"
 	}
+	if svc.HasWritableClaimVolume() {
+		return "a writable claim volume"
+	}
 	if svc.Runtime == RuntimeTypeProcess {
 		return "the process runtime"
 	}
@@ -336,6 +339,20 @@ func (s *Service) HasClaimTemplateVolume() bool {
 	return false
 }
 
+// HasWritableClaimVolume reports whether the service mounts a shared claim
+// volume without readOnly.
+func (s *Service) HasWritableClaimVolume() bool {
+	if s == nil {
+		return false
+	}
+	for i := range s.Volumes {
+		if s.Volumes[i].Claim != nil && !s.Volumes[i].ReadOnly {
+			return true
+		}
+	}
+	return false
+}
+
 // IsSurgeCapable reports whether a second copy of a replica can run
 // concurrently with the one it replaces. False means the update must retire
 // before it creates, one replica at a time.
@@ -346,6 +363,13 @@ func (s *Service) IsSurgeCapable() bool {
 	// Per-replica claimTemplate volumes: the replacement would have to mount
 	// the volume the outgoing instance still holds.
 	if s.HasClaimTemplateVolume() {
+		return false
+	}
+	// A writable shared claim: the replacement would write to the volume the
+	// outgoing instance is still writing. The access mode lives on the Volume
+	// row, which this check cannot see, so every writable claim is treated as
+	// single-writer — RWX claims update one replica at a time too.
+	if s.HasWritableClaimVolume() {
 		return false
 	}
 	// Process-runner instances are dialed at 127.0.0.1:<port> on the host and
