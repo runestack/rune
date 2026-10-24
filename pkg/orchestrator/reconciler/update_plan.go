@@ -281,17 +281,31 @@ func planUpdate(in updateInput) updatePlan {
 	// are all unready — a broken probe, fixed by the cast now rolling out —
 	// would hold forever with nothing available to trade.
 	//
-	// Bounded to the dip (at least one) per tick, and skipped while creates
-	// are blocked: if no replacement can start, an outage that made every
-	// instance unready would otherwise strip the service one tick at a time,
-	// leaving nothing warm for when it recovers.
+	// Paced on replacements becoming ready, not on their being created: up
+	// to the dip (at least one) replacements may be waiting to serve at a
+	// time, and none while creates are blocked. Planning is event-driven, so
+	// pacing on creation alone would, in an outage that keeps replacements
+	// from becoming ready, retire the whole warm fleet within seconds —
+	// leaving nothing to fall back on if the new template is the problem.
 	if !in.CreatesBlocked {
 		unreadyBudget := in.Params.Dip
 		if unreadyBudget < 1 {
 			unreadyBudget = 1
 		}
+		// Replacements in flight: current-template instances not yet
+		// serving, plus slots an earlier retirement freed that this plan is
+		// about to fill.
+		if missing := in.Scale - live; missing > 0 {
+			unreadyBudget -= missing
+		}
+		for i := range in.Instances {
+			v := &in.Instances[i]
+			if v.Class == instancectl.CompatOK && !v.Terminating && !retired[v.Instance.ID] && !v.serving() {
+				unreadyBudget--
+			}
+		}
 		for _, v := range liveOutdated {
-			if unreadyBudget == 0 {
+			if unreadyBudget <= 0 {
 				break
 			}
 			if v.Running && !v.Ready && !retired[v.Instance.ID] {

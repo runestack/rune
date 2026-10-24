@@ -301,7 +301,13 @@ func TestReadiness_NonFlipWritesNothing(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			c.updateHealthStatus(other.ID, readinessResult(true), "readiness")
 		}
-		time.Sleep(50 * time.Millisecond)
+		// A write would have set readyWriting before updateHealthStatus
+		// returned; once it is clear, any write has landed.
+		require.Eventually(t, func() bool {
+			c.mu.RLock()
+			defer c.mu.RUnlock()
+			return !ih.readyWriting
+		}, 3*time.Second, 5*time.Millisecond)
 		var got types.Instance
 		require.NoError(t, testStore.Get(ctx, types.ResourceTypeInstance, "default", other.ID, &got))
 		assert.True(t, got.ReadyChangedAt.Equal(changed), "passes on an instance already ready wrote a flip")

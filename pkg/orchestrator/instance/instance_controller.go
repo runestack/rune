@@ -215,15 +215,15 @@ func (c *Controller) SetMountResolver(resolver MountResolver) {
 	c.mountRes.Store(&mountResolverBox{r: resolver})
 }
 
-// emit records one event for the instance. Fire-and-forget — emission
-// failures are logged but never surfaced to the caller (events are
-// observability, never on a correctness path).
 // EmitInstanceEvent records an instance-scoped event on behalf of another
 // controller. Best-effort and nil-safe.
 func (c *Controller) EmitInstanceEvent(level types.EventLevel, instance *types.Instance, reason, message string) {
 	c.emit(level, instance, reason, message)
 }
 
+// emit records one event for the instance. Fire-and-forget — emission
+// failures are logged but never surfaced to the caller (events are
+// observability, never on a correctness path).
 func (c *Controller) emit(level types.EventLevel, instance *types.Instance, reason, message string) {
 	if c.events == nil || instance == nil {
 		return

@@ -361,6 +361,12 @@ func unreadyOutdated(name string) instanceView {
 // applyPlan advances a simulated service one tick: retirements leave, and
 // created instances arrive ready at the current template.
 func applyPlan(insts []instanceView, p updatePlan, next *int) []instanceView {
+	return applyPlanReady(insts, p, next, true)
+}
+
+// applyPlanReady is applyPlan with control over whether replacements ever
+// become ready.
+func applyPlanReady(insts []instanceView, p updatePlan, next *int, ready bool) []instanceView {
 	gone := map[string]bool{}
 	for _, r := range p.Retire {
 		gone[r.ID] = true
@@ -372,7 +378,7 @@ func applyPlan(insts []instanceView, p updatePlan, next *int) []instanceView {
 		}
 	}
 	for i := 0; i < p.Create; i++ {
-		out = append(out, view(fmt.Sprintf("new%d", *next), instancectl.CompatOK, true, 60))
+		out = append(out, view(fmt.Sprintf("new%d", *next), instancectl.CompatOK, ready, 60))
 		*next++
 	}
 	return out
@@ -411,6 +417,39 @@ func TestPlanUpdate_UnreadyOutdatedInstancesConverge(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// In an outage that keeps every replacement from becoming ready, the old
+// unready fleet must stay: at most max(dip, 1) replacements wait to serve at
+// a time, however many ticks pass. Otherwise a bad new template would leave
+// nothing to fall back on.
+func TestPlanUpdate_UnreadyRetirementWaitsForReplacements(t *testing.T) {
+	twoDip := exclusive()
+	twoDip.Dip = 2
+	for _, tc := range []struct {
+		name    string
+		params  types.UpdateParams
+		maxGone int
+	}{{"dip 1", exclusive(), 1}, {"dip 2", twoDip, 2}, {"can surge", surgeable(), 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var insts []instanceView
+			for i := 0; i < 5; i++ {
+				insts = append(insts, unreadyOutdated(fmt.Sprintf("old%d", i)))
+			}
+			next := 0
+			for tick := 0; tick < 20; tick++ {
+				p := planUpdate(updateInput{Scale: 5, Params: tc.params, Instances: insts, Now: planBase})
+				insts = applyPlanReady(insts, p, &next, false)
+			}
+			old := 0
+			for _, v := range insts {
+				if v.Class == instancectl.CompatOutdated {
+					old++
+				}
+			}
+			assert.GreaterOrEqual(t, old, 5-tc.maxGone, "retired %d of 5 old instances with no replacement ever ready", 5-old)
+		})
 	}
 }
 
