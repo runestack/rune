@@ -90,8 +90,8 @@ type PreparedCast struct {
 // Pending release and no bumped revision behind.
 type Admit func(ctx context.Context, plan *Plan) error
 
-// Prepare runs the 3-way plan, validates it (conflicts, detach-prune, admit
-// when non-nil), and writes the pending release intent. It does NOT mutate the cluster — that is
+// Prepare runs the 3-way plan, validates it (admit when non-nil, conflicts,
+// detach-prune), and writes the pending release intent. It does NOT mutate the cluster — that is
 // the returned PreparedCast.Execute closure's job. On a validation error it
 // still returns a PreparedCast carrying the Plan (Release nil) so callers can
 // surface it.
@@ -109,16 +109,18 @@ func Prepare(ctx context.Context, spec ReleaseSpec, recs ReleaseRecords, live Li
 	if err != nil {
 		return nil, err
 	}
+	// Admit first: a conflict reason names the release that owns a
+	// resource, and a denied caller must learn nothing about the plan.
+	if admit != nil {
+		if err := admit(ctx, plan); err != nil {
+			return nil, err
+		}
+	}
 	if !plan.Applyable() {
 		return &PreparedCast{Plan: plan}, ErrConflicts
 	}
 	if spec.Detach && plan.HasPrune() {
 		return &PreparedCast{Plan: plan}, ErrDetachWouldPrune
-	}
-	if admit != nil {
-		if err := admit(ctx, plan); err != nil {
-			return &PreparedCast{Plan: plan}, err
-		}
 	}
 
 	revision := 1

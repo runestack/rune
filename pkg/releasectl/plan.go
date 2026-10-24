@@ -30,7 +30,16 @@ func (c *Controller) Plan(ctx context.Context, spec release.ReleaseSpec) (*relea
 	if found {
 		prev = current
 	}
-	return release.BuildPlan(spec.Name, spec.Namespace, spec.Resources, prev, &liveLookup{c: c}, spec.Options)
+	plan, err := release.BuildPlan(spec.Name, spec.Namespace, spec.Resources, prev, &liveLookup{c: c}, spec.Options)
+	if err != nil {
+		return nil, err
+	}
+	// A plan says which resources exist and which release owns them, so
+	// previewing one needs read access to everything it names.
+	if err := c.admission.AdmitReleaseReads(ctx, plan.Changes); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // Uninstall removes the resources owned by a release in reverse dependency

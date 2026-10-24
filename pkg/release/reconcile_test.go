@@ -250,14 +250,31 @@ func TestReconcile_AdmitDenialRecordsNothing(t *testing.T) {
 	if !errors.Is(err, denied) {
 		t.Fatalf("want admit error, got %v", err)
 	}
-	if seen == nil || !seen.HasPrune() || plan != seen {
+	if seen == nil || !seen.HasPrune() {
 		t.Fatalf("admit must see the full plan, prune included; got %+v", seen)
+	}
+	if plan != nil {
+		t.Errorf("a denied caller must not get the plan back: %+v", plan)
 	}
 	if got := recs.rels["default/rel"]; got != prev || got.Revision != 3 || got.Status != types.ReleaseStatusDeployed {
 		t.Errorf("record changed after denial: %+v", got)
 	}
 	if len(applier.events) != 0 {
 		t.Errorf("nothing may be applied after denial: %v", applier.events)
+	}
+}
+
+// Admission runs before the conflict check: a conflict reason names the
+// release that owns a resource, which a denied caller must not learn.
+func TestPrepare_AdmitRunsBeforeConflicts(t *testing.T) {
+	a := svcRef("default", "taken")
+	live := fakeLive{a.Key(): {Exists: true, OwnedBy: &types.OwnedBy{Release: "other"}}}
+	denied := errors.New("denied")
+	prep, err := Prepare(context.Background(), ReleaseSpec{
+		Name: "rel", Namespace: "default", Resources: desired(a),
+	}, newFakeRecords(), live, func(context.Context, *Plan) error { return denied })
+	if !errors.Is(err, denied) || prep != nil {
+		t.Fatalf("want the admit denial and no plan, got %v (prep %+v)", err, prep)
 	}
 }
 

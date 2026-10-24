@@ -306,3 +306,23 @@ func TestAdmitReleaseChanges(t *testing.T) {
 		}
 	})
 }
+
+func TestAdmitReleaseReads(t *testing.T) {
+	ctx := authctx.WithSubject(context.Background(), "ci")
+	plan := []release.PlannedChange{
+		change(release.ActionReference, types.ResourceTypeStorageClass, "", "fast"),
+		change(release.ActionCreate, types.ResourceTypeService, "a", "api"),
+		change(release.ActionPrune, types.ResourceTypeSecret, "b", "creds"),
+	}
+	auth := &nsAuth{allow: map[string]bool{"services:get@a": true}}
+	if err := NewGate(auth).AdmitReleaseReads(ctx, plan); !IsDenied(err) {
+		t.Fatalf("want a read denial for secrets in b, got %v", err)
+	}
+	auth = &nsAuth{allow: map[string]bool{"services:get@a": true, "secrets:get@b": true}}
+	if err := NewGate(auth).AdmitReleaseReads(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(auth.asked) != 2 || auth.asked[0] != "services:get@a" || auth.asked[1] != "secrets:get@b" {
+		t.Fatalf("every change needs get in its own namespace; asked %v", auth.asked)
+	}
+}

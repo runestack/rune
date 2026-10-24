@@ -172,6 +172,26 @@ func (g *Gate) AdmitReleaseChanges(ctx context.Context, changes []release.Planne
 	return nil
 }
 
+// AdmitReleaseReads checks that the subject may read every resource a plan
+// names, each in its own namespace. The dry-run Plan path uses it, so a
+// preview reveals nothing about a namespace the caller cannot read.
+func (g *Gate) AdmitReleaseReads(ctx context.Context, changes []release.PlannedChange) error {
+	if g == nil || IsSystem(ctx) {
+		return nil
+	}
+	for _, c := range changes {
+		r, ok := ReleaseChangeRequirement(c)
+		if !ok {
+			continue
+		}
+		r.Verb = "get"
+		if err := g.require(ctx, r, c.Ref.Namespace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // require fails closed: with a gate installed, a context with no subject is
 // denied.
 func (g *Gate) require(ctx context.Context, r Requirement, ns string) error {

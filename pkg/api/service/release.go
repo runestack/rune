@@ -84,6 +84,9 @@ func (s *ReleaseService) Plan(ctx context.Context, req *generated.PlanRequest) (
 	}
 	plan, err := s.ctl.Plan(ctx, spec)
 	if err != nil {
+		if authz.IsDenied(err) {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
 		return nil, status.Errorf(codes.Internal, "plan: %v", err)
 	}
 	return &generated.PlanResponse{Plan: toProtoPlan(plan), Status: &generated.Status{Code: int32(codes.OK)}}, nil

@@ -10,8 +10,8 @@ import (
 	"github.com/runestack/rune/pkg/types"
 )
 
-// castScoped stands in for a `cast`-scoped CI token: it may create and
-// update every kind a release writes, in namespace "default" only, and
+// castScoped stands in for a `cast`-scoped CI token: it may read, create
+// and update every kind a release writes, in namespace "default" only, and
 // holds neither delete nor services.privileged.
 type castScoped struct{}
 
@@ -21,7 +21,7 @@ func (castScoped) Authorize(_ context.Context, _, resource, verb, ns string) (bo
 	}
 	switch resource {
 	case "services", "secrets", "configmaps", "volumes":
-		return verb == "create" || verb == "update", nil
+		return verb == "get" || verb == "create" || verb == "update", nil
 	}
 	return false, nil
 }
@@ -265,4 +265,76 @@ func (noVolumes) Authorize(ctx context.Context, sub, resource, verb, ns string) 
 		return false, nil
 	}
 	return castScoped{}.Authorize(ctx, sub, resource, verb, ns)
+}
+
+// The --detach path must run verb admission synchronously too: the
+// background apply has no subject, so a check there would never fire.
+func TestCast_DetachRunsVerbAdmission(t *testing.T) {
+	c, _ := newTestController(t)
+	c.SetAdmission(authz.NewGate(noVolumes{}))
+	vol := types.OwnerRef{ResourceType: types.ResourceTypeVolume, Namespace: "default", Name: "data"}
+	_, _, err := c.Cast(authctx.WithSubject(context.Background(), "ci"), release.ReleaseSpec{
+		Name: "app", Namespace: "default", Detach: true,
+		Resources: []release.DesiredResource{{Ref: vol}},
+	}, Payloads{Volumes: map[string]*types.Volume{vol.Key(): {Name: "data", Namespace: "default", StorageClassName: "local", Size: "1Gi"}}})
+	if !authz.IsDenied(err) {
+		t.Fatalf("expected a synchronous volumes denial on the detach path, got %v", err)
+	}
+	if _, err := c.releases.GetByName(context.Background(), "default", "app"); err == nil {
+		t.Fatal("a denied detached cast recorded a release")
+	}
+}
+
+// oneVerb grants a single verb on services in "default" and nothing else,
+// so a test can tell create from update.
+type oneVerb string
+
+func (v oneVerb) Authorize(_ context.Context, _, resource, verb, ns string) (bool, error) {
+	return ns == "default" && resource == "services" && verb == string(v), nil
+}
+
+func TestCast_CreateAndUpdateAreDistinctVerbs(t *testing.T) {
+	web := svcRef("default", "web")
+	spec := release.ReleaseSpec{Name: "app", Namespace: "default", Resources: []release.DesiredResource{{Ref: web}}}
+	payloads := func() Payloads {
+		return Payloads{Services: map[string]*types.Service{web.Key(): {Name: "web", Namespace: "default"}}}
+	}
+	ci := authctx.WithSubject(context.Background(), "ci")
+
+	c, _ := newTestController(t)
+	c.SetAdmission(authz.NewGate(oneVerb("update")))
+	if _, _, err := c.Cast(ci, spec, payloads()); !authz.IsDenied(err) {
+		t.Fatalf("update-only token created a service: %v", err)
+	}
+
+	c, _ = newTestController(t)
+	if _, _, err := c.Cast(context.Background(), spec, payloads()); err != nil {
+		t.Fatalf("seed cast: %v", err)
+	}
+	c.SetAdmission(authz.NewGate(oneVerb("create")))
+	if _, _, err := c.Cast(ci, spec, payloads()); !authz.IsDenied(err) {
+		t.Fatalf("create-only token updated a service: %v", err)
+	}
+}
+
+// A dry-run plan reveals which resources exist and which release owns
+// them, so it needs read access in every namespace it names.
+func TestPlan_NeedsReadInEachNamespace(t *testing.T) {
+	c, _ := newTestController(t)
+	c.SetAdmission(authz.NewGate(castScoped{}))
+	ci := authctx.WithSubject(context.Background(), "ci")
+	other := svcRef("prod", "web")
+	_, err := c.Plan(ci, release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: other}},
+	})
+	if !authz.IsDenied(err) {
+		t.Fatalf("expected a read denial in prod, got %v", err)
+	}
+	if _, err := c.Plan(ci, release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: svcRef("default", "web")}},
+	}); err != nil {
+		t.Fatalf("plan in an allowed namespace denied: %v", err)
+	}
 }
