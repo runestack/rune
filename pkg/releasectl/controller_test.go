@@ -34,6 +34,7 @@ func newTestController(t *testing.T) (*Controller, *store.TestStore) {
 	// of outliving `go test`'s own timeout and wedging the package.
 	c.verifyTimeout = 2 * time.Second
 	c.teardownWait = 1500 * time.Millisecond
+	c.teardownPoll = 50 * time.Millisecond
 	return c, st
 }
 

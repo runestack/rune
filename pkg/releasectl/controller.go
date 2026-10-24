@@ -53,6 +53,7 @@ type Controller struct {
 	// teardownWait bounds how long a cast waits for a service that is being
 	// deleted to go before creating it again.
 	teardownWait time.Duration
+	teardownPoll time.Duration
 
 	// admission gates payload-shaped authorization (services.privileged).
 	// The orchestrator enforces the same gate, but a release must be
@@ -120,6 +121,7 @@ func NewController(orch orchestrator.Orchestrator, st store.Store, logger log.Lo
 		// Uninstall returns once teardown has started, so uninstall-then-cast
 		// lands here routinely; instance cleanup takes seconds.
 		teardownWait: 60 * time.Second,
+		teardownPoll: time.Second,
 	}
 }
 
@@ -152,8 +154,9 @@ func (c *Controller) cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 	}
 
 	a := &applier{
-		c: c,
-		p: p,
+		c:       c,
+		p:       p,
+		started: time.Now(),
 		stamp: types.OwnedBy{
 			Release:  spec.Name,
 			Revision: revision,
@@ -263,6 +266,9 @@ type applier struct {
 	c     *Controller
 	p     Payloads
 	stamp types.OwnedBy
+	// started is when the cast began. A teardown that started later is an
+	// operator's delete racing the cast, which the cast must not undo.
+	started time.Time
 
 	// pre holds the pre-image of every resource this cast has touched, keyed
 	// by OwnerRef.Key(), captured on the read-before-write each Apply/Prune
@@ -340,15 +346,17 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 	ref := change.Ref
 	switch ref.ResourceType {
 	case types.ResourceTypeService:
-		err := a.applyService(ctx, ref)
+		err := a.applyService(ctx, ref, "")
 		var td *teardownError
-		if !errors.As(err, &td) {
+		if !errors.As(err, &td) || (!a.started.IsZero() && td.since.After(a.started)) {
 			return err
 		}
 		if err := a.c.waitForTeardown(ctx, td); err != nil {
 			return err
 		}
-		return a.applyService(ctx, ref)
+		// Only the torn-down record, or none: anything else under this name
+		// was created by someone else while the cast waited.
+		return a.applyService(ctx, ref, td.id)
 	case types.ResourceTypeSecret:
 		s := a.p.Secrets[ref.Key()]
 		if s == nil {
@@ -398,8 +406,9 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 
 // applyService writes the rendered service over the stored one, carrying
 // server-owned state, or creates it. It returns a *teardownError when the
-// stored service is being deleted.
-func (a *applier) applyService(ctx context.Context, ref types.OwnerRef) error {
+// stored service is being deleted. With onlyID set, it refuses to write over
+// a stored service with any other ID.
+func (a *applier) applyService(ctx context.Context, ref types.OwnerRef, onlyID string) error {
 	svc := a.p.Services[ref.Key()]
 	if svc == nil {
 		return fmt.Errorf("no rendered payload for service %s", ref.Key())
@@ -418,7 +427,11 @@ func (a *applier) applyService(ctx context.Context, ref types.OwnerRef) error {
 		// reconciler is tearing down persists something deleted along with
 		// it — a green cast and no service.
 		if stored.Metadata != nil && stored.Metadata.DeletionTimestamp != nil {
-			return &teardownError{ref: ref, finalizers: stored.Metadata.Finalizers}
+			return &teardownError{ref: ref, id: stored.ID, since: *stored.Metadata.DeletionTimestamp,
+				finalizers: stored.Metadata.Finalizers}
+		}
+		if onlyID != "" && stored.ID != onlyID {
+			return fmt.Errorf("%s was created by someone else while this cast waited for its teardown; not taking it over", ref.Key())
 		}
 		captured = deepCopy(stored)
 		// Start from the payload each attempt: a retry re-runs this on a
@@ -451,7 +464,15 @@ func (a *applier) applyService(ctx context.Context, ref types.OwnerRef) error {
 	}
 	sanitizeServerFields(created)
 	created.Metadata.OwnedBy = &stamp
-	return a.c.orch.CreateService(ctx, created)
+	if err := a.c.orch.CreateService(ctx, created); err != nil {
+		if store.IsAlreadyExistsError(err) {
+			// Someone else's service took the name: this create never
+			// landed, and a revert must not delete theirs.
+			delete(a.pre, ref.Key())
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *applier) Prune(ctx context.Context, ref types.OwnerRef) error {
