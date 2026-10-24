@@ -26,6 +26,12 @@ const (
 	eventUpdateComplete  = "UpdateComplete"
 )
 
+// EmitServiceEvent records a service-scoped event on behalf of another
+// controller. Best-effort and nil-safe.
+func (r *Reconciler) EmitServiceEvent(ctx context.Context, service *types.Service, level types.EventLevel, reason, message string) {
+	r.emitService(ctx, service, level, reason, message)
+}
+
 // emitService records a service-scoped event. Best-effort and nil-safe.
 func (r *Reconciler) emitService(ctx context.Context, service *types.Service, level types.EventLevel, reason, message string) {
 	if r.events == nil || service == nil {

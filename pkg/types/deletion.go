@@ -161,6 +161,10 @@ type DeletionRequest struct {
 
 	// Optional finalizers to run
 	Finalizers []string `json:"finalizers,omitempty"`
+
+	// AbandonFinalizers clears the remaining finalizers of a service that is
+	// already being deleted. Rejected for a service that is not.
+	AbandonFinalizers bool `json:"abandon_finalizers,omitempty"`
 }
 
 // DeletionResponse represents the response from a deletion request

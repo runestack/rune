@@ -27,6 +27,8 @@ type deleteOptions struct {
 	finalizers     []string
 	output         string
 	noDependencies bool
+
+	abandonFinalizers bool
 }
 
 // newDeleteCmd creates the delete command
@@ -286,6 +288,9 @@ Examples:
 	// Add flags
 	cmd.Flags().StringVarP(&opts.namespace, "namespace", "n", "default", "Namespace of the service")
 	cmd.Flags().BoolVarP(&opts.force, "force", "f", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&opts.abandonFinalizers, "abandon-finalizers", false,
+		"For a service already being deleted: skip its remaining cleanup and remove the record. "+
+			"Anything that cleanup would have removed (e.g. owned volumes) is left for you")
 	cmd.Flags().Int32VarP(&opts.timeoutSeconds, "timeout", "t", 30, "Graceful shutdown timeout in seconds")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start deletion and return immediately")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would be deleted without actually deleting")
@@ -424,23 +429,29 @@ func runServiceDelete(ctx context.Context, serviceName string, opts *deleteOptio
 
 	// Handle confirmation unless force is specified
 	if !opts.force && !opts.dryRun {
-		if err := confirmDeletion(ctx, serviceClient, serviceName, opts.namespace); err != nil {
+		confirm := confirmDeletion
+		if opts.abandonFinalizers {
+			confirm = confirmAbandonFinalizers
+		}
+		if err := confirm(ctx, serviceClient, serviceName, opts.namespace); err != nil {
 			return err
 		}
 	}
 
 	// Create the deletion request
 	deleteReq := &generated.DeleteServiceRequest{
-		Name:           serviceName,
-		Namespace:      opts.namespace,
-		Force:          opts.force || opts.noDependencies,
-		TimeoutSeconds: opts.timeoutSeconds,
-		Detach:         opts.detach,
-		DryRun:         opts.dryRun,
-		GracePeriod:    opts.gracePeriod,
-		Now:            opts.now,
-		IgnoreNotFound: opts.ignoreNotFound,
-		Finalizers:     opts.finalizers,
+		Name:      serviceName,
+		Namespace: opts.namespace,
+		Force:     opts.force || opts.noDependencies,
+
+		AbandonFinalizers: opts.abandonFinalizers,
+		TimeoutSeconds:    opts.timeoutSeconds,
+		Detach:            opts.detach,
+		DryRun:            opts.dryRun,
+		GracePeriod:       opts.gracePeriod,
+		Now:               opts.now,
+		IgnoreNotFound:    opts.ignoreNotFound,
+		Finalizers:        opts.finalizers,
 	}
 
 	// Execute deletion
@@ -531,6 +542,21 @@ func confirmDeletion(ctx context.Context, serviceClient *client.ServiceClient, s
 	return nil
 }
 
+// confirmAbandonFinalizers asks before skipping a stuck teardown's remaining
+// cleanup, which cannot be undone.
+func confirmAbandonFinalizers(_ context.Context, _ *client.ServiceClient, serviceName, namespace string) error {
+	fmt.Printf("Service %s/%s will be removed without finishing its cleanup.\n", namespace, serviceName)
+	fmt.Println("Anything that cleanup would have removed (e.g. owned volumes) is left for you.")
+	fmt.Print("Abandon the remaining cleanup? (y/N): ")
+	var response string
+	fmt.Scanln(&response)
+	if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
+		fmt.Println("Cancelled.")
+		os.Exit(0)
+	}
+	return nil
+}
+
 // handleDryRun handles dry run mode
 func handleDryRun(ctx context.Context, serviceClient *client.ServiceClient, serviceName string, opts *deleteOptions) error {
 	// Create the deletion request with dry run enabled
@@ -545,6 +571,8 @@ func handleDryRun(ctx context.Context, serviceClient *client.ServiceClient, serv
 		Now:            opts.now,
 		IgnoreNotFound: opts.ignoreNotFound,
 		Finalizers:     opts.finalizers,
+
+		AbandonFinalizers: opts.abandonFinalizers,
 	}
 
 	// Execute dry run deletion
@@ -586,14 +614,18 @@ func handleDryRun(ctx context.Context, serviceClient *client.ServiceClient, serv
 	case "yaml":
 		return outputYAML(dryRunResp)
 	default:
-		return handleDryRunTextOutput(dryRunResp, opts.namespace, serviceName)
+		return handleDryRunTextOutput(dryRunResp, opts.namespace, serviceName, opts.abandonFinalizers)
 	}
 }
 
 // handleDryRunTextOutput handles text output for dry run operations
-func handleDryRunTextOutput(dryRunResp *types.DeletionResponse, namespace, serviceName string) error {
+func handleDryRunTextOutput(dryRunResp *types.DeletionResponse, namespace, serviceName string, abandon bool) error {
 	// Text output
-	fmt.Printf("Dry run: Service %s/%s would be deleted\n", namespace, serviceName)
+	if abandon {
+		fmt.Printf("Dry run: would abandon the remaining cleanup of service %s/%s\n", namespace, serviceName)
+	} else {
+		fmt.Printf("Dry run: Service %s/%s would be deleted\n", namespace, serviceName)
+	}
 
 	// Show what would be deleted
 	if len(dryRunResp.Finalizers) > 0 {
@@ -649,6 +681,13 @@ func handleTextOutput(ctx context.Context, serviceClient *client.ServiceClient, 
 		for i, finalizer := range resp.Finalizers {
 			fmt.Printf("  %d. %s\n", i+1, finalizer.Type)
 		}
+	}
+
+	// Abandoning finalizers has no deletion operation of its own to follow:
+	// the record is removed on the next reconcile.
+	if opts.abandonFinalizers {
+		fmt.Println("\nRemaining cleanup abandoned; the service record will be removed shortly.")
+		return nil
 	}
 
 	// If detach mode, just return

@@ -689,6 +689,10 @@ func (sc *serviceController) DeleteService(ctx context.Context, request *types.D
 		return nil, err
 	}
 
+	if request.AbandonFinalizers {
+		return sc.abandonFinalizers(ctx, service, request.DryRun)
+	}
+
 	// Determine finalizer types based on service configuration
 	finalizerTypes := sc.determineFinalizerTypes(service)
 
@@ -1091,6 +1095,109 @@ func (sc *serviceController) handleRealDeletion(ctx context.Context, service *ty
 		Status:     "in_progress",
 		Finalizers: deletionOperation.Finalizers,
 	}, nil
+}
+
+// abandonFinalizers is the operator's way out of a teardown that cannot
+// finish: it clears the remaining finalizers of a tombstoned service, so the
+// reconciler removes the record without completing that cleanup. What is
+// abandoned is logged and recorded as a Warn event, since the operator now
+// owns any resources it leaves behind.
+//
+// Instance cleanup cannot be abandoned. It never gets stuck — it removes the
+// records even when a container fails to stop — and abandoning it would leave
+// instances that nothing reaps once the record is gone, and that a later cast
+// of the same name would adopt.
+func (sc *serviceController) abandonFinalizers(ctx context.Context, service *types.Service, dryRun bool) (*types.DeletionResponse, error) {
+	ns, name := service.Namespace, service.Name
+	check := func(svc *types.Service) error {
+		if svc.Metadata == nil || svc.Metadata.DeletionTimestamp == nil {
+			return types.NewValidationError(fmt.Sprintf(
+				"service %s/%s is not being deleted; run `rune delete service %s -n %s` first", ns, name, name, ns))
+		}
+		if fins := svc.Metadata.Finalizers; len(fins) > 0 && fins[0] == types.FinalizerTypeInstanceCleanup {
+			return types.NewValidationError(fmt.Sprintf(
+				"service %s/%s is still removing its instances; wait for that to finish, then retry", ns, name))
+		}
+		return nil
+	}
+	if err := check(service); err != nil {
+		return nil, err
+	}
+
+	var abandoned []types.FinalizerType
+	if dryRun {
+		abandoned = service.Metadata.Finalizers
+	} else {
+		var checkErr error
+		var fresh types.Service
+		if err := sc.store.UpdateFunc(ctx, types.ResourceTypeService, ns, name, &fresh, func() error {
+			abandoned = nil
+			if checkErr = check(&fresh); checkErr != nil || len(fresh.Metadata.Finalizers) == 0 {
+				return store.ErrSkipUpdate
+			}
+			abandoned = fresh.Metadata.Finalizers
+			fresh.Metadata.Finalizers = nil
+			return nil
+		}, store.WithOrchestrator()); err != nil {
+			return nil, fmt.Errorf("failed to clear finalizers for %s/%s: %w", ns, name, err)
+		}
+		if checkErr != nil {
+			return nil, checkErr
+		}
+	}
+
+	resp := sc.inProgressDeletionResponse(ctx, service)
+	resp.Finalizers = nil
+	if dryRun {
+		resp.Status = "dry_run"
+	}
+	if len(abandoned) == 0 {
+		resp.Warnings = []string{"no finalizers left to abandon"}
+		return resp, nil
+	}
+
+	finalizers := make([]string, len(abandoned))
+	for i, f := range abandoned {
+		finalizers[i] = string(f)
+	}
+	verb := "finalizers abandoned by operator"
+	if dryRun {
+		verb = "would abandon finalizers"
+	}
+	msg := fmt.Sprintf("%s: %s", verb, strings.Join(finalizers, ", "))
+	// The rows keep OwnerService, so a later cast of the same name binds them
+	// again (ensureClaimTemplateVolume) — data included.
+	if vols := sc.ownedVolumeNames(ctx, service); len(vols) > 0 {
+		msg += fmt.Sprintf("; owned volumes at the time of abandoning: %s. A cast of the same name will reuse "+
+			"these volumes and their data; delete them with `rune delete volume <name> -n %s` if you don't want that",
+			strings.Join(vols, ", "), ns)
+	}
+	resp.Warnings = []string{msg}
+
+	if !dryRun {
+		sc.logger.Warn("Abandoning service finalizers",
+			log.Str("service", name), log.Str("namespace", ns), log.Str("detail", msg))
+		sc.rec.EmitServiceEvent(ctx, service, types.EventLevelWarn, "FinalizersAbandoned", msg)
+		sc.rec.Enqueue(ns, name)
+	}
+	return resp, nil
+}
+
+// ownedVolumeNames lists the volume rows the service auto-provisioned that
+// still exist.
+func (sc *serviceController) ownedVolumeNames(ctx context.Context, service *types.Service) []string {
+	var vols []types.Volume
+	if err := sc.store.List(ctx, types.ResourceTypeVolume, service.Namespace, &vols); err != nil {
+		return nil
+	}
+	owner := service.Namespace + "/" + service.Name
+	var names []string
+	for i := range vols {
+		if vols[i].OwnerService == owner {
+			names = append(names, vols[i].Name)
+		}
+	}
+	return names
 }
 
 // deletionFinalizerList returns the ordered finalizers the reconciler runs when

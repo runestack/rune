@@ -2626,8 +2626,12 @@ type DeleteServiceRequest struct {
 	Finalizers []string `protobuf:"bytes,10,rep,name=finalizers,proto3" json:"finalizers,omitempty"`
 	// Ignore dependents and proceed with deletion (MVP override)
 	NoDependencies bool `protobuf:"varint,11,opt,name=no_dependencies,json=noDependencies,proto3" json:"no_dependencies,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Clear the remaining finalizers of a service that is already being
+	// deleted, so its record is removed without finishing that cleanup.
+	// Rejected for a service that is not being deleted.
+	AbandonFinalizers bool `protobuf:"varint,12,opt,name=abandon_finalizers,json=abandonFinalizers,proto3" json:"abandon_finalizers,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DeleteServiceRequest) Reset() {
@@ -2733,6 +2737,13 @@ func (x *DeleteServiceRequest) GetFinalizers() []string {
 func (x *DeleteServiceRequest) GetNoDependencies() bool {
 	if x != nil {
 		return x.NoDependencies
+	}
+	return false
+}
+
+func (x *DeleteServiceRequest) GetAbandonFinalizers() bool {
+	if x != nil {
+		return x.AbandonFinalizers
 	}
 	return false
 }
@@ -4093,7 +4104,7 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"\x14UpdateServiceRequest\x12+\n" +
 	"\aservice\x18\x01 \x01(\v2\x11.rune.api.ServiceR\aservice\x12%\n" +
 	"\x0edeployment_tag\x18\x02 \x01(\tR\rdeploymentTag\x12\x14\n" +
-	"\x05force\x18\x03 \x01(\bR\x05force\"\xe0\x02\n" +
+	"\x05force\x18\x03 \x01(\bR\x05force\"\x8f\x03\n" +
 	"\x14DeleteServiceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x14\n" +
@@ -4108,7 +4119,8 @@ const file_pkg_api_proto_service_proto_rawDesc = "" +
 	"finalizers\x18\n" +
 	" \x03(\tR\n" +
 	"finalizers\x12'\n" +
-	"\x0fno_dependencies\x18\v \x01(\bR\x0enoDependencies\"\xa3\x02\n" +
+	"\x0fno_dependencies\x18\v \x01(\bR\x0enoDependencies\x12-\n" +
+	"\x12abandon_finalizers\x18\f \x01(\bR\x11abandonFinalizers\"\xa3\x02\n" +
 	"\x15DeleteServiceResponse\x12\x1f\n" +
 	"\vdeletion_id\x18\x01 \x01(\tR\n" +
 	"deletionId\x12(\n" +
