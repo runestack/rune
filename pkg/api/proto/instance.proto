@@ -99,6 +99,16 @@ message Instance {
   // usage or the instance is not running. Mirrors the NodeResources pattern
   // on HealthService.
   InstanceUsage usage = 21;
+
+  // Ready is the readiness probe's verdict once the instance is RUNNING. An
+  // instance withdrawn by its probe stays RUNNING but is not ready and
+  // receives no traffic. Meaningful only with ready_changed_at set.
+  bool ready = 22;
+
+  // When the readiness verdict last changed (RFC 3339). Empty when none has
+  // been recorded, which means ready: the service has no readiness probe, or
+  // the server predates the field.
+  string ready_changed_at = 23;
 }
 
 // InstanceUsage is a point-in-time resource usage sample for one instance.

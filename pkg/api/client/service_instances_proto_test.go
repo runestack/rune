@@ -45,3 +45,15 @@ func TestEmbeddedInstance_ZeroTimestampsStayEmpty(t *testing.T) {
 	assert.True(t, out.CreatedAt.IsZero())
 	assert.True(t, out.UpdatedAt.IsZero())
 }
+
+func TestEmbeddedInstance_ReadinessRoundTrips(t *testing.T) {
+	changed := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+	in := &types.Instance{ID: "i-3", Status: types.InstanceStatusRunning, Ready: false, ReadyChangedAt: &changed}
+
+	out := embeddedInstanceFromProto(embeddedInstanceToProto(in))
+	assert.False(t, out.IsReady(), "a withdrawn instance must stay withdrawn on the wire")
+
+	// No verdict on the wire (an older server) reads as ready.
+	legacy := embeddedInstanceFromProto(embeddedInstanceToProto(&types.Instance{ID: "i-4", Status: types.InstanceStatusRunning}))
+	assert.True(t, legacy.IsReady())
+}

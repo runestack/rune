@@ -176,9 +176,9 @@ func DefaultInstanceResourceToRows(resources []types.Resource) [][]string {
 
 	// Add header row
 	if allNamespaces {
-		rows = append(rows, []string{"NAMESPACE", "NAME", "SERVICE", "NODE", "STATUS", "RESTARTS", "AGE"})
+		rows = append(rows, []string{"NAMESPACE", "NAME", "SERVICE", "NODE", "STATUS", "READY", "RESTARTS", "AGE"})
 	} else {
-		rows = append(rows, []string{"NAME", "SERVICE", "NODE", "STATUS", "RESTARTS", "AGE"})
+		rows = append(rows, []string{"NAME", "SERVICE", "NODE", "STATUS", "READY", "RESTARTS", "AGE"})
 	}
 
 	// Add instance rows
@@ -191,6 +191,7 @@ func DefaultInstanceResourceToRows(resources []types.Resource) [][]string {
 
 		// Calculate age
 		age := formatAge(instance.CreatedAt)
+		ready := format.InstanceReady(instance)
 
 		// Create the row
 		var row []string
@@ -201,6 +202,7 @@ func DefaultInstanceResourceToRows(resources []types.Resource) [][]string {
 				instance.ServiceID,
 				instance.NodeID,
 				status,
+				ready,
 				restarts,
 				age,
 			}
@@ -210,6 +212,7 @@ func DefaultInstanceResourceToRows(resources []types.Resource) [][]string {
 				instance.ServiceID,
 				instance.NodeID,
 				status,
+				ready,
 				restarts,
 				age,
 			}

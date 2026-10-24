@@ -111,16 +111,7 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 		// with NO readiness probe also reports Running and the old
 		// inference was equivalent. The fallback below preserves the
 		// old behaviour for paths that don't inline instances.
-		running := 0
-		if len(service.Instances) > 0 {
-			for i := range service.Instances {
-				if service.Instances[i].Status == types.InstanceStatusRunning {
-					running++
-				}
-			}
-		} else if service.Status == types.ServiceStatusRunning {
-			running = service.Scale
-		}
+		running := readyInstanceCount(service)
 		instances := fmt.Sprintf("%d/%d", running, service.Scale)
 
 		// Reason: short slug. Empty when service is healthy.
@@ -225,9 +216,9 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 	// Set default headers if not provided
 	if len(t.Headers) == 0 {
 		if t.AllNamespaces {
-			t.Headers = []string{"NAMESPACE", "NAME", "INSTANCE ID", "SERVICE", "NODE", "STATUS", "RESTARTS", "AGE"}
+			t.Headers = []string{"NAMESPACE", "NAME", "INSTANCE ID", "SERVICE", "NODE", "STATUS", "READY", "RESTARTS", "AGE"}
 		} else {
-			t.Headers = []string{"NAME", "INSTANCE ID", "SERVICE", "NODE", "STATUS", "RESTARTS", "AGE"}
+			t.Headers = []string{"NAME", "INSTANCE ID", "SERVICE", "NODE", "STATUS", "READY", "RESTARTS", "AGE"}
 		}
 	}
 
@@ -247,6 +238,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 
 		// Calculate age
 		age := formatAgeTable(instance.CreatedAt)
+		ready := format.InstanceReady(instance)
 
 		// Create the row
 		var row []string
@@ -258,6 +250,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 				instance.ServiceName,
 				instance.NodeID,
 				status,
+				ready,
 				restarts,
 				age,
 			}
@@ -268,6 +261,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 				instance.ServiceName,
 				instance.NodeID,
 				status,
+				ready,
 				restarts,
 				age,
 			}
@@ -278,6 +272,22 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 
 	// Render the table with pterm
 	return t.tableRenderer.WithData(rows).Render()
+}
+
+// readyInstanceCount is the numerator of a service's READY column.
+func readyInstanceCount(service *types.Service) int {
+	running := 0
+	if len(service.Instances) > 0 {
+		for i := range service.Instances {
+			// Withdrawn by a readiness probe: Running, but not serving.
+			if service.Instances[i].Status == types.InstanceStatusRunning && service.Instances[i].IsReady() {
+				running++
+			}
+		}
+	} else if service.Status == types.ServiceStatusRunning {
+		running = service.Scale
+	}
+	return running
 }
 
 // RenderNamespaces renders a table of namespaces

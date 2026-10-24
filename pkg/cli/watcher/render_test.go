@@ -50,8 +50,11 @@ func TestDefaultInstanceResourceToRows_HeaderVariants(t *testing.T) {
 	if len(rows) < 2 {
 		t.Fatalf("expected at least header + 1 row for same ns, got %d", len(rows))
 	}
-	if got, want := len(rows[0]), 6; got != want {
+	if got, want := len(rows[0]), 7; got != want {
 		t.Fatalf("unexpected header col count for same ns: got %d want %d", got, want)
+	}
+	if rows[0][4] != "READY" {
+		t.Fatalf("READY must follow STATUS, got header %v", rows[0])
 	}
 
 	instMixed := []types.Resource{
@@ -59,7 +62,19 @@ func TestDefaultInstanceResourceToRows_HeaderVariants(t *testing.T) {
 		&types.Instance{ID: "2", Name: "b", Namespace: "ns2", ServiceID: "svc", CreatedAt: now},
 	}
 	rows2 := DefaultInstanceResourceToRows(instMixed)
-	if got, want := len(rows2[0]), 7; got != want {
+	if got, want := len(rows2[0]), 8; got != want {
 		t.Fatalf("unexpected header col count for mixed ns: got %d want %d", got, want)
+	}
+}
+
+// The watch view must show a readiness withdrawal, not just the plain table.
+func TestDefaultInstanceResourceToRows_ShowsReadiness(t *testing.T) {
+	changed := time.Now()
+	rows := DefaultInstanceResourceToRows([]types.Resource{
+		&types.Instance{ID: "1", Name: "a", Namespace: "ns", Status: types.InstanceStatusRunning,
+			Ready: false, ReadyChangedAt: &changed, CreatedAt: changed},
+	})
+	if got := rows[1][4]; got != "no" {
+		t.Fatalf("READY for a withdrawn instance: got %q want %q", got, "no")
 	}
 }

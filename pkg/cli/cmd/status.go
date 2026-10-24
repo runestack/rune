@@ -218,6 +218,35 @@ type statusSummary struct {
 	Configmaps int `json:"configmaps" yaml:"configmaps"`
 }
 
+// bucketInstances counts ready instances per service and every instance by
+// lifecycle state. An instance withdrawn by its readiness probe is Running
+// but not ready.
+func bucketInstances(insts []*types.Instance) (ready map[string]int, total int, states instanceStateCounts) {
+	ready = map[string]int{}
+	for _, inst := range insts {
+		if inst == nil || inst.Status == types.InstanceStatusDeleted {
+			continue
+		}
+		total++
+		switch inst.Status {
+		case types.InstanceStatusRunning:
+			states.Running++
+			if inst.IsReady() {
+				ready[inst.ServiceName]++
+			}
+		case types.InstanceStatusStarting, types.InstanceStatusPending, types.InstanceStatusCreated:
+			states.Starting++
+		case types.InstanceStatusFailed:
+			states.Failed++
+		case types.InstanceStatusStalled:
+			states.Stalled++
+		case types.InstanceStatusTerminating:
+			states.Terminating++
+		}
+	}
+	return ready, total, states
+}
+
 // instanceStateCounts buckets non-deleted instances by status for the
 // summary. Starting folds in Pending/Created (all "coming up" states).
 type instanceStateCounts struct {
@@ -537,25 +566,7 @@ func collectNamespace(sc *client.ServiceClient, ic *client.InstanceClient, sec *
 	totalInstances := 0
 	var states instanceStateCounts
 	if insts, err := ic.ListInstances(namespace, "", "", ""); err == nil {
-		for _, inst := range insts {
-			if inst == nil || inst.Status == types.InstanceStatusDeleted {
-				continue
-			}
-			totalInstances++
-			switch inst.Status {
-			case types.InstanceStatusRunning:
-				states.Running++
-				ready[inst.ServiceName]++
-			case types.InstanceStatusStarting, types.InstanceStatusPending, types.InstanceStatusCreated:
-				states.Starting++
-			case types.InstanceStatusFailed:
-				states.Failed++
-			case types.InstanceStatusStalled:
-				states.Stalled++
-			case types.InstanceStatusTerminating:
-				states.Terminating++
-			}
-		}
+		ready, totalInstances, states = bucketInstances(insts)
 	}
 
 	nr := &namespaceReport{Namespace: namespace}

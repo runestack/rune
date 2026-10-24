@@ -786,22 +786,24 @@ func embeddedInstanceToProto(i *types.Instance) *generated.Instance {
 		return nil
 	}
 	return &generated.Instance{
-		Id:            i.ID,
-		Runner:        string(i.Runner),
-		Namespace:     i.Namespace,
-		Name:          i.Name,
-		ServiceId:     i.ServiceID,
-		ServiceName:   i.ServiceName,
-		NodeId:        i.NodeID,
-		Labels:        i.Labels,
-		Ip:            i.IP,
-		Status:        instanceStatusToProto(i.Status),
-		StatusMessage: i.StatusMessage,
-		ContainerId:   i.ContainerID,
-		Pid:           utils.ToInt32NonNegative(i.PID),
-		CreatedAt:     formatInstanceTime(i.CreatedAt),
-		UpdatedAt:     formatInstanceTime(i.UpdatedAt),
-		Usage:         InstanceUsageToProto(i.Usage),
+		Id:             i.ID,
+		Runner:         string(i.Runner),
+		Namespace:      i.Namespace,
+		Name:           i.Name,
+		ServiceId:      i.ServiceID,
+		ServiceName:    i.ServiceName,
+		NodeId:         i.NodeID,
+		Labels:         i.Labels,
+		Ip:             i.IP,
+		Status:         instanceStatusToProto(i.Status),
+		StatusMessage:  i.StatusMessage,
+		ContainerId:    i.ContainerID,
+		Pid:            utils.ToInt32NonNegative(i.PID),
+		CreatedAt:      formatInstanceTime(i.CreatedAt),
+		UpdatedAt:      formatInstanceTime(i.UpdatedAt),
+		Usage:          InstanceUsageToProto(i.Usage),
+		Ready:          i.Ready,
+		ReadyChangedAt: formatInstanceTimePtr(i.ReadyChangedAt),
 	}
 }
 
@@ -817,6 +819,13 @@ func InstanceUsageToProto(u *types.InstanceUsage) *generated.InstanceUsage {
 		MemUsedBytes:  u.MemUsedBytes,
 		MemLimitBytes: u.MemLimitBytes,
 	}
+}
+
+func formatInstanceTimePtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return formatInstanceTime(*t)
 }
 
 // formatInstanceTime renders a timestamp as RFC3339, or "" for the zero
@@ -852,6 +861,10 @@ func embeddedInstanceFromProto(p *generated.Instance) *types.Instance {
 	}
 	if ts, err := parseTimestamp(p.UpdatedAt); err == nil && ts != nil {
 		inst.UpdatedAt = *ts
+	}
+	inst.Ready = p.Ready
+	if ts, err := parseTimestamp(p.ReadyChangedAt); err == nil && ts != nil {
+		inst.ReadyChangedAt = ts
 	}
 	return inst
 }

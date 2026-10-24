@@ -381,7 +381,8 @@ func instanceEquals(a, b *types.Instance) bool {
 		a.ServiceID == b.ServiceID &&
 		a.NodeID == b.NodeID &&
 		a.Status == b.Status &&
-		a.IP == b.IP
+		a.IP == b.IP &&
+		a.IsReady() == b.IsReady()
 }
 
 // Helper function to convert a protobuf Instance message to a types.Instance.
@@ -477,6 +478,12 @@ func (i *InstanceClient) protoToInstance(proto *generated.Instance) (*types.Inst
 		}
 	}
 	instance.FailureReason = proto.FailureReason
+	instance.Ready = proto.Ready
+	if proto.ReadyChangedAt != "" {
+		if t, perr := parseTimestamp(proto.ReadyChangedAt); perr == nil {
+			instance.ReadyChangedAt = t
+		}
+	}
 
 	// Convert status
 	switch proto.Status {
