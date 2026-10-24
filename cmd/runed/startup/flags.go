@@ -43,6 +43,8 @@ type Flags struct {
 	UIPath       string
 	UIRequireTLS bool
 
+	GRPCRequireTLS bool
+
 	ShowHelp    bool
 	ShowVersion bool
 }
@@ -72,6 +74,7 @@ func DefineFlags(fs *flag.FlagSet) *Flags {
 	fs.BoolVar(&f.UIEnabled, "ui", true, "Serve the embedded web dashboard and gRPC-Web transcoder on the HTTP address (RUNE-200). Use --ui=false for headless installs.")
 	fs.StringVar(&f.UIPath, "ui-path", "", "Mount path for the embedded dashboard (default /ui).")
 	fs.BoolVar(&f.UIRequireTLS, "ui-require-tls", true, "Refuse to serve the dashboard over plaintext on a non-loopback address; bind 127.0.0.1 only when TLS is off. Set false for dev or when TLS terminates at an ingress.")
+	fs.BoolVar(&f.GRPCRequireTLS, "grpc-require-tls", false, "Refuse to serve gRPC over plaintext on a non-loopback address; bind 127.0.0.1 only when TLS is off. Off by default for now: when off, plaintext on a public address only logs a warning.")
 	fs.BoolVar(&f.ShowHelp, "help", false, "Show help")
 	fs.BoolVar(&f.ShowVersion, "version", false, "Show version")
 	return f

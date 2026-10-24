@@ -174,7 +174,11 @@ func (s *APIServer) bridgeExec(parent context.Context, conn *websocket.Conn, tok
 
 // dialSelfGRPC opens a client connection to this daemon's own gRPC server.
 func (s *APIServer) dialSelfGRPC(_ context.Context) (*grpc.ClientConn, error) {
-	target := loopbackTarget(s.options.GRPCAddr)
+	addr := s.grpcListenAddr
+	if addr == "" {
+		addr = s.options.GRPCAddr
+	}
+	target := loopbackTarget(addr)
 	var creds credentials.TransportCredentials = insecure.NewCredentials()
 	if s.options.EnableTLS {
 		// Loopback self-call: we are dialing ourselves, so cert-name

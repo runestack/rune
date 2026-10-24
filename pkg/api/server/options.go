@@ -28,6 +28,9 @@ type Options struct {
 	EnableTLS   bool
 	TLSCertFile string
 	TLSKeyFile  string
+	// GRPCRequireTLS, when set with EnableTLS=false, binds the gRPC server
+	// to loopback only, mirroring UIOptions.RequireTLS for the dashboard.
+	GRPCRequireTLS bool
 
 	// Authentication (token-only)
 	EnableAuth bool
@@ -184,6 +187,13 @@ func WithTLS(certFile, keyFile string) Option {
 		o.TLSCertFile = certFile
 		o.TLSKeyFile = keyFile
 		o.EnableTLS = true
+	}
+}
+
+// WithGRPCRequireTLS refuses plaintext gRPC on a non-loopback address.
+func WithGRPCRequireTLS(require bool) Option {
+	return func(o *Options) {
+		o.GRPCRequireTLS = require
 	}
 }
 

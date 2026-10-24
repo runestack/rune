@@ -167,13 +167,15 @@ type ServerConfig struct {
 	GRPCAddress string     `yaml:"grpc_address,omitempty"`
 	HTTPAddress string     `yaml:"http_address,omitempty"`
 	TLS         *TLSConfig `yaml:"tls,omitempty"`
+	RequireTLS  bool       `yaml:"require_tls,omitempty"`
 }
 
 // TLSConfig represents TLS configuration
 type TLSConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	CertFile string `yaml:"cert_file,omitempty"`
-	KeyFile  string `yaml:"key_file,omitempty"`
+	Enabled  bool     `yaml:"enabled"`
+	CertFile string   `yaml:"cert_file,omitempty"`
+	KeyFile  string   `yaml:"key_file,omitempty"`
+	Hosts    []string `yaml:"hosts,omitempty"`
 }
 
 // ClientConfig represents client configuration
@@ -768,6 +770,7 @@ func isKnownField(fieldName string, node *yaml.Node) bool {
 		"enabled":      true,
 		"cert_file":    true,
 		"key_file":     true,
+		"hosts":        true,
 		"timeout":      true,
 		"retries":      true,
 

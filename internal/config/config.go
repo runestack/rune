@@ -27,12 +27,18 @@ type TLS struct {
 	Enabled  bool   `yaml:"enabled"`
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
+	// Hosts are extra names and addresses for the self-signed certificate
+	// runed generates when Enabled is set without CertFile/KeyFile.
+	Hosts []string `yaml:"hosts"`
 }
 
 type Server struct {
 	GRPCAddr string `yaml:"grpc_address"`
 	HTTPAddr string `yaml:"http_address"`
 	TLS      TLS    `yaml:"tls"`
+	// RequireTLS binds gRPC to 127.0.0.1 when TLS is off, so bearer tokens
+	// never cross the network in clear. Defaults to false.
+	RequireTLS bool `yaml:"require_tls"`
 }
 
 // UI configures the embedded web dashboard (RUNE-200). The dashboard is

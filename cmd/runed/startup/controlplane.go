@@ -119,7 +119,17 @@ func mustStartControlPlane(b *boot, cp *controlPlane) *controlPlane {
 			log.Str("backend", observeStore.Capabilities().Backend))
 	}
 
-	apiServer, err := server.New(buildServerOptions(b.flags.GRPCAddr, b.flags.HTTPAddr, stateStore, appCfg, logger, b.identity.NodeID, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)...)
+	serverOpts := buildServerOptions(b.flags.GRPCAddr, b.flags.HTTPAddr, stateStore, appCfg, logger, b.identity.NodeID, vipAllocator, vipAllocator, eventLog, observeStore, watchRegistrar)
+	var tlsCfg config.TLS
+	if appCfg != nil {
+		tlsCfg = appCfg.Server.TLS
+	}
+	tlsOpts, err := serverTLSOptions(tlsCfg, b.flags.GRPCRequireTLS, b.flags.DataDir, logger)
+	if err != nil {
+		logger.Error("Failed to configure server TLS", log.Err(err))
+		os.Exit(1)
+	}
+	apiServer, err := server.New(append(serverOpts, tlsOpts...)...)
 	if err != nil {
 		logger.Error("Failed to create API server", log.Err(err))
 		os.Exit(1)

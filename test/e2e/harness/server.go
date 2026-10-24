@@ -5,6 +5,7 @@ package harness
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"github.com/runestack/rune/pkg/api/generated"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
@@ -37,6 +39,7 @@ type Server struct {
 	cmd     *exec.Cmd
 	logFile *os.File
 	stopped bool
+	tls     bool
 
 	// waitDone closes once the single Wait goroutine reaps the
 	// process; waitErr is valid after that. One reaper avoids the
@@ -62,6 +65,7 @@ func startServer(t *testing.T, opts Options) *Server {
 		HTTPAddr: freeAddr(t),
 		DataDir:  dataDir,
 		LogPath:  dir + "/runed.log",
+		tls:      opts.TLS,
 	}
 	// The ingress subsystem defaults to :8080/:8443 in dev mode, which
 	// is shared state the rest of the harness carefully avoids: a second
@@ -137,8 +141,13 @@ func readyTimeout() time.Duration {
 // just that the socket is bound. One lazy connection is reused across
 // polls; gRPC redials it as the server comes up.
 func (s *Server) waitReady(timeout time.Duration) error {
-	conn, err := grpc.NewClient(s.GRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	creds := insecure.NewCredentials()
+	if s.tls {
+		// Readiness only: the tests that enable TLS verify the
+		// certificate themselves.
+		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // readiness probe
+	}
+	conn, err := grpc.NewClient(s.GRPCAddr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return fmt.Errorf("create probe client: %w", err)
 	}
