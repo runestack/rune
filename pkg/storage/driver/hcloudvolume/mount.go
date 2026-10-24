@@ -34,8 +34,3 @@ func (execMounter) MkdirAll(target string, mode os.FileMode) error {
 func (execMounter) EnsureFormatted(ctx context.Context, dev, fsType string) error {
 	return blockfs.EnsureFormatted(ctx, "hcloudvolume", dev, fsType)
 }
-
-func alreadyMounted(ctx context.Context, target string) bool {
-	cmd := exec.CommandContext(ctx, "findmnt", "-n", target)
-	return cmd.Run() == nil
-}

@@ -57,3 +57,15 @@ func TestParseMountPoints(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+func TestTopIs(t *testing.T) {
+	own, other := Dev{8, 16}, Dev{8, 32}
+	got, err := topIs(nil, own, "/m")
+	require.NoError(t, err)
+	assert.False(t, got)
+	got, err = topIs([]Dev{other, own}, own, "/m")
+	require.NoError(t, err)
+	assert.True(t, got)
+	_, err = topIs([]Dev{own, other}, own, "/m")
+	assert.ErrorContains(t, err, "8:32 is mounted at /m")
+}
