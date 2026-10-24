@@ -40,7 +40,7 @@ type doVolumeDriver struct {
 
 // MountRoot is the parent directory the driver mounts each volume
 // under. A Mount(target=...) call is honoured (the agent passes
-// /var/lib/rune/mounts/<vol.ID>/) but the driver also accepts an
+// /var/lib/rune/mounts/<namespace>/<vol.ID>/) but the driver also accepts an
 // empty Target and falls back to its own /var/lib/rune/mounts/dovolume
 // layout — useful for ad-hoc tests.
 const fallbackMountRoot = "/var/lib/rune/mounts/dovolume"

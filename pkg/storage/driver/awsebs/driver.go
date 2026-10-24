@@ -41,7 +41,7 @@ type ebsDriver struct {
 
 // fallbackMountRoot is used when the agent passes an empty Mount target
 // (ad-hoc tests). In production the agent passes
-// /var/lib/rune/mounts/<vol.ID>/.
+// /var/lib/rune/mounts/<namespace>/<vol.ID>/.
 const fallbackMountRoot = "/var/lib/rune/mounts/awsebs"
 
 // Tag keys the driver stamps on every volume it creates. The volume-id

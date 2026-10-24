@@ -45,6 +45,10 @@ func (r *VolumeRepo) Create(ctx context.Context, v *types.Volume) error {
 	if v.ID == "" {
 		v.ID = uuid.NewString()
 	}
+	// The ID becomes a host mount path segment on the node.
+	if err := types.ValidateVolumeID(v.ID); err != nil {
+		return err
+	}
 	now := time.Now()
 	if v.CreatedAt.IsZero() {
 		v.CreatedAt = now
@@ -113,6 +117,9 @@ func (r *VolumeRepo) Update(ctx context.Context, v *types.Volume, opts ...store.
 	}
 	if v.ID == "" {
 		v.ID = cur.ID
+	}
+	if v.ID != cur.ID {
+		return fmt.Errorf("volume %s/%s: id is immutable (have %q, got %q)", v.Namespace, v.Name, cur.ID, v.ID)
 	}
 	v.CreatedAt = cur.CreatedAt
 	v.UpdatedAt = time.Now()

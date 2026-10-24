@@ -171,6 +171,48 @@ func (v *Volume) GetResourceType() ResourceType { return ResourceTypeVolume }
 // String returns the namespaced identifier "<namespace>/<name>".
 func (v *Volume) String() string { return v.Namespace + "/" + v.Name }
 
+// ValidateVolumeID checks that id is safe to use as a host path segment:
+// 1-253 lowercase letters, digits and hyphens, starting and ending with a
+// letter or digit. A UUID passes, as does a claim-template volume name.
+func ValidateVolumeID(id string) error {
+	if len(id) == 0 || len(id) > 253 {
+		return NewValidationError(fmt.Sprintf("volume id %q: must be 1-253 characters", id))
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		alnum := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+		if !alnum && (c != '-' || i == 0 || i == len(id)-1) {
+			return NewValidationError(fmt.Sprintf("volume id %q: only lowercase letters, digits and inner hyphens are allowed", id))
+		}
+	}
+	return nil
+}
+
+// ValidateVolumePathSegment checks only that id cannot walk out of a
+// directory when used as one path segment. It is the floor for volume
+// IDs that already exist or are re-created under legacy names;
+// ValidateVolumeID is the rule for new client-supplied IDs.
+func ValidateVolumePathSegment(id string) error {
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, "/\\\x00") {
+		return NewValidationError(fmt.Sprintf("volume id %q: not usable as a path segment", id))
+	}
+	return nil
+}
+
+// MountKey identifies the volume on a node: "<namespace>/<id>", falling
+// back to the name when no ID is stamped. The agent keys its mount table
+// and mount paths by it, and the orchestrator looks mounts up by it. The
+// ID alone is not enough: a claim-template volume's ID is its name, so
+// the same service cast into two namespaces yields two volumes with one
+// ID.
+func (v *Volume) MountKey() string {
+	id := v.ID
+	if id == "" {
+		id = v.Name
+	}
+	return NS(v.Namespace) + "/" + id
+}
+
 // Equals reports whether two Volume resources are functionally equivalent
 // for watch purposes.
 func (v *Volume) Equals(other Resource) bool {
@@ -296,6 +338,12 @@ func ValidateVolumeMounts(mounts []VolumeMount) error {
 		}
 		if seenNames[m.Name] {
 			return NewValidationError(fmt.Sprintf("volume mount %q: duplicate name", m.Name))
+		}
+		// A claim template's name becomes part of a volume ID, and so of a
+		// host mount path. Cast enforces a DNS-1123 label; this looser check
+		// also runs on stored services, which predate that rule.
+		if m.Name == "." || m.Name == ".." || strings.ContainsAny(m.Name, "/\\\x00") {
+			return NewValidationError(fmt.Sprintf("volume mount %q: name must not contain path separators", m.Name))
 		}
 		seenNames[m.Name] = true
 
