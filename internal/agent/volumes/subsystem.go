@@ -910,28 +910,37 @@ func (s *Subsystem) stillMounted(dev driver.DevicePath) []string {
 	return where
 }
 
-// topIsOther reports whether unmounting path could take down another
-// disk's mount: another disk is the visible mount there, or this disk's
-// device cannot be identified while something is mounted there. A volume
-// with no recorded device (drivers that mount no block device) reports
-// false.
-func (s *Subsystem) topIsOther(dev driver.DevicePath, path string) bool {
+// unmountBlocked says why unmounting path could take down another disk's
+// mount, or "" when it is safe: another disk is the visible mount there,
+// or this disk's device cannot be identified while something is mounted
+// there. unknown reports the second case, where the disk's own state is
+// unknown too, so it must not be detached either. A volume with no
+// recorded device (drivers that mount no block device) is never blocked.
+func (s *Subsystem) unmountBlocked(dev driver.DevicePath, path string) (reason string, unknown bool) {
 	if dev == "" {
-		return false
+		return "", false
 	}
 	own, err := s.cfg.MountTable.DeviceOf(string(dev))
 	if err != nil {
 		stack, serr := s.cfg.MountTable.Stack(path)
-		if errors.Is(serr, mountinfo.ErrUnsupported) {
-			return false // no host mount table to consult on this platform
+		switch {
+		case errors.Is(serr, mountinfo.ErrUnsupported):
+			return "", false // no host mount table to consult on this platform
+		case serr != nil:
+			return fmt.Sprintf("cannot identify this volume's disk (%v) or read the mount table (%v)", err, serr), true
+		case len(stack) > 0:
+			return fmt.Sprintf("cannot identify this volume's disk (%v) and something is mounted at its path", err), true
 		}
-		return serr != nil || len(stack) > 0
+		return "", false
 	}
 	stack, err := s.cfg.MountTable.Stack(path)
 	if err != nil || len(stack) == 0 {
-		return false
+		return "", false
 	}
-	return stack[len(stack)-1] != own
+	if stack[len(stack)-1] != own {
+		return "another disk is now mounted at this volume's path", false
+	}
+	return "", false
 }
 
 // tearDown is the inverse: Unmount then Detach. Both are required to
@@ -963,9 +972,15 @@ func (s *Subsystem) tearDown(ctx context.Context, id string, m trackedMount) (de
 	var firstErr error
 	// The path may since have been given to another disk (the handle
 	// changed and the new disk mounted there): leave that mount alone.
-	if s.topIsOther(m.Device, string(m.Target)) {
-		s.log.Warn("Not unmounting: another disk is now mounted at this volume's path",
-			log.Str("volume_id", id), log.Str("target", string(m.Target)))
+	reason, unknown := s.unmountBlocked(m.Device, string(m.Target))
+	if reason != "" {
+		s.log.Warn("Not unmounting volume path",
+			log.Str("volume_id", id), log.Str("target", string(m.Target)), log.Str("reason", reason))
+		if unknown {
+			// This disk may be the one still mounted there: detaching
+			// it would pull it from under that mount. Park and retry.
+			return false, fmt.Errorf("agent.volumes: not detaching %s: %s", id, reason)
+		}
 	} else if uerr := m.Driver.Unmount(ctx, opctx, m.Target); uerr != nil {
 		firstErr = fmt.Errorf("agent.volumes: unmount %s: %w", id, uerr)
 		s.log.Warn("Unmount failed",
