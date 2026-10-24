@@ -17,6 +17,7 @@ import (
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockDockerClient is a mock implementation of the Docker client
@@ -124,7 +125,6 @@ func TestDockerExecStreamExitCode(t *testing.T) {
 		logger:        log.NewLogger(),
 		stdout:        &readWritePipe{reader: r, writer: w},
 		stderr:        &readWritePipe{reader: r, writer: w},
-		closed:        false,
 		mutex:         sync.Mutex{},
 		exitCodeMutex: sync.Mutex{},
 	}
@@ -163,7 +163,6 @@ func TestDockerExecStreamRunningThenContextCancelled(t *testing.T) {
 		logger:        log.NewLogger(),
 		stdout:        &readWritePipe{reader: r, writer: w},
 		stderr:        &readWritePipe{reader: r, writer: w},
-		closed:        false,
 		mutex:         sync.Mutex{},
 		exitCodeMutex: sync.Mutex{},
 	}
@@ -211,7 +210,6 @@ func TestDockerExecStreamRunningThenCompletes(t *testing.T) {
 		logger:        log.NewLogger(),
 		stdout:        &readWritePipe{reader: r, writer: w},
 		stderr:        &readWritePipe{reader: r, writer: w},
-		closed:        false,
 		mutex:         sync.Mutex{},
 		exitCodeMutex: sync.Mutex{},
 	}
@@ -315,7 +313,6 @@ func TestDockerExecStreamSignalNonTTY(t *testing.T) {
 		tty:    false,
 		logger: log.NewLogger(),
 		mutex:  sync.Mutex{},
-		closed: false,
 	}
 
 	// When TTY is false, all signals should be not supported
@@ -345,4 +342,71 @@ func TestExecStream(t *testing.T) {
 	// Verify it implements the required methods
 	assert.NotNil(t, stream)
 	assert.Implements(t, (*runner.ExecStream)(nil), stream)
+}
+
+// A process that never reads stdin blocks Write. Close must still run,
+// since closing the connection is what unblocks the write.
+func TestDockerExecStream_BlockedWriteDoesNotWedgeClose(t *testing.T) {
+	conn, peer := net.Pipe() // writes block until the peer reads; nobody does
+	defer peer.Close()
+	r, w := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &DockerExecStream{
+		ctx:          ctx,
+		cancel:       cancel,
+		logger:       log.NewLogger(),
+		hijackedResp: types.HijackedResponse{Conn: conn},
+		stdout:       &readWritePipe{reader: r, writer: w},
+		stderr:       &readWritePipe{reader: r, writer: w},
+	}
+
+	writeErr := make(chan error, 1)
+	go func() {
+		_, err := stream.Write([]byte("stdin nobody reads"))
+		writeErr <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let the write block
+
+	closed := make(chan struct{})
+	go func() {
+		_ = stream.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close is stuck behind a blocked Write")
+	}
+	select {
+	case err := <-writeErr:
+		assert.Error(t, err, "the blocked write fails once the connection closes")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write still blocked after Close")
+	}
+}
+
+// Closing the stream cancels its context. A later ExitCode must still
+// report the real exit code, not 0.
+func TestDockerExecStream_ExitCodeAfterClose(t *testing.T) {
+	mockClient := new(MockDockerClient)
+	mockClient.On("ContainerExecInspect", mock.Anything, "exec123").Return(3, false, nil)
+	r, w := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, peer := net.Pipe()
+	defer peer.Close()
+	stream := &DockerExecStream{
+		cli:          mockClient,
+		execID:       "exec123",
+		ctx:          ctx,
+		cancel:       cancel,
+		logger:       log.NewLogger(),
+		hijackedResp: types.HijackedResponse{Conn: conn},
+		stdout:       &readWritePipe{reader: r, writer: w},
+		stderr:       &readWritePipe{reader: r, writer: w},
+	}
+	require.NoError(t, stream.Close())
+
+	code, err := stream.ExitCode()
+	require.NoError(t, err)
+	assert.Equal(t, 3, code)
 }

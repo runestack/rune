@@ -243,10 +243,7 @@ func TestProcessExecStreamExitCodeError(t *testing.T) {
 	stream, err := NewProcessExecStream(ctx, "test-instance", options, logger)
 	assert.NoError(t, err)
 
-	// Wait for the process to complete
-	time.Sleep(100 * time.Millisecond)
-
-	// Check exit code
+	// ExitCode waits for the process; no sleep needed.
 	exitCode, err := stream.ExitCode()
 	assert.NoError(t, err) // No error, but non-zero exit code
 	assert.Equal(t, 1, exitCode)

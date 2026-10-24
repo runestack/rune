@@ -243,25 +243,27 @@ func (s *ProcessExecStream) Signal(sigName string) error {
 	return s.cmd.Process.Signal(sig)
 }
 
-// ExitCode returns the exit code after the process has completed.
+// ExitCode blocks until the process completes, then returns its exit
+// code. The wait is bounded by the stream's context, as Docker's is. It
+// waits before taking exitCodeMutex: the goroutine that reaps the process
+// needs that mutex to record the code.
 func (s *ProcessExecStream) ExitCode() (int, error) {
+	select {
+	case <-s.doneCh:
+	case <-s.ctx.Done():
+		select {
+		case <-s.doneCh:
+		default:
+			return 0, fmt.Errorf("process did not complete: %w", s.ctx.Err())
+		}
+	}
+
 	s.exitCodeMutex.Lock()
 	defer s.exitCodeMutex.Unlock()
-
-	// If there's an error, return it
 	if s.exitErr != nil && s.exitCode == 0 {
 		return s.exitCode, s.exitErr
 	}
-
-	// If the process is still running, check
-	select {
-	case <-s.doneCh:
-		// Process has completed
-		return s.exitCode, nil
-	default:
-		// Process is still running
-		return 0, fmt.Errorf("process is still running")
-	}
+	return s.exitCode, nil
 }
 
 // Close terminates the exec session and releases resources.

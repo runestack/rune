@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
+	"net"
+	"syscall"
 	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
@@ -185,9 +186,10 @@ func (s *ExecService) initializeExecSession(stream generated.ExecService_StreamE
 		return nil, "", err
 	}
 
-	// Set up context with cancel
-	ctx, cancel := context.WithCancel(stream.Context())
-	defer cancel()
+	// The exec stream outlives this function and calls the runtime with
+	// this context for the whole session (exit code, resize), so it must
+	// be the session's, not one cancelled on return.
+	ctx := stream.Context()
 
 	// Get target instance
 	instance, err := s.getTargetInstance(ctx, initReq)
@@ -520,15 +522,21 @@ func (s *ExecService) waitForCompletion(doneCh <-chan error, errorCh <-chan erro
 
 // sendExitCode retrieves and sends the exit code to the client
 func (s *ExecService) sendExitCode(stream generated.ExecService_StreamExecServer, execStream types.ExecStream) {
-	exitCode := s.getExitCode(execStream)
-
-	// Always send an exit response, even if we can't get the actual exit code
-	// This ensures the client knows the session has ended
-	if exitCode == -1 {
-		// Default to success if we can't determine the actual code
-		// Log at debug to avoid alarming users
-		s.logger.Debug("Exit code unavailable; defaulting to 0")
-		exitCode = 0
+	exitCode, err := s.getExitCode(execStream)
+	if err != nil {
+		// Reporting 0 here would tell a script its command succeeded.
+		s.logger.Warn("Exit code unavailable", log.Err(err))
+		if serr := stream.Send(&generated.ExecResponse{
+			Response: &generated.ExecResponse_Status{
+				Status: &generated.Status{
+					Code:    int32(codes.Unknown),
+					Message: fmt.Sprintf("the command's exit code could not be determined: %v", err),
+				},
+			},
+		}); serr != nil {
+			s.logger.Error("Failed to send exit status", log.Err(serr))
+		}
+		return
 	}
 
 	if err := stream.Send(&generated.ExecResponse{
@@ -543,50 +551,39 @@ func (s *ExecService) sendExitCode(stream generated.ExecService_StreamExecServer
 	}
 }
 
-// getExitCode retrieves the exit code with timeout protection
-func (s *ExecService) getExitCode(execStream types.ExecStream) int {
-	exitCode := -1
+// exitCodeWait bounds how long the session waits for the runtime to
+// report the exit code once output has ended.
+const exitCodeWait = 15 * time.Second
 
-	// Try multiple times with increasing delays
-	for i := 0; i < 5; i++ {
-		select {
-		case <-time.After(time.Duration(i+1) * time.Second):
-			s.logger.Debug("Attempt to get exit code timed out, retrying", log.Int("attempt", i+1))
-		case <-func() chan struct{} {
-			ch := make(chan struct{})
-			go func() {
-				defer close(ch)
-				if code, err := execStream.ExitCode(); err == nil {
-					exitCode = code
-				} else {
-					s.logger.Debug("Failed to get exit code, will retry", log.Err(err), log.Int("attempt", i+1))
-				}
-			}()
-			return ch
-		}():
-			// If we got a valid exit code, return it
-			if exitCode != -1 {
-				return exitCode
-			}
-		}
+// getExitCode asks the exec stream for the exit code, which blocks until
+// the process finishes or the stream's context ends.
+func (s *ExecService) getExitCode(execStream types.ExecStream) (int, error) {
+	type result struct {
+		code int
+		err  error
 	}
-
-	s.logger.Debug("Failed to get exit code after all attempts")
-	return exitCode
+	ch := make(chan result, 1)
+	go func() {
+		code, err := execStream.ExitCode()
+		ch <- result{code, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.code, r.err
+	case <-time.After(exitCodeWait):
+		return 0, fmt.Errorf("no exit code after %v", exitCodeWait)
+	}
 }
 
-// isBenignStreamError detects transport-layer errors that happen on normal closure
+// isBenignStreamError reports errors that mean the exec stream was
+// closed in the ordinary way: by our own Close (a closed pipe or
+// connection), or by the process exiting while stdin was still being
+// written (EPIPE). A reset connection is not among them; that is a
+// failure, not an ending.
 func isBenignStreamError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	// Docker hijacked connection often reports use of closed network connection on normal close
-	return strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(strings.ToLower(msg), "client disconnected") ||
-		strings.Contains(strings.ToLower(msg), "broken pipe") ||
-		strings.Contains(strings.ToLower(msg), "connection reset by peer") ||
-		strings.Contains(msg, "io: read/write on closed pipe")
+	return errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.EPIPE)
 }
 
 // validateExecRequest validates an exec request.
