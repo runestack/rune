@@ -39,6 +39,25 @@ func TestLoadWithUnknownKeys_NoneForAValidFile(t *testing.T) {
 	_, unknown, err := LoadWithUnknownKeys("../../examples/runefile.toml")
 	require.NoError(t, err)
 	assert.Empty(t, unknown)
+
+	// Keys with no Config field that other code reads.
+	p := writeRunefile(t, "runefile.toml", `
+debug = true
+pretty = true
+
+[docker]
+config_file_mode = 420
+disable_ambient_registry_auth = true
+
+[[docker.registries]]
+name = "ghcr"
+registry = "ghcr.io"
+[docker.registries.auth]
+from_secret = "ghcr-creds"
+`)
+	_, unknown, err = LoadWithUnknownKeys(p)
+	require.NoError(t, err)
+	assert.Empty(t, unknown)
 }
 
 // A value of the wrong type used to come back as (nil, err), which startup

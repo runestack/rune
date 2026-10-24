@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"time"
 
@@ -411,10 +412,15 @@ func Load(path string) (*Config, error) {
 	return cfg, err
 }
 
-// readElsewhere are runefile keys with no Config field, read through the
-// global viper by pkg/runner/manager. They are valid, so they must not be
-// reported as unknown.
+// readElsewhere are runefile keys with no Config field, read through viper
+// elsewhere: the docker modes by pkg/runner/manager, debug and pretty by
+// runed's flag resolution, and from_secret (an alias of fromSecret) by the
+// registry bootstrap in pkg/api/service. They are valid, so they must not be
+// reported as unknown. Slice indexes are dropped before the lookup.
 var readElsewhere = map[string]bool{
+	"debug":                                true,
+	"pretty":                               true,
+	"docker.registries.auth.from_secret":   true,
 	"docker.secret_dir_mode":               true,
 	"docker.secret_file_mode":              true,
 	"docker.config_dir_mode":               true,
@@ -426,6 +432,8 @@ var readElsewhere = map[string]bool{
 // sorted. A misspelled key otherwise falls back to its default with no sign
 // anything is wrong. Unknown keys are not an error: a rolled-back runed must
 // still start on a runefile written for a newer one.
+var sliceIndex = regexp.MustCompile(`\[\d+\]`)
+
 func LoadWithUnknownKeys(path string) (*Config, []string, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
@@ -455,7 +463,7 @@ func LoadWithUnknownKeys(path string) (*Config, []string, error) {
 	}
 	var unknown []string
 	for _, k := range md.Unused {
-		if !readElsewhere[k] {
+		if !readElsewhere[sliceIndex.ReplaceAllString(k, "")] {
 			unknown = append(unknown, k)
 		}
 	}

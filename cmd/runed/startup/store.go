@@ -63,7 +63,7 @@ func loadRunefile(logger log.Logger, path string) (*config.Config, error) {
 		return nil, err
 	}
 	if len(unknown) > 0 {
-		logger.Error("Runefile keys are not recognised and have no effect; check their spelling",
+		logger.Error("Runefile keys are not recognised and have no effect",
 			log.Str("path", path), log.Str("keys", strings.Join(unknown, ", ")))
 	}
 	return appCfg, nil
