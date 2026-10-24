@@ -3,7 +3,6 @@ package dovolume
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/runestack/rune/pkg/storage/driver/blockfs"
@@ -67,9 +66,4 @@ func (execMounter) DeviceExists(dev string) bool {
 // see pkg/storage/driver/blockfs.
 func (execMounter) EnsureFormatted(ctx context.Context, dev, fsType string) error {
 	return blockfs.EnsureFormatted(ctx, "dovolume", dev, fsType)
-}
-
-func alreadyMounted(ctx context.Context, target string) bool {
-	cmd := exec.CommandContext(ctx, "findmnt", "-n", target)
-	return cmd.Run() == nil
 }

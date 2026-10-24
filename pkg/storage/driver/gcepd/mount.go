@@ -3,7 +3,6 @@ package gcepd
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/runestack/rune/pkg/storage/driver/blockfs"
@@ -44,9 +43,4 @@ func (execMounter) MkdirAll(target string, mode os.FileMode) error {
 // see pkg/storage/driver/blockfs.
 func (execMounter) EnsureFormatted(ctx context.Context, dev, fsType string) error {
 	return blockfs.EnsureFormatted(ctx, "gcepd", dev, fsType)
-}
-
-func alreadyMounted(ctx context.Context, target string) bool {
-	cmd := exec.CommandContext(ctx, "findmnt", "-n", target)
-	return cmd.Run() == nil
 }

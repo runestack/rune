@@ -9,10 +9,17 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/runestack/rune/pkg/storage/driver/mountsync"
+	"github.com/runestack/rune/pkg/storage/mountinfo"
 )
 
-func (execMounter) Mount(ctx context.Context, dev, target, fsType string, readOnly bool) error {
-	if alreadyMounted(ctx, target) {
+func (execMounter) Mount(_ context.Context, dev, target, fsType string, readOnly bool) error {
+	// By device, not by "anything is mounted there": another disk at the
+	// target is an error, and so is a mount table that cannot be read.
+	mounted, err := mountinfo.MountedAt(target, dev)
+	if err != nil {
+		return fmt.Errorf("hcloudvolume: check %s before mounting %s: %w", target, dev, err)
+	}
+	if mounted {
 		return nil
 	}
 	var flags uintptr

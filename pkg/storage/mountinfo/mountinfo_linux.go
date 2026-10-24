@@ -31,6 +31,22 @@ func MountPoints(dev Dev) ([]string, error) {
 	return parseMountPoints(f, dev)
 }
 
+// MountedAt reports whether dev is the visible mount at target. It errs
+// when another device is mounted there, or when either cannot be read:
+// a probe that cannot answer must not read as "not mounted", since the
+// caller would then mount over whatever is there.
+func MountedAt(target, dev string) (bool, error) {
+	own, err := DeviceOf(dev)
+	if err != nil {
+		return false, err
+	}
+	stack, err := Stack(target)
+	if err != nil {
+		return false, err
+	}
+	return topIs(stack, own, target)
+}
+
 // DeviceOf returns the major:minor of a block device node, following
 // symlinks such as /dev/disk/by-id/*.
 func DeviceOf(path string) (Dev, error) {

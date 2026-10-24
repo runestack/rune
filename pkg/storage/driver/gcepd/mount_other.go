@@ -39,3 +39,12 @@ func (execMounter) Unmount(ctx context.Context, target string) error {
 	}
 	return nil
 }
+
+// alreadyMounted is the non-Linux probe, for local development only: a
+// findmnt that cannot run reads as "not mounted", so Unmount here can
+// report success without unmounting. Linux decides by device through
+// mountinfo instead.
+func alreadyMounted(ctx context.Context, target string) bool {
+	cmd := exec.CommandContext(ctx, "findmnt", "-n", target)
+	return cmd.Run() == nil
+}
