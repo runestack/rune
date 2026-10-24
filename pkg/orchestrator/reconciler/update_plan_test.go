@@ -358,6 +358,35 @@ func unreadyOutdated(name string) instanceView {
 	return v
 }
 
+// applyPlan advances a simulated service one tick: retirements leave, and
+// created instances arrive ready at the current template.
+func applyPlan(insts []instanceView, p updatePlan, next *int) []instanceView {
+	gone := map[string]bool{}
+	for _, r := range p.Retire {
+		gone[r.ID] = true
+	}
+	var out []instanceView
+	for _, v := range insts {
+		if !gone[v.Instance.ID] {
+			out = append(out, v)
+		}
+	}
+	for i := 0; i < p.Create; i++ {
+		out = append(out, view(fmt.Sprintf("new%d", *next), instancectl.CompatOK, true, 60))
+		*next++
+	}
+	return out
+}
+
+func converged(insts []instanceView, scale int) bool {
+	for _, v := range insts {
+		if v.Class == instancectl.CompatOutdated {
+			return false
+		}
+	}
+	return len(insts) == scale
+}
+
 // A rollout whose outdated instances are all unready — a broken probe, fixed
 // by the cast now rolling out — must converge. The availability budget never
 // counts them, so before they were retired outside it the plan held forever.
@@ -373,34 +402,13 @@ func TestPlanUpdate_UnreadyOutdatedInstancesConverge(t *testing.T) {
 					insts = append(insts, unreadyOutdated(fmt.Sprintf("old%d", i)))
 				}
 				next := 0
-				for tick := 0; tick < 10*scale; tick++ {
+				for tick := 0; tick < 10*scale && !converged(insts, scale); tick++ {
 					p := planUpdate(updateInput{Scale: scale, Params: tc.params, Instances: insts, Now: planBase})
-					gone := map[string]bool{}
-					for _, r := range p.Retire {
-						gone[r.ID] = true
-					}
-					var remaining []instanceView
-					for _, v := range insts {
-						if !gone[v.Instance.ID] {
-							remaining = append(remaining, v)
-						}
-					}
-					for i := 0; i < p.Create; i++ {
-						remaining = append(remaining, view(fmt.Sprintf("new%d", next), instancectl.CompatOK, true, 60))
-						next++
-					}
-					insts = remaining
-					outdated := 0
-					for _, v := range insts {
-						if v.Class == instancectl.CompatOutdated {
-							outdated++
-						}
-					}
-					if outdated == 0 && len(insts) == scale {
-						return
-					}
+					insts = applyPlan(insts, p, &next)
 				}
-				t.Fatalf("did not converge: %d instance(s) left, %d created", len(insts), next)
+				if !converged(insts, scale) {
+					t.Fatalf("did not converge: %d instance(s) left, %d created", len(insts), next)
+				}
 			})
 		}
 	}
