@@ -76,10 +76,20 @@ func edgesZero(dev string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return zeroEdges(f, size)
+}
+
+// zeroEdges reads both ends of a device of the given size. A device too
+// small to hold both spans is refused, not passed: a freshly attached
+// disk can briefly report a size of 0 before its real capacity appears.
+func zeroEdges(r io.ReaderAt, size int64) (bool, error) {
+	if size < 2*zeroSpan {
+		return false, fmt.Errorf("device reports %d bytes, too small to confirm it is blank", size)
+	}
 	buf := make([]byte, zeroSpan)
-	for _, off := range []int64{0, max(size-zeroSpan, 0)} {
-		n, err := f.ReadAt(buf[:min(int64(zeroSpan), size)], off)
-		if err != nil && !(errors.Is(err, io.EOF) && int64(n) == min(int64(zeroSpan), size)) {
+	for _, off := range []int64{0, size - zeroSpan} {
+		n, err := r.ReadAt(buf, off)
+		if err != nil && !(errors.Is(err, io.EOF) && n == zeroSpan) {
 			return false, err
 		}
 		for _, b := range buf[:n] {
@@ -136,10 +146,16 @@ func isEmpty(ctx context.Context, dev string) (bool, error) {
 	case 0:
 		tags := parseExport(r.stdout)
 		switch {
+		case containerTypes[tags["TYPE"]]:
+			// Not a filesystem but a layer that holds one; mounting it
+			// would fail anyway, so say what it is.
+			return false, fmt.Errorf("device holds %s, not a filesystem; refusing to format it "+
+				"(wipe it by hand if it really is unused)", tags["TYPE"])
 		case tags["TYPE"] != "":
 			return false, nil
 		case tags["PTTYPE"] != "":
-			return false, fmt.Errorf("device has a %s partition table and no filesystem; refusing to format it", tags["PTTYPE"])
+			return false, fmt.Errorf("device has a %s partition table and no filesystem; refusing to format it "+
+				"(wipe it by hand if it really is unused)", tags["PTTYPE"])
 		default:
 			return false, fmt.Errorf("blkid recognised something it could not name: %q", strings.TrimSpace(string(r.stdout)))
 		}
@@ -163,6 +179,16 @@ func isEmpty(ctx context.Context, dev string) (bool, error) {
 	default:
 		return false, fmt.Errorf("blkid -p %s failed (exit %d): %v %s", dev, r.exitCode, r.err, strings.TrimSpace(string(r.stderr)))
 	}
+}
+
+// containerTypes are blkid TYPEs for a layer that holds data rather than
+// a filesystem the drivers can mount.
+var containerTypes = map[string]bool{
+	"crypto_LUKS":       true,
+	"LVM2_member":       true,
+	"linux_raid_member": true,
+	"zfs_member":        true,
+	"swap":              true,
 }
 
 // parseExport reads blkid's KEY=value lines.

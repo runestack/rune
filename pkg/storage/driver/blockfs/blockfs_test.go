@@ -44,6 +44,9 @@ func TestEnsureFormatted(t *testing.T) {
 		{"ambivalent probe", nil, probeResult{exitCode: 8, err: errors.New("exit status 8")}, false, "exit 8"},
 		{"blkid did not run", nil, probeResult{exitCode: -1, err: context.Canceled}, false, "context canceled"},
 		{"unnamed signature", nil, probeResult{stdout: []byte("DEVNAME=/dev/sdb\n"), exitCode: 0}, false, "could not name"},
+		{"LUKS container", nil, probeResult{stdout: []byte("TYPE=crypto_LUKS\n"), exitCode: 0}, false, "crypto_LUKS"},
+		{"LVM member", nil, probeResult{stdout: []byte("TYPE=LVM2_member\n"), exitCode: 0}, false, "LVM2_member"},
+		{"xfs when ext4 asked", nil, probeResult{stdout: []byte("TYPE=xfs\n"), exitCode: 0}, false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -106,20 +109,46 @@ func TestEdgesZero(t *testing.T) {
 	}
 	const mib = 1 << 20
 	for _, c := range []struct {
-		name string
-		path string
-		want bool
+		name    string
+		path    string
+		want    bool
+		wantErr bool
 	}{
-		{"all zero", write("z", 4*mib, nil), true},
-		{"data at start", write("s", 4*mib, map[int]byte{1080: 0x53}), false},
-		{"data at end", write("e", 4*mib, map[int]byte{4*mib - 512: 1}), false},
-		{"data in the middle is not looked at", write("m", 4*mib, map[int]byte{2 * mib: 1}), true},
-		{"smaller than the span", write("small", 4096, map[int]byte{4000: 1}), false},
+		{"all zero", write("z", 4*mib, nil), true, false},
+		{"data at start", write("s", 4*mib, map[int]byte{1080: 0x53}), false, false},
+		{"data at end", write("e", 4*mib, map[int]byte{4*mib - 512: 1}), false, false},
+		{"data in the middle is not looked at", write("m", 4*mib, map[int]byte{2 * mib: 1}), true, false},
+		{"exactly two spans", write("two", 2*mib, nil), true, false},
+		{"smaller than two spans", write("small", 2*mib-1, nil), false, true},
+		{"reports zero size", write("empty", 0, nil), false, true},
 	} {
 		got, err := edgesZero(c.path)
+		if c.wantErr {
+			assert.Error(t, err, c.name)
+			continue
+		}
 		require.NoError(t, err, c.name)
 		assert.Equal(t, c.want, got, c.name)
 	}
 	_, err := edgesZero(filepath.Join(dir, "missing"))
 	assert.Error(t, err)
+}
+
+type failingReader struct{ failAt int64 }
+
+func (f failingReader) ReadAt(p []byte, off int64) (int, error) {
+	if off == f.failAt {
+		return 0, errors.New("input/output error")
+	}
+	clear(p)
+	return len(p), nil
+}
+
+// A read error at either end is an error, never "zeros".
+func TestZeroEdges_ReadError(t *testing.T) {
+	const size = 8 << 20
+	for _, at := range []int64{0, size - zeroSpan} {
+		_, err := zeroEdges(failingReader{failAt: at}, size)
+		assert.ErrorContains(t, err, "input/output error", "offset %d", at)
+	}
 }
