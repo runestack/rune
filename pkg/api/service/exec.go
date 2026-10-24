@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"syscall"
 	"time"
 
@@ -583,6 +584,7 @@ func (s *ExecService) getExitCode(execStream types.ExecStream) (int, error) {
 func isBenignStreamError(err error) bool {
 	return errors.Is(err, io.ErrClosedPipe) ||
 		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, os.ErrClosed) ||
 		errors.Is(err, syscall.EPIPE)
 }
 

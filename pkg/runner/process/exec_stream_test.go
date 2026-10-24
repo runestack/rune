@@ -329,3 +329,15 @@ func TestProcessExecStreamStderr(t *testing.T) {
 	err = stream.Close()
 	assert.NoError(t, err)
 }
+
+// A process killed by a signal reports 128+signal, as a shell does, not
+// the -1 Go gives for "no exit status".
+func TestProcessExecStreamSignalledExitCode(t *testing.T) {
+	stream, err := NewProcessExecStream(context.Background(), "test-instance",
+		runner.ExecOptions{Command: []string{"sh", "-c", "kill -9 $$"}}, log.NewLogger())
+	require.NoError(t, err)
+	defer stream.Close()
+	code, err := stream.ExitCode()
+	require.NoError(t, err)
+	assert.Equal(t, 137, code)
+}

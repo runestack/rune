@@ -315,6 +315,7 @@ func TestIsBenignStreamError(t *testing.T) {
 	}{
 		{fmt.Errorf("write: %w", io.ErrClosedPipe), true},
 		{fmt.Errorf("read: %w", net.ErrClosed), true},
+		{&os.PathError{Op: "write", Path: "|1", Err: os.ErrClosed}, true},
 		{&net.OpError{Op: "write", Err: &os.SyscallError{Syscall: "write", Err: syscall.EPIPE}}, true},
 		{&net.OpError{Op: "read", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}, false},
 		{errors.New("connection reset by peer"), false},

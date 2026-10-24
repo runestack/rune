@@ -52,10 +52,9 @@ type ExecOptions struct {
 
 // ExecSession represents an active exec session.
 type ExecSession struct {
-	stream    generated.ExecService_StreamExecClient
-	client    *ExecClient
-	logger    log.Logger
-	exitState int // Track exit command state
+	stream generated.ExecService_StreamExecClient
+	client *ExecClient
+	logger log.Logger
 }
 
 // NewExecSession creates a new exec session.
@@ -189,28 +188,9 @@ func (s *ExecSession) RunInteractive() error {
 			}
 
 			if n > 0 {
-				input := string(buffer[:n])
-
-				// Check if this is an exit command or Ctrl+D
-				if s.isExitCommand(input) {
-					// Send the input first, then close
-					req := &generated.ExecRequest{
-						Request: &generated.ExecRequest_Stdin{
-							Stdin: buffer[:n],
-						},
-					}
-					if err := s.stream.Send(req); err != nil {
-						errChan <- fmt.Errorf("failed to send stdin: %w", err)
-						return
-					}
-
-					// Wait a moment for the server to process, then close
-					time.Sleep(100 * time.Millisecond)
-					close(doneChan)
-					errChan <- nil
-					return
-				}
-
+				// Everything, including "exit" and Ctrl-D, goes to the remote
+				// terminal: the shell decides whether to end, and its exit
+				// frame ends the session with its real code.
 				req := &generated.ExecRequest{
 					Request: &generated.ExecRequest_Stdin{
 						Stdin: buffer[:n],
@@ -309,32 +289,6 @@ func (s *ExecSession) RunInteractive() error {
 	}
 
 	return err
-}
-
-// isExitCommand checks if the input represents an exit command or Ctrl+D
-func (s *ExecSession) isExitCommand(input string) bool {
-	// Check for Ctrl+D (EOF character)
-	if input == "\x04" {
-		return true
-	}
-
-	// State machine to detect "exit" followed by newline
-	if input == "e" {
-		s.exitState = 1
-	} else if input == "x" && s.exitState == 1 {
-		s.exitState = 2
-	} else if input == "i" && s.exitState == 2 {
-		s.exitState = 3
-	} else if input == "t" && s.exitState == 3 {
-		s.exitState = 4
-	} else if (input == "\n" || input == "\r") && s.exitState == 4 {
-		s.exitState = 0 // Reset state
-		return true
-	} else {
-		s.exitState = 0 // Reset state on any other input
-	}
-
-	return false
 }
 
 // RunNonInteractive runs a non-interactive exec session.

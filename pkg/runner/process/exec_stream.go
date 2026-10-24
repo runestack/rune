@@ -158,7 +158,13 @@ func NewProcessExecStream(
 			stream.exitErr = err
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-					stream.exitCode = status.ExitStatus()
+					// ExitStatus is -1 for a signalled process; report
+					// it the way a shell does.
+					if status.Signaled() {
+						stream.exitCode = 128 + int(status.Signal())
+					} else {
+						stream.exitCode = status.ExitStatus()
+					}
 					return
 				}
 			}
