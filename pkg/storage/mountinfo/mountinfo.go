@@ -9,12 +9,17 @@ package mountinfo
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+// ErrUnsupported is returned off Linux, where no cloud volume driver
+// mounts anything.
+var ErrUnsupported = errors.New("mountinfo: not supported on this platform")
 
 // Dev identifies a block device by major:minor, which is what mountinfo
 // records and what stat(2) on the device node returns.

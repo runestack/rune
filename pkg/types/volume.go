@@ -188,6 +188,17 @@ func ValidateVolumeID(id string) error {
 	return nil
 }
 
+// ValidateVolumePathSegment checks only that id cannot walk out of a
+// directory when used as one path segment. It is the floor for volume
+// IDs that already exist or are re-created under legacy names;
+// ValidateVolumeID is the rule for new client-supplied IDs.
+func ValidateVolumePathSegment(id string) error {
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, "/\\\x00") {
+		return NewValidationError(fmt.Sprintf("volume id %q: not usable as a path segment", id))
+	}
+	return nil
+}
+
 // MountKey identifies the volume on a node: "<namespace>/<id>", falling
 // back to the name when no ID is stamped. The agent keys its mount table
 // and mount paths by it, and the orchestrator looks mounts up by it. The

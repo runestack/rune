@@ -169,6 +169,10 @@ type Subsystem struct {
 	// does. Mirrored to parkedFile so a restart does not forget them.
 	// Guarded by stateMu.
 	parked map[driver.VolumeHandle]*parkedDisk
+
+	// saveMu serialises writes of parkedFile: drainMounts parks from
+	// several goroutines at once.
+	saveMu sync.Mutex
 }
 
 // mountFailure is the most recent reason a volume failed to come up on
@@ -906,16 +910,22 @@ func (s *Subsystem) stillMounted(dev driver.DevicePath) []string {
 	return where
 }
 
-// topIsOther reports positive evidence that a disk other than dev is the
-// visible mount at path, so unmounting path would take down someone
-// else's mount. Unknown answers report false.
+// topIsOther reports whether unmounting path could take down another
+// disk's mount: another disk is the visible mount there, or this disk's
+// device cannot be identified while something is mounted there. A volume
+// with no recorded device (drivers that mount no block device) reports
+// false.
 func (s *Subsystem) topIsOther(dev driver.DevicePath, path string) bool {
 	if dev == "" {
 		return false
 	}
 	own, err := s.cfg.MountTable.DeviceOf(string(dev))
 	if err != nil {
-		return false
+		stack, serr := s.cfg.MountTable.Stack(path)
+		if errors.Is(serr, mountinfo.ErrUnsupported) {
+			return false // no host mount table to consult on this platform
+		}
+		return serr != nil || len(stack) > 0
 	}
 	stack, err := s.cfg.MountTable.Stack(path)
 	if err != nil || len(stack) == 0 {

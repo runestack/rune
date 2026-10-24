@@ -236,10 +236,6 @@ func (b *mountBinder) resolveVolumeMount(ctx context.Context, service *types.Ser
 		// parsed back out of the name — so the name format is free to change.
 		ordinal := instance.Ordinal
 		name = fmt.Sprintf("%s-%s-%d", m.Name, service.Name, ordinal)
-		// The name is also the volume's ID, which becomes a host mount path.
-		if err := types.ValidateVolumeID(name); err != nil {
-			return types.ResolvedVolumeMount{}, fmt.Errorf("claim template %q: %w", m.Name, err)
-		}
 		if err := b.ensureClaimTemplateVolume(ctx, service, m, name, ordinal); err != nil {
 			return types.ResolvedVolumeMount{}, fmt.Errorf("ensure claim-template volume %s/%s: %w", ns, name, err)
 		}
@@ -335,6 +331,13 @@ func (b *mountBinder) ensureClaimTemplateVolume(ctx context.Context, service *ty
 	var existing types.Volume
 	if err := b.store.Get(ctx, types.ResourceTypeVolume, ns, name, &existing); err == nil {
 		return nil
+	}
+	// The name is also the new volume's ID, which becomes a host mount
+	// path segment. Checked only here, at creation: existing volumes keep
+	// mounting, and a legacy name such as "data_dir-api-0" can still be
+	// re-created; only path-unsafe names are refused.
+	if err := types.ValidateVolumePathSegment(name); err != nil {
+		return fmt.Errorf("claim template %q: %w", m.Name, err)
 	}
 
 	tpl := m.ClaimTemplate

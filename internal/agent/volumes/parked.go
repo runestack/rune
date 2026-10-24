@@ -10,6 +10,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/runestack/rune/pkg/store"
+
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/storage/driver"
 	"github.com/runestack/rune/pkg/types"
@@ -114,6 +116,13 @@ func (s *Subsystem) retryParked(ctx context.Context) {
 	}
 	s.stateMu.Unlock()
 	for _, p := range todo {
+		// Still bound here: the volume is wanted and its bring-up is what
+		// needs retrying (the regular reconcile does that). Tearing it
+		// down would pull the disk from under running containers.
+		if s.stillWanted(ctx, p.rec) {
+			s.warnParked(p, "Parked disk is still bound to this node; leaving it for bring-up", nil)
+			continue
+		}
 		if p.m == nil {
 			m, err := s.rebuildParked(ctx, p.rec)
 			if err != nil {
@@ -130,6 +139,17 @@ func (s *Subsystem) retryParked(ctx context.Context) {
 			s.warnParked(p, "Retry of parked volume teardown failed", err)
 		}
 	}
+}
+
+// stillWanted reports whether the store still binds this disk to this
+// node. A lookup failure other than "gone" counts as wanted, so an
+// unreachable store never triggers a teardown.
+func (s *Subsystem) stillWanted(ctx context.Context, rec parkedRecord) bool {
+	var vol types.Volume
+	if err := s.cfg.Store.Get(ctx, types.ResourceTypeVolume, rec.Namespace, rec.Name, &vol); err != nil {
+		return !store.IsNotFoundError(err)
+	}
+	return vol.Handle == rec.Handle && s.shouldMount(&vol)
 }
 
 func (s *Subsystem) warnParked(p *parkedDisk, msg string, err error) {
@@ -175,8 +195,12 @@ func (s *Subsystem) rebuildParked(ctx context.Context, rec parkedRecord) (tracke
 
 func (s *Subsystem) parkedPath() string { return filepath.Join(s.cfg.MountRoot, parkedFile) }
 
-// saveParked rewrites parkedFile from the in-memory set.
+// saveParked rewrites parkedFile from the in-memory set. The snapshot
+// and the write happen under saveMu, so concurrent parks cannot write an
+// older set over a newer one.
 func (s *Subsystem) saveParked() {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	s.stateMu.RLock()
 	recs := make([]parkedRecord, 0, len(s.parked))
 	for _, p := range s.parked {
@@ -205,10 +229,31 @@ func writeParked(path string, recs []parkedRecord) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// Make the rename itself durable.
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
 }
 
 // loadParked restores the parked set recorded by a previous run.
