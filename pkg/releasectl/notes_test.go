@@ -160,3 +160,21 @@ func TestCast_DetachedCastCarriesNotes(t *testing.T) {
 	require.Len(t, plan.Changes, 1)
 	assert.Equal(t, []string{labelNote}, plan.Changes[0].Notes)
 }
+
+func TestCast_FailedCastCarriesNoNotes(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+	ref := svcRef("default", "web")
+	// Unmanaged, so the cast conflicts and returns its plan with the error.
+	require.NoError(t, c.orch.CreateService(ctx, notesService(nil)))
+
+	spec := release.ReleaseSpec{Name: "app", Namespace: "default", Resources: []release.DesiredResource{{Ref: ref}}}
+	_, plan, err := c.Cast(ctx, spec, Payloads{Services: map[string]*types.Service{
+		ref.Key(): notesService(func(s *types.Service) { s.Labels["team"] = "b" }),
+	}})
+	require.Error(t, err)
+	require.NotNil(t, plan)
+	for _, ch := range plan.Changes {
+		assert.Empty(t, ch.Notes)
+	}
+}
