@@ -1281,26 +1281,45 @@ func TestSubsystem_RefusesForeignDiskAtTarget(t *testing.T) {
 	assert.Zero(t, m)
 }
 
-// Stop's drain parks disks from several goroutines at once. Every one of
-// them must end up in the parked file.
+// Stop's drain parks disks from several goroutines at once. A save that
+// snapshots the parked set and is then overtaken must not write its older
+// set over a newer one. The first save is held mid-write while a second
+// park runs; both disks must end up in the file.
 func TestSubsystem_ConcurrentParksAllSaved(t *testing.T) {
 	sub, _, drv := newSubsystem(t, "node-a")
-	const n = 32
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			id := fmt.Sprintf("prod/v-%d", i)
-			sub.park(id, trackedMount{Driver: drv, Handle: driver.VolumeHandle(fmt.Sprintf("h-%d", i)), VolumeNS: "prod", VolumeName: fmt.Sprintf("v-%d", i)}, nil)
-		}(i)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var first sync.Once
+	orig := writeParkedFile
+	writeParkedFile = func(path string, recs []parkedRecord) error {
+		held := false
+		first.Do(func() { held = true })
+		if held {
+			close(entered)
+			<-release
+		}
+		return orig(path, recs)
 	}
+	t.Cleanup(func() { writeParkedFile = orig })
+
+	park := func(i int) {
+		sub.park(fmt.Sprintf("prod/v-%d", i), trackedMount{Driver: drv,
+			Handle: driver.VolumeHandle(fmt.Sprintf("h-%d", i)), VolumeNS: "prod", VolumeName: fmt.Sprintf("v-%d", i)}, nil)
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); park(1) }()
+	<-entered
+	go func() { defer wg.Done(); park(2) }()
+	// Long enough for the second save to finish if nothing serialises it.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
 	wg.Wait()
+
 	b, err := os.ReadFile(filepath.Join(sub.cfg.MountRoot, parkedFile))
 	require.NoError(t, err)
 	var recs []parkedRecord
 	require.NoError(t, json.Unmarshal(b, &recs))
-	assert.Len(t, recs, n)
+	assert.Len(t, recs, 2, "the held save must not overwrite the later one")
 }
 
 // A parked disk the store still binds to this node is wanted; its
@@ -1332,8 +1351,19 @@ func TestSubsystem_UnknownDeviceDoesNotUnmountOccupiedPath(t *testing.T) {
 	sub, _, drv := newSubsystem(t, "node-a")
 	target := filepath.Join(sub.cfg.MountRoot, "prod", "data-db-0")
 	sub.cfg.MountTable = fakeMountTable{stacks: map[string][]mountinfo.Dev{target: {{Major: 8, Minor: 32}}}}
-	_, _ = sub.tearDown(context.Background(), "prod/data-db-0", trackedMount{
-		Driver: drv, Handle: "h", Device: "/dev/gone", Target: driver.MountTarget(target)})
-	_, _, _, u := drv.snapshot()
-	assert.Zero(t, u)
+	m := trackedMount{Driver: drv, Handle: "h", Device: "/dev/gone", Target: driver.MountTarget(target),
+		VolumeNS: "prod", VolumeName: "data-db-0"}
+	detached, err := sub.tearDown(context.Background(), "prod/data-db-0", m)
+	assert.False(t, detached)
+	assert.ErrorContains(t, err, "cannot identify")
+	_, d, _, u := drv.snapshot()
+	assert.Zero(t, u, "no unmount")
+	assert.Zero(t, d, "and no detach: this disk may be the one mounted there")
+
+	// Through release, it is parked for retry.
+	require.Error(t, sub.release(context.Background(), "prod/data-db-0", m))
+	sub.stateMu.RLock()
+	_, parked := sub.parked["h"]
+	sub.stateMu.RUnlock()
+	assert.True(t, parked)
 }

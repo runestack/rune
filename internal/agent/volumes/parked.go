@@ -208,11 +208,14 @@ func (s *Subsystem) saveParked() {
 	}
 	s.stateMu.RUnlock()
 	sort.Slice(recs, func(i, j int) bool { return recs[i].Handle < recs[j].Handle })
-	if err := writeParked(s.parkedPath(), recs); err != nil {
+	if err := writeParkedFile(s.parkedPath(), recs); err != nil {
 		s.log.Warn("Cannot record parked volume disks; a restart will not retry them",
 			log.Str("path", s.parkedPath()), log.Err(err))
 	}
 }
+
+// writeParkedFile is writeParked; replaced in tests.
+var writeParkedFile = writeParked
 
 func writeParked(path string, recs []parkedRecord) error {
 	if len(recs) == 0 {
