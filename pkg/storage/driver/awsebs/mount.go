@@ -3,7 +3,6 @@ package awsebs
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/runestack/rune/pkg/storage/driver/blockfs"
