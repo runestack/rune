@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
 	"github.com/runestack/rune/pkg/types"
@@ -730,4 +731,37 @@ func TestProcessRunner_RetryAfterFailedStart(t *testing.T) {
 	require.NoError(t, r.Create(ctx, instance), "the retry's Create must not find a leftover instance")
 	require.NoError(t, r.Start(ctx, instance))
 	t.Cleanup(func() { _ = r.Remove(context.Background(), instance, true) })
+}
+
+// Starting a Stopped instance fails (a Cmd runs once), but that instance
+// holds the previous run's log and must not be released.
+func TestProcessRunner_StartAfterStopKeepsInstance(t *testing.T) {
+	r := newTestRunner(t)
+	ctx := context.Background()
+	instance := &types.Instance{
+		ID: "rerun", Name: "rerun", NodeID: "local", ServiceID: "svc",
+		Process: &types.ProcessSpec{Command: "sh", Args: []string{"-c", "echo first-run"}},
+	}
+	require.NoError(t, r.Create(ctx, instance))
+	require.NoError(t, r.Start(ctx, instance))
+	t.Cleanup(func() { _ = r.Remove(context.Background(), instance, true) })
+	require.Eventually(t, func() bool {
+		st, err := r.Status(ctx, instance)
+		return err == nil && st == types.InstanceStatusStopped
+	}, 5*time.Second, 10*time.Millisecond)
+
+	require.Error(t, r.Start(ctx, instance))
+	_, err := r.Status(ctx, instance)
+	require.NoError(t, err, "the instance is still known")
+	logs, err := r.GetLogs(ctx, instance, runner.LogOptions{})
+	require.NoError(t, err)
+	defer logs.Close()
+	b, _ := io.ReadAll(logs)
+	assert.Contains(t, string(b), "first-run", "the previous run's log survives")
+}
+
+func TestProcessRunner_NotFoundIsErrdefs(t *testing.T) {
+	r := newTestRunner(t)
+	_, err := r.Status(context.Background(), &types.Instance{ID: "nope"})
+	assert.True(t, errdefs.IsNotFound(err))
 }

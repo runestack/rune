@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/containerd/errdefs"
+
 	"github.com/google/uuid"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/runner"
@@ -251,7 +253,7 @@ func (r *ProcessRunner) Start(ctx context.Context, instance *types.Instance) (er
 	r.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("instance with ID %s not found", instance.ID)
+		return fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	// An exec.Cmd can only be started once, so an instance whose start
@@ -283,7 +285,10 @@ func (r *ProcessRunner) Start(ctx context.Context, instance *types.Instance) (er
 	if err := proc.cmd.Start(); err != nil {
 		proc.status.State = types.InstanceStatusFailed
 		proc.status.ErrorMessage = err.Error()
-		startFailed = true
+		// Only a Cmd that never ran is released. Starting a Stopped
+		// instance also fails here ("already started"), but that one
+		// holds the previous run's log, which must survive.
+		startFailed = proc.cmd.Process == nil
 		return fmt.Errorf("failed to start process: %w", err)
 	}
 
@@ -355,7 +360,7 @@ func (r *ProcessRunner) Stop(ctx context.Context, instance *types.Instance, time
 	r.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("instance with ID %s not found", instance.ID)
+		return fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	proc.mu.Lock()
@@ -440,7 +445,7 @@ func (r *ProcessRunner) Remove(ctx context.Context, instance *types.Instance, fo
 
 	proc, exists := r.processes[instance.ID]
 	if !exists {
-		return fmt.Errorf("instance with ID %s not found", instance.ID)
+		return fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	proc.mu.Lock()
@@ -518,7 +523,7 @@ func (r *ProcessRunner) GetLogs(ctx context.Context, instance *types.Instance, o
 	r.mu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("instance with ID %s not found", instance.ID)
+		return nil, fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	proc.mu.RLock()
@@ -1036,7 +1041,7 @@ func (r *ProcessRunner) Status(ctx context.Context, instance *types.Instance) (t
 	r.mu.RUnlock()
 
 	if !exists {
-		return types.InstanceStatusFailed, fmt.Errorf("instance with ID %s not found", instance.ID)
+		return types.InstanceStatusFailed, fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	proc.mu.RLock()
