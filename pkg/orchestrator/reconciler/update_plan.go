@@ -114,6 +114,10 @@ type updateInput struct {
 	Params    types.UpdateParams
 	Instances []instanceView
 	Now       time.Time
+
+	// CreatesBlocked is true while the dependency gate holds creates: no
+	// replacement can start this tick.
+	CreatesBlocked bool
 }
 
 // updatePlan is what may happen THIS tick. Create/Retire are bounded by the
@@ -266,6 +270,34 @@ func planUpdate(in updateInput) updatePlan {
 	for _, v := range liveOutdated {
 		if !v.routed() && !retired[v.Instance.ID] {
 			retire(v)
+		}
+	}
+
+	// --- 3b. Retire outdated instances withdrawn by their readiness probe ---
+	//
+	// Routed but not serving: their endpoints are published unhealthy, so
+	// retiring one cannot lower serving capacity. The availability budget in
+	// step 4 never counts them, so without this a service whose instances
+	// are all unready — a broken probe, fixed by the cast now rolling out —
+	// would hold forever with nothing available to trade.
+	//
+	// Bounded to the dip (at least one) per tick, and skipped while creates
+	// are blocked: if no replacement can start, an outage that made every
+	// instance unready would otherwise strip the service one tick at a time,
+	// leaving nothing warm for when it recovers.
+	if !in.CreatesBlocked {
+		unreadyBudget := in.Params.Dip
+		if unreadyBudget < 1 {
+			unreadyBudget = 1
+		}
+		for _, v := range liveOutdated {
+			if unreadyBudget == 0 {
+				break
+			}
+			if v.Running && !v.Ready && !retired[v.Instance.ID] {
+				retire(v)
+				unreadyBudget--
+			}
 		}
 	}
 

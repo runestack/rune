@@ -89,7 +89,6 @@ type instanceHealth struct {
 	monitoring          bool // true while monitorInstance goroutine is running
 	lastCheck           time.Time
 	consecutiveFailures int
-	livenessSuccesses   int // consecutive liveness passes, for successThreshold
 	// ready mirrors the instance's persisted readiness verdict
 	// (Instance.IsReady) and moves only when a threshold is crossed.
 	ready              bool
@@ -116,6 +115,7 @@ type Republisher interface {
 type healthInstanceOps interface {
 	Republisher
 	RestartInstance(ctx context.Context, instance *types.Instance, reason instancectl.RestartReason) error
+	EmitInstanceEvent(level types.EventLevel, instance *types.Instance, reason, message string)
 }
 
 func NewController(logger log.Logger, store store.Store, runnerManager manager.IRunnerManager, instanceController healthInstanceOps) Controller {
@@ -610,14 +610,10 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 				log.Str("instance", instanceID),
 				log.Duration("duration", result.Duration))
 
-			// A flapping probe must pass successThreshold times in a row
-			// before its failures are forgiven.
-			ih.livenessSuccesses++
-			if ih.livenessSuccesses >= successThreshold(probeOf(ih.service, "liveness")) {
-				ih.consecutiveFailures = 0
-			}
+			// Reset failure counter on success
+			ih.consecutiveFailures = 0
 		} else {
-			ih.livenessSuccesses = 0
+			// Increment consecutive failures counter
 			ih.consecutiveFailures++
 
 			c.logger.Warn("Liveness check failed",
@@ -846,8 +842,12 @@ func (c *healthController) setReady(namespace, instanceID string, ready bool) er
 	c.instanceController.RepublishServiceByInstance(ctx, &current)
 	if ready {
 		c.logger.Info("Instance ready again; restored to endpoints", log.Str("instance", instanceID))
+		c.instanceController.EmitInstanceEvent(types.EventLevelInfo, &current, "Ready",
+			"readiness probe passing again; restored to endpoints")
 	} else {
 		c.logger.Warn("Instance not ready; withdrawn from endpoints", log.Str("instance", instanceID))
+		c.instanceController.EmitInstanceEvent(types.EventLevelWarn, &current, "NotReady",
+			"readiness probe failing; withdrawn from endpoints until it passes again")
 	}
 	return nil
 }

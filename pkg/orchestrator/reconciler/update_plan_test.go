@@ -350,18 +350,76 @@ func TestNewInstanceView_ReadinessWithdrawal(t *testing.T) {
 	assert.False(t, v.Available, "ready again 1s ago with a 5s window is not yet serving")
 }
 
-// A Running instance withdrawn by its readiness probe is still in the
-// endpoint set: it goes through the budget, not the unbudgeted retire, so a
-// dependency outage during an update cannot retire every replica at once.
-func TestPlanUpdate_UnreadyOutdatedInstancesAreBudgeted(t *testing.T) {
-	insts := make([]instanceView, 0, 3)
-	for _, name := range []string{"a", "b", "c"} {
-		v := view(name, instancectl.CompatOutdated, true, 60)
-		v.Ready, v.Available = false, false
-		insts = append(insts, v)
+// unreadyOutdated is a Running instance at the old template that its readiness
+// probe has withdrawn: routed, but not serving.
+func unreadyOutdated(name string) instanceView {
+	v := view(name, instancectl.CompatOutdated, true, 60)
+	v.Ready, v.Available = false, false
+	return v
+}
+
+// A rollout whose outdated instances are all unready — a broken probe, fixed
+// by the cast now rolling out — must converge. The availability budget never
+// counts them, so before they were retired outside it the plan held forever.
+func TestPlanUpdate_UnreadyOutdatedInstancesConverge(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params types.UpdateParams
+	}{{"cannot surge", exclusive()}, {"can surge", surgeable()}} {
+		for scale := 1; scale <= 3; scale++ {
+			t.Run(fmt.Sprintf("%s/scale %d", tc.name, scale), func(t *testing.T) {
+				var insts []instanceView
+				for i := 0; i < scale; i++ {
+					insts = append(insts, unreadyOutdated(fmt.Sprintf("old%d", i)))
+				}
+				next := 0
+				for tick := 0; tick < 10*scale; tick++ {
+					p := planUpdate(updateInput{Scale: scale, Params: tc.params, Instances: insts, Now: planBase})
+					gone := map[string]bool{}
+					for _, r := range p.Retire {
+						gone[r.ID] = true
+					}
+					var remaining []instanceView
+					for _, v := range insts {
+						if !gone[v.Instance.ID] {
+							remaining = append(remaining, v)
+						}
+					}
+					for i := 0; i < p.Create; i++ {
+						remaining = append(remaining, view(fmt.Sprintf("new%d", next), instancectl.CompatOK, true, 60))
+						next++
+					}
+					insts = remaining
+					outdated := 0
+					for _, v := range insts {
+						if v.Class == instancectl.CompatOutdated {
+							outdated++
+						}
+					}
+					if outdated == 0 && len(insts) == scale {
+						return
+					}
+				}
+				t.Fatalf("did not converge: %d instance(s) left, %d created", len(insts), next)
+			})
+		}
 	}
+}
+
+// Unready retirements are bounded per tick, and held entirely while creates
+// are blocked: with no replacement possible, retiring warm instances during
+// a dependency outage would only leave a cold start for when it recovers.
+func TestPlanUpdate_UnreadyRetirementBounded(t *testing.T) {
+	insts := []instanceView{unreadyOutdated("a"), unreadyOutdated("b"), unreadyOutdated("c")}
+
 	p := planUpdate(updateInput{Scale: 3, Params: exclusive(), Instances: insts, Now: planBase})
-	assert.LessOrEqual(t, len(p.Retire), 1, "dip=1 allows one retirement per tick, got %v", retireNames(p))
+	assert.Len(t, p.Retire, 1, "dip=1 retires one unready instance per tick")
+
+	p = planUpdate(updateInput{Scale: 3, Params: surgeable(), Instances: insts, Now: planBase})
+	assert.Len(t, p.Retire, 1, "dip=0 still retires one, or a surge-capable service holds too")
+
+	p = planUpdate(updateInput{Scale: 3, Params: exclusive(), Instances: insts, Now: planBase, CreatesBlocked: true})
+	assert.Empty(t, p.Retire, "no unready retirement while no replacement can start")
 }
 
 // --- the property that matters -------------------------------------------

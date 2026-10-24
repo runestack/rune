@@ -1204,6 +1204,13 @@ func (h *HealthCheck) Validate() error {
 		if err := h.Liveness.Validate(); err != nil {
 			return WrapValidationError(err, "invalid liveness probe")
 		}
+		// One pass clears a liveness probe's failures, as in Kubernetes. A
+		// higher value was accepted and ignored before, so refuse it rather
+		// than start restarting existing services more often.
+		if h.Liveness.SuccessThreshold > 1 {
+			return NewValidationError("invalid liveness probe: successThreshold must be 1; " +
+				"it applies to readiness only")
+		}
 	}
 
 	if h.Readiness != nil {
