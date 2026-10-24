@@ -191,7 +191,10 @@ func (d *managedDriver) Provision(ctx context.Context, opctx driver.OpContext, r
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	dir := d.volumeDir(opctx.Volume)
+	dir, err := d.volumeDir(opctx.Volume)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("local: mkdir %q: %w", dir, err)
 	}
@@ -214,7 +217,7 @@ func (d *managedDriver) Delete(ctx context.Context, opctx driver.OpContext, hand
 	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	abs, err := d.volumePath(dir)
+	abs, err := d.ownPath(opctx, dir)
 	if err != nil {
 		return fmt.Errorf("local: refusing to delete: %w", err)
 	}
@@ -243,7 +246,7 @@ func (d *managedDriver) Mount(ctx context.Context, opctx driver.OpContext, opts 
 	// The handle becomes a container bind source, so it must be one of
 	// this driver's volume directories. The resolved path is returned so
 	// a symlink swapped in after the check cannot redirect the bind.
-	dir, err := d.volumePath(string(opts.Handle))
+	dir, err := d.ownPath(opctx, string(opts.Handle))
 	if err != nil {
 		return "", fmt.Errorf("local: refusing to mount: %w", err)
 	}
@@ -261,12 +264,15 @@ func (d *managedDriver) Snapshot(ctx context.Context, opctx driver.OpContext, re
 	if req.Handle == "" {
 		return "", fmt.Errorf("local: Snapshot called with empty handle: %w", driver.ErrInvalidConfig)
 	}
-	src, err := d.volumePath(string(req.Handle))
+	src, err := d.ownPath(opctx, string(req.Handle))
 	if err != nil {
 		return "", fmt.Errorf("local: refusing to snapshot: %w", err)
 	}
 	if req.Snapshot == nil {
 		return "", fmt.Errorf("local: Snapshot called with nil Snapshot: %w", driver.ErrInvalidConfig)
+	}
+	if err := pathSegments(req.Snapshot.Namespace, req.Snapshot.Name); err != nil {
+		return "", fmt.Errorf("local: snapshot: %w", err)
 	}
 	dst := filepath.Join(d.cfg.SnapshotRoot, req.Snapshot.Namespace, req.Snapshot.Name)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
@@ -288,11 +294,14 @@ func (d *managedDriver) RestoreFromSnapshot(ctx context.Context, opctx driver.Op
 	if opctx.Volume == nil {
 		return "", fmt.Errorf("local: RestoreFromSnapshot: OpContext.Volume (target) is required: %w", driver.ErrInvalidConfig)
 	}
-	src, err := within(string(req.SourceHandle), d.cfg.SnapshotRoot)
+	src, err := d.snapshotPath(string(req.SourceHandle))
 	if err != nil {
 		return "", fmt.Errorf("local: refusing to restore: source %w", err)
 	}
-	dst := d.volumeDir(opctx.Volume)
+	dst, err := d.volumeDir(opctx.Volume)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return "", fmt.Errorf("local: mkdir target parent %q: %w", filepath.Dir(dst), err)
 	}
@@ -317,16 +326,12 @@ func (d *managedDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpConte
 	if dir == "" {
 		return nil
 	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return fmt.Errorf("local: resolve snapshot %q: %w", dir, err)
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	rootAbs, err := filepath.Abs(d.cfg.SnapshotRoot)
+	abs, err := d.snapshotPath(dir)
 	if err != nil {
-		return fmt.Errorf("local: resolve snapshot root %q: %w", d.cfg.SnapshotRoot, err)
-	}
-	if !pathHasPrefix(abs, rootAbs) {
-		return fmt.Errorf("local: refusing to delete snapshot %q outside snapshotRoot %q: %w", abs, rootAbs, driver.ErrInvalidConfig)
+		return fmt.Errorf("local: refusing to delete snapshot: %w", err)
 	}
 	if err := os.RemoveAll(abs); err != nil {
 		return fmt.Errorf("local: rm -rf snapshot %q: %w", abs, err)
@@ -341,6 +346,12 @@ func (d *managedDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpConte
 func (d *managedDriver) volumePath(handle string) (string, error) {
 	p, err := within(handle, d.cfg.LocalVolumeRoot)
 	if err != nil {
+		if errors.Is(err, driver.ErrInvalidConfig) {
+			// The likeliest legitimate cause is a volume provisioned
+			// before localVolumeRoot was changed.
+			return "", fmt.Errorf("%w; if this volume was created under an earlier localVolumeRoot, "+
+				"move its directory under the current root %q or set localVolumeRoot back", err, d.cfg.LocalVolumeRoot)
+		}
 		return "", err
 	}
 	if snap, serr := filepath.EvalSymlinks(d.cfg.SnapshotRoot); serr == nil && pathHasPrefix(p, snap) {
@@ -349,10 +360,58 @@ func (d *managedDriver) volumePath(handle string) (string, error) {
 	return p, nil
 }
 
-func (d *managedDriver) volumeDir(v *types.Volume) string {
+// ownPath resolves handle and checks it is this volume's own directory,
+// not merely some path inside the root: otherwise one volume's handle
+// could name another volume, or a whole namespace. Without a volume in
+// the OpContext it falls back to the root check.
+func (d *managedDriver) ownPath(opctx driver.OpContext, handle string) (string, error) {
+	p, err := d.volumePath(handle)
+	if err != nil || opctx.Volume == nil {
+		return p, err
+	}
+	want, err := d.volumeDir(opctx.Volume)
+	if err != nil {
+		return "", err
+	}
+	if w, werr := filepath.EvalSymlinks(want); werr != nil || w != p {
+		return "", fmt.Errorf("%q is not volume %s's directory %q: %w", handle, opctx.Volume.String(), want, driver.ErrInvalidConfig)
+	}
+	return p, nil
+}
+
+// snapshotPath resolves a snapshot handle and checks it is exactly one
+// snapshot's directory, <snapshotRoot>/<namespace>/<name>.
+func (d *managedDriver) snapshotPath(handle string) (string, error) {
+	p, err := within(handle, d.cfg.SnapshotRoot)
+	if err != nil {
+		return "", err
+	}
+	r, _ := filepath.EvalSymlinks(d.cfg.SnapshotRoot)
+	rel, err := filepath.Rel(r, p)
+	if err != nil || len(strings.Split(rel, string(filepath.Separator))) != 2 {
+		return "", fmt.Errorf("%q is not a snapshot directory under %q: %w", handle, d.cfg.SnapshotRoot, driver.ErrInvalidConfig)
+	}
+	return p, nil
+}
+
+func (d *managedDriver) volumeDir(v *types.Volume) (string, error) {
 	// Volumes live at <root>/<namespace>/<name>/. ID would also work but
 	// keeping the human-readable layout makes operator debugging easier.
-	return filepath.Join(d.cfg.LocalVolumeRoot, types.NS(v.Namespace), v.Name)
+	ns := types.NS(v.Namespace)
+	if err := pathSegments(ns, v.Name); err != nil {
+		return "", fmt.Errorf("local: volume %s: %w", v.String(), err)
+	}
+	return filepath.Join(d.cfg.LocalVolumeRoot, ns, v.Name), nil
+}
+
+// pathSegments checks each name can be used as exactly one path segment.
+func pathSegments(names ...string) error {
+	for _, n := range names {
+		if n == "" || n == "." || n == ".." || strings.ContainsAny(n, "/\\\x00") {
+			return fmt.Errorf("%q is not usable as a path segment: %w", n, driver.ErrInvalidConfig)
+		}
+	}
+	return nil
 }
 
 // ============================================================================
@@ -615,7 +674,9 @@ func copyTree(src, dst string) error {
 }
 
 func copyFile(src, dst string, perm os.FileMode) error {
-	in, err := os.Open(src)
+	// O_NOFOLLOW: the walk saw a regular file, but a running container
+	// could have swapped in a symlink since.
+	in, err := openNoFollow(src)
 	if err != nil {
 		return err
 	}

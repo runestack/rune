@@ -14,8 +14,8 @@ import (
 // a bounded recursive walk of the volume's backing directory. Capacity is
 // reported as 0 (unknown) — directory-backed volumes have no device
 // boundary, so callers fall back to the volume's declared spec size.
-func (d *managedDriver) Usage(ctx context.Context, _ driver.OpContext, handle driver.VolumeHandle) (uint64, uint64, error) {
-	dir, err := d.volumePath(string(handle))
+func (d *managedDriver) Usage(ctx context.Context, opctx driver.OpContext, handle driver.VolumeHandle) (uint64, uint64, error) {
+	dir, err := d.ownPath(opctx, string(handle))
 	if err != nil {
 		return 0, 0, err
 	}

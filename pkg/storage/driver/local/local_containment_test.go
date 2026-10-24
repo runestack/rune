@@ -155,3 +155,86 @@ func TestUsage_Containment(t *testing.T) {
 		}
 	}
 }
+
+// A handle must be this volume's own directory, not another volume's or a
+// whole namespace inside the same root.
+func TestManaged_PinnedToOwnDirectory(t *testing.T) {
+	d, root := newManagedDriver(t)
+	own := mustMkdir(t, filepath.Join(root, "prod", "data"))
+	other := mustMkdir(t, filepath.Join(root, "other", "victim"))
+	opctx := driver.OpContext{Volume: &types.Volume{Name: "data", Namespace: "prod"}}
+
+	for name, h := range map[string]string{
+		"another volume":   other,
+		"a namespace":      filepath.Join(root, "prod"),
+		"another ns entry": filepath.Join(root, "other"),
+	} {
+		if _, err := d.Mount(context.Background(), opctx, driver.MountOpts{Handle: driver.VolumeHandle(h)}); err == nil {
+			t.Errorf("Mount %s (%q) succeeded", name, h)
+		}
+		if err := d.Delete(context.Background(), opctx, driver.VolumeHandle(h)); err == nil {
+			t.Errorf("Delete %s (%q) succeeded", name, h)
+		}
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("another volume was deleted: %v", err)
+	}
+	if _, err := d.Mount(context.Background(), opctx, driver.MountOpts{Handle: driver.VolumeHandle(own)}); err != nil {
+		t.Errorf("Mount of the volume's own directory: %v", err)
+	}
+}
+
+// DeleteSnapshot removes only one snapshot's directory, never through a
+// symlink the snapshot preserved from a volume, and never the store.
+func TestManagedDeleteSnapshot_Containment(t *testing.T) {
+	d, root := newManagedDriver(t)
+	snaps := filepath.Join(root, ".snapshots")
+	outside := t.TempDir()
+	victim := mustMkdir(t, filepath.Join(outside, "keep"))
+	mustMkdir(t, filepath.Join(snaps, "prod", "s1"))
+	mustSymlink(t, outside, filepath.Join(snaps, "prod", "s1", "link"))
+
+	for name, h := range map[string]string{
+		"through a preserved symlink": filepath.Join(snaps, "prod", "s1", "link", "keep"),
+		"the whole store":             snaps,
+		"a namespace":                 filepath.Join(snaps, "prod"),
+		"outside the store":           outside,
+	} {
+		if err := d.DeleteSnapshot(context.Background(), driver.OpContext{}, driver.SnapshotHandle(h)); err == nil {
+			t.Errorf("DeleteSnapshot %s (%q) succeeded", name, h)
+		}
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("data outside the store was removed: %v", err)
+	}
+	if err := d.DeleteSnapshot(context.Background(), driver.OpContext{}, driver.SnapshotHandle(filepath.Join(snaps, "prod", "s1"))); err != nil {
+		t.Errorf("DeleteSnapshot of a real snapshot: %v", err)
+	}
+}
+
+// Names become path segments of destinations; one that walks out of the
+// root is refused before anything is written or removed.
+func TestManaged_TraversalNames(t *testing.T) {
+	d, root := newManagedDriver(t)
+	src := mustMkdir(t, filepath.Join(root, "prod", "data"))
+	bad := "../../../escape"
+	ctx := context.Background()
+
+	if _, err := d.Provision(ctx, driver.OpContext{Volume: &types.Volume{Name: bad, Namespace: "prod", AccessMode: types.AccessModeRWO}}, driver.ProvisionRequest{}); err == nil {
+		t.Error("Provision with a traversal name succeeded")
+	}
+	srcCtx := driver.OpContext{Volume: &types.Volume{Name: "data", Namespace: "prod"}}
+	if _, err := d.Snapshot(ctx, srcCtx, driver.SnapshotRequest{Handle: driver.VolumeHandle(src), Snapshot: &types.Snapshot{Name: bad, Namespace: "prod"}}); err == nil {
+		t.Error("Snapshot with a traversal name succeeded")
+	}
+	snap, err := d.Snapshot(ctx, srcCtx, driver.SnapshotRequest{Handle: driver.VolumeHandle(src), Snapshot: &types.Snapshot{Name: "s1", Namespace: "prod"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RestoreFromSnapshot(ctx, driver.OpContext{Volume: &types.Volume{Name: bad, Namespace: "prod"}}, driver.RestoreRequest{SourceHandle: snap}); err == nil {
+		t.Error("Restore with a traversal name succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(root), "escape")); err == nil {
+		t.Error("something was written outside the root")
+	}
+}

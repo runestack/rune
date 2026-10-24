@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -213,9 +212,9 @@ func (r *DockerRunner) initStepToContainerConfig(instance *runetypes.Instance, s
 			if vm.Source == "" || vm.MountPath == "" {
 				return nil, nil, fmt.Errorf("invalid parent volume mount %q: source or mountPath empty", vm.Name)
 			}
-			source := vm.Source
-			if vm.SubPath != "" {
-				source = filepath.Join(source, vm.SubPath)
+			source, err := bindSource(vm.Source, vm.SubPath)
+			if err != nil {
+				return nil, nil, fmt.Errorf("parent volume mount %q: %w", vm.Name, err)
 			}
 			hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
 				Type:     mount.TypeBind,
