@@ -82,6 +82,16 @@ func parseMountPoints(r io.Reader, dev Dev) ([]string, error) {
 	return out, nil
 }
 
+func topIs(stack []Dev, own Dev, target string) (bool, error) {
+	if len(stack) == 0 {
+		return false, nil
+	}
+	if top := stack[len(stack)-1]; top != own {
+		return false, fmt.Errorf("mountinfo: %s is mounted at %s, not %s", top, target, own)
+	}
+	return true, nil
+}
+
 // order sorts the mounts at one path bottom-to-top. A mount stacked on
 // another has the lower one as its parent, so the bottom is the entry
 // whose parent is not itself mounted at this path.

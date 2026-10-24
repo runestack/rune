@@ -35,3 +35,8 @@ func (execMounter) Unmount(ctx context.Context, target string) error {
 	}
 	return nil
 }
+
+func alreadyMounted(ctx context.Context, target string) bool {
+	cmd := exec.CommandContext(ctx, "findmnt", "-n", target)
+	return cmd.Run() == nil
+}
