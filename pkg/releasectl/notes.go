@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -25,7 +26,11 @@ func (c *Controller) serviceNotes(ctx context.Context, p Payloads) map[string][]
 			continue
 		}
 		var n []string
-		if stored, err := c.orch.GetService(ctx, rendered.Namespace, rendered.Name); err == nil && stored != nil {
+		stored, err := c.orch.GetService(ctx, rendered.Namespace, rendered.Name)
+		if err != nil {
+			stored = nil
+		}
+		if stored != nil {
 			n = append(n, nextRollNotes(stored, rendered)...)
 		}
 		if hasClaimTemplate(rendered) {
@@ -34,7 +39,7 @@ func (c *Controller) serviceNotes(ctx context.Context, p Payloads) map[string][]
 				c.log.Debug("Cannot list volumes for cast notes",
 					log.Str("namespace", rendered.Namespace), log.Err(err))
 			}
-			n = append(n, claimTemplateNotes(rendered, vols)...)
+			n = append(n, claimTemplateNotes(stored, rendered, vols)...)
 		}
 		if len(n) > 0 {
 			notes[key] = n
@@ -81,13 +86,16 @@ func nextRollNotes(stored, rendered *types.Service) []string {
 		strings.Join(fields, ", "))}
 }
 
-// claimTemplateNotes compares each claim template with the volumes it has
-// already made. A replica reattaches its existing volume by name, so those
-// volumes keep what they were created with, whatever the template now says.
-func claimTemplateNotes(svc *types.Service, vols []*types.Volume) []string {
+// claimTemplateNotes compares each claim template this cast changes with the
+// volumes it has already made. A replica reattaches its existing volume by
+// name, so those volumes keep what they were created with, whatever the
+// template now says. stored is the service before this cast, or nil: a
+// template it already had was noted when it changed, and repeating that on
+// every later cast would bury the note.
+func claimTemplateNotes(stored, svc *types.Service, vols []*types.Volume) []string {
 	var notes []string
 	for _, m := range svc.Volumes {
-		if m.ClaimTemplate == nil {
+		if m.ClaimTemplate == nil || sameClaimTemplate(stored, m) {
 			continue
 		}
 		existing := claimTemplateVolumes(svc, m.Name, vols)
@@ -100,7 +108,10 @@ func claimTemplateNotes(svc *types.Service, vols []*types.Volume) []string {
 			if v.Size != m.ClaimTemplate.Size && !slices.Contains(sizes, v.Size) {
 				sizes = append(sizes, v.Size)
 			}
-			if v.StorageClassName != m.ClaimTemplate.StorageClassName || v.AccessMode != m.ClaimTemplate.AccessMode ||
+			// An empty class means the default, which the volume records
+			// under its resolved name.
+			classDiffers := m.ClaimTemplate.StorageClassName != "" && v.StorageClassName != m.ClaimTemplate.StorageClassName
+			if classDiffers || v.AccessMode != m.ClaimTemplate.AccessMode ||
 				v.ReclaimPolicy != m.ClaimTemplate.ReclaimPolicy || !maps.Equal(v.Parameters, m.ClaimTemplate.Parameters) {
 				otherDiff = true
 			}
@@ -134,6 +145,18 @@ func claimTemplateVolumes(svc *types.Service, mount string, vols []*types.Volume
 		}
 	}
 	return out
+}
+
+func sameClaimTemplate(stored *types.Service, m types.VolumeMount) bool {
+	if stored == nil {
+		return false
+	}
+	for _, sm := range stored.Volumes {
+		if sm.Name == m.Name && sm.ClaimTemplate != nil {
+			return reflect.DeepEqual(*sm.ClaimTemplate, *m.ClaimTemplate)
+		}
+	}
+	return false
 }
 
 func hasClaimTemplate(s *types.Service) bool {

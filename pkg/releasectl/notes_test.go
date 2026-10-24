@@ -71,13 +71,34 @@ func claimVolume(name, size string) *types.Volume {
 
 func TestClaimTemplateNotes(t *testing.T) {
 	existing := []*types.Volume{claimVolume("data-web-0", "10Gi"), claimVolume("data-web-1", "10Gi")}
+	defaultClass := func(s *types.Service) { s.Volumes[0].ClaimTemplate.StorageClassName = "" }
 	cases := []struct {
-		name string
-		mut  func(*types.Service)
-		vols []*types.Volume
-		want []string
+		name   string
+		stored func(*types.Service) // nil: no stored service
+		mut    func(*types.Service)
+		vols   []*types.Volume
+		want   []string
 	}{
 		{name: "matches what exists", vols: existing},
+		{
+			// A service cast again after deletion: no stored spec to compare.
+			name: "an empty class is the default the volume recorded",
+			mut:  defaultClass,
+			vols: existing,
+		},
+		{
+			name:   "drift from an earlier cast is not repeated",
+			stored: func(s *types.Service) { s.Volumes[0].ClaimTemplate.Size = "20Gi" },
+			mut:    func(s *types.Service) { s.Volumes[0].ClaimTemplate.Size = "20Gi" },
+			vols:   existing,
+		},
+		{
+			name:   "this cast resizes",
+			stored: func(*types.Service) {},
+			mut:    func(s *types.Service) { s.Volumes[0].ClaimTemplate.Size = "20Gi" },
+			vols:   existing,
+			want:   []string{"volume data: existing volumes stay 10Gi; only replicas without a volume yet get 20Gi"},
+		},
 		{name: "no volumes yet", mut: func(s *types.Service) { s.Volumes[0].ClaimTemplate.Size = "20Gi" }},
 		{
 			name: "resize",
@@ -109,7 +130,11 @@ func TestClaimTemplateNotes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, claimTemplateNotes(notesService(tc.mut), tc.vols))
+			var stored *types.Service
+			if tc.stored != nil {
+				stored = notesService(tc.stored)
+			}
+			assert.Equal(t, tc.want, claimTemplateNotes(stored, notesService(tc.mut), tc.vols))
 		})
 	}
 }
