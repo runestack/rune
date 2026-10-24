@@ -111,16 +111,7 @@ func (t *ResourceTable) RenderServices(services []*types.Service) error {
 		// with NO readiness probe also reports Running and the old
 		// inference was equivalent. The fallback below preserves the
 		// old behaviour for paths that don't inline instances.
-		running := 0
-		if len(service.Instances) > 0 {
-			for i := range service.Instances {
-				if service.Instances[i].Status == types.InstanceStatusRunning {
-					running++
-				}
-			}
-		} else if service.Status == types.ServiceStatusRunning {
-			running = service.Scale
-		}
+		running := readyInstanceCount(service)
 		instances := fmt.Sprintf("%d/%d", running, service.Scale)
 
 		// Reason: short slug. Empty when service is healthy.
@@ -247,7 +238,7 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 
 		// Calculate age
 		age := formatAgeTable(instance.CreatedAt)
-		ready := instanceReadyCell(instance)
+		ready := format.InstanceReady(instance)
 
 		// Create the row
 		var row []string
@@ -283,17 +274,20 @@ func (t *ResourceTable) RenderInstances(instances []*types.Instance) error {
 	return t.tableRenderer.WithData(rows).Render()
 }
 
-// instanceReadyCell is the READY column: whether a Running instance is
-// receiving traffic. A failing readiness probe withdraws it while Status
-// stays Running; "-" for anything not Running.
-func instanceReadyCell(instance *types.Instance) string {
-	if instance.Status != types.InstanceStatusRunning {
-		return "-"
+// readyInstanceCount is the numerator of a service's READY column.
+func readyInstanceCount(service *types.Service) int {
+	running := 0
+	if len(service.Instances) > 0 {
+		for i := range service.Instances {
+			// Withdrawn by a readiness probe: Running, but not serving.
+			if service.Instances[i].Status == types.InstanceStatusRunning && service.Instances[i].IsReady() {
+				running++
+			}
+		}
+	} else if service.Status == types.ServiceStatusRunning {
+		running = service.Scale
 	}
-	if instance.IsReady() {
-		return "yes"
-	}
-	return "no"
+	return running
 }
 
 // RenderNamespaces renders a table of namespaces

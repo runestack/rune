@@ -8,11 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestInstanceReadyCell(t *testing.T) {
+// A withdrawn instance is Running but not serving, so `rune get services`
+// must not count it as ready.
+func TestReadyInstanceCount_ExcludesWithdrawn(t *testing.T) {
 	changed := time.Now()
-	assert.Equal(t, "yes", instanceReadyCell(&types.Instance{Status: types.InstanceStatusRunning}),
-		"no verdict recorded counts as ready")
-	assert.Equal(t, "yes", instanceReadyCell(&types.Instance{Status: types.InstanceStatusRunning, Ready: true, ReadyChangedAt: &changed}))
-	assert.Equal(t, "no", instanceReadyCell(&types.Instance{Status: types.InstanceStatusRunning, Ready: false, ReadyChangedAt: &changed}))
-	assert.Equal(t, "-", instanceReadyCell(&types.Instance{Status: types.InstanceStatusStarting}))
+	svc := &types.Service{Scale: 3, Instances: []types.Instance{
+		{Status: types.InstanceStatusRunning},
+		{Status: types.InstanceStatusRunning, Ready: false, ReadyChangedAt: &changed},
+		{Status: types.InstanceStatusStarting},
+	}}
+	assert.Equal(t, 1, readyInstanceCount(svc))
 }

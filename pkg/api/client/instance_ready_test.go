@@ -2,9 +2,11 @@ package client
 
 import (
 	"testing"
+	"time"
 
 	"github.com/runestack/rune/pkg/api/generated"
 	"github.com/runestack/rune/pkg/log"
+	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,4 +28,13 @@ func TestProtoToInstance_Readiness(t *testing.T) {
 	inst, err = c.protoToInstance(base())
 	require.NoError(t, err)
 	assert.True(t, inst.IsReady(), "a server that sends no verdict reads as ready")
+}
+
+// The client watch emits MODIFIED only when instanceEquals differs, so a
+// readiness flip must count as a change.
+func TestInstanceEquals_ReadinessFlip(t *testing.T) {
+	changed := time.Now()
+	a := &types.Instance{ID: "i", Status: types.InstanceStatusRunning}
+	b := &types.Instance{ID: "i", Status: types.InstanceStatusRunning, Ready: false, ReadyChangedAt: &changed}
+	assert.False(t, instanceEquals(a, b))
 }
