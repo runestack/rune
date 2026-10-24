@@ -398,3 +398,43 @@ func TestBadgerStoreWatch(t *testing.T) {
 		t.Fatalf("Expected delete event, got %s", deleteEvent.Type)
 	}
 }
+
+// A namespace whose name prefixes another's must not list the other's
+// resources: authorization checks the requested namespace only.
+func TestBadgerStoreListDoesNotMatchPrefixNamespaces(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	type obj struct {
+		Name string `json:"name"`
+	}
+	for _, ns := range []string{"prod", "production"} {
+		if err := store.Create(ctx, types.ResourceTypeService, ns, "web", &obj{Name: ns}); err != nil {
+			t.Fatalf("create in %s: %v", ns, err)
+		}
+	}
+
+	var got []obj
+	if err := store.List(ctx, types.ResourceTypeService, "prod", &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "prod" {
+		t.Fatalf("listing prod returned %v", got)
+	}
+
+	// An empty namespace and "*" still mean every namespace.
+	for _, ns := range []string{"", "*"} {
+		var all []obj
+		if err := store.List(ctx, types.ResourceTypeService, ns, &all); err != nil {
+			t.Fatal(err)
+		}
+		if len(all) != 2 {
+			t.Errorf("listing %q returned %d items, want 2", ns, len(all))
+		}
+	}
+	var all []obj
+	if err := store.ListAll(ctx, types.ResourceTypeService, &all); err != nil || len(all) != 2 {
+		t.Errorf("ListAll returned %d items, %v", len(all), err)
+	}
+}
