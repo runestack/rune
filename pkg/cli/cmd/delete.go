@@ -614,14 +614,18 @@ func handleDryRun(ctx context.Context, serviceClient *client.ServiceClient, serv
 	case "yaml":
 		return outputYAML(dryRunResp)
 	default:
-		return handleDryRunTextOutput(dryRunResp, opts.namespace, serviceName)
+		return handleDryRunTextOutput(dryRunResp, opts.namespace, serviceName, opts.abandonFinalizers)
 	}
 }
 
 // handleDryRunTextOutput handles text output for dry run operations
-func handleDryRunTextOutput(dryRunResp *types.DeletionResponse, namespace, serviceName string) error {
+func handleDryRunTextOutput(dryRunResp *types.DeletionResponse, namespace, serviceName string, abandon bool) error {
 	// Text output
-	fmt.Printf("Dry run: Service %s/%s would be deleted\n", namespace, serviceName)
+	if abandon {
+		fmt.Printf("Dry run: would abandon the remaining cleanup of service %s/%s\n", namespace, serviceName)
+	} else {
+		fmt.Printf("Dry run: Service %s/%s would be deleted\n", namespace, serviceName)
+	}
 
 	// Show what would be deleted
 	if len(dryRunResp.Finalizers) > 0 {

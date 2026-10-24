@@ -1160,9 +1160,17 @@ func (sc *serviceController) abandonFinalizers(ctx context.Context, service *typ
 	for i, f := range abandoned {
 		finalizers[i] = string(f)
 	}
-	msg := fmt.Sprintf("finalizers abandoned by operator: %s", strings.Join(finalizers, ", "))
+	verb := "finalizers abandoned by operator"
+	if dryRun {
+		verb = "would abandon finalizers"
+	}
+	msg := fmt.Sprintf("%s: %s", verb, strings.Join(finalizers, ", "))
+	// The rows keep OwnerService, so a later cast of the same name binds them
+	// again (ensureClaimTemplateVolume) — data included.
 	if vols := sc.ownedVolumeNames(ctx, service); len(vols) > 0 {
-		msg += fmt.Sprintf("; owned volumes left for the operator: %s", strings.Join(vols, ", "))
+		msg += fmt.Sprintf("; owned volumes at the time of abandoning: %s. A cast of the same name will reuse "+
+			"these volumes and their data; delete them with `rune delete volume <name> -n %s` if you don't want that",
+			strings.Join(vols, ", "), ns)
 	}
 	resp.Warnings = []string{msg}
 

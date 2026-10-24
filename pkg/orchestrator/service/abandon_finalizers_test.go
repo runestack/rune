@@ -94,6 +94,8 @@ func TestAbandonFinalizers_ClearsAndRemovesRecord(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "dry_run", dry.Status)
+	require.Len(t, dry.Warnings, 1)
+	assert.Contains(t, dry.Warnings[0], "would abandon")
 	var got types.Service
 	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, &got))
 	assert.NotEmpty(t, got.Metadata.Finalizers, "a dry run must not clear anything")
@@ -105,6 +107,7 @@ func TestAbandonFinalizers_ClearsAndRemovesRecord(t *testing.T) {
 	require.Len(t, resp.Warnings, 1)
 	assert.Contains(t, resp.Warnings[0], string(types.FinalizerTypeVolumeCleanup))
 	assert.Contains(t, resp.Warnings[0], "data-stuck-0")
+	assert.Contains(t, resp.Warnings[0], "will reuse these volumes and their data")
 	require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, &got))
 	assert.Empty(t, got.Metadata.Finalizers)
 
@@ -125,4 +128,42 @@ func TestAbandonFinalizers_ClearsAndRemovesRecord(t *testing.T) {
 	assert.Equal(t, "FinalizersAbandoned", events.events[0].Reason)
 	assert.Equal(t, types.EventLevelWarn, events.events[0].Level)
 	assert.Contains(t, events.events[0].Message, "data-stuck-0")
+}
+
+// The check runs again inside the CAS write, against the stored record: a
+// service read as abandonable must still be refused if, by the time of the
+// write, it is no longer being deleted or is back on instance cleanup.
+func TestAbandonFinalizers_RecheckedAtWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stored []types.FinalizerType // nil: the stored service is not tombstoned
+	}{
+		{"no longer being deleted", nil},
+		{"head is instance cleanup", []types.FinalizerType{types.FinalizerTypeInstanceCleanup, types.FinalizerTypeVolumeCleanup}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, testStore, _, _, controller := setupTestServiceController(t)
+			sc := controller.(*serviceController)
+			svc := createTestService(ctx, t, testStore, "racy")
+			if tc.stored != nil {
+				tombstone(ctx, t, testStore, svc, tc.stored...)
+			}
+
+			// What abandon read before the write: tombstoned, on volume cleanup.
+			stale := *svc
+			md := *svc.Metadata
+			now := time.Now()
+			md.DeletionTimestamp = &now
+			md.Finalizers = []types.FinalizerType{types.FinalizerTypeVolumeCleanup}
+			stale.Metadata = &md
+
+			_, err := sc.abandonFinalizers(ctx, &stale, false)
+			require.Error(t, err)
+			assert.True(t, types.IsValidationError(err))
+
+			var got types.Service
+			require.NoError(t, testStore.Get(ctx, types.ResourceTypeService, svc.Namespace, svc.Name, &got))
+			assert.Equal(t, tc.stored, got.Metadata.Finalizers, "the stored record must be untouched")
+		})
+	}
 }
