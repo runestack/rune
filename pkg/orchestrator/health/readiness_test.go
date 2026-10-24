@@ -149,3 +149,75 @@ func TestLivenessSuccessThresholdKeepsFlappingFailures(t *testing.T) {
 		return false
 	}, 3*time.Second, 10*time.Millisecond, "single passes must not reset the failure count")
 }
+
+// After a runed restart the monitor entry is rebuilt with promoted=false. A
+// Running instance that was withdrawn must still come back after
+// successThreshold passes: the promotion path must not mark it ready in
+// memory without writing anything.
+func TestReadiness_WithdrawnInstanceRecoversAfterRestart(t *testing.T) {
+	baseCtx, testStore, _, hc := setupHealthController(t)
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
+	require.NoError(t, hc.Start(ctx))
+	defer hc.Stop()
+	c := hc.(*healthController)
+
+	service := &types.Service{
+		ID: "api", Name: "api", Namespace: "default", Runtime: "container",
+		Health: &types.HealthCheck{Readiness: &types.Probe{Type: "http", Port: 80, SuccessThreshold: 2}},
+	}
+	require.NoError(t, testStore.CreateService(ctx, service))
+	changed := time.Now()
+	inst := &types.Instance{
+		ID: "api-0", Name: "api-0", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status: types.InstanceStatusRunning, CreatedAt: time.Now(),
+		Ready: false, ReadyChangedAt: &changed,
+	}
+	require.NoError(t, testStore.CreateInstance(ctx, inst))
+	ih := seedHealthEntry(c, inst, service)
+	ih.ready = inst.IsReady() // as AddInstance seeds it; promoted stays false
+
+	c.updateHealthStatus(inst.ID, readinessResult(true), "readiness")
+	c.updateHealthStatus(inst.ID, readinessResult(true), "readiness")
+	require.Eventually(t, func() bool {
+		ready, _ := storedReady(ctx, t, c, inst)
+		return ready
+	}, 3*time.Second, 10*time.Millisecond, "successThreshold passes must restore a withdrawn instance")
+}
+
+// The stored verdict wins over the in-memory one: a write that failed, landed
+// out of order or was overwritten is healed on the next probe.
+func TestReadiness_ResyncsFromStoreBeforeEachProbe(t *testing.T) {
+	baseCtx, testStore, _, hc := setupHealthController(t)
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
+	require.NoError(t, hc.Start(ctx))
+	defer hc.Stop()
+	c := hc.(*healthController)
+
+	probe := &types.Probe{Type: "no-such-probe-type", Port: 80}
+	service := &types.Service{
+		ID: "api", Name: "api", Namespace: "default", Runtime: "container",
+		Health: &types.HealthCheck{Readiness: probe},
+	}
+	require.NoError(t, testStore.CreateService(ctx, service))
+	inst := &types.Instance{
+		ID: "api-0", Name: "api-0", Namespace: "default",
+		ServiceID: service.ID, ServiceName: service.Name,
+		Status: types.InstanceStatusRunning, CreatedAt: time.Now(),
+	}
+	require.NoError(t, testStore.CreateInstance(ctx, inst))
+	ih := seedHealthEntry(c, inst, service)
+	ih.ready, ih.promoted = true, true
+
+	// Someone else's write says not ready.
+	changed := time.Now()
+	inst.Ready, inst.ReadyChangedAt = false, &changed
+	require.NoError(t, testStore.Update(ctx, types.ResourceTypeInstance, "default", inst.ID, inst))
+
+	c.performHealthCheck(inst.ID, probe, "readiness")
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	assert.False(t, ih.ready, "one failure is below the threshold, so only the resync can explain this")
+}

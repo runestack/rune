@@ -78,27 +78,27 @@ func (c *Controller) instanceEndpointIP(ctx context.Context, inst *types.Instanc
 // persistInstanceIP records ip on both Instance.IP (the operator-facing
 // field surfaced by `rune get`/`describe`) and Metadata.ContainerIP (used
 // for VIP routing / probes). Historically only ContainerIP was written,
-// leaving Instance.IP permanently empty in CLI output. The write targets
-// a freshly-loaded copy — the in-hand `inst` was listed earlier in the
-// republish pass and writing it back whole would clobber a concurrent
-// status update (the store has no CAS); same load-modify-write discipline
-// promoteToRunningOnReady uses. The in-hand copy is kept in sync so the
-// rest of this pass sees the IP even if the store write is skipped/fails.
+// leaving Instance.IP permanently empty in CLI output. CAS via UpdateFunc:
+// the in-hand `inst` was listed earlier in the republish pass, and writing
+// it back whole would clobber a concurrent status or readiness write. The
+// in-hand copy is kept in sync so the rest of this pass sees the IP even if
+// the store write is skipped/fails.
 func (c *Controller) persistInstanceIP(ctx context.Context, inst *types.Instance, ip string) {
 	var fresh types.Instance
-	if err := c.store.Get(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh); err == nil {
+	if err := c.store.UpdateFunc(ctx, types.ResourceTypeInstance, inst.Namespace, inst.ID, &fresh, func() error {
 		if fresh.Metadata == nil {
 			fresh.Metadata = &types.InstanceMetadata{}
 		}
-		if fresh.Metadata.ContainerIP != ip || fresh.IP != ip {
-			fresh.Metadata.ContainerIP = ip
-			fresh.IP = ip
-			if err := c.store.Update(ctx, types.ResourceTypeInstance, fresh.Namespace, fresh.ID, &fresh); err != nil {
-				c.logger.Debug("persistInstanceIP: persist failed",
-					log.Str("instance", inst.Name),
-					log.Err(err))
-			}
+		if fresh.Metadata.ContainerIP == ip && fresh.IP == ip {
+			return store.ErrSkipUpdate
 		}
+		fresh.Metadata.ContainerIP = ip
+		fresh.IP = ip
+		return nil
+	}); err != nil {
+		c.logger.Debug("persistInstanceIP: persist failed",
+			log.Str("instance", inst.Name),
+			log.Err(err))
 	}
 	if inst.Metadata == nil {
 		inst.Metadata = &types.InstanceMetadata{}

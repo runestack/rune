@@ -93,6 +93,7 @@ type instanceHealth struct {
 	// ready mirrors the instance's persisted readiness verdict
 	// (Instance.IsReady) and moves only when a threshold is crossed.
 	ready              bool
+	readyWriting       bool // a readiness write is in flight; see applyReadinessThresholdsLocked
 	readinessFailures  int
 	readinessSuccesses int
 	healthRestartCount int // Separate count for health check restarts (backoff calculation)
@@ -508,6 +509,11 @@ func (c *healthController) performHealthCheck(instanceID string, probe *types.Pr
 				}
 				c.mu.Lock()
 				ih.instance = &fresh
+				// The store is the source of truth for readiness: this heals
+				// a write that failed, landed out of order, or was overwritten.
+				if !ih.readyWriting {
+					ih.ready = fresh.IsReady()
+				}
 				c.mu.Unlock()
 				instance = &fresh
 			}
@@ -670,7 +676,9 @@ func (c *healthController) updateHealthStatus(instanceID string, result types.He
 		// wedged in Starting forever.
 		if result.Success && !ih.promoted {
 			ih.promoted = true // optimistic; reset below if it fails
-			ih.ready = true    // promotion records Ready
+			if ih.instance != nil && ih.instance.Status == types.InstanceStatusStarting {
+				ih.ready = true // promotion records Ready
+			}
 			namespace := ""
 			if ih.instance != nil {
 				namespace = ih.instance.Namespace
@@ -768,11 +776,15 @@ func (c *healthController) promoteToRunningOnReady(namespace, instanceID string)
 // applyReadinessThresholdsLocked flips a Running instance's readiness once
 // failureThreshold consecutive failures or successThreshold consecutive
 // passes are reached. The store write runs in a goroutine so a slow store
-// does not stall every probe behind c.mu. Caller must hold c.mu.
+// does not stall every probe behind c.mu; only one is in flight per instance,
+// so two flips cannot land out of order. Caller must hold c.mu.
 func (c *healthController) applyReadinessThresholdsLocked(ih *instanceHealth, instanceID string) {
 	if ih.instance == nil || ih.instance.Status != types.InstanceStatusRunning {
 		// Before promotion readiness gates Starting→Running instead.
 		return
+	}
+	if ih.readyWriting {
+		return // re-evaluated on the next probe, after the store resync
 	}
 	probe := probeOf(ih.service, "readiness")
 	var want bool
@@ -785,14 +797,17 @@ func (c *healthController) applyReadinessThresholdsLocked(ih *instanceHealth, in
 		return
 	}
 	ih.ready = want
+	ih.readyWriting = true
 	namespace := ih.instance.Namespace
 	go func() {
-		if err := c.setReady(namespace, instanceID, want); err != nil {
-			c.mu.Lock()
-			if ih2, ok := c.instances[instanceID]; ok {
-				ih2.ready = !want // the next probe result retries
-			}
-			c.mu.Unlock()
+		err := c.setReady(namespace, instanceID, want)
+		c.mu.Lock()
+		if ih2, ok := c.instances[instanceID]; ok {
+			ih2.readyWriting = false
+		}
+		c.mu.Unlock()
+		if err != nil {
+			// The next probe resyncs ih.ready from the store and retries.
 			c.logger.Warn("Failed to record instance readiness",
 				log.Str("instance", instanceID),
 				log.Bool("ready", want),

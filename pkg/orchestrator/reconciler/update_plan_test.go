@@ -34,6 +34,7 @@ func view(name string, class instancectl.CompatClass, available bool, ageSeconds
 	return instanceView{
 		Instance:  inst,
 		Class:     class,
+		Running:   available,
 		Ready:     available,
 		Available: available,
 	}
@@ -349,6 +350,20 @@ func TestNewInstanceView_ReadinessWithdrawal(t *testing.T) {
 	assert.False(t, v.Available, "ready again 1s ago with a 5s window is not yet serving")
 }
 
+// A Running instance withdrawn by its readiness probe is still in the
+// endpoint set: it goes through the budget, not the unbudgeted retire, so a
+// dependency outage during an update cannot retire every replica at once.
+func TestPlanUpdate_UnreadyOutdatedInstancesAreBudgeted(t *testing.T) {
+	insts := make([]instanceView, 0, 3)
+	for _, name := range []string{"a", "b", "c"} {
+		v := view(name, instancectl.CompatOutdated, true, 60)
+		v.Ready, v.Available = false, false
+		insts = append(insts, v)
+	}
+	p := planUpdate(updateInput{Scale: 3, Params: exclusive(), Instances: insts, Now: planBase})
+	assert.LessOrEqual(t, len(p.Retire), 1, "dip=1 allows one retirement per tick, got %v", retireNames(p))
+}
+
 // --- the property that matters -------------------------------------------
 
 // The safety claim of the whole feature, checked mechanically rather than by
@@ -579,12 +594,13 @@ func TestPlanUpdate_Property_AlwaysConverges(t *testing.T) {
 			for i := range remaining {
 				if remaining[i].Class == instancectl.CompatOK {
 					remaining[i].Available = true
+					remaining[i].Running = true
 					remaining[i].Ready = true
 				}
 			}
 			for i := 0; i < p.Create+len(p.Repair); i++ {
 				v := view(fmt.Sprintf("new%d", next), instancectl.CompatOK, false, 0)
-				v.Ready = true // Running immediately; not yet past minReady
+				v.Running, v.Ready = true, true // Running immediately; not yet past minReady
 				next++
 				remaining = append(remaining, v)
 			}
