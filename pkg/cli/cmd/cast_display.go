@@ -92,6 +92,24 @@ func renderPlanBlock(w io.Writer, releaseName, namespace string, revision int, p
 	return destructive
 }
 
+// printPlanNotes prints the server's caveats about applied changes: parts of
+// an update that running instances only pick up later, or never.
+func printPlanNotes(w io.Writer, plan *client.Plan) {
+	if plan == nil {
+		return
+	}
+	printed := false
+	for _, ch := range plan.Changes {
+		for _, n := range ch.Notes {
+			if !printed {
+				fmt.Fprintln(w)
+				printed = true
+			}
+			fmt.Fprintf(w, "  %s %s/%s: %s\n", format.Dim("⚠"), ch.ResourceType, ch.Name, n)
+		}
+	}
+}
+
 // classSuffix preserves "storageclass" display for the storage_class type.
 func classSuffix(rt string) string {
 	if rt == "storage_class" {
@@ -160,11 +178,12 @@ type castJSONOutput struct {
 }
 
 type castJSONChange struct {
-	Action       string `json:"action"`
-	ResourceType string `json:"resourceType"`
-	Namespace    string `json:"namespace"`
-	Name         string `json:"name"`
-	Conflict     string `json:"conflict,omitempty"`
+	Action       string   `json:"action"`
+	ResourceType string   `json:"resourceType"`
+	Namespace    string   `json:"namespace"`
+	Name         string   `json:"name"`
+	Conflict     string   `json:"conflict,omitempty"`
+	Notes        []string `json:"notes,omitempty"`
 }
 
 type castJSONResource struct {
@@ -191,6 +210,7 @@ func buildCastJSON(releaseName, namespace string, dryRun bool, plan *client.Plan
 				Namespace:    ch.Namespace,
 				Name:         ch.Name,
 				Conflict:     ch.Conflict,
+				Notes:        ch.Notes,
 			})
 			out.Counts[ch.Action]++
 		}

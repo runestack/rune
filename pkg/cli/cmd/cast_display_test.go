@@ -120,3 +120,21 @@ func TestStorageClassDisplaySuffix(t *testing.T) {
 	// storage_class renders as "storageclass" in the plan block.
 	require.Contains(t, strings.ToLower(buf.String()), "storageclass/fast")
 }
+
+func TestPrintPlanNotes(t *testing.T) {
+	var none bytes.Buffer
+	printPlanNotes(&none, planWith(client.PlannedChange{ResourceType: "service", Name: "web", Action: "update"}))
+	require.Empty(t, none.String(), "no notes, no output")
+
+	var buf bytes.Buffer
+	printPlanNotes(&buf, planWith(client.PlannedChange{
+		ResourceType: "service", Name: "web", Action: "update",
+		Notes: []string{"labels: running instances pick this up when they are next replaced (e.g. rune restart)"},
+	}))
+	require.Contains(t, buf.String(), "service/web: labels: running instances pick this up")
+
+	out := buildCastJSON("app", "default", false, planWith(client.PlannedChange{
+		ResourceType: "service", Name: "web", Action: "update", Notes: []string{"n"},
+	}), nil)
+	require.Equal(t, []string{"n"}, out.Plan[0].Notes)
+}

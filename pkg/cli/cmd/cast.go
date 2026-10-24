@@ -277,6 +277,7 @@ func runCast(ctx context.Context, args []string, opts *castOptions) error {
 		return writeCastJSON(buildCastJSON(rc.releaseName, rendered.namespace, false, plan, releaseToResult(rel)))
 	}
 	printCastReleaseSummary(rel, startTime, opts)
+	printPlanNotes(os.Stdout, plan)
 	return nil
 }
 

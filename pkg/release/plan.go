@@ -49,6 +49,9 @@ type PlannedChange struct {
 	Ref      types.OwnerRef
 	Action   Action
 	Conflict *Conflict
+	// Notes are human-readable caveats about the change, e.g. parts of a
+	// service update that running instances only pick up when replaced.
+	Notes []string
 }
 
 // Plan is the full set of changes a cast revision will make, in apply order
