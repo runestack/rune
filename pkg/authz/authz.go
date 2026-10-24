@@ -157,6 +157,21 @@ func (g *Gate) AdmitService(ctx context.Context, svc *types.Service) error {
 	return nil
 }
 
+// AdmitVolume checks a Volume written directly against read access in every
+// other namespace its parameters reference. Same fail-closed rules as
+// AdmitService.
+func (g *Gate) AdmitVolume(ctx context.Context, vol *types.Volume) error {
+	if g == nil || IsSystem(ctx) {
+		return nil
+	}
+	for _, r := range VolumeReferenceRequirements(vol) {
+		if err := g.require(ctx, r.Requirement, r.Namespace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // AdmitReleaseChanges checks every change against the subject, each in its
 // own resource's namespace, and stops at the first denial. Callers run it
 // over the whole plan before applying anything, so a denial never lands

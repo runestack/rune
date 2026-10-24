@@ -359,3 +359,21 @@ func TestCast_CrossNamespaceSecretRefNeedsReveal(t *testing.T) {
 		t.Fatal("a denied cast recorded a release")
 	}
 }
+
+// A release's Volume payload is a direct Volume write: its parameters can
+// restore another namespace's snapshot, which needs snapshots:get there.
+func TestCast_VolumePayloadSnapshotRestoreNeedsGet(t *testing.T) {
+	c, _ := newTestController(t)
+	c.SetAdmission(authz.NewGate(castScoped{}))
+	vol := types.OwnerRef{ResourceType: types.ResourceTypeVolume, Namespace: "default", Name: "data"}
+	_, _, err := c.Cast(authctx.WithSubject(context.Background(), "ci"), release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: vol}},
+	}, Payloads{Volumes: map[string]*types.Volume{vol.Key(): {
+		Name: "data", Namespace: "default", StorageClassName: "local", Size: "1Gi",
+		Parameters: map[string]string{types.RestoreFromSnapshotParam: "prod/nightly"},
+	}}})
+	if !authz.IsDenied(err) {
+		t.Fatalf("expected a snapshots:get denial in prod, got %v", err)
+	}
+}

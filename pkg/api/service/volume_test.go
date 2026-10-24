@@ -4,9 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/runestack/rune/pkg/api/authctx"
 	"github.com/runestack/rune/pkg/api/generated"
+	"github.com/runestack/rune/pkg/authz"
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/store"
+	"github.com/runestack/rune/pkg/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -257,5 +260,40 @@ func TestVolumeServiceDetach(t *testing.T) {
 	_, err = svc.DetachVolume(ctx, &generated.DetachVolumeRequest{Name: "nope", Namespace: "ns"})
 	if st, ok := status.FromError(err); !ok || st.Code() != codes.NotFound {
 		t.Fatalf("expected NotFound, got %v", err)
+	}
+}
+
+// denyAuth refuses every verb, standing in for a token pinned elsewhere.
+type denyAuth struct{}
+
+func (denyAuth) Authorize(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+// A Volume's parameters can restore another namespace's snapshot or hand
+// its secret to the driver, so direct writes go through reference admission.
+func TestVolumeService_AdmitsParameterReferences(t *testing.T) {
+	svc := newVolumeTestService(t)
+	svc.SetAdmission(authz.NewGate(denyAuth{}))
+	ctx := authctx.WithSubject(context.Background(), "ci")
+	vol := func(params map[string]string) *generated.Volume {
+		return &generated.Volume{Name: "data", Namespace: "trial", StorageClassName: "local", Size: "1Gi", AccessMode: "ReadWriteOnce", Parameters: params}
+	}
+
+	_, err := svc.CreateVolume(ctx, &generated.CreateVolumeRequest{
+		Volume:          vol(map[string]string{types.RestoreFromSnapshotParam: "prod/nightly"}),
+		EnsureNamespace: true,
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("create restoring prod's snapshot: want PermissionDenied, got %v", err)
+	}
+	if _, err := svc.CreateVolume(ctx, &generated.CreateVolumeRequest{Volume: vol(nil), EnsureNamespace: true}); err != nil {
+		t.Fatalf("a volume with no foreign references was denied: %v", err)
+	}
+	_, err = svc.UpdateVolume(ctx, &generated.UpdateVolumeRequest{
+		Volume: vol(map[string]string{"token": "secret:do.prod.rune/token"}),
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("update referencing prod's secret: want PermissionDenied, got %v", err)
 	}
 }

@@ -37,6 +37,19 @@ func ServiceReferenceRequirements(svc *types.Service) []NamespacedRequirement {
 	return c.out
 }
 
+// VolumeReferenceRequirements is ServiceReferenceRequirements for a Volume
+// written directly (VolumeService, a release payload, a snapshot restore):
+// its parameters can name another namespace's snapshot or secret.
+func VolumeReferenceRequirements(vol *types.Volume) []NamespacedRequirement {
+	if vol == nil {
+		return nil
+	}
+	c := refCollector{own: vol.Namespace, seen: map[NamespacedRequirement]bool{}}
+	c.volumeParams(vol.Parameters)
+	c.sort()
+	return c.out
+}
+
 type refCollector struct {
 	own  string
 	seen map[NamespacedRequirement]bool
@@ -59,11 +72,32 @@ func (c *refCollector) env(env map[string]string, from []types.EnvFromSource) {
 
 func (c *refCollector) volumes(mounts []types.VolumeMount) {
 	for _, m := range mounts {
+		if m.ClaimTemplate != nil {
+			c.volumeParams(m.ClaimTemplate.Parameters)
+		}
 		if m.Claim == nil {
 			continue
 		}
 		if ns, _, ok := strings.Cut(m.Claim.Name, "/"); ok && ns != "" {
 			c.add(types.ResourceTypeVolume, ns)
+		}
+	}
+}
+
+// volumeParams mirrors what the volume controller does with Volume
+// parameters: a restore-from-snapshot reference copies that snapshot's data
+// in, and any value that parses as a secret ref is resolved and handed to
+// the driver (driverparams.Resolve).
+func (c *refCollector) volumeParams(params map[string]string) {
+	for k, v := range params {
+		if k == types.RestoreFromSnapshotParam {
+			if ns, _, ok := strings.Cut(v, "/"); ok {
+				c.add(types.ResourceTypeSnapshot, ns)
+			}
+			continue
+		}
+		if ref, err := types.ParseResourceRef(v); err == nil && ref.Type == types.ResourceTypeSecret {
+			c.add(types.ResourceTypeSecret, ref.Namespace)
 		}
 	}
 }
@@ -102,6 +136,8 @@ func (c *refCollector) add(rt types.ResourceType, ns string) {
 		r = Requirement{Resource: "configmaps", Verb: "get"}
 	case types.ResourceTypeVolume:
 		r = Requirement{Resource: "volumes", Verb: "get"}
+	case types.ResourceTypeSnapshot:
+		r = Requirement{Resource: "snapshots", Verb: "get"}
 	default:
 		return
 	}
