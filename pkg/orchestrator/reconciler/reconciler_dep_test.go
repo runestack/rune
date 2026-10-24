@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/runestack/rune/pkg/log"
 	"github.com/runestack/rune/pkg/orchestrator/health"
@@ -96,5 +97,46 @@ func TestReconciler_DependencyReadiness_NonService(t *testing.T) {
 	}
 	if len(instCtrl.CreateInstanceCalls) == 0 {
 		t.Fatalf("expected instance creation when only non-service deps are declared")
+	}
+}
+
+// A dependency whose only Running instance has been withdrawn by its
+// readiness probe does not satisfy the gate.
+func TestReconciler_DependencyReadiness_UnreadyInstance(t *testing.T) {
+	ctx := context.Background()
+	testStore := setupStore(t)
+	logger := log.NewTestLogger()
+	rm := manager.NewTestRunnerManager(nil)
+
+	instCtrl := instancectl.NewFakeController()
+	healthCtrl := health.NewController(logger, testStore, rm, instCtrl)
+	rec := New(testStore, instCtrl, healthCtrl, logger)
+
+	dep := &types.Service{Name: "dep", Namespace: "default", Scale: 1,
+		Health: &types.HealthCheck{Readiness: &types.Probe{Type: "http", Port: 80}}}
+	if err := testStore.Create(ctx, types.ResourceTypeService, dep.Namespace, dep.Name, dep); err != nil {
+		t.Fatalf("store create dep: %v", err)
+	}
+	api := &types.Service{Name: "api", Namespace: "default", Scale: 1,
+		Dependencies: []types.DependencyRef{{Service: "dep", Namespace: "default"}}}
+
+	changed := time.Now()
+	depInst := &types.Instance{ID: "dep-1", Name: "dep-1", Namespace: "default", ServiceName: "dep",
+		Status: types.InstanceStatusRunning, Ready: false, ReadyChangedAt: &changed}
+	if err := testStore.Create(ctx, types.ResourceTypeInstance, depInst.Namespace, depInst.ID, depInst); err != nil {
+		t.Fatalf("store create dep instance: %v", err)
+	}
+	ready, err := rec.dependenciesReady(ctx, api)
+	if err != nil || ready {
+		t.Fatalf("unready dependency must gate: ready=%v err=%v", ready, err)
+	}
+
+	depInst.Ready = true
+	if err := testStore.Update(ctx, types.ResourceTypeInstance, depInst.Namespace, depInst.ID, depInst); err != nil {
+		t.Fatalf("store update dep instance: %v", err)
+	}
+	ready, err = rec.dependenciesReady(ctx, api)
+	if err != nil || !ready {
+		t.Fatalf("ready dependency must pass: ready=%v err=%v", ready, err)
 	}
 }

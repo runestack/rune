@@ -11,9 +11,9 @@ import (
 
 // dependenciesReady evaluates whether all declared dependencies for a service are ready.
 // Readiness definition (MVP):
-// - If dependency is not a service, it's ready
-// - If dependency is a service and it defines readiness probe: at least one instance is Running and readiness=true
-// - Else: at least one instance is Running
+//   - If dependency is not a service, it's ready
+//   - If dependency is a service: at least one instance is Running and ready
+//     (Instance.IsReady, which is always true without a readiness probe)
 func (r *Reconciler) dependenciesReady(ctx context.Context, service *types.Service) (bool, error) {
 	for _, dep := range service.Dependencies {
 		// Fetch dependency service
@@ -34,25 +34,9 @@ func (r *Reconciler) dependenciesReady(ctx context.Context, service *types.Servi
 			return false, fmt.Errorf("failed to list instances for dependency %s/%s: %w", depService.Namespace, dep.Service, err)
 		}
 
-		// Evaluate readiness
 		readyFound := false
-		hasReadinessProbe := depService.Health != nil && depService.Health.Readiness != nil
 		for _, inst := range instances {
-			if inst.Status != types.InstanceStatusRunning {
-				continue
-			}
-			if !hasReadinessProbe {
-				// Running instance is sufficient
-				readyFound = true
-				break
-			}
-			// Check readiness via health controller
-			status, err := r.healthController.GetHealthStatus(ctx, inst.ID)
-			if err != nil {
-				// On error, treat as not ready; continue
-				continue
-			}
-			if status != nil && status.Readiness {
+			if inst.Status == types.InstanceStatusRunning && inst.IsReady() {
 				readyFound = true
 				break
 			}

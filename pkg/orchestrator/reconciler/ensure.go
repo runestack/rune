@@ -147,7 +147,7 @@ func (r *Reconciler) ensureStatelessInstances(ctx context.Context, service *type
 	// the stranded record occupies a slot no plan can free.
 	r.reapStuckTerminating(ctx, service, instanceData)
 
-	plan, views := r.planServiceUpdate(ctx, service, instanceData)
+	plan, views := r.planServiceUpdate(ctx, service, instanceData, createsBlocked)
 
 	// 1. Retire, oldest/least-valuable first as the planner ordered them.
 	//
@@ -243,7 +243,7 @@ func (r *Reconciler) ensureStatelessInstances(ctx context.Context, service *type
 // what may happen this tick. Returns the plan and the classified views, which
 // the caller reuses so nothing is classified twice (each classification hits
 // the runner).
-func (r *Reconciler) planServiceUpdate(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData) (updatePlan, []instanceView) {
+func (r *Reconciler) planServiceUpdate(ctx context.Context, service *types.Service, instanceData *ServiceInstanceData, createsBlocked bool) (updatePlan, []instanceView) {
 	params := service.ResolveUpdateParams()
 	now := time.Now()
 
@@ -263,10 +263,11 @@ func (r *Reconciler) planServiceUpdate(ctx context.Context, service *types.Servi
 	}
 
 	return planUpdate(updateInput{
-		Scale:     service.Scale,
-		Params:    params,
-		Instances: views,
-		Now:       now,
+		Scale:          service.Scale,
+		Params:         params,
+		Instances:      views,
+		Now:            now,
+		CreatesBlocked: createsBlocked,
 	}), views
 }
 

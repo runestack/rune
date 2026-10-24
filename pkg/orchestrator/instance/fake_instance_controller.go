@@ -379,6 +379,9 @@ func (c *FakeController) SetEndpointPublisher(_ EndpointPublisher, _ string) {}
 func (c *FakeController) RepublishServiceByInstance(_ context.Context, _ *types.Instance) {
 }
 
+// EmitInstanceEvent is a no-op on the fake.
+func (c *FakeController) EmitInstanceEvent(types.EventLevel, *types.Instance, string, string) {}
+
 // RepublishService is a no-op on the fake.
 func (c *FakeController) RepublishService(_ context.Context, _ *types.Service) {
 }

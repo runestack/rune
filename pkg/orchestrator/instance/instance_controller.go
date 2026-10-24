@@ -215,6 +215,12 @@ func (c *Controller) SetMountResolver(resolver MountResolver) {
 	c.mountRes.Store(&mountResolverBox{r: resolver})
 }
 
+// EmitInstanceEvent records an instance-scoped event on behalf of another
+// controller. Best-effort and nil-safe.
+func (c *Controller) EmitInstanceEvent(level types.EventLevel, instance *types.Instance, reason, message string) {
+	c.emit(level, instance, reason, message)
+}
+
 // emit records one event for the instance. Fire-and-forget — emission
 // failures are logged but never surfaced to the caller (events are
 // observability, never on a correctness path).

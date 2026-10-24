@@ -34,6 +34,7 @@ func view(name string, class instancectl.CompatClass, available bool, ageSeconds
 	return instanceView{
 		Instance:  inst,
 		Class:     class,
+		Running:   available,
 		Ready:     available,
 		Available: available,
 	}
@@ -330,6 +331,144 @@ func TestNewInstanceView_MinReadyGate(t *testing.T) {
 	assert.True(t, v.Available, "a nil LastTransitionAt must count as available")
 }
 
+// An instance withdrawn by its readiness probe is not serving, and when it
+// comes back the minimum-ready window runs from the moment it became ready.
+func TestNewInstanceView_ReadinessWithdrawal(t *testing.T) {
+	old := planBase.Add(-30 * time.Second)
+	justNow := planBase.Add(-1 * time.Second)
+
+	unready := &types.Instance{ID: "u", Status: types.InstanceStatusRunning, LastTransitionAt: &old,
+		Ready: false, ReadyChangedAt: &justNow}
+	v := newInstanceView(unready, instancectl.CompatOK, 5*time.Second, planBase)
+	assert.False(t, v.Ready)
+	assert.False(t, v.serving())
+
+	back := &types.Instance{ID: "b", Status: types.InstanceStatusRunning, LastTransitionAt: &old,
+		Ready: true, ReadyChangedAt: &justNow}
+	v = newInstanceView(back, instancectl.CompatOK, 5*time.Second, planBase)
+	assert.True(t, v.Ready)
+	assert.False(t, v.Available, "ready again 1s ago with a 5s window is not yet serving")
+}
+
+// unreadyOutdated is a Running instance at the old template that its readiness
+// probe has withdrawn: routed, but not serving.
+func unreadyOutdated(name string) instanceView {
+	v := view(name, instancectl.CompatOutdated, true, 60)
+	v.Ready, v.Available = false, false
+	return v
+}
+
+// applyPlan advances a simulated service one tick: retirements leave, and
+// created instances arrive ready at the current template.
+func applyPlan(insts []instanceView, p updatePlan, next *int) []instanceView {
+	return applyPlanReady(insts, p, next, true)
+}
+
+// applyPlanReady is applyPlan with control over whether replacements ever
+// become ready.
+func applyPlanReady(insts []instanceView, p updatePlan, next *int, ready bool) []instanceView {
+	gone := map[string]bool{}
+	for _, r := range p.Retire {
+		gone[r.ID] = true
+	}
+	var out []instanceView
+	for _, v := range insts {
+		if !gone[v.Instance.ID] {
+			out = append(out, v)
+		}
+	}
+	for i := 0; i < p.Create; i++ {
+		out = append(out, view(fmt.Sprintf("new%d", *next), instancectl.CompatOK, ready, 60))
+		*next++
+	}
+	return out
+}
+
+func converged(insts []instanceView, scale int) bool {
+	for _, v := range insts {
+		if v.Class == instancectl.CompatOutdated {
+			return false
+		}
+	}
+	return len(insts) == scale
+}
+
+// A rollout whose outdated instances are all unready — a broken probe, fixed
+// by the cast now rolling out — must converge. The availability budget never
+// counts them, so before they were retired outside it the plan held forever.
+func TestPlanUpdate_UnreadyOutdatedInstancesConverge(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params types.UpdateParams
+	}{{"cannot surge", exclusive()}, {"can surge", surgeable()}} {
+		for scale := 1; scale <= 3; scale++ {
+			t.Run(fmt.Sprintf("%s/scale %d", tc.name, scale), func(t *testing.T) {
+				var insts []instanceView
+				for i := 0; i < scale; i++ {
+					insts = append(insts, unreadyOutdated(fmt.Sprintf("old%d", i)))
+				}
+				next := 0
+				for tick := 0; tick < 10*scale && !converged(insts, scale); tick++ {
+					p := planUpdate(updateInput{Scale: scale, Params: tc.params, Instances: insts, Now: planBase})
+					insts = applyPlan(insts, p, &next)
+				}
+				if !converged(insts, scale) {
+					t.Fatalf("did not converge: %d instance(s) left, %d created", len(insts), next)
+				}
+			})
+		}
+	}
+}
+
+// In an outage that keeps every replacement from becoming ready, the old
+// unready fleet must stay: at most max(dip, 1) replacements wait to serve at
+// a time, however many ticks pass. Otherwise a bad new template would leave
+// nothing to fall back on.
+func TestPlanUpdate_UnreadyRetirementWaitsForReplacements(t *testing.T) {
+	twoDip := exclusive()
+	twoDip.Dip = 2
+	for _, tc := range []struct {
+		name    string
+		params  types.UpdateParams
+		maxGone int
+	}{{"dip 1", exclusive(), 1}, {"dip 2", twoDip, 2}, {"can surge", surgeable(), 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var insts []instanceView
+			for i := 0; i < 5; i++ {
+				insts = append(insts, unreadyOutdated(fmt.Sprintf("old%d", i)))
+			}
+			next := 0
+			for tick := 0; tick < 20; tick++ {
+				p := planUpdate(updateInput{Scale: 5, Params: tc.params, Instances: insts, Now: planBase})
+				insts = applyPlanReady(insts, p, &next, false)
+			}
+			old := 0
+			for _, v := range insts {
+				if v.Class == instancectl.CompatOutdated {
+					old++
+				}
+			}
+			assert.GreaterOrEqual(t, old, 5-tc.maxGone, "retired %d of 5 old instances with no replacement ever ready", 5-old)
+		})
+	}
+}
+
+// Unready retirements are bounded per tick, and held entirely while creates
+// are blocked: with no replacement possible, retiring warm instances during
+// a dependency outage would only leave a cold start for when it recovers.
+func TestPlanUpdate_UnreadyRetirementBounded(t *testing.T) {
+	insts := []instanceView{unreadyOutdated("a"), unreadyOutdated("b"), unreadyOutdated("c")}
+
+	p := planUpdate(updateInput{Scale: 3, Params: exclusive(), Instances: insts, Now: planBase})
+	assert.Len(t, p.Retire, 1, "dip=1 retires one unready instance per tick")
+
+	p = planUpdate(updateInput{Scale: 3, Params: surgeable(), Instances: insts, Now: planBase})
+	assert.Len(t, p.Retire, 1, "dip=0 still retires one, or a surge-capable service holds too")
+
+	p = planUpdate(updateInput{Scale: 3, Params: exclusive(), Instances: insts, Now: planBase, CreatesBlocked: true})
+	assert.Empty(t, p.Retire, "no unready retirement while no replacement can start")
+}
+
 // --- the property that matters -------------------------------------------
 
 // The safety claim of the whole feature, checked mechanically rather than by
@@ -560,12 +699,13 @@ func TestPlanUpdate_Property_AlwaysConverges(t *testing.T) {
 			for i := range remaining {
 				if remaining[i].Class == instancectl.CompatOK {
 					remaining[i].Available = true
+					remaining[i].Running = true
 					remaining[i].Ready = true
 				}
 			}
 			for i := 0; i < p.Create+len(p.Repair); i++ {
 				v := view(fmt.Sprintf("new%d", next), instancectl.CompatOK, false, 0)
-				v.Ready = true // Running immediately; not yet past minReady
+				v.Running, v.Ready = true, true // Running immediately; not yet past minReady
 				next++
 				remaining = append(remaining, v)
 			}

@@ -89,6 +89,14 @@ type Instance struct {
 	// nil until the first reconciler-observed transition.
 	LastTransitionAt *time.Time `json:"lastTransitionAt,omitempty" yaml:"lastTransitionAt,omitempty"`
 
+	// Ready is the readiness probe's verdict once the instance is Running,
+	// after failureThreshold / successThreshold. It is separate from Status:
+	// an unready instance stays Running and is withdrawn from traffic.
+	// ReadyChangedAt is nil until the health controller first records a
+	// verdict; see IsReady.
+	Ready          bool       `json:"ready,omitempty" yaml:"ready,omitempty"`
+	ReadyChangedAt *time.Time `json:"readyChangedAt,omitempty" yaml:"readyChangedAt,omitempty"`
+
 	// Process-specific configuration for process runner
 	Process *ProcessSpec `json:"process,omitempty" yaml:"process,omitempty"`
 
@@ -173,6 +181,14 @@ type Instance struct {
 	// time leave the record alone. nil means "ready now" or "not in
 	// retry mode". Cleared on first success and on operator restart.
 	NextCreateAttemptAt *time.Time `json:"nextCreateAttemptAt,omitempty" yaml:"nextCreateAttemptAt,omitempty"`
+}
+
+// IsReady reports whether the instance may receive traffic as far as
+// readiness goes. An instance with no recorded verdict counts as ready: that
+// covers services without a readiness probe and records written before the
+// field existed.
+func (i *Instance) IsReady() bool {
+	return i.ReadyChangedAt == nil || i.Ready
 }
 
 func (i *Instance) GetResourceType() ResourceType {

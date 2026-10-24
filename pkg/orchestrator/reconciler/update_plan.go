@@ -29,9 +29,14 @@ type instanceView struct {
 	// Class is the broken/outdated/OK verdict (Phase 2).
 	Class instancectl.CompatClass
 
-	// Ready is Status == Running. For a service with a readiness probe that
-	// means a probe has passed; without one it means only that the runner
-	// accepted the container, which is why MinReady exists.
+	// Running is Status == Running: the instance is in the endpoint set,
+	// whether or not its readiness probe currently lets it take traffic.
+	Running bool
+
+	// Ready is Running and not withdrawn by its readiness probe. For a
+	// service with a readiness probe that means a probe has passed; without
+	// one it means only that the runner accepted the container, which is why
+	// MinReady exists.
 	Ready bool
 
 	// Available is Ready AND held Running for at least MinReady. This is what
@@ -46,17 +51,21 @@ type instanceView struct {
 	Terminating bool
 }
 
-// routed reports whether the DATAPLANE is currently sending this instance new
-// connections. republishService publishes an endpoint for any instance whose
-// stored Status is Running, and nothing else, so this must mirror exactly
-// that condition — no minimum-ready window, no class check.
+// routed reports whether the instance is in the dataplane's endpoint set:
+// republishService publishes every instance whose stored Status is Running,
+// and nothing else — no minimum-ready window, no class check.
 //
 // This is deliberately weaker than serving(): an instance inside its
 // minimum-ready window IS taking traffic even though the budget does not yet
 // count it as available. Retiring such an instance costs real requests, so
 // the unbudgeted retire path must gate on routed(), not on serving().
+//
+// An instance withdrawn by its readiness probe is still routed here. It is
+// published as unhealthy and comes back as soon as the probe passes;
+// retiring every such instance outside the budget would let a dependency
+// outage during an update tear the whole service down.
 func (v *instanceView) routed() bool {
-	return v.Ready && !v.Terminating
+	return v.Running && !v.Terminating
 }
 
 // serving reports whether this instance is actually carrying traffic right
@@ -76,14 +85,22 @@ func (v *instanceView) serving() bool {
 // A nil LastTransitionAt counts as available: instances predating that field
 // must not wedge the first update after an upgrade.
 func newInstanceView(inst *types.Instance, class instancectl.CompatClass, minReady time.Duration, now time.Time) instanceView {
-	ready := inst.Status == types.InstanceStatusRunning
+	running := inst.Status == types.InstanceStatusRunning
+	ready := running && inst.IsReady()
 	available := ready
-	if ready && minReady > 0 && inst.LastTransitionAt != nil {
-		available = now.Sub(*inst.LastTransitionAt) >= minReady
+	// The minimum-ready window restarts when readiness comes back, not only
+	// when Status last changed.
+	since := inst.LastTransitionAt
+	if inst.ReadyChangedAt != nil && (since == nil || inst.ReadyChangedAt.After(*since)) {
+		since = inst.ReadyChangedAt
+	}
+	if ready && minReady > 0 && since != nil {
+		available = now.Sub(*since) >= minReady
 	}
 	return instanceView{
 		Instance:    inst,
 		Class:       class,
+		Running:     running,
 		Ready:       ready,
 		Available:   available,
 		Terminating: inst.Status == types.InstanceStatusTerminating,
@@ -97,6 +114,10 @@ type updateInput struct {
 	Params    types.UpdateParams
 	Instances []instanceView
 	Now       time.Time
+
+	// CreatesBlocked is true while the dependency gate holds creates: no
+	// replacement can start this tick.
+	CreatesBlocked bool
 }
 
 // updatePlan is what may happen THIS tick. Create/Retire are bounded by the
@@ -249,6 +270,48 @@ func planUpdate(in updateInput) updatePlan {
 	for _, v := range liveOutdated {
 		if !v.routed() && !retired[v.Instance.ID] {
 			retire(v)
+		}
+	}
+
+	// --- 3b. Retire outdated instances withdrawn by their readiness probe ---
+	//
+	// Routed but not serving: their endpoints are published unhealthy, so
+	// retiring one cannot lower serving capacity. The availability budget in
+	// step 4 never counts them, so without this a service whose instances
+	// are all unready — a broken probe, fixed by the cast now rolling out —
+	// would hold forever with nothing available to trade.
+	//
+	// Paced on replacements becoming ready, not on their being created: up
+	// to the dip (at least one) replacements may be waiting to serve at a
+	// time, and none while creates are blocked. Planning is event-driven, so
+	// pacing on creation alone would, in an outage that keeps replacements
+	// from becoming ready, retire the whole warm fleet within seconds —
+	// leaving nothing to fall back on if the new template is the problem.
+	if !in.CreatesBlocked {
+		unreadyBudget := in.Params.Dip
+		if unreadyBudget < 1 {
+			unreadyBudget = 1
+		}
+		// Replacements in flight: current-template instances not yet
+		// serving, plus slots an earlier retirement freed that this plan is
+		// about to fill.
+		if missing := in.Scale - live; missing > 0 {
+			unreadyBudget -= missing
+		}
+		for i := range in.Instances {
+			v := &in.Instances[i]
+			if v.Class == instancectl.CompatOK && !v.Terminating && !retired[v.Instance.ID] && !v.serving() {
+				unreadyBudget--
+			}
+		}
+		for _, v := range liveOutdated {
+			if unreadyBudget <= 0 {
+				break
+			}
+			if v.Running && !v.Ready && !retired[v.Instance.ID] {
+				retire(v)
+				unreadyBudget--
+			}
 		}
 	}
 
