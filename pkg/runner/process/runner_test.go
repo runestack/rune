@@ -711,3 +711,23 @@ func TestWriteSecretFiles_Base64Decoding(t *testing.T) {
 		t.Fatalf("plain content mismatch. want %q got %q", "just-text", string(gotPlain))
 	}
 }
+
+// A failed Start must not strand the instance: the orchestrator's retry
+// is Create then Start, and Create used to answer "already exists"
+// forever.
+func TestProcessRunner_RetryAfterFailedStart(t *testing.T) {
+	r := newTestRunner(t)
+	ctx := context.Background()
+	instance := &types.Instance{
+		ID: "retry", Name: "retry", NodeID: "local", ServiceID: "svc",
+		Process: &types.ProcessSpec{Command: "true", WorkingDir: filepath.Join(t.TempDir(), "missing")},
+	}
+	require.NoError(t, r.Create(ctx, instance))
+	err := r.Start(ctx, instance)
+	require.Error(t, err, "chdir into a missing directory fails the start")
+
+	instance.Process.WorkingDir = t.TempDir()
+	require.NoError(t, r.Create(ctx, instance), "the retry's Create must not find a leftover instance")
+	require.NoError(t, r.Start(ctx, instance))
+	t.Cleanup(func() { _ = r.Remove(context.Background(), instance, true) })
+}
