@@ -19,9 +19,10 @@ type NamespacedRequirement struct {
 // these references with no subject, so without this check a token scoped to
 // one namespace could read another's secrets through its own container's env,
 // or mount another's volumes. A secret reference needs secrets:reveal there,
-// since its value lands in a container the caller controls; configmaps and
-// volumes need get. References within the service's own namespace need
-// nothing beyond the service verb itself.
+// since its value lands in a container the caller controls; a configmap needs
+// get; a volume claim and a snapshot restore copy or expose the whole volume,
+// so they need a reveal-class verb no builtin below admin holds. References
+// within the service's own namespace need nothing beyond the service verb.
 func ServiceReferenceRequirements(svc *types.Service) []NamespacedRequirement {
 	if svc == nil {
 		return nil
@@ -135,9 +136,12 @@ func (c *refCollector) add(rt types.ResourceType, ns string) {
 	case types.ResourceTypeConfigmap:
 		r = Requirement{Resource: "configmaps", Verb: "get"}
 	case types.ResourceTypeVolume:
-		r = Requirement{Resource: "volumes", Verb: "get"}
+		// reveal, not get: a cross-namespace claim mounts the volume's data,
+		// so it needs a verb no builtin below admin holds (like secrets:reveal).
+		r = Requirement{Resource: "volumes", Verb: "reveal"}
 	case types.ResourceTypeSnapshot:
-		r = Requirement{Resource: "snapshots", Verb: "get"}
+		// reveal: a cross-namespace restore copies the snapshot's data.
+		r = Requirement{Resource: "snapshots", Verb: "reveal"}
 	default:
 		return
 	}
