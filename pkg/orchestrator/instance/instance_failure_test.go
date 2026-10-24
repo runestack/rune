@@ -1,9 +1,15 @@
 package instance
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/containerd/errdefs"
+	"github.com/runestack/rune/pkg/runner"
+	"github.com/runestack/rune/pkg/runner/manager"
+	"github.com/runestack/rune/pkg/store"
 	"github.com/runestack/rune/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -182,4 +188,204 @@ func TestSnapshotInstanceLogs_NoOpForNeverCreated(t *testing.T) {
 	cc.snapshotInstanceLogs(ctx, rec)
 
 	assert.Empty(t, rec.LastLogs, "stuck-in-create records (no container) must not trigger a runner.GetLogs call")
+}
+
+// startFailingRunner creates a container (with an ID) on every Create and
+// fails every Start, tracking which containers still exist.
+type startFailingRunner struct {
+	*runner.TestRunner
+	created   int
+	live      map[string]bool
+	running   map[string]bool
+	removeErr error
+	removed   []string
+	// healIP, when set, makes Status behave like the docker runner's
+	// label self-heal: it rewrites the instance's IP.
+	healIP string
+	// startsAfterCheck holds containers that Status reports as not
+	// running but that are running by the time Remove is called.
+	startsAfterCheck map[string]bool
+}
+
+func newStartFailingRunner() *startFailingRunner {
+	return &startFailingRunner{TestRunner: runner.NewTestRunner(), live: map[string]bool{}, running: map[string]bool{}}
+}
+
+func (r *startFailingRunner) Create(_ context.Context, instance *types.Instance) error {
+	r.created++
+	instance.ContainerID = fmt.Sprintf("container-%d", r.created)
+	r.live[instance.ContainerID] = true
+	return nil
+}
+
+func (r *startFailingRunner) Start(context.Context, *types.Instance) error {
+	return assert.AnError
+}
+
+func (r *startFailingRunner) Status(_ context.Context, instance *types.Instance) (types.InstanceStatus, error) {
+	if r.healIP != "" && instance.Metadata != nil {
+		instance.Metadata.ContainerIP = r.healIP
+	}
+	if !r.live[instance.ContainerID] {
+		return "", errdefs.ErrNotFound
+	}
+	if r.running[instance.ContainerID] {
+		return types.InstanceStatusRunning, nil
+	}
+	return types.InstanceStatusFailed, nil
+}
+
+func (r *startFailingRunner) Remove(_ context.Context, instance *types.Instance, force bool) error {
+	if r.removeErr != nil {
+		return r.removeErr
+	}
+	if !r.live[instance.ContainerID] {
+		return fmt.Errorf("failed to remove container: %w", errdefs.ErrNotFound)
+	}
+	if (r.running[instance.ContainerID] || r.startsAfterCheck[instance.ContainerID]) && !force {
+		return fmt.Errorf("cannot remove running container")
+	}
+	r.removed = append(r.removed, instance.ContainerID)
+	delete(r.live, instance.ContainerID)
+	return nil
+}
+
+func setupStartFailing(t *testing.T) (context.Context, *store.TestStore, *Controller, *types.Service, *startFailingRunner) {
+	ctx, testStore, _, controller := setupTestController(t)
+	service := instanceControllerCreateTestService(ctx, t, testStore, "test-service", types.RestartPolicyAlways)
+	r := newStartFailingRunner()
+	mgr := manager.NewTestRunnerManager(nil)
+	mgr.SetDockerRunner(r)
+	mgr.SetProcessRunner(r)
+	controller.runnerManager = mgr
+
+	_, err := controller.CreateInstance(ctx, service, "test-instance-0", 0)
+	require.Error(t, err)
+	return ctx, testStore, controller, service, r
+}
+
+func storedOnly(ctx context.Context, t *testing.T, s *store.TestStore) types.Instance {
+	var stored []types.Instance
+	require.NoError(t, s.List(ctx, types.ResourceTypeInstance, "default", &stored))
+	require.Len(t, stored, 1)
+	return stored[0]
+}
+
+// A Start failure must not lose the container ID: retries would otherwise
+// create one more container per attempt for the same instance.
+func TestRetryCreateInstance_StartFailureDoesNotAccumulateContainers(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		rec := storedOnly(ctx, t, testStore)
+		assert.Equal(t, fmt.Sprintf("container-%d", attempt), rec.ContainerID, "attempt %d: container ID persisted", attempt)
+		assert.Nil(t, rec.ContainerEverCreatedAt, "attempt %d: must stay stuck-in-create, not broken", attempt)
+		assert.Len(t, r.live, 1, "attempt %d: one container per instance", attempt)
+
+		require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	}
+	assert.Equal(t, []string{"container-1", "container-2", "container-3"}, r.removed)
+}
+
+// Only the recorded container is removed, even when another container
+// carries the same instance.
+func TestRetryCreateInstance_RemovesOnlyRecordedContainer(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+	r.live["unrelated"] = true
+
+	rec := storedOnly(ctx, t, testStore)
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	assert.Equal(t, []string{"container-1"}, r.removed)
+	assert.True(t, r.live["unrelated"])
+}
+
+func TestRetryCreateInstance_RecordedContainerAlreadyGone(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+	delete(r.live, "container-1")
+
+	rec := storedOnly(ctx, t, testStore)
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	assert.Equal(t, 2, r.created, "not-found counts as removed, so the retry creates")
+	assert.Equal(t, "container-2", storedOnly(ctx, t, testStore).ContainerID)
+}
+
+func TestRetryCreateInstance_RecordedContainerRunningIsKept(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+	r.running["container-1"] = true
+
+	rec := storedOnly(ctx, t, testStore)
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	assert.Empty(t, r.removed)
+	assert.Equal(t, 1, r.created, "no new container while the old one runs")
+	got := storedOnly(ctx, t, testStore)
+	assert.Equal(t, "container-1", got.ContainerID)
+	assert.Equal(t, "PreviousContainerRunning", got.FailureReason)
+	assert.Contains(t, got.StatusMessage, "container-1")
+}
+
+func TestRetryCreateInstance_RemoveFailureKeepsRecordedID(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+	r.removeErr = assert.AnError
+
+	rec := storedOnly(ctx, t, testStore)
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	assert.Equal(t, 1, r.created, "no new container until the old one is removed")
+	got := storedOnly(ctx, t, testStore)
+	assert.Equal(t, "container-1", got.ContainerID)
+	assert.Equal(t, "PreviousContainerRemoveFailed", got.FailureReason)
+	assert.Equal(t, 2, got.CreateAttempts)
+
+	r.removeErr = nil
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &got))
+	assert.Equal(t, []string{"container-1"}, r.removed, "the next retry removes it")
+	assert.Equal(t, "container-2", storedOnly(ctx, t, testStore).ContainerID)
+}
+
+// An operator restart resets the attempt budget even when the old
+// container cannot be removed, so the record is not straight back to Stalled.
+func TestRestartInstance_RemoveFailureStillResetsAttempts(t *testing.T) {
+	ctx, testStore, controller, _, r := setupStartFailing(t)
+	rec := storedOnly(ctx, t, testStore)
+	require.NoError(t, testStore.UpdateFunc(ctx, types.ResourceTypeInstance, "default", rec.ID, &rec, func() error {
+		rec.Status = types.InstanceStatusStalled
+		rec.CreateAttempts = maxCreateAttempts
+		rec.NextCreateAttemptAt = nil
+		return nil
+	}))
+	r.removeErr = assert.AnError
+
+	_ = controller.RestartInstance(ctx, &rec, RestartReasonManual)
+	got := storedOnly(ctx, t, testStore)
+	assert.Equal(t, 1, got.CreateAttempts)
+	assert.Equal(t, types.InstanceStatusFailed, got.Status)
+	assert.Equal(t, "container-1", got.ContainerID)
+}
+
+// The running check must not leak a label-healed container's IP onto the
+// instance being retried.
+func TestRetryCreateInstance_StatusProbeDoesNotMutateInstance(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+	r.healIP = "10.9.9.9"
+
+	rec := storedOnly(ctx, t, testStore)
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	got := storedOnly(ctx, t, testStore)
+	require.NotNil(t, got.Metadata)
+	assert.NotEqual(t, "10.9.9.9", got.Metadata.ContainerIP)
+}
+
+// A container that starts between the running check and Remove must survive:
+// the runtime only refuses to remove it because Remove is not forced.
+func TestRetryCreateInstance_ContainerStartingAfterCheckIsKept(t *testing.T) {
+	ctx, testStore, controller, service, r := setupStartFailing(t)
+	r.startsAfterCheck = map[string]bool{"container-1": true}
+
+	rec := storedOnly(ctx, t, testStore)
+	require.Error(t, controller.RetryCreateInstance(ctx, service, &rec))
+	assert.Empty(t, r.removed)
+	assert.True(t, r.live["container-1"])
+	assert.Equal(t, 1, r.created, "no new container while the old one runs")
+	got := storedOnly(ctx, t, testStore)
+	assert.Equal(t, "container-1", got.ContainerID)
+	assert.Equal(t, "PreviousContainerRemoveFailed", got.FailureReason)
 }

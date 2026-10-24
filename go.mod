@@ -13,6 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.48.0
 	github.com/aws/smithy-go v1.25.1
 	github.com/coder/websocket v1.8.14
+	github.com/containerd/errdefs v1.0.0
 	github.com/dgraph-io/badger/v4 v4.7.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.6.0
@@ -67,7 +68,6 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/console v1.0.3 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
