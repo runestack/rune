@@ -2,6 +2,7 @@ package volume
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -274,12 +275,14 @@ func (c *volumeController) handle(ctx context.Context, ev store.WatchEvent) erro
 		}
 		return c.reconcile(ctx, vol)
 	case store.WatchEventDeleted:
-		vol, ok := ev.Resource.(*types.Volume)
-		if !ok {
-			// Some store backends omit the body on delete events.
-			c.logger.Warn("Volume delete event missing body",
+		vol, err := deletedVolume(ev.Resource)
+		if err != nil {
+			// Without the row there is no handle or reclaim policy, so a
+			// reclaimPolicy: delete volume's backing storage is left behind.
+			c.logger.Warn("Volume delete event has no usable body; backing storage is not reclaimed",
 				log.Str("namespace", ev.Namespace),
-				log.Str("name", ev.Name))
+				log.Str("name", ev.Name),
+				log.Err(err))
 			return nil
 		}
 		return c.handleDeleted(ctx, vol)
@@ -508,6 +511,30 @@ func (c *volumeController) clearRetry(key string) {
 
 // handleDeleted runs the reclaim path. The store has already removed the
 // Volume row; we only need to honour the policy that was on it.
+// deletedVolume recovers the Volume from a delete event. The Badger store
+// emits the deleted row as it decodes it without a target type, a
+// map[string]interface{}, so it is re-decoded here; a failed type
+// assertion used to skip reclaim entirely.
+func deletedVolume(resource interface{}) (*types.Volume, error) {
+	switch r := resource.(type) {
+	case *types.Volume:
+		return r, nil
+	case types.Volume:
+		return &r, nil
+	case nil:
+		return nil, errors.New("event carries no resource")
+	}
+	b, err := json.Marshal(resource)
+	if err != nil {
+		return nil, fmt.Errorf("re-encode %T: %w", resource, err)
+	}
+	var vol types.Volume
+	if err := json.Unmarshal(b, &vol); err != nil {
+		return nil, fmt.Errorf("decode %T as a volume: %w", resource, err)
+	}
+	return &vol, nil
+}
+
 func (c *volumeController) handleDeleted(ctx context.Context, vol *types.Volume) error {
 	if vol.Handle == "" {
 		// Never provisioned — nothing to clean up.
