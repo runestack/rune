@@ -23,11 +23,15 @@ func storeLegacyService(t *testing.T, ctx context.Context, c *Controller, svc *t
 	require.NoError(t, c.orch.UpdateService(ctx, &zeroed))
 }
 
+// appStamp is what release "app" in namespace "default" writes on what it owns.
+var appStamp = types.OwnedBy{Release: "app", Namespace: "default", Manager: types.ManagerRuneset}
+
 func stateService(id, image string, scale int) *types.Service {
+	stamp := appStamp
 	return &types.Service{
 		ID: id, Name: "web", Namespace: "default", Image: image, Scale: scale,
 		Status:   types.ServiceStatusPending,
-		Metadata: &types.ServiceMetadata{},
+		Metadata: &types.ServiceMetadata{OwnedBy: &stamp},
 	}
 }
 
@@ -93,7 +97,7 @@ func TestApply_ScaleChangeDoesNotMoveTheTemplate(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stored))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:1", 5),
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -114,7 +118,7 @@ func TestApply_UnchangedSpecChangesNothing(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stored))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:1", 2),
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -136,7 +140,7 @@ func TestApply_ZeroedCountersDoNotRollTheFleetOnAScaleEdit(t *testing.T) {
 	storeLegacyService(t, ctx, c, stateService("STABLE-ID", "nginx:1", 1))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:1", 5),
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -159,7 +163,7 @@ func TestApply_ZeroedCountersStartOnATemplateChange(t *testing.T) {
 	storeLegacyService(t, ctx, c, stateService("STABLE-ID", "nginx:1", 1))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:2", 1),
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -180,7 +184,7 @@ func TestApply_KeepsTheAllocatedVIP(t *testing.T) {
 	ref := svcRef("default", "web")
 	rendered := stateService("FRESH", "nginx:1", 1)
 	rendered.Discovery = &types.ServiceDiscovery{Mode: "headless"}
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{ref.Key(): rendered}}}
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{ref.Key(): rendered}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
 
 	after, err := c.orch.GetService(ctx, "default", "web")
@@ -204,7 +208,7 @@ func TestApply_RefusesAServiceBeingDeleted(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stored))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:2", 1),
 	}}}
 	err := a.Apply(ctx, release.PlannedChange{Ref: ref})
@@ -237,7 +241,7 @@ func TestRevert_MovesTheTemplateForwardNotBack(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stored))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:2", 1),
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -266,7 +270,7 @@ func TestRevert_LiftsATeardownThisReleasePruned(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stateService("STABLE-ID", "nginx:1", 1)))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:1", 1),
 	}}}
 	require.NoError(t, a.Prune(ctx, ref))
@@ -293,7 +297,7 @@ func TestRevert_LeavesATeardownItDidNotStart(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stateService("STABLE-ID", "nginx:1", 1)))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:2", 1),
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -326,7 +330,7 @@ func TestRevert_RecreatesAboveTheGenerationTheFailedCastReached(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stored))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:2", 1),
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -359,7 +363,7 @@ func TestRevert_RestoresDiscoveryFieldsTheFailedCastSet(t *testing.T) {
 	ref := svcRef("default", "web")
 	rendered := stateService("FRESH", "nginx:2", 1)
 	rendered.Discovery = &types.ServiceDiscovery{Mode: "headless", LocalityPreference: "zone"}
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{ref.Key(): rendered}}}
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{ref.Key(): rendered}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
 
 	require.NoError(t, a.Revert(ctx, ref))
@@ -415,7 +419,7 @@ func TestRevert_KeepsAVIPAllocatedAfterThePreImage(t *testing.T) {
 	ref := svcRef("default", "web")
 	drifted := stateService("FRESH", "nginx:2", 1)
 	drifted.Discovery = &types.ServiceDiscovery{Mode: "headless"}
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{ref.Key(): drifted}}}
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{ref.Key(): drifted}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
 
 	allocated, err := c.orch.GetService(ctx, "default", "web")
@@ -453,7 +457,7 @@ func TestApply_DiscardsServerStateOnAPayloadThatCreatesAService(t *testing.T) {
 	hostile.IngressCert = &types.IngressCertStatus{Host: "attacker.example.com", State: types.IngressCertIssued}
 	hostile.Discovery = &types.ServiceDiscovery{Mode: "load-balanced", VIP: "10.42.0.7"}
 	hostile.Instances = []types.Instance{{ID: "ghost", Name: "web-0", Status: types.InstanceStatusRunning}}
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{ref.Key(): hostile}}}
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{ref.Key(): hostile}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
 
 	after, err := c.orch.GetService(ctx, "default", "web")
@@ -487,7 +491,7 @@ func TestRevert_RecreateDoesNotRollSurvivorsAScaleCastNeverTouched(t *testing.T)
 	require.NoError(t, c.orch.CreateService(ctx, stored))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:1", 6), // scale only
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -513,7 +517,7 @@ func TestRevert_DoesNotResurrectAServiceItDidNotPrune(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stateService("STABLE-ID", "nginx:1", 1)))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:2", 1),
 	}}}
 	require.NoError(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
@@ -540,7 +544,7 @@ func TestRevert_LeavesATeardownAPruneMerelyFound(t *testing.T) {
 	require.NoError(t, err)
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:1", 1),
 	}}}
 	require.NoError(t, a.Prune(ctx, ref))
@@ -563,7 +567,7 @@ func TestApply_RefusesAServiceWhoseGenerationIsExhausted(t *testing.T) {
 	require.NoError(t, c.orch.CreateService(ctx, stored))
 
 	ref := svcRef("default", "web")
-	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{
+	a := &applier{c: c, stamp: appStamp, p: Payloads{Services: map[string]*types.Service{
 		ref.Key(): stateService("FRESH", "nginx:2", 1),
 	}}}
 	err := a.Apply(ctx, release.PlannedChange{Ref: ref})

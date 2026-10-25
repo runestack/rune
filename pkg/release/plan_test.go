@@ -55,8 +55,10 @@ func TestBuildPlan_FirstInstall_AllCreate(t *testing.T) {
 func TestBuildPlan_Upgrade_PrunesRemoved(t *testing.T) {
 	a, b := svcRef("default", "a"), svcRef("default", "b")
 	current := &types.Release{Name: "rel", Namespace: "default", Owns: []types.OwnerRef{a, b}}
+	ours := &types.OwnedBy{Release: "rel", Namespace: "default"}
+	live := fakeLive{a.Key(): {Exists: true, OwnedBy: ours}, b.Key(): {Exists: true, OwnedBy: ours}}
 	// b is dropped from desired → should prune.
-	p, err := BuildPlan("rel", "default", desired(a), current, fakeLive{}, Options{})
+	p, err := BuildPlan("rel", "default", desired(a), current, live, Options{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,5 +118,87 @@ func TestBuildPlan_SharedKind_IsReferencedNotPruned(t *testing.T) {
 	}
 	if got := actionFor(p, sc); got != ActionReference {
 		t.Errorf("storageclass: want reference, got %q", got)
+	}
+}
+
+// The record says this release owns a, but a was deleted and recreated by
+// someone else since: updating it would take it over without --adopt.
+func TestBuildPlan_RecordedButReplacedIsAConflict(t *testing.T) {
+	a := svcRef("default", "a")
+	current := &types.Release{Name: "rel", Namespace: "default", Owns: []types.OwnerRef{a}}
+	for name, owner := range map[string]*types.OwnedBy{
+		"another release": {Release: "other", Namespace: "default"},
+		"unmanaged":       nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, err := BuildPlan("rel", "default", desired(a), current, fakeLive{a.Key(): {Exists: true, OwnedBy: owner}}, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Applyable() {
+				t.Fatalf("a replaced resource must conflict, got %+v", p.Changes)
+			}
+		})
+	}
+}
+
+func TestBuildPlan_RecordedButGoneIsACreate(t *testing.T) {
+	a := svcRef("default", "a")
+	current := &types.Release{Name: "rel", Namespace: "default", Owns: []types.OwnerRef{a}}
+	p, err := BuildPlan("rel", "default", desired(a), current, fakeLive{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actionFor(p, a); got != ActionCreate {
+		t.Errorf("want create, got %q", got)
+	}
+}
+
+// Two releases may share a name in different namespaces and still write
+// into one namespace; the stamp's namespace tells them apart.
+func TestBuildPlan_SameNameOtherNamespaceIsNotUs(t *testing.T) {
+	a := svcRef("shared", "a")
+	live := fakeLive{a.Key(): {Exists: true, OwnedBy: &types.OwnedBy{Release: "app", Namespace: "team-a"}}}
+	p, err := BuildPlan("app", "team-b", desired(a), nil, live, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Applyable() {
+		t.Fatalf("team-b/app must not update team-a/app's resource, got %+v", p.Changes)
+	}
+
+	// A stamp from before the namespace was recorded still matches by name.
+	legacy := fakeLive{a.Key(): {Exists: true, OwnedBy: &types.OwnedBy{Release: "app"}}}
+	p, err = BuildPlan("app", "team-b", desired(a), nil, legacy, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actionFor(p, a); got != ActionUpdate {
+		t.Errorf("legacy stamp: want update, got %q", got)
+	}
+}
+
+// A resource the record lists that now belongs to someone else is dropped
+// from the release, never deleted.
+func TestBuildPlan_DoesNotPruneWhatIsNoLongerOurs(t *testing.T) {
+	a, b, c := svcRef("default", "a"), svcRef("default", "b"), svcRef("default", "c")
+	current := &types.Release{Name: "rel", Namespace: "default", Owns: []types.OwnerRef{a, b, c}}
+	live := fakeLive{
+		a.Key(): {Exists: true, OwnedBy: &types.OwnedBy{Release: "other", Namespace: "default"}},
+		b.Key(): {Exists: true},
+		// c is gone: pruning it is harmless and clears it from the record.
+	}
+	p, err := BuildPlan("rel", "default", nil, current, live, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actionFor(p, a); got != "" {
+		t.Errorf("a belongs to another release: want no change, got %q", got)
+	}
+	if got := actionFor(p, b); got != "" {
+		t.Errorf("b is unmanaged now: want no change, got %q", got)
+	}
+	if got := actionFor(p, c); got != ActionPrune {
+		t.Errorf("c: want prune, got %q", got)
 	}
 }

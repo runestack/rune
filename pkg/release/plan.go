@@ -127,14 +127,19 @@ func isSharedClusterKind(rt types.ResourceType) bool {
 // BuildPlan computes the 3-way reconcile between the desired set, the current
 // release record (nil for a first install), and live state.
 //
+// Ownership is read from the live resource's stamp, never from the record
+// alone: what the record lists may have been deleted and recreated by
+// someone else since.
+//
 // Rules:
 //   - Shared cluster-scoped kinds (StorageClass, Namespace) are ActionReference:
 //     ensured-present, never owned or pruned.
-//   - A desired resource already in current.Owns → ActionUpdate.
 //   - A desired resource that doesn't exist live → ActionCreate.
+//   - A desired resource whose live stamp is this release's → ActionUpdate.
 //   - A desired resource that exists live but isn't ours → ActionAdopt if opts.Adopt,
 //     else a Conflict.
-//   - A resource in current.Owns no longer desired → ActionPrune.
+//   - A resource in current.Owns no longer desired → ActionPrune, unless it now
+//     belongs to someone else, which is dropped from the release untouched.
 func BuildPlan(releaseName, namespace string, desired []DesiredResource, current *types.Release, live LiveLookup, opts Options) (*Plan, error) {
 	plan := &Plan{Release: releaseName, Namespace: namespace}
 
@@ -157,34 +162,26 @@ func BuildPlan(releaseName, namespace string, desired []DesiredResource, current
 			continue
 		}
 
-		// Already owned by this release → update.
-		if owned[d.Ref.Key()] {
-			plan.Changes = append(plan.Changes, PlannedChange{Ref: d.Ref, Action: ActionUpdate})
-			continue
-		}
-
 		state, err := live.Lookup(d.Ref)
 		if err != nil {
 			return nil, err
 		}
 
-		if !state.Exists {
-			plan.Changes = append(plan.Changes, PlannedChange{Ref: d.Ref, Action: ActionCreate})
-			continue
-		}
-
-		// Exists live but not in our record.
 		switch {
-		case state.OwnedBy != nil && state.OwnedBy.Release == releaseName:
-			// We already own it (record/live drift) — reconcile as update.
-			// TODO: surface this as repaired drift in the plan display.
+		case !state.Exists:
+			plan.Changes = append(plan.Changes, PlannedChange{Ref: d.Ref, Action: ActionCreate})
+		case state.OwnedBy.IsRelease(releaseName, namespace):
+			// Ours, whether or not the record lists it.
 			plan.Changes = append(plan.Changes, PlannedChange{Ref: d.Ref, Action: ActionUpdate})
 		case opts.Adopt:
 			plan.Changes = append(plan.Changes, PlannedChange{Ref: d.Ref, Action: ActionAdopt})
 		default:
 			reason := "resource exists and is unmanaged; pass --adopt to take ownership"
 			if state.OwnedBy != nil {
-				reason = "resource is owned by release \"" + state.OwnedBy.Release + "\"; pass --adopt to take ownership"
+				reason = "resource is owned by release \"" + ownerName(state.OwnedBy) + "\"; pass --adopt to take ownership"
+			}
+			if owned[d.Ref.Key()] {
+				reason = "this release created it, but it has been replaced since: " + reason
 			}
 			plan.Changes = append(plan.Changes, PlannedChange{
 				Ref:      d.Ref,
@@ -201,9 +198,23 @@ func BuildPlan(releaseName, namespace string, desired []DesiredResource, current
 			if desiredKeys[ref.Key()] {
 				continue
 			}
+			state, err := live.Lookup(ref)
+			if err != nil {
+				return nil, err
+			}
+			if state.Exists && !state.OwnedBy.IsRelease(releaseName, namespace) {
+				continue
+			}
 			plan.Changes = append(plan.Changes, PlannedChange{Ref: ref, Action: ActionPrune})
 		}
 	}
 
 	return plan, nil
+}
+
+func ownerName(o *types.OwnedBy) string {
+	if o.Namespace == "" {
+		return o.Release
+	}
+	return o.Namespace + "/" + o.Release
 }

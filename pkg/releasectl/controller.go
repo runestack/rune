@@ -148,9 +148,10 @@ func (c *Controller) cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 		c: c,
 		p: p,
 		stamp: types.OwnedBy{
-			Release:  spec.Name,
-			Revision: revision,
-			Manager:  types.ManagerRuneset,
+			Release:   spec.Name,
+			Namespace: spec.Namespace,
+			Revision:  revision,
+			Manager:   types.ManagerRuneset,
 		},
 	}
 	recs := &records{repo: c.releases}
@@ -218,7 +219,7 @@ func (l *liveLookup) Lookup(ref types.OwnerRef) (release.LiveState, error) {
 	case types.ResourceTypeService:
 		svc, err := l.c.orch.GetService(context.Background(), ref.Namespace, ref.Name)
 		if err != nil {
-			return release.LiveState{Exists: false}, nil
+			return absentOr(err)
 		}
 		var ob *types.OwnedBy
 		if svc.Metadata != nil {
@@ -228,19 +229,19 @@ func (l *liveLookup) Lookup(ref types.OwnerRef) (release.LiveState, error) {
 	case types.ResourceTypeSecret:
 		s, err := l.c.secrets.Get(context.Background(), ref.Namespace, ref.Name)
 		if err != nil {
-			return release.LiveState{Exists: false}, nil
+			return absentOr(err)
 		}
 		return release.LiveState{Exists: true, OwnedBy: s.OwnedBy}, nil
 	case types.ResourceTypeConfigmap:
 		cm, err := l.c.configs.Get(context.Background(), ref.Namespace, ref.Name)
 		if err != nil {
-			return release.LiveState{Exists: false}, nil
+			return absentOr(err)
 		}
 		return release.LiveState{Exists: true, OwnedBy: cm.OwnedBy}, nil
 	case types.ResourceTypeVolume:
 		v, err := l.c.volumes.Get(context.Background(), ref.Namespace, ref.Name)
 		if err != nil {
-			return release.LiveState{Exists: false}, nil
+			return absentOr(err)
 		}
 		return release.LiveState{Exists: true, OwnedBy: v.OwnedBy}, nil
 	default:
@@ -248,6 +249,16 @@ func (l *liveLookup) Lookup(ref types.OwnerRef) (release.LiveState, error) {
 		// live lookup; anything else is treated as absent.
 		return release.LiveState{Exists: false}, nil
 	}
+}
+
+// absentOr reports a resource as absent when the lookup found nothing, and
+// fails otherwise: planning a store error as "absent" would create over, or
+// skip the ownership check on, whatever is really there.
+func absentOr(err error) (release.LiveState, error) {
+	if errors.Is(err, orchestrator.ErrServiceNotFound) || store.IsNotFoundError(err) {
+		return release.LiveState{Exists: false}, nil
+	}
+	return release.LiveState{}, err
 }
 
 // --- Applier: materialize/prune/verify against the cluster ---
@@ -436,6 +447,17 @@ func (a *applier) Prune(ctx context.Context, ref types.OwnerRef) error {
 	// Capture the pre-image first so an atomic rollback can restore a pruned
 	// resource (capture is first-touch-wins, so this never clobbers a pre-image
 	// taken before an earlier Apply of the same ref).
+	// The plan checked ownership, but a cast verifies before it prunes, which
+	// can take minutes. Something recreated under the name since is not ours
+	// to delete.
+	state, err := (&liveLookup{c: a.c}).Lookup(ref)
+	if err != nil {
+		return err
+	}
+	if state.Exists && !state.OwnedBy.IsRelease(a.stamp.Release, a.stamp.Namespace) {
+		a.c.log.Info("Not pruning a resource another owner now holds", log.Str("resource", ref.Key()))
+		return nil
+	}
 	a.capturePreDelete(ctx, ref)
 	alreadyTerminating := false
 	if pi, ok := a.pre[ref.Key()]; ok && pi.Service != nil && pi.Service.Metadata != nil {
