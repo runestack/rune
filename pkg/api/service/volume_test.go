@@ -309,12 +309,15 @@ func TestVolumeService_CreateClearsClientHandleAndStatus(t *testing.T) {
 		Volume: &generated.Volume{
 			Name: "evil", Namespace: "ns", StorageClassName: "local",
 			Size: "1Gi", AccessMode: "ReadWriteOnce",
-			Status: "Available", Handle: "/etc", BoundClaim: "x/y/0", OwnerService: "ns/x",
+			Id: "prod-data-id", Status: "Available", Handle: "/etc", BoundClaim: "x/y/0", OwnerService: "ns/x",
 		},
 		EnsureNamespace: true,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
+	}
+	if resp.Volume.Id == "prod-data-id" {
+		t.Fatalf("client-chosen volume ID survived create: %q", resp.Volume.Id)
 	}
 	if resp.Volume.Handle != "" || resp.Volume.Status == string(types.VolumeStatusAvailable) {
 		t.Fatalf("client Handle/Available survived create: handle=%q status=%q", resp.Volume.Handle, resp.Volume.Status)
@@ -333,11 +336,13 @@ func TestVolumeService_UpdatePreservesServerFields(t *testing.T) {
 	ctx := context.Background()
 	svc := newVolumeTestService(t)
 	seedRawVolume(t, svc, &types.Volume{
+		ID:   "server-minted-id",
 		Name: "data", Namespace: "ns", StorageClassName: "local", Size: "1Gi",
 		AccessMode: types.AccessModeRWO, Status: types.VolumeStatusAvailable,
 		Handle: "/var/lib/rune/v/ns/data",
 	})
 	resp, err := svc.UpdateVolume(ctx, &generated.UpdateVolumeRequest{Volume: &generated.Volume{
+		Id:   "attacker-id",
 		Name: "data", Namespace: "ns", StorageClassName: "local", Size: "2Gi",
 		AccessMode: "ReadWriteOnce", Status: "Available", Handle: "/etc/shadow",
 	}})
@@ -346,6 +351,9 @@ func TestVolumeService_UpdatePreservesServerFields(t *testing.T) {
 	}
 	if resp.Volume.Handle != "/var/lib/rune/v/ns/data" {
 		t.Fatalf("client rewrote Handle to %q", resp.Volume.Handle)
+	}
+	if resp.Volume.Id != "server-minted-id" {
+		t.Fatalf("update changed the volume ID to %q", resp.Volume.Id)
 	}
 	if resp.Volume.Size != "2Gi" {
 		t.Fatalf("legitimate Size change was lost: %q", resp.Volume.Size)

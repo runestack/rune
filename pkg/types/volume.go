@@ -519,12 +519,14 @@ func ValidateProcessRuntimeVolumes(owner string, runtime RuntimeType, vols []Vol
 	return nil
 }
 
-// serverOwnedVolumeFields are the Volume fields the control plane and the
-// storage driver own: a client that sets them on a write is ignored. Handle
-// and Status are the load-bearing pair — a client-chosen Handle on a volume
-// written already Available skips provisioning and is bind-mounted verbatim,
-// so a caller with volumes:create could mount an arbitrary host path. The
-// binding and driver-output fields travel with them.
+// The Volume fields below are the control plane's and the storage driver's;
+// a client that sets them on a write is ignored. Handle and Status are the
+// load-bearing pair — a client-chosen Handle on a volume written already
+// Available skips provisioning and is bind-mounted verbatim. ID matters too:
+// the agent keys a volume's mount tracking on ID (see volumeMountKey), so a
+// client-chosen ID colliding with another namespace's volume makes this
+// volume resolve to that one's mount. Zeroing ID lets the repo mint a uuid.
+// The binding and driver-output fields travel with them.
 
 // ZeroServerOwnedVolumeFields clears the control-plane fields on a volume a
 // client is creating, so provisioning assigns them. A zero Status reconciles
@@ -533,6 +535,7 @@ func ZeroServerOwnedVolumeFields(v *Volume) {
 	if v == nil {
 		return
 	}
+	v.ID = ""
 	v.Handle = ""
 	v.DriverParameters = nil
 	v.OwnerService = ""
@@ -551,6 +554,7 @@ func CarryServerOwnedVolumeFields(stored, v *Volume) {
 	if stored == nil || v == nil {
 		return
 	}
+	v.ID = stored.ID
 	v.Handle = stored.Handle
 	v.DriverParameters = stored.DriverParameters
 	v.OwnerService = stored.OwnerService

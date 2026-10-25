@@ -45,7 +45,9 @@ func (r *VolumeRepo) Create(ctx context.Context, v *types.Volume) error {
 	if v.ID == "" {
 		v.ID = uuid.NewString()
 	}
-	// The ID becomes a host mount path segment on the node.
+	// The ID keys the agent's mount tracking (volumeMountKey), so it must be
+	// server-minted: the API/release paths zero a client-supplied ID
+	// (types.ZeroServerOwnedVolumeFields) and this mints one.
 	if err := types.ValidateVolumeID(v.ID); err != nil {
 		return err
 	}
