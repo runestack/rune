@@ -238,3 +238,32 @@ func TestManaged_TraversalNames(t *testing.T) {
 		t.Error("something was written outside the root")
 	}
 }
+
+// A forged snapshot handle naming another namespace's snapshot is
+// refused for restore and delete: each is tied to its own snapshot.
+func TestManaged_SnapshotPinnedToItsSource(t *testing.T) {
+	d, root := newManagedDriver(t)
+	ctx := context.Background()
+	src := mustMkdir(t, filepath.Join(root, "other", "data"))
+	theirs, err := d.Snapshot(ctx, driver.OpContext{Volume: &types.Volume{Name: "data", Namespace: "other"}},
+		driver.SnapshotRequest{Handle: driver.VolumeHandle(src), Snapshot: &types.Snapshot{Name: "theirs", Namespace: "other"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine := &types.Snapshot{Name: "mine", Namespace: "prod"}
+
+	target := driver.OpContext{Volume: &types.Volume{Name: "restored", Namespace: "prod"}}
+	if _, err := d.RestoreFromSnapshot(ctx, target, driver.RestoreRequest{Source: mine, SourceHandle: theirs}); err == nil {
+		t.Error("restore from another namespace's snapshot succeeded")
+	}
+	if err := d.DeleteSnapshot(ctx, driver.OpContext{Snapshot: mine}, theirs); err == nil {
+		t.Error("delete of another namespace's snapshot succeeded")
+	}
+	if _, err := os.Stat(string(theirs)); err != nil {
+		t.Errorf("the other snapshot was removed: %v", err)
+	}
+	owner := &types.Snapshot{Name: "theirs", Namespace: "other"}
+	if err := d.DeleteSnapshot(ctx, driver.OpContext{Snapshot: owner}, theirs); err != nil {
+		t.Errorf("delete by its own snapshot: %v", err)
+	}
+}
