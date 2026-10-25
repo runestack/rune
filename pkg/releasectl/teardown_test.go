@@ -2,6 +2,7 @@ package releasectl
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -64,7 +65,7 @@ func TestApply_TeardownTimeoutNamesThePendingCleanup(t *testing.T) {
 	assert.GreaterOrEqual(t, time.Since(start), c.teardownWait, "it waited before giving up")
 	assert.Contains(t, err.Error(), "was not gone after 1.5s")
 	assert.Contains(t, err.Error(), "cleanup still pending: "+string(types.FinalizerTypeInstanceCleanup))
-	assert.Contains(t, err.Error(), "cast again once teardown finishes")
+	assert.Contains(t, err.Error(), "rune delete service web -n default --abandon-finalizers")
 }
 
 func TestUninstallThenCast_Succeeds(t *testing.T) {
@@ -99,4 +100,74 @@ func TestApply_TeardownWaitEndsWithTheCaller(t *testing.T) {
 	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{ref.Key(): stateService("", "nginx:2", 1)}}}
 	err := a.Apply(ctx, release.PlannedChange{Ref: ref})
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "cleanup still pending", "the caller's deadline keeps the diagnosis")
+}
+
+// A delete that starts after the cast began is an operator's decision; the
+// cast refuses rather than waiting it out and recreating the service.
+func TestApply_TeardownStartedDuringTheCastIsRefused(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+	require.NoError(t, c.orch.CreateService(ctx, stateService("OLD", "nginx:1", 1)))
+	ref := svcRef("default", "web")
+	a := &applier{c: c, started: time.Now().Add(-time.Second),
+		p: Payloads{Services: map[string]*types.Service{ref.Key(): stateService("", "nginx:2", 1)}}}
+	tombstone(t, c, "web")
+
+	start := time.Now()
+	err := a.Apply(ctx, release.PlannedChange{Ref: ref})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "being deleted")
+	assert.Less(t, time.Since(start), c.teardownWait, "refused without waiting")
+}
+
+func TestApply_DoesNotTakeOverAServiceRecreatedDuringTheWait(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+	require.NoError(t, c.orch.CreateService(ctx, stateService("OLD", "nginx:1", 1)))
+	fake := tombstone(t, c, "web")
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		fake.TombstoneOnDelete(false)
+		_, _ = fake.DeleteService(context.Background(), &types.DeletionRequest{Namespace: "default", Name: "web"})
+		_ = fake.CreateService(context.Background(), stateService("THEIRS", "theirs:1", 1))
+	}()
+
+	ref := svcRef("default", "web")
+	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{ref.Key(): stateService("", "nginx:2", 1)}}}
+	err := a.Apply(ctx, release.PlannedChange{Ref: ref})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "created by someone else")
+
+	after, err := c.orch.GetService(ctx, "default", "web")
+	require.NoError(t, err)
+	assert.Equal(t, "theirs:1", after.Image)
+}
+
+// createRaces loses every create to someone else's service of the same name.
+type createRaces struct{ *orchestrator.FakeOrchestrator }
+
+func (createRaces) UpdateServiceFunc(context.Context, string, string, func(*types.Service) error) error {
+	return orchestrator.ErrServiceNotFound
+}
+
+func (createRaces) CreateService(_ context.Context, s *types.Service) error {
+	return fmt.Errorf("resource service/%s/%s already exists", s.Namespace, s.Name)
+}
+
+func TestRevert_LeavesAServiceThisCastFailedToCreate(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+	fake := c.orch.(*orchestrator.FakeOrchestrator)
+	require.NoError(t, fake.CreateService(ctx, stateService("THEIRS", "theirs:1", 1)))
+	c.orch = createRaces{fake}
+
+	ref := svcRef("default", "web")
+	a := &applier{c: c, p: Payloads{Services: map[string]*types.Service{ref.Key(): stateService("", "nginx:2", 1)}}}
+	require.Error(t, a.Apply(ctx, release.PlannedChange{Ref: ref}))
+	require.NoError(t, a.Revert(ctx, ref))
+
+	after, err := fake.GetService(ctx, "default", "web")
+	require.NoError(t, err, "a revert must not delete a service this cast never created")
+	assert.Equal(t, "theirs:1", after.Image)
 }

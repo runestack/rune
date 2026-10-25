@@ -39,7 +39,8 @@ func (e *teardownError) Error() string {
 	if e.lookupErr != nil {
 		msg += fmt.Sprintf(" (last lookup failed: %v)", e.lookupErr)
 	}
-	return msg + "; cast again once teardown finishes"
+	return msg + fmt.Sprintf("; cast again once teardown finishes, or if its cleanup is stuck, give it up with "+
+		"`rune delete service %s -n %s --abandon-finalizers`", e.ref.Name, e.ref.Namespace)
 }
 
 // waitForTeardown polls until the service being deleted is gone, or the same
