@@ -187,3 +187,28 @@ func TestLoadOrCreateServerCert_IsNotACA(t *testing.T) {
 		t.Fatalf("BasicConstraintsValid=%v IsCA=%v", pair.Leaf.BasicConstraintsValid, pair.Leaf.IsCA)
 	}
 }
+
+// A symlinked key or tls dir must be refused, not chmodded through to its
+// target (which Stat/Chmod would follow).
+func TestLoadOrCreateServerCert_RefusesSymlinkedKey(t *testing.T) {
+	dir := t.TempDir()
+	tlsDir := filepath.Join(dir, "tls")
+	first, err := LoadOrCreateServerCert(tlsDir, []string{"a"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replace the key with a symlink to a target outside the dir.
+	outside := filepath.Join(dir, "evil.key")
+	if err := os.Rename(first.KeyFile, outside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, first.KeyFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(outside, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateServerCert(tlsDir, []string{"a"}, time.Now()); err == nil {
+		t.Fatal("a symlinked key was accepted")
+	}
+}

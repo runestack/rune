@@ -24,6 +24,20 @@ type Context struct {
 	// RefreshToken is the RUNE-201 refresh grant. When present, the client
 	// transparently renews Token on Unauthenticated and rewrites both here.
 	RefreshToken string `yaml:"refreshToken,omitempty"`
+
+	// TLS turns on gRPC-over-TLS for this context. A grpcs:// server URL
+	// implies it.
+	TLS bool `yaml:"tls,omitempty"`
+	// CAFingerprint pins the server certificate's SPKI fingerprint
+	// ("sha256:<hex>"), the shape runed logs and `rune context trust`
+	// records. The right anchor for runed's self-signed, IP-addressed cert.
+	CAFingerprint string `yaml:"caFingerprint,omitempty"`
+	// CAFile is a PEM bundle to verify the server against instead of a pin,
+	// for a cert from a private CA. Pin takes precedence if both are set.
+	CAFile string `yaml:"caFile,omitempty"`
+	// InsecurePlaintext acknowledges sending credentials over plaintext to a
+	// non-loopback server; without it the CLI warns on every such call.
+	InsecurePlaintext bool `yaml:"insecurePlaintext,omitempty"`
 }
 
 // persistRefreshedTokens writes rotated session credentials back to the current
@@ -67,6 +81,7 @@ namespace used by every Rune CLI command. Use this group to:
 	cmd.AddCommand(newContextUseCmd())
 	cmd.AddCommand(newContextListCmd())
 	cmd.AddCommand(newContextDeleteCmd())
+	cmd.AddCommand(newContextTrustCmd())
 
 	return cmd
 }

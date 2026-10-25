@@ -243,14 +243,19 @@ func tightenModes(modes map[string]os.FileMode) ([]string, error) {
 }
 
 // tighten narrows path to want when its mode is wider, and reports whether
-// it did. A missing path is left alone.
+// it did. A missing path is left alone. It refuses a symlink: Stat/Chmod
+// would follow it and narrow (or expose) the target, so a symlinked key or
+// tls dir is an error, not something to silently chmod through.
 func tighten(path string, want os.FileMode) (bool, error) {
-	fi, err := os.Stat(path)
+	fi, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("%s is a symlink; refusing to operate on TLS material through a link", path)
 	}
 	if fi.Mode().Perm()&^want == 0 {
 		return false, nil

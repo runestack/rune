@@ -20,6 +20,12 @@ type ClientOptions struct {
 	// TLS configuration
 	UseTLS      bool
 	TLSCertFile string
+	// TLSPinSHA256 pins the server certificate's SPKI fingerprint
+	// ("sha256:<hex>", as runed logs it). When set, the connection
+	// verifies the leaf against this pin and skips hostname/chain checks —
+	// the right model for the self-signed, IP-addressed server certificate,
+	// where no public CA or useful name applies. Ignored unless UseTLS.
+	TLSPinSHA256 string
 
 	// Authentication. Token is the bearer (access or static) sent on requests.
 	Token string
@@ -76,19 +82,23 @@ func NewClient(options *ClientOptions) (*Client, error) {
 	}
 
 	// Configure TLS
-	if options.UseTLS {
-		if options.TLSCertFile != "" {
-			creds, err := credentials.NewClientTLSFromFile(options.TLSCertFile, "")
-			if err != nil {
-				return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
-			}
-			dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
-		} else {
-			// Use default TLS credentials
-			dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
+	switch {
+	case options.UseTLS && options.TLSPinSHA256 != "":
+		creds, err := pinnedTransportCreds(options.TLSPinSHA256)
+		if err != nil {
+			return nil, err
 		}
-	} else {
-		// No TLS
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
+	case options.UseTLS && options.TLSCertFile != "":
+		creds, err := credentials.NewClientTLSFromFile(options.TLSCertFile, "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
+	case options.UseTLS:
+		// Default system roots: for a server with a cert from a public CA.
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
+	default:
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
