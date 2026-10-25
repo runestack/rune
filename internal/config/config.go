@@ -422,18 +422,20 @@ func Load(path string) (*Config, error) {
 
 // readElsewhere are runefile keys with no Config field, read through viper
 // elsewhere: the docker modes by pkg/runner/manager, debug and pretty by
-// runed's flag resolution, and from_secret (an alias of fromSecret) by the
-// registry bootstrap in pkg/api/service. They are valid, so they must not be
+// runed's flag resolution, from_secret (an alias of fromSecret) by the
+// registry bootstrap in pkg/api/service, and an inline dockerconfigjson by
+// pkg/runner/docker/registryauth. They are valid, so they must not be
 // reported as unknown. Slice indexes are dropped before the lookup.
 var readElsewhere = map[string]bool{
-	"debug":                                true,
-	"pretty":                               true,
-	"docker.registries.auth.from_secret":   true,
-	"docker.secret_dir_mode":               true,
-	"docker.secret_file_mode":              true,
-	"docker.config_dir_mode":               true,
-	"docker.config_file_mode":              true,
-	"docker.disable_ambient_registry_auth": true,
+	"debug":                              true,
+	"pretty":                             true,
+	"docker.registries.auth.from_secret": true,
+	"docker.registries.auth.dockerconfigjson": true,
+	"docker.secret_dir_mode":                  true,
+	"docker.secret_file_mode":                 true,
+	"docker.config_dir_mode":                  true,
+	"docker.config_file_mode":                 true,
+	"docker.disable_ambient_registry_auth":    true,
 }
 
 var sliceIndex = regexp.MustCompile(`\[\d+\]`)

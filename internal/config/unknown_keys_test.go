@@ -54,6 +54,13 @@ name = "ghcr"
 registry = "ghcr.io"
 [docker.registries.auth]
 from_secret = "ghcr-creds"
+
+[[docker.registries]]
+name = "private"
+registry = "registry.example.com"
+[docker.registries.auth]
+type = "dockerconfigjson"
+dockerconfigjson = "{\"auths\":{}}"
 `)
 	_, unknown, err = LoadWithUnknownKeys(p)
 	require.NoError(t, err)
