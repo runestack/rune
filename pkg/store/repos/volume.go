@@ -121,6 +121,12 @@ func (r *VolumeRepo) Update(ctx context.Context, v *types.Volume, opts ...store.
 	if v.ID != cur.ID {
 		return fmt.Errorf("volume %s/%s: id is immutable (have %q, got %q)", v.Namespace, v.Name, cur.ID, v.ID)
 	}
+	// A write that names no owner keeps the current one: the API and CLI
+	// paths carry no ownership, and dropping it makes the owning release
+	// see the resource as replaced and refuse to cast over it.
+	if v.OwnedBy == nil {
+		v.OwnedBy = cur.OwnedBy
+	}
 	v.CreatedAt = cur.CreatedAt
 	v.UpdatedAt = time.Now()
 	return r.base.Update(ctx, v.Namespace, v.Name, v, opts...)

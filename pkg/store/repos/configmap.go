@@ -87,6 +87,12 @@ func (r *ConfigmapRepo) Update(ctx context.Context, namespace, name string, c *t
 		return err
 	}
 
+	// A write that names no owner keeps the current one: the API and CLI
+	// paths carry no ownership, and dropping it makes the owning release
+	// see the resource as replaced and refuse to cast over it.
+	if c.OwnedBy == nil {
+		c.OwnedBy = cur.OwnedBy
+	}
 	c.CreatedAt = cur.CreatedAt
 	c.UpdatedAt = time.Now()
 	c.Version = cur.Version + 1

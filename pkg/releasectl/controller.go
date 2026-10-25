@@ -444,9 +444,6 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 }
 
 func (a *applier) Prune(ctx context.Context, ref types.OwnerRef) error {
-	// Capture the pre-image first so an atomic rollback can restore a pruned
-	// resource (capture is first-touch-wins, so this never clobbers a pre-image
-	// taken before an earlier Apply of the same ref).
 	// The plan checked ownership, but a cast verifies before it prunes, which
 	// can take minutes. Something recreated under the name since is not ours
 	// to delete.
@@ -458,6 +455,9 @@ func (a *applier) Prune(ctx context.Context, ref types.OwnerRef) error {
 		a.c.log.Info("Not pruning a resource another owner now holds", log.Str("resource", ref.Key()))
 		return nil
 	}
+	// Capture the pre-image before deleting so an atomic rollback can restore
+	// a pruned resource (capture is first-touch-wins, so this never clobbers a
+	// pre-image taken before an earlier Apply of the same ref).
 	a.capturePreDelete(ctx, ref)
 	alreadyTerminating := false
 	if pi, ok := a.pre[ref.Key()]; ok && pi.Service != nil && pi.Service.Metadata != nil {

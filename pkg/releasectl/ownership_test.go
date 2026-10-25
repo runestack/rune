@@ -75,3 +75,42 @@ func TestPlan_AFailedLookupIsNotAnAbsentResource(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "store unavailable")
 }
+
+// The API and CLI write secrets, configmaps and volumes without an owner.
+// Those writes must not orphan the resource from the release that owns it.
+func TestCast_StillOwnsWhatAnUnstampedWriteTouched(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+	sec := secretRef("default", "creds")
+	cm := types.OwnerRef{ResourceType: types.ResourceTypeConfigmap, Namespace: "default", Name: "cfg"}
+	vol := types.OwnerRef{ResourceType: types.ResourceTypeVolume, Namespace: "default", Name: "data"}
+	spec := release.ReleaseSpec{Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: sec}, {Ref: cm}, {Ref: vol}}}
+	payloads := func() Payloads {
+		return Payloads{
+			Secrets:    map[string]*types.Secret{sec.Key(): {Name: "creds", Namespace: "default", Type: "static", Data: map[string]string{"k": "v1"}}},
+			Configmaps: map[string]*types.Configmap{cm.Key(): {Name: "cfg", Namespace: "default"}},
+			Volumes:    map[string]*types.Volume{vol.Key(): {Name: "data", Namespace: "default", StorageClassName: "local", Size: "1Gi"}},
+		}
+	}
+	_, _, err := c.Cast(ctx, spec, payloads())
+	require.NoError(t, err)
+
+	// What `rune secret patch`, `rune configmap update` and UpdateVolume write.
+	require.NoError(t, c.secrets.Update(ctx, "default", "creds",
+		&types.Secret{Name: "creds", Namespace: "default", Type: "static", Data: map[string]string{"k": "rotated"}}))
+	require.NoError(t, c.configs.Update(ctx, "default", "cfg",
+		&types.Configmap{Name: "cfg", Namespace: "default"}))
+	stored, err := c.volumes.Get(ctx, "default", "data")
+	require.NoError(t, err)
+	unstamped := *stored
+	unstamped.OwnedBy = nil
+	require.NoError(t, c.volumes.Update(ctx, &unstamped))
+
+	plan, err := c.Plan(ctx, spec)
+	require.NoError(t, err)
+	require.True(t, plan.Applyable(), "the release still owns all three: %+v", plan.Changes)
+	for _, ch := range plan.Changes {
+		assert.Equal(t, release.ActionUpdate, ch.Action, ch.Ref.Key())
+	}
+}
