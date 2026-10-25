@@ -765,3 +765,35 @@ func TestProcessRunner_NotFoundIsErrdefs(t *testing.T) {
 	_, err := r.Status(context.Background(), &types.Instance{ID: "nope"})
 	assert.True(t, errdefs.IsNotFound(err))
 }
+
+// Every way of asking for an instance the runner does not know says
+// "not found" in a form callers can test with errdefs.
+func TestProcessRunner_NotFoundEverywhere(t *testing.T) {
+	r := newTestRunner(t)
+	ctx := context.Background()
+	ghost := &types.Instance{ID: "ghost"}
+	_, err := r.Exec(ctx, ghost, runner.ExecOptions{Command: []string{"true"}})
+	assert.True(t, errdefs.IsNotFound(err), "Exec: %v", err)
+	_, err = r.GetLogs(ctx, ghost, runner.LogOptions{})
+	assert.True(t, errdefs.IsNotFound(err), "GetLogs: %v", err)
+	_, err = r.Dial(ctx, ghost, 8080)
+	assert.True(t, errdefs.IsNotFound(err), "Dial: %v", err)
+}
+
+// A reader that found the instance just before a release removed its
+// workspace sees the log gone, which is "not found" too.
+func TestProcessRunner_GetLogsAfterWorkspaceGone(t *testing.T) {
+	r := newTestRunner(t)
+	ctx := context.Background()
+	inst := &types.Instance{ID: "gone", Name: "gone", NodeID: "local", ServiceID: "svc",
+		Process: &types.ProcessSpec{Command: "true"}}
+	require.NoError(t, r.Create(ctx, inst))
+	t.Cleanup(func() { _ = r.Remove(context.Background(), inst, true) })
+	r.mu.RLock()
+	logPath := r.processes[inst.ID].logFile.Name()
+	r.mu.RUnlock()
+	require.NoError(t, os.Remove(logPath))
+
+	_, err := r.GetLogs(ctx, inst, runner.LogOptions{})
+	assert.True(t, errdefs.IsNotFound(err), "GetLogs: %v", err)
+}
