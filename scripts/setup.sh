@@ -66,9 +66,6 @@ install_go_tools() {
   print_step "Installing godoc..."
   go install golang.org/x/tools/cmd/godoc@latest
 
-  # Install goreleaser
-  print_step "Installing goreleaser..."
-  go install github.com/goreleaser/goreleaser@latest
   
   print_success "Go tools installed successfully"
 }
