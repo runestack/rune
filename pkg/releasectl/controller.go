@@ -157,6 +157,9 @@ func (c *Controller) cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 		c:       c,
 		p:       p,
 		started: time.Now(),
+		// Without its cancellation: --detach applies after the request
+		// returns, and a recreate after a teardown wait is admitted then.
+		admitCtx: context.WithoutCancel(ctx),
 		stamp: types.OwnedBy{
 			Release:  spec.Name,
 			Revision: revision,
@@ -269,6 +272,10 @@ type applier struct {
 	// started is when the cast began. A teardown that started later is an
 	// operator's delete racing the cast, which the cast must not undo.
 	started time.Time
+	// admitCtx carries the caller's subject for admitting a change the plan
+	// could not see coming: a service planned as an update that is created
+	// after its teardown finishes. Nil admits nothing extra.
+	admitCtx context.Context
 
 	// pre holds the pre-image of every resource this cast has touched, keyed
 	// by OwnerRef.Key(), captured on the read-before-write each Apply/Prune
@@ -348,11 +355,21 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 	case types.ResourceTypeService:
 		err := a.applyService(ctx, ref, "")
 		var td *teardownError
-		if !errors.As(err, &td) || (!a.started.IsZero() && td.since.After(a.started)) {
+		// Without an ID the retry could not tell the torn-down record from
+		// one someone else created, so legacy records are refused as before.
+		if !errors.As(err, &td) || td.id == "" || (!a.started.IsZero() && td.since.After(a.started)) {
 			return err
 		}
 		if err := a.c.waitForTeardown(ctx, td); err != nil {
 			return err
+		}
+		// The plan admitted an update, but after a teardown the retry may
+		// create, so it needs create too.
+		if a.admitCtx != nil {
+			if err := a.c.admission.AdmitReleaseChanges(a.admitCtx,
+				[]release.PlannedChange{{Ref: ref, Action: release.ActionCreate}}); err != nil {
+				return err
+			}
 		}
 		// Only the torn-down record, or none: anything else under this name
 		// was created by someone else while the cast waited.

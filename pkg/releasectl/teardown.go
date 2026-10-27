@@ -61,7 +61,11 @@ func (c *Controller) waitForTeardown(ctx context.Context, td *teardownError) err
 		case errors.Is(err, orchestrator.ErrServiceNotFound) || store.IsNotFoundError(err):
 			return nil
 		case err != nil:
-			td.lookupErr = err
+			// A lookup cut off by the wait's own deadline says nothing about
+			// the store.
+			if ctx.Err() == nil {
+				td.lookupErr = err
+			}
 		case svc.Metadata == nil || svc.Metadata.DeletionTimestamp == nil:
 			// Gone and recreated, or the teardown lifted; the retry checks
 			// which.
