@@ -395,3 +395,28 @@ func TestCast_VolumePayloadSecretParamNeedsReveal(t *testing.T) {
 		t.Fatalf("expected a secrets:reveal denial in prod, got %v", err)
 	}
 }
+
+// A release Volume payload is a direct Volume write: its control-plane
+// fields must come from the server, not the cast, so a client-chosen Handle
+// on an Available volume cannot skip provisioning.
+func TestCast_VolumePayloadClearsServerFields(t *testing.T) {
+	c, _ := newTestController(t)
+	ctx := context.Background()
+	vol := types.OwnerRef{ResourceType: types.ResourceTypeVolume, Namespace: "default", Name: "data"}
+	if _, _, err := c.Cast(ctx, release.ReleaseSpec{
+		Name: "app", Namespace: "default",
+		Resources: []release.DesiredResource{{Ref: vol}},
+	}, Payloads{Volumes: map[string]*types.Volume{vol.Key(): {
+		Name: "data", Namespace: "default", StorageClassName: "local", Size: "1Gi",
+		Status: types.VolumeStatusAvailable, Handle: "/etc",
+	}}}); err != nil {
+		t.Fatalf("cast: %v", err)
+	}
+	stored, err := c.volumes.Get(ctx, "default", "data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Handle != "" || stored.Status == types.VolumeStatusAvailable {
+		t.Fatalf("client Handle/Available survived the cast: handle=%q status=%q", stored.Handle, stored.Status)
+	}
+}

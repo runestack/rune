@@ -417,12 +417,19 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 			return fmt.Errorf("no rendered payload for volume %s", ref.Key())
 		}
 		stamp := a.stamp
-		v.OwnedBy = &stamp
 		if existing, err := a.c.volumes.Get(ctx, ref.Namespace, ref.Name); err == nil {
 			a.capture(ref, preImage{Existed: true, Volume: deepCopy(existing)})
+			// Control-plane fields (ID, Handle, Status, bindings) are the
+			// server's; a cast must not set them (a client-chosen Handle on
+			// an Available volume is bind-mounted verbatim). Stamp ownership
+			// after, so the carry doesn't drop this revision's stamp.
+			types.CarryServerOwnedVolumeFields(existing, v)
+			v.OwnedBy = &stamp
 			return a.c.volumes.Update(ctx, v)
 		}
 		a.capture(ref, preImage{})
+		types.ZeroServerOwnedVolumeFields(v)
+		v.OwnedBy = &stamp
 		return a.c.volumes.Create(ctx, v)
 	default:
 		// ActionReference for shared cluster kinds (Namespace, StorageClass):

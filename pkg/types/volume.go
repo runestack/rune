@@ -518,3 +518,64 @@ func ValidateProcessRuntimeVolumes(owner string, runtime RuntimeType, vols []Vol
 	}
 	return nil
 }
+
+// The Volume fields below are the control plane's and the storage driver's;
+// a client that sets them on a write is ignored. Why each is server-owned:
+//
+//   - Handle + Status are the load-bearing pair: a client-chosen Handle on a
+//     volume written already Available skips provisioning and is bind-mounted
+//     verbatim.
+//   - ID is adopted by id-tagging drivers — awsebs Provision reuses any EBS
+//     volume tagged rune.io/volume-id == Volume.ID (pkg/storage/driver/awsebs),
+//     so a client-chosen ID could take over another tenant's disk. (The mount
+//     key is namespace-prefixed, ns/id, so the mount path itself does not
+//     collide cross-namespace.) Zeroing ID lets the repo mint a uuid.
+//   - OwnedBy is the release-ownership stamp; a direct client write must not
+//     claim release ownership. The release applier re-stamps it after these
+//     helpers run.
+//   - The binding and driver-output fields travel with them.
+//
+// Timestamps are handled by the repo (CreatedAt stamped unconditionally on
+// create), not here.
+
+// ZeroServerOwnedVolumeFields clears the control-plane fields on a volume a
+// client is creating, so provisioning assigns them. A zero Status reconciles
+// as Pending.
+func ZeroServerOwnedVolumeFields(v *Volume) {
+	if v == nil {
+		return
+	}
+	v.ID = ""
+	v.Handle = ""
+	v.DriverParameters = nil
+	v.OwnerService = ""
+	v.BoundNode = ""
+	v.BoundClaim = ""
+	v.Status = ""
+	v.StatusReason = ""
+	v.Message = ""
+	v.InitializedFor = nil
+	v.OwnedBy = nil
+}
+
+// CarryServerOwnedVolumeFields copies the control-plane fields from the
+// stored volume onto an incoming update, so a client update cannot rewrite
+// them (e.g. flip a provisioning volume to Available with a chosen Handle).
+// The release applier overwrites OwnedBy with the current stamp after calling
+// this.
+func CarryServerOwnedVolumeFields(stored, v *Volume) {
+	if stored == nil || v == nil {
+		return
+	}
+	v.ID = stored.ID
+	v.Handle = stored.Handle
+	v.DriverParameters = stored.DriverParameters
+	v.OwnerService = stored.OwnerService
+	v.BoundNode = stored.BoundNode
+	v.BoundClaim = stored.BoundClaim
+	v.Status = stored.Status
+	v.StatusReason = stored.StatusReason
+	v.Message = stored.Message
+	v.InitializedFor = stored.InitializedFor
+	v.OwnedBy = stored.OwnedBy
+}

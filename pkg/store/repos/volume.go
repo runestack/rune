@@ -45,14 +45,18 @@ func (r *VolumeRepo) Create(ctx context.Context, v *types.Volume) error {
 	if v.ID == "" {
 		v.ID = uuid.NewString()
 	}
-	// The ID becomes a host mount path segment on the node.
+	// The ID is adopted by id-tagging drivers (e.g. awsebs reuses an EBS
+	// volume tagged with it), so it must be server-minted: the API/release
+	// paths zero a client-supplied ID (types.ZeroServerOwnedVolumeFields) and
+	// this mints one.
 	if err := types.ValidateVolumeID(v.ID); err != nil {
 		return err
 	}
 	now := time.Now()
-	if v.CreatedAt.IsZero() {
-		v.CreatedAt = now
-	}
+	// Stamp unconditionally: CreatedAt is the server's, a client value is
+	// discarded (the API/release paths also zero it via the server-owned
+	// field helpers).
+	v.CreatedAt = now
 	v.UpdatedAt = now
 	if v.Status == "" {
 		v.Status = types.VolumeStatusPending
