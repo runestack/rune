@@ -111,6 +111,15 @@ type OwnedBy struct {
 	Revision int `json:"revision" yaml:"revision"`
 	// Manager identifies what manages the resource; "runeset" today.
 	Manager string `json:"manager" yaml:"manager"`
+	// Namespace is the owning release's namespace, which can differ from the
+	// resource's. Empty on stamps written before it was recorded.
+	Namespace string `json:"namespace,omitempty" yaml:"namespace,omitempty"`
+}
+
+// IsRelease reports whether o stamps the release name in namespace. A stamp
+// without a namespace predates the field and matches on the name alone.
+func (o *OwnedBy) IsRelease(name, namespace string) bool {
+	return o != nil && o.Release == name && (o.Namespace == "" || o.Namespace == namespace)
 }
 
 // ManagerRuneset is the OwnedBy.Manager value for runeset-managed resources.

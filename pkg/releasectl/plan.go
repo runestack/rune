@@ -81,7 +81,7 @@ func (c *Controller) Uninstall(ctx context.Context, namespace, name string, opts
 
 	// Prune in reverse dependency order: services first, volumes last. We reuse
 	// the same applier prune path the reconcile loop uses.
-	a := &applier{c: c}
+	a := &applier{c: c, stamp: types.OwnedBy{Release: name, Namespace: namespace}}
 	for _, ref := range order {
 		if opts.KeepVolumes && ref.ResourceType == types.ResourceTypeVolume {
 			c.log.Info("keeping volume on uninstall", log.Str("volume", ref.Key()))

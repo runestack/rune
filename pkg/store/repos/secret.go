@@ -131,6 +131,12 @@ func (r *SecretRepo) Update(ctx context.Context, namespace, name string, s *type
 	if err := r.validateSecretData(s.Data); err != nil {
 		return err
 	}
+	// A write that names no owner keeps the current one: the API and CLI
+	// paths carry no ownership, and dropping it makes the owning release
+	// see the resource as replaced and refuse to cast over it.
+	if s.OwnedBy == nil {
+		s.OwnedBy = cur.OwnedBy
+	}
 	s.CreatedAt = cur.CreatedAt
 	s.UpdatedAt = time.Now()
 	rec, err := r.encryptSecret(*s, next)
