@@ -50,6 +50,11 @@ type Controller struct {
 	// Running (aggregate, per release — fixes today's per-service N×timeout).
 	verifyTimeout time.Duration
 
+	// teardownWait bounds how long a cast waits for a service that is being
+	// deleted to go before creating it again.
+	teardownWait time.Duration
+	teardownPoll time.Duration
+
 	// admission gates payload-shaped authorization (services.privileged).
 	// The orchestrator enforces the same gate, but a release must be
 	// admitted BEFORE anything is applied — otherwise a denial lands
@@ -113,6 +118,10 @@ func NewController(orch orchestrator.Orchestrator, st store.Store, logger log.Lo
 		// merely-slow update before stall detection ever declared one
 		// (RUNE-042 §8.3). 15m leaves margin for a slow image pull on top.
 		verifyTimeout: 15 * time.Minute,
+		// Uninstall returns once teardown has started, so uninstall-then-cast
+		// lands here routinely; instance cleanup takes seconds.
+		teardownWait: 60 * time.Second,
+		teardownPoll: time.Second,
 	}
 }
 
@@ -145,8 +154,12 @@ func (c *Controller) cast(ctx context.Context, spec release.ReleaseSpec, p Paylo
 	}
 
 	a := &applier{
-		c: c,
-		p: p,
+		c:       c,
+		p:       p,
+		started: time.Now(),
+		// Without its cancellation: --detach applies after the request
+		// returns, and a recreate after a teardown wait is admitted then.
+		admitCtx: context.WithoutCancel(ctx),
 		stamp: types.OwnedBy{
 			Release:  spec.Name,
 			Revision: revision,
@@ -256,6 +269,13 @@ type applier struct {
 	c     *Controller
 	p     Payloads
 	stamp types.OwnedBy
+	// started is when the cast began. A teardown that started later is an
+	// operator's delete racing the cast, which the cast must not undo.
+	started time.Time
+	// admitCtx carries the caller's subject for admitting a change the plan
+	// could not see coming: a service planned as an update that is created
+	// after its teardown finishes. Nil admits nothing extra.
+	admitCtx context.Context
 
 	// pre holds the pre-image of every resource this cast has touched, keyed
 	// by OwnerRef.Key(), captured on the read-before-write each Apply/Prune
@@ -333,58 +353,27 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 	ref := change.Ref
 	switch ref.ResourceType {
 	case types.ResourceTypeService:
-		svc := a.p.Services[ref.Key()]
-		if svc == nil {
-			return fmt.Errorf("no rendered payload for service %s", ref.Key())
-		}
-		if svc.Metadata == nil {
-			svc.Metadata = &types.ServiceMetadata{}
-		}
-		stamp := a.stamp
-		svc.Metadata.OwnedBy = &stamp
-		original := deepCopy(svc)
-		var captured *types.Service
-		var appliedGen, appliedTemplateGen int64
-		err := a.c.orch.UpdateServiceFunc(ctx, ref.Namespace, ref.Name, func(stored *types.Service) error {
-			// Inside the transaction: a delete landing between a read and this
-			// write would be erased by it. Writing a spec onto a record the
-			// reconciler is tearing down persists something deleted along with
-			// it — a green cast and no service.
-			if stored.Metadata != nil && stored.Metadata.DeletionTimestamp != nil {
-				return fmt.Errorf("%s is being deleted; cast again once teardown finishes", ref.Key())
-			}
-			captured = deepCopy(stored)
-			// Start from the payload each attempt: a retry re-runs this on a
-			// freshly read record, and carrying onto an already-carried service
-			// would fold the previous attempt's carry in.
-			next := deepCopy(original)
-			if next == nil {
-				return fmt.Errorf("copy rendered service %s", ref.Key())
-			}
-			if err := carryServerState(stored, next); err != nil {
-				return err
-			}
-			appliedGen = next.Metadata.Generation
-			appliedTemplateGen = next.Metadata.TemplateGeneration
-			*stored = *next
-			return nil
-		})
-		switch {
-		case err == nil:
-			a.capture(ref, preImage{Existed: true, Service: captured})
-			a.noteApplied(ref, appliedGen, appliedTemplateGen)
-			return nil
-		case !errors.Is(err, orchestrator.ErrServiceNotFound):
+		err := a.applyService(ctx, ref, "")
+		var td *teardownError
+		// Without an ID the retry could not tell the torn-down record from
+		// one someone else created, so legacy records are refused as before.
+		if !errors.As(err, &td) || td.id == "" || (!a.started.IsZero() && td.since.After(a.started)) {
 			return err
 		}
-		a.capture(ref, preImage{})
-		created := deepCopy(original)
-		if created == nil {
-			return fmt.Errorf("copy rendered service %s", ref.Key())
+		if err := a.c.waitForTeardown(ctx, td); err != nil {
+			return err
 		}
-		sanitizeServerFields(created)
-		created.Metadata.OwnedBy = &stamp
-		return a.c.orch.CreateService(ctx, created)
+		// The plan admitted an update, but after a teardown the retry may
+		// create, so it needs create too.
+		if a.admitCtx != nil {
+			if err := a.c.admission.AdmitReleaseChanges(a.admitCtx,
+				[]release.PlannedChange{{Ref: ref, Action: release.ActionCreate}}); err != nil {
+				return err
+			}
+		}
+		// Only the torn-down record, or none: anything else under this name
+		// was created by someone else while the cast waited.
+		return a.applyService(ctx, ref, td.id)
 	case types.ResourceTypeSecret:
 		s := a.p.Secrets[ref.Key()]
 		if s == nil {
@@ -430,6 +419,77 @@ func (a *applier) Apply(ctx context.Context, change release.PlannedChange) error
 		// TODO: ensure the referenced resource exists and record the dependency.
 		return nil
 	}
+}
+
+// applyService writes the rendered service over the stored one, carrying
+// server-owned state, or creates it. It returns a *teardownError when the
+// stored service is being deleted. With onlyID set, it refuses to write over
+// a stored service with any other ID.
+func (a *applier) applyService(ctx context.Context, ref types.OwnerRef, onlyID string) error {
+	svc := a.p.Services[ref.Key()]
+	if svc == nil {
+		return fmt.Errorf("no rendered payload for service %s", ref.Key())
+	}
+	if svc.Metadata == nil {
+		svc.Metadata = &types.ServiceMetadata{}
+	}
+	stamp := a.stamp
+	svc.Metadata.OwnedBy = &stamp
+	original := deepCopy(svc)
+	var captured *types.Service
+	var appliedGen, appliedTemplateGen int64
+	err := a.c.orch.UpdateServiceFunc(ctx, ref.Namespace, ref.Name, func(stored *types.Service) error {
+		// Inside the transaction: a delete landing between a read and this
+		// write would be erased by it. Writing a spec onto a record the
+		// reconciler is tearing down persists something deleted along with
+		// it — a green cast and no service.
+		if stored.Metadata != nil && stored.Metadata.DeletionTimestamp != nil {
+			return &teardownError{ref: ref, id: stored.ID, since: *stored.Metadata.DeletionTimestamp,
+				finalizers: stored.Metadata.Finalizers}
+		}
+		if onlyID != "" && stored.ID != onlyID {
+			return fmt.Errorf("%s was created by someone else while this cast waited for its teardown; not taking it over", ref.Key())
+		}
+		captured = deepCopy(stored)
+		// Start from the payload each attempt: a retry re-runs this on a
+		// freshly read record, and carrying onto an already-carried service
+		// would fold the previous attempt's carry in.
+		next := deepCopy(original)
+		if next == nil {
+			return fmt.Errorf("copy rendered service %s", ref.Key())
+		}
+		if err := carryServerState(stored, next); err != nil {
+			return err
+		}
+		appliedGen = next.Metadata.Generation
+		appliedTemplateGen = next.Metadata.TemplateGeneration
+		*stored = *next
+		return nil
+	})
+	switch {
+	case err == nil:
+		a.capture(ref, preImage{Existed: true, Service: captured})
+		a.noteApplied(ref, appliedGen, appliedTemplateGen)
+		return nil
+	case !errors.Is(err, orchestrator.ErrServiceNotFound):
+		return err
+	}
+	a.capture(ref, preImage{})
+	created := deepCopy(original)
+	if created == nil {
+		return fmt.Errorf("copy rendered service %s", ref.Key())
+	}
+	sanitizeServerFields(created)
+	created.Metadata.OwnedBy = &stamp
+	if err := a.c.orch.CreateService(ctx, created); err != nil {
+		if store.IsAlreadyExistsError(err) {
+			// Someone else's service took the name: this create never
+			// landed, and a revert must not delete theirs.
+			delete(a.pre, ref.Key())
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *applier) Prune(ctx context.Context, ref types.OwnerRef) error {
