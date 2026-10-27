@@ -124,6 +124,10 @@ type OpContext struct {
 	// volume-scoped operations (every method on the interface).
 	Volume *types.Volume
 
+	// Snapshot is the snapshot a DeleteSnapshot call pertains to, so a
+	// driver can check the handle belongs to it. Nil elsewhere.
+	Snapshot *types.Snapshot
+
 	// Parameters is StorageClass.Parameters with Volume.Parameters
 	// overlaid on top, pre-merged by the caller. Drivers consult this
 	// map for per-class configuration (region, fsType, auth refs, etc.)

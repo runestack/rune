@@ -271,10 +271,11 @@ func (d *managedDriver) Snapshot(ctx context.Context, opctx driver.OpContext, re
 	if req.Snapshot == nil {
 		return "", fmt.Errorf("local: Snapshot called with nil Snapshot: %w", driver.ErrInvalidConfig)
 	}
-	if err := pathSegments(req.Snapshot.Namespace, req.Snapshot.Name); err != nil {
+	snapNS := types.NS(req.Snapshot.Namespace)
+	if err := pathSegments(snapNS, req.Snapshot.Name); err != nil {
 		return "", fmt.Errorf("local: snapshot: %w", err)
 	}
-	dst := filepath.Join(d.cfg.SnapshotRoot, req.Snapshot.Namespace, req.Snapshot.Name)
+	dst := filepath.Join(d.cfg.SnapshotRoot, snapNS, req.Snapshot.Name)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return "", fmt.Errorf("local: mkdir snapshot parent %q: %w", filepath.Dir(dst), err)
 	}
@@ -294,7 +295,7 @@ func (d *managedDriver) RestoreFromSnapshot(ctx context.Context, opctx driver.Op
 	if opctx.Volume == nil {
 		return "", fmt.Errorf("local: RestoreFromSnapshot: OpContext.Volume (target) is required: %w", driver.ErrInvalidConfig)
 	}
-	src, err := d.snapshotPath(string(req.SourceHandle))
+	src, err := d.ownSnapshotPath(req.Source, string(req.SourceHandle))
 	if err != nil {
 		return "", fmt.Errorf("local: refusing to restore: source %w", err)
 	}
@@ -329,7 +330,7 @@ func (d *managedDriver) DeleteSnapshot(ctx context.Context, opctx driver.OpConte
 	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	abs, err := d.snapshotPath(dir)
+	abs, err := d.ownSnapshotPath(opctx.Snapshot, dir)
 	if err != nil {
 		return fmt.Errorf("local: refusing to delete snapshot: %w", err)
 	}
@@ -390,6 +391,25 @@ func (d *managedDriver) snapshotPath(handle string) (string, error) {
 	rel, err := filepath.Rel(r, p)
 	if err != nil || len(strings.Split(rel, string(filepath.Separator))) != 2 {
 		return "", fmt.Errorf("%q is not a snapshot directory under %q: %w", handle, d.cfg.SnapshotRoot, driver.ErrInvalidConfig)
+	}
+	return p, nil
+}
+
+// ownSnapshotPath is snapshotPath pinned to snap's own directory,
+// <snapshotRoot>/<namespace>/<name>, so a handle cannot name another
+// namespace's snapshot. Without a snapshot it falls back to snapshotPath.
+func (d *managedDriver) ownSnapshotPath(snap *types.Snapshot, handle string) (string, error) {
+	p, err := d.snapshotPath(handle)
+	if err != nil || snap == nil {
+		return p, err
+	}
+	ns := types.NS(snap.Namespace)
+	if err := pathSegments(ns, snap.Name); err != nil {
+		return "", err
+	}
+	want := filepath.Join(d.cfg.SnapshotRoot, ns, snap.Name)
+	if w, werr := filepath.EvalSymlinks(want); werr != nil || w != p {
+		return "", fmt.Errorf("%q is not snapshot %s/%s's directory %q: %w", handle, ns, snap.Name, want, driver.ErrInvalidConfig)
 	}
 	return p, nil
 }

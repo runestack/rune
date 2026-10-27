@@ -234,6 +234,7 @@ func (c *snapshotController) delete(ctx context.Context, snap *types.Snapshot) e
 		return c.markFailed(ctx, snap, "InvalidParameters", err.Error())
 	}
 	opctx.Parameters = resolved
+	opctx.Snapshot = snap
 	if err := d.DeleteSnapshot(ctx, opctx, driver.SnapshotHandle(snap.Handle)); err != nil {
 		return c.markFailed(ctx, snap, "DeleteSnapshotFailed", err.Error())
 	}
