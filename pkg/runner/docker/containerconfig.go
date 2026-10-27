@@ -4,7 +4,6 @@ package docker
 
 import (
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -120,9 +119,9 @@ func (r *DockerRunner) instanceToContainerConfig(instance *runetypes.Instance) (
 				if vm.Source == "" || vm.MountPath == "" {
 					return nil, nil, fmt.Errorf("invalid volume mount %q: source or mountPath empty", vm.Name)
 				}
-				source := vm.Source
-				if vm.SubPath != "" {
-					source = filepath.Join(source, vm.SubPath)
+				source, err := bindSource(vm.Source, vm.SubPath)
+				if err != nil {
+					return nil, nil, fmt.Errorf("volume mount %q: %w", vm.Name, err)
 				}
 				hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
 					Type:     mount.TypeBind,
