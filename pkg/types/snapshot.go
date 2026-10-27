@@ -85,3 +85,22 @@ func (s *Snapshot) Equals(other Resource) bool {
 		s.Handle == o.Handle &&
 		s.SizeBytes == o.SizeBytes
 }
+
+// ZeroServerOwnedSnapshotFields clears the fields the control plane and the
+// driver own, so a client cannot create a snapshot already Ready with a
+// chosen Handle (which the controller skips and restore then reads as the
+// source), nor set the Driver (the server derives it from the source
+// volume's class) or an id a tag-adopting driver might reuse. A zero Phase
+// reconciles as Pending.
+func ZeroServerOwnedSnapshotFields(s *Snapshot) {
+	if s == nil {
+		return
+	}
+	s.ID = ""
+	s.Driver = ""
+	s.Handle = ""
+	s.SizeBytes = 0
+	s.Phase = ""
+	s.Reason = ""
+	s.Message = ""
+}

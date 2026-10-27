@@ -46,9 +46,9 @@ func (r *SnapshotRepo) Create(ctx context.Context, s *types.Snapshot) error {
 		s.ID = uuid.NewString()
 	}
 	now := time.Now()
-	if s.CreatedAt.IsZero() {
-		s.CreatedAt = now
-	}
+	// Stamp unconditionally: CreatedAt is the server's (CreateSnapshot clears
+	// it via the server-owned field helper), a client value is discarded.
+	s.CreatedAt = now
 	s.UpdatedAt = now
 	if s.Phase == "" {
 		s.Phase = types.SnapshotPhasePending
