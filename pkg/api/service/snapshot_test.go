@@ -221,8 +221,8 @@ func TestSnapshotServiceRestoreNotReady(t *testing.T) {
 }
 
 // Restoring another namespace's snapshot into your own copies its data, so
-// it needs snapshots:get in the snapshot's namespace.
-func TestSnapshotServiceRestoreVolume_CrossNamespaceNeedsGet(t *testing.T) {
+// it needs snapshots:reveal in the snapshot's namespace.
+func TestSnapshotServiceRestoreVolume_CrossNamespaceNeedsReveal(t *testing.T) {
 	ctx := context.Background()
 	svc, _, st := newSnapshotTestServices(t)
 	seedVolume(t, st, "prod", "data")

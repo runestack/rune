@@ -16,6 +16,9 @@ func TestServiceReferenceRequirements(t *testing.T) {
 	get := func(res, ns string) []NamespacedRequirement {
 		return []NamespacedRequirement{{Requirement{res, "get"}, ns}}
 	}
+	reveal2 := func(res, ns string) []NamespacedRequirement {
+		return []NamespacedRequirement{{Requirement{res, "reveal"}, ns}}
+	}
 	svc := func(mut func(*types.Service)) *types.Service {
 		s := &types.Service{Name: "api", Namespace: "trial"}
 		mut(s)
@@ -42,13 +45,13 @@ func TestServiceReferenceRequirements(t *testing.T) {
 		}), reveal("ops")},
 		{"volume claim", svc(func(s *types.Service) {
 			s.Volumes = []types.VolumeMount{{Name: "v", Claim: &types.VolumeClaim{Name: "prod/data"}}}
-		}), get("volumes", "prod")},
+		}), reveal2("volumes", "prod")},
 		{"volume claim own namespace", svc(func(s *types.Service) {
 			s.Volumes = []types.VolumeMount{{Name: "v", Claim: &types.VolumeClaim{Name: "data"}}}
 		}), nil},
 		{"claim template restore", svc(func(s *types.Service) {
 			s.Volumes = []types.VolumeMount{{Name: "v", ClaimTemplate: &types.VolumeClaimTemplate{Parameters: map[string]string{types.RestoreFromSnapshotParam: "prod/nightly"}}}}
-		}), get("snapshots", "prod")},
+		}), reveal2("snapshots", "prod")},
 		{"claim template secret param", svc(func(s *types.Service) {
 			s.Volumes = []types.VolumeMount{{Name: "v", ClaimTemplate: &types.VolumeClaimTemplate{Parameters: map[string]string{"token": "secret:do.prod.rune/token"}}}}
 		}), reveal("prod")},
@@ -89,7 +92,7 @@ func TestVolumeReferenceRequirements(t *testing.T) {
 	}}
 	want := []NamespacedRequirement{
 		{Requirement{"secrets", "reveal"}, "ops"},
-		{Requirement{"snapshots", "get"}, "prod"},
+		{Requirement{"snapshots", "reveal"}, "prod"},
 	}
 	got := VolumeReferenceRequirements(vol)
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
@@ -98,9 +101,9 @@ func TestVolumeReferenceRequirements(t *testing.T) {
 
 	ctx := authctx.WithSubject(context.Background(), "ci")
 	if err := NewGate(&nsAuth{allow: map[string]bool{"secrets:reveal@ops": true}}).AdmitVolume(ctx, vol); !IsDenied(err) {
-		t.Fatalf("want a snapshots:get denial in prod, got %v", err)
+		t.Fatalf("want a snapshots:reveal denial in prod, got %v", err)
 	}
-	if err := NewGate(&nsAuth{allow: map[string]bool{"secrets:reveal@ops": true, "snapshots:get@prod": true}}).AdmitVolume(ctx, vol); err != nil {
+	if err := NewGate(&nsAuth{allow: map[string]bool{"secrets:reveal@ops": true, "snapshots:reveal@prod": true}}).AdmitVolume(ctx, vol); err != nil {
 		t.Fatal(err)
 	}
 }

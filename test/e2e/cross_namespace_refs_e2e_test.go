@@ -99,7 +99,7 @@ service:
 }
 
 // VolumeService writes go through reference admission: the builtin cast
-// role can create volumes anywhere but holds neither snapshots:get nor
+// role can create volumes anywhere but holds neither snapshots:reveal nor
 // secrets:reveal, so a volume parameter naming another namespace's snapshot
 // or secret is refused.
 func TestCrossNamespaceRefs_VolumeParametersNeedTargetGrant(t *testing.T) {
@@ -123,7 +123,7 @@ func TestCrossNamespaceRefs_VolumeParametersNeedTargetGrant(t *testing.T) {
 
 // RestoreVolume stamps the restore parameter itself, so it is admitted too,
 // before the snapshot is even looked up.
-func TestCrossNamespaceRefs_RestoreFromAnotherNamespaceNeedsGet(t *testing.T) {
+func TestCrossNamespaceRefs_RestoreFromAnotherNamespaceNeedsReveal(t *testing.T) {
 	ctx := harness.New(t)
 	c, cancel := ctx.Ctx()
 	defer cancel()
@@ -133,6 +133,6 @@ func TestCrossNamespaceRefs_RestoreFromAnotherNamespaceNeedsGet(t *testing.T) {
 		TargetVolumeName: "stolen", TargetNamespace: "trial",
 	})
 	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "snapshots") {
-		t.Fatalf("want a snapshots:get denial, got %v", err)
+		t.Fatalf("want a snapshots:reveal denial, got %v", err)
 	}
 }
