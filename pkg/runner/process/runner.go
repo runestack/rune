@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -531,7 +532,7 @@ func (r *ProcessRunner) GetLogs(ctx context.Context, instance *types.Instance, o
 
 	// Ensure log file exists
 	if proc.logFile == nil {
-		return nil, fmt.Errorf("log file not found for instance %s", instance.ID)
+		return nil, fmt.Errorf("log file not found for instance %s: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	// Get log file path
@@ -540,6 +541,12 @@ func (r *ProcessRunner) GetLogs(ctx context.Context, instance *types.Instance, o
 	// Open log file for reading
 	file, err := os.Open(logPath)
 	if err != nil {
+		// A failed start releases the instance and removes its
+		// workspace; a reader that looked it up just before sees the
+		// file gone. That is "not found", not a failure.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("log file for instance %s is gone: %w", instance.ID, errdefs.ErrNotFound)
+		}
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 
@@ -1122,7 +1129,7 @@ func (r *ProcessRunner) Exec(ctx context.Context, instance *types.Instance, opti
 	r.mu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("instance not found: %s", instance.ID)
+		return nil, fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	// Verify instance is running
@@ -1162,7 +1169,7 @@ func (r *ProcessRunner) Dial(ctx context.Context, instance *types.Instance, port
 	_, exists := r.processes[instance.ID]
 	r.mu.RUnlock()
 	if !exists {
-		return nil, fmt.Errorf("instance not found: %s", instance.ID)
+		return nil, fmt.Errorf("instance with ID %s not found: %w", instance.ID, errdefs.ErrNotFound)
 	}
 
 	status, err := r.Status(ctx, instance)
