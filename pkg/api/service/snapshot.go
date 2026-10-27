@@ -71,6 +71,11 @@ func (s *SnapshotService) CreateSnapshot(ctx context.Context, req *generated.Cre
 	}
 	snap := protoToSnapshot(req.Snapshot)
 	snap.Namespace = types.NS(snap.Namespace)
+	// Handle, Phase, Driver and the driver-output fields are the server's:
+	// a client-chosen Handle on an already-Ready snapshot is skipped by the
+	// controller and read verbatim at restore, and Driver must come from the
+	// source volume, not the request.
+	types.ZeroServerOwnedSnapshotFields(snap)
 	if err := ensureNamespaceExists(ctx, s.nsRepo, snap.Namespace, req.EnsureNamespace); err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "ensure namespace: %v", err)
 	}
@@ -91,13 +96,13 @@ func (s *SnapshotService) CreateSnapshot(ctx context.Context, req *generated.Cre
 	// declares Capabilities.Snapshots:false. Fail-OPEN matches the
 	// volume_lint policy: missing class / unregistered driver / factory
 	// error → defer to the controller.
-	if snap.Driver == "" {
-		if sc, err := s.scRepo.Get(ctx, src.StorageClassName); err == nil {
-			snap.Driver = sc.Driver
-			if caps, ok := s.lookupSnapshotCaps(sc.Driver); ok && !caps.Snapshots {
-				return nil, status.Errorf(codes.InvalidArgument,
-					"snapshot: driver %q does not support snapshots", sc.Driver)
-			}
+	// Driver is derived from the source volume's class, never the request
+	// (ZeroServerOwnedSnapshotFields already cleared any client value).
+	if sc, err := s.scRepo.Get(ctx, src.StorageClassName); err == nil {
+		snap.Driver = sc.Driver
+		if caps, ok := s.lookupSnapshotCaps(sc.Driver); ok && !caps.Snapshots {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"snapshot: driver %q does not support snapshots", sc.Driver)
 		}
 	}
 	if err := s.repo.Create(ctx, snap); err != nil {

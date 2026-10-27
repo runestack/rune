@@ -256,3 +256,42 @@ func TestSnapshotServiceRestoreVolume_CrossNamespaceNeedsReveal(t *testing.T) {
 		t.Fatalf("want PermissionDenied, got %v", err)
 	}
 }
+
+// CreateSnapshot must ignore a client's Handle/Phase/Driver: Handle and Phase
+// are the escape (a Ready snapshot with a chosen Handle is read at restore),
+// and Driver must come from the source volume's class.
+func TestSnapshotService_CreateClearsClientControlledFields(t *testing.T) {
+	ctx := context.Background()
+	svc, _, st := newSnapshotTestServices(t)
+	if err := repos.NewStorageClassRepo(st).Create(ctx, &types.StorageClass{Name: "local", Driver: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	seedVolume(t, st, "prod", "data")
+
+	resp, err := svc.CreateSnapshot(ctx, &generated.CreateSnapshotRequest{
+		Snapshot: &generated.Snapshot{
+			Name: "snap1", Namespace: "prod", SourceVolume: "data",
+			Handle: "/etc", Phase: string(types.SnapshotPhaseReady), Driver: "evil", Id: "client-id",
+		},
+		EnsureNamespace: true,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if resp.Snapshot.Handle != "" {
+		t.Errorf("client Handle survived: %q", resp.Snapshot.Handle)
+	}
+	if resp.Snapshot.Phase == string(types.SnapshotPhaseReady) {
+		t.Errorf("client Phase=Ready survived: %q", resp.Snapshot.Phase)
+	}
+	if resp.Snapshot.Driver != "local" {
+		t.Errorf("Driver = %q, want derived \"local\"", resp.Snapshot.Driver)
+	}
+	stored, err := svc.repo.Get(ctx, "prod", "snap1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Handle != "" || stored.Phase == types.SnapshotPhaseReady || stored.Driver != "local" || stored.ID == "client-id" {
+		t.Fatalf("control fields stored from client: %+v", stored)
+	}
+}
