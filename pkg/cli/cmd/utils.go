@@ -3,7 +3,9 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -228,7 +230,48 @@ func buildClientOptions(addressOverride string) *client.ClientOptions {
 			return persistRefreshedTokens(accessToken, refreshToken)
 		}
 	}
+	applyTLSOptions(opts)
 	return opts
+}
+
+// applyTLSOptions threads the context's TLS settings onto opts and, with TLS
+// off, warns when credentials would cross a non-loopback link in clear
+// (unless the context opted in with insecurePlaintext). Warn-only for now; a
+// later release refuses.
+func applyTLSOptions(opts *client.ClientOptions) {
+	opts.UseTLS = viper.GetBool("contexts.default.tls")
+	if s := viper.GetString("contexts.default.server"); strings.HasPrefix(s, "grpcs://") {
+		opts.UseTLS = true
+	}
+	opts.TLSPinSHA256 = viper.GetString("contexts.default.caFingerprint")
+	opts.TLSCertFile = viper.GetString("contexts.default.caFile")
+	if opts.UseTLS {
+		return
+	}
+	if viper.GetBool("contexts.default.insecurePlaintext") {
+		return
+	}
+	if hasCredential(opts) && !isLoopbackAddress(opts.Address) {
+		fmt.Fprintf(os.Stderr,
+			"warning: sending credentials over plaintext gRPC to %s; enable TLS with `rune context trust %s`, "+
+				"or set insecurePlaintext on the context to silence this.\n",
+			opts.Address, viper.GetString("current-context"))
+	}
+}
+
+func hasCredential(o *client.ClientOptions) bool { return o.Token != "" || o.RefreshToken != "" }
+
+// isLoopbackAddress reports whether addr (host:port) targets loopback.
+func isLoopbackAddress(addr string) bool {
+	host := addr
+	if h, _, err := netSplitHostPortSafe(addr); err == nil {
+		host = h
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // newAPIClient creates a new client using buildClientOptions with optional address and token overrides.
