@@ -28,6 +28,12 @@ func mustOpenStore(b *boot) *controlPlane {
 		logger.Error("Runefile does not decode", log.Str("path", resolvedRunefile), log.Err(err))
 		os.Exit(1)
 	}
+	// Fail closed on KEK settings that are declared but do nothing, rather
+	// than letting an operator believe a key protection is active (rune#324).
+	if err := appCfg.ValidateKEK(); err != nil {
+		logger.Error("Invalid secret-encryption configuration", log.Err(err))
+		os.Exit(1)
+	}
 
 	stateStore, _, err := openStateStore(logger, appCfg, b.flags.DataDir)
 	if err != nil {

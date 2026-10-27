@@ -401,6 +401,18 @@ func defaultDataDir() string {
 	return filepath.Join(home, ".rune")
 }
 
+// ValidateKEK rejects KEK settings that are declared but not implemented, so
+// an operator who believes a protection is on is told it is not rather than
+// silently getting none. Passphrase-derived KEKs are not implemented (no KDF
+// in the tree); see runestack/rune#324.
+func (c *Config) ValidateKEK() error {
+	if c.Secret.Encryption.KEK.Passphrase.Enabled {
+		return fmt.Errorf("[secret.encryption.kek.passphrase] enabled=true is not implemented " +
+			"(no passphrase-derived KEK exists); remove it or use source file/env/generated — see rune#324")
+	}
+	return nil
+}
+
 func (c *Config) KEKOptions() *crypto.KEKOptions {
 	return &crypto.KEKOptions{
 		Source:   crypto.KEKSource(c.Secret.Encryption.KEK.Source),
