@@ -593,3 +593,64 @@ func TestVolumeController_PreserveOnDeleteSkipsLocalDriverDelete(t *testing.T) {
 		t.Fatalf("handle directory was reclaimed despite preserveOnDelete=true: %v", err)
 	}
 }
+
+// Production runs on the Badger store, which emits a deleted row as an
+// untyped map. Reclaim must still run; the test store's typed bodies hid
+// that it did not.
+func TestVolumeController_ReclaimsOnDeleteWithBadgerStore(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bs := store.NewBadgerStore(log.NewLogger())
+	require.NoError(t, bs.Open(t.TempDir()))
+	t.Cleanup(func() { _ = bs.Close() })
+
+	root := t.TempDir()
+	controller, err := NewController(Options{
+		Store:         bs,
+		Logger:        log.NewLogger(),
+		DriverConfigs: map[string]map[string]any{local.DriverNameLocal: {"localVolumeRoot": root}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, controller.Start(ctx))
+	t.Cleanup(func() { _ = controller.Stop() })
+
+	class := &types.StorageClass{ID: "sc-b", Name: "sc-b", Driver: local.DriverNameLocal, CreatedAt: time.Now().UTC()}
+	require.NoError(t, bs.Create(ctx, types.ResourceTypeStorageClass, "", class.Name, class))
+	vol := &types.Volume{
+		ID: "v-b", Name: "ephemeral", Namespace: "default", StorageClassName: "sc-b",
+		AccessMode: types.AccessModeRWO, ReclaimPolicy: types.ReclaimPolicyDelete, Status: types.VolumeStatusPending,
+	}
+	require.NoError(t, bs.Create(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, vol))
+
+	var provisioned types.Volume
+	waitFor(t, 3*time.Second, func() error {
+		if err := bs.Get(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name, &provisioned); err != nil {
+			return err
+		}
+		if provisioned.Status != types.VolumeStatusAvailable || provisioned.Handle == "" {
+			return errors.New("not yet available")
+		}
+		return nil
+	})
+
+	require.NoError(t, bs.Delete(ctx, types.ResourceTypeVolume, vol.Namespace, vol.Name))
+	waitFor(t, 3*time.Second, func() error {
+		if _, err := os.Stat(provisioned.Handle); err == nil {
+			return errors.New("backing directory still present")
+		}
+		return nil
+	})
+}
+
+func TestDeletedVolume(t *testing.T) {
+	v, err := deletedVolume(map[string]interface{}{"name": "data", "namespace": "prod", "handle": "h", "reclaimPolicy": "delete"})
+	require.NoError(t, err)
+	assert.Equal(t, "h", v.Handle)
+	assert.Equal(t, types.ReclaimPolicyDelete, v.ReclaimPolicy)
+	_, err = deletedVolume(nil)
+	assert.Error(t, err)
+	typed := &types.Volume{Name: "x"}
+	got, err := deletedVolume(typed)
+	require.NoError(t, err)
+	assert.Same(t, typed, got)
+}
